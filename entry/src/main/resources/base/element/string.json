@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "听书主模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "听书主入口"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "听书"
+    }
+  ]
+}
