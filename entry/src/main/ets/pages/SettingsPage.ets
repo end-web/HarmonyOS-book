@@ -1,4 +1,5 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { PreferenceService } from '../service/PreferenceService';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -52,7 +53,7 @@ export struct SettingsPage {
 
   private async setColorMode(mode: number): Promise<void> {
     try {
-      const ctx = this.getUIContext().getHostContext();
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const appCtx = ctx.getApplicationContext();
       appCtx.setColorMode(mode);
       this.currentMode = mode;

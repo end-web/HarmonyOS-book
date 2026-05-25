@@ -1,49 +1,19 @@
 # HarmonyOS 代码混淆规则
 
-# 保留导出的类和方法
+# 保留全局名称和属性名称
 -keep-global-name
 -keep-property-name
-
-# 保留 ArkUI 组件
--keep-dts @Component
--keep-dts @ComponentV2
--keep-dts @Entry
--keep-dts @Builder
--keep-dts @Extend
--keep-dts @Styles
-
-# 保留数据模型
--keep class Book
--keep class BookSource
--keep class Chapter
--keep class PlayerState
--keep class AudioSource
-
-# 保留服务类的公共接口
--keep class *Service {
-  public *;
-}
-
-# 保留工具类
--keep class *Utils {
-  public *;
-}
-
-# 保留 Ability 相关
--keep class *Ability {
-  *;
-}
 
 # 不混淆文件名
 -keep-file-name
 
-# 启用名称缓存以提高构建速度
+# 启用名称缓存
 -enable-name-cache
 
 # 启用属性混淆
 -enable-property-obfuscation
 
-# 启用字符串混淆
+# 启用顶层混淆
 -enable-toplevel-obfuscation
 
 # 混淆日志输出
