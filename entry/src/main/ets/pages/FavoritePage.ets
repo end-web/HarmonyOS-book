@@ -18,9 +18,10 @@ export struct FavoritePage {
   @Event onBookTap: (id: string) => void = () => {};
   @Event onGotoStore: () => void = () => {};
 
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private context!: common.UIAbilityContext;
 
   aboutToAppear(): void {
+    this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadFavorites();
   }
 

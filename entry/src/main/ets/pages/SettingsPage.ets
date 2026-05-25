@@ -52,7 +52,7 @@ export struct SettingsPage {
 
   private async setColorMode(mode: number): Promise<void> {
     try {
-      const ctx = getContext(this);
+      const ctx = this.getUIContext().getHostContext();
       const appCtx = ctx.getApplicationContext();
       appCtx.setColorMode(mode);
       this.currentMode = mode;

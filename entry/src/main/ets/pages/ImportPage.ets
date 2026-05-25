@@ -30,7 +30,11 @@ export struct ImportPage {
   @Local importDone: boolean = false;
   @Local progressText: string = '';
 
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private context!: common.UIAbilityContext;
+
+  aboutToAppear(): void {
+    this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+  }
 
   private async pickFiles(): Promise<void> {
     try {
@@ -101,28 +105,34 @@ export struct ImportPage {
     this.progressText = '准备中...';
     const bookId = 'import_' + Date.now().toString();
 
-    const novelFiles = this.pickedFiles.filter(f => this.isNovelFile(f.ext));
-    const audioFiles = this.pickedFiles.filter(f => !this.isNovelFile(f.ext));
+    try {
+      const novelFiles = this.pickedFiles.filter(f => this.isNovelFile(f.ext));
+      const audioFiles = this.pickedFiles.filter(f => !this.isNovelFile(f.ext));
 
-    if (novelFiles.length > 0) {
-      const dir = this.context.filesDir + '/novel/' + bookId;
-      await fileIo.mkdir(dir, true);
-      const book = await this.importNovelBook(bookId, dir, novelFiles);
-      await DataService.addImportedBook(book);
-      await PreferenceService.toggleFavorite(book.id);
-    }
-    if (audioFiles.length > 0) {
-      const aid = novelFiles.length > 0 ? bookId + '_audio' : bookId;
-      const dir = this.context.filesDir + '/audio/' + aid;
-      await fileIo.mkdir(dir, true);
-      const book = await this.importAudioBook(aid, dir, audioFiles);
-      await DataService.addImportedBook(book);
-      await PreferenceService.toggleFavorite(book.id);
-    }
+      if (novelFiles.length > 0) {
+        const dir = this.context.filesDir + '/novel/' + bookId;
+        await fileIo.mkdir(dir, true);
+        const book = await this.importNovelBook(bookId, dir, novelFiles);
+        await DataService.addImportedBook(book);
+        await PreferenceService.toggleFavorite(book.id);
+      }
+      if (audioFiles.length > 0) {
+        const aid = novelFiles.length > 0 ? bookId + '_audio' : bookId;
+        const dir = this.context.filesDir + '/audio/' + aid;
+        await fileIo.mkdir(dir, true);
+        const book = await this.importAudioBook(aid, dir, audioFiles);
+        await DataService.addImportedBook(book);
+        await PreferenceService.toggleFavorite(book.id);
+      }
 
-    this.importing = false;
-    this.progressText = '';
-    this.importDone = true;
+      this.importing = false;
+      this.progressText = '';
+      this.importDone = true;
+    } catch (err) {
+      this.importing = false;
+      this.progressText = '导入失败: ' + (err as Error).message;
+      console.error('Import failed:', err);
+    }
   }
 
   private async importAudioBook(bookId: string, sandboxDir: string, files: PickedFile[]): Promise<Book> {
@@ -215,28 +225,33 @@ export struct ImportPage {
   }
 
   private async readPickedText(uri: string): Promise<string> {
-    const file = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
     try {
-      const stat = await fileIo.stat(file.fd);
-      const size = stat.size;
-      if (size === 0) return '';
-      const buf = new ArrayBuffer(size);
-      await fileIo.read(file.fd, buf);
-      const bytes = new Uint8Array(buf);
+      const file = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
       try {
-        const dec = util.TextDecoder.create('utf-8', { fatal: true, ignoreBOM: false });
-        return dec.decodeToString(bytes);
-      } catch (_e) {
+        const stat = await fileIo.stat(file.fd);
+        const size = stat.size;
+        if (size === 0) return '';
+        const buf = new ArrayBuffer(size);
+        await fileIo.read(file.fd, buf);
+        const bytes = new Uint8Array(buf);
         try {
-          const dec = util.TextDecoder.create('gbk');
+          const dec = util.TextDecoder.create('utf-8', { fatal: true, ignoreBOM: false });
           return dec.decodeToString(bytes);
-        } catch (_e2) {
-          const dec = util.TextDecoder.create('utf-8');
-          return dec.decodeToString(bytes);
+        } catch (_e) {
+          try {
+            const dec = util.TextDecoder.create('gbk');
+            return dec.decodeToString(bytes);
+          } catch (_e2) {
+            const dec = util.TextDecoder.create('utf-8');
+            return dec.decodeToString(bytes);
+          }
         }
+      } finally {
+        await fileIo.close(file);
       }
-    } finally {
-      await fileIo.close(file);
+    } catch (err) {
+      console.error('Failed to read file:', uri, err);
+      return '';
     }
   }
 

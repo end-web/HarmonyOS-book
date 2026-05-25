@@ -54,7 +54,7 @@ export struct BookDetailPage {
   private async findBookById(id: string): Promise<Book | null> {
     const cached = SearchCache.get(id);
     if (cached) return cached;
-    const ctx = getContext(this) as common.UIAbilityContext;
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const imported = await DataService.getBookById(ctx, id);
     return imported || null;
   }
@@ -105,7 +105,7 @@ export struct BookDetailPage {
       if (cover.startsWith('http')) {
         rgb = await ColorPickerUtils.pickFromUrl(cover);
       } else {
-        const ctx = getContext(this) as common.UIAbilityContext;
+        const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
         rgb = await ColorPickerUtils.pickFromRawfile(ctx, cover);
       }
     } catch (_e) { /* ignore */ }
@@ -186,7 +186,7 @@ export struct BookDetailPage {
           }
         } catch (_e) { /* ignore */ }
       }
-      AudioService.getInstance().bind(this.playerState, getContext(this) as common.UIAbilityContext);
+      AudioService.getInstance().bind(this.playerState, this.getUIContext().getHostContext() as common.UIAbilityContext);
       await AudioService.getInstance().playChapter(this.book, target);
     } finally {
       this.isStartingPlay = false;

@@ -21,9 +21,10 @@ export struct HistoryPage {
   @Local entries: HistoryEntry[] = [];
   @Local loading: boolean = true;
 
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private context!: common.UIAbilityContext;
 
   aboutToAppear(): void {
+    this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadHistory();
   }
 

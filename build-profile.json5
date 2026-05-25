@@ -35,7 +35,11 @@
         "name": "debug",
       },
       {
-        "name": "release"
+        "name": "release",
+        "ruleOptions": {
+          "enable": true,
+          "files": ["obfuscation-rules.txt"]
+        }
       }
     ]
   },
