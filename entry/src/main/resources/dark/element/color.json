@@ -3,6 +3,38 @@
     {
       "name": "start_window_background",
       "value": "#000000"
+    },
+    {
+      "name": "page_background",
+      "value": "#1A1A1A"
+    },
+    {
+      "name": "card_background",
+      "value": "#2C2C2C"
+    },
+    {
+      "name": "text_primary",
+      "value": "#E8E8E8"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#AAAAAA"
+    },
+    {
+      "name": "text_tertiary",
+      "value": "#777777"
+    },
+    {
+      "name": "text_placeholder",
+      "value": "#555555"
+    },
+    {
+      "name": "divider",
+      "value": "#333333"
+    },
+    {
+      "name": "input_background",
+      "value": "#333333"
     }
   ]
 }

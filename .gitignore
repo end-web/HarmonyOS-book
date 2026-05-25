@@ -11,3 +11,5 @@
 **/.test
 /.appanalyzer
 /.specstory
+/.tmp_shots
+/screenshot

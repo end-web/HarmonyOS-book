@@ -1,6 +1,20 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BFB8A7BD3CA5DB31BDE6F245EDB330AE701AA004A63EE79F0B978035E089CD46E4D0990DC1397D3",
+          "profile": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p12",
+          "storePassword": "0000001B0B369058F4BD3CD678131A91F9AE63AD3FB3B0AB02E1FB49F0F7C668FB792B18E060E02854E200"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",

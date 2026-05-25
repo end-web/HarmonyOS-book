@@ -1,0 +1,20 @@
+{
+    "specstory.cloudSync.enabled": "never",
+    "chat.mcp.serverSampling": {
+        "ListenBook/.vscode/mcp.json: codegenie-mcp": {
+            "allowedModels": [
+                "copilot/auto",
+                "copilotcli/claude-haiku-4.5",
+                "claude-code/claude-haiku-4.5",
+                "copilot/claude-haiku-4.5",
+                "copilot/gpt-4.1",
+                "copilotcli/gpt-4.1",
+                "copilot/gpt-4o",
+                "copilotcli/gpt-4o",
+                "copilot/gpt-5-mini",
+                "copilotcli/gpt-5-mini",
+                "copilot/oswe-vscode-prime"
+            ]
+        }
+    }
+}

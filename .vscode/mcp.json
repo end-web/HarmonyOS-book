@@ -1,0 +1,16 @@
+{
+	"servers": {
+		"codegenie-mcp": {
+			"args": [
+				"-y",
+				"@deveco-codegenie/mcp@latest"
+			],
+			"command": "npx",
+			"env": {
+				"MANAGED_BY_UI": "1"
+			},
+			"type": "stdio"
+		}
+	},
+	"inputs": []
+}
