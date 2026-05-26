@@ -37,14 +37,8 @@ export class AudioService {
   private pausedByFocus: boolean = false;
   /** 是否为短暂 duck 类打断（只有 duck 打断恢复时才自动续播） */
   private wasDuckedInterrupt: boolean = false;
-  /** 上次暂停的时间戳，用于判断长时间静默后不自动播放 */
-  private lastPauseTime: number = 0;
-  /** 静默超时定时器，暂停超过阈值后 deactivate session */
   private idleTimer: number = -1;
-  /** 静默多久后自动释放 session（ms），默认 15 分钟 */
-  private static readonly IDLE_TIMEOUT_MS: number = 15 * 60 * 1000;
-  /** 暂停超过多久后 AVSession play 不自动播放（ms），默认 30 分钟 */
-  private static readonly RESUME_THRESHOLD_MS: number = 30 * 60 * 1000;
+  private static readonly IDLE_TIMEOUT_MS: number = 5 * 60 * 1000;
 
   static getInstance(): AudioService {
     if (!AudioService.instance) {
@@ -104,12 +98,8 @@ export class AudioService {
   private initAVSession(): void {
     if (!this.context) return;
     const cbs: AVSessionCallbacks = {
-      onPlay: () => {
-        if (this.shouldRespondToSessionPlay()) {
-          this.toggle();
-        }
-      },
-      onPause: () => { this.toggle(); },
+      onPlay: () => { this.toggle(); },
+      onPause: () => { this.pauseFromSession(); },
       onPlayNext: () => { this.playNext(); },
       onPlayPrevious: () => { this.playPrevious(); },
       onSeek: (ms: number) => { this.seek(ms); }
@@ -174,7 +164,6 @@ export class AudioService {
         p.play();
       } else if (newState === 'playing') {
         this.state.isPlaying = true;
-        this.lastPauseTime = 0;
         this.stopIdleTimer();
         AVSessionService.getInstance().reactivate();
         this.startTick();
@@ -273,7 +262,6 @@ export class AudioService {
   }
 
   private recordPause(): void {
-    this.lastPauseTime = Date.now();
     this.startIdleTimer();
   }
 
@@ -290,17 +278,6 @@ export class AudioService {
       clearTimeout(this.idleTimer);
       this.idleTimer = -1;
     }
-  }
-
-  /** AVSession play 指令是否应该响应（暂停超过阈值则不自动播放） */
-  private shouldRespondToSessionPlay(): boolean {
-    if (this.lastPauseTime <= 0) return true;
-    const idleMs = Date.now() - this.lastPauseTime;
-    if (idleMs > AudioService.RESUME_THRESHOLD_MS) {
-      hilog.info(DOMAIN, TAG, 'Ignoring session play: idle %{public}dms > threshold', idleMs);
-      return false;
-    }
-    return true;
   }
 
   private startTick(): void {
@@ -401,6 +378,21 @@ export class AudioService {
     }
   }
 
+  /** AVSession pause 指令专用：直接暂停，不做 toggle */
+  private async pauseFromSession(): Promise<void> {
+    if (!this.player) return;
+    if (this.player.state === 'playing') {
+      try {
+        this.startIdleTimer();
+        await this.player.pause();
+      } catch (err) {
+        const e = err as Error;
+        hilog.error(DOMAIN, TAG, 'pauseFromSession failed: %{public}s',
+          e?.message ?? JSON.stringify(err));
+      }
+    }
+  }
+
   async toggle(): Promise<void> {
     // 用户主动操作，清除焦点暂停标记
     this.pausedByFocus = false;
@@ -415,6 +407,7 @@ export class AudioService {
     if (p.state === 'playing') {
       await p.pause();
     } else if (p.state === 'paused') {
+      this.stopIdleTimer();
       await p.play();
     } else if (p.state === 'completed') {
       // completed 直接 play 在部分机型不会重置进度,先 seek 到 0 再 play

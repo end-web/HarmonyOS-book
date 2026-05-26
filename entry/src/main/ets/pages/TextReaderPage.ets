@@ -583,14 +583,14 @@ export struct TextReaderPage {
   @Builder
   buildBody() {
     Column() {
-      // 顶栏：仅在工具栏显示时出现
+      // 顶栏：仅在工具栏显示时出现;否则只占状态栏 + 常驻进度条
       if (this.toolbarVisible) {
         this.buildTopBar()
       } else {
-        // 状态栏占位，避免内容贴顶
         Row()
           .width('100%')
           .height(WindowUtils.getStatusBarHeightVp())
+        this.buildProgressBar()
       }
 
       // 正文：撑满，叠加分区手势
@@ -651,15 +651,20 @@ export struct TextReaderPage {
       .backgroundColor(this.resolvedBgOption().bg)
 
       // 进度条
-      Stack({ alignContent: Alignment.Start }) {
-        Row().width('100%').height(2)
-          .backgroundColor(this.bgMode === 2 ? '#333333' : '#E8E8E8')
-        Row().width(`${this.scrollPercent}%`).height(2)
-          .backgroundColor(AppColor.Brand)
-      }
-      .width('100%').height(2)
+      this.buildProgressBar()
     }
     .transition(TransitionEffect.OPACITY.animation({ duration: AppMotion.Base, curve: Curve.Smooth }))
+  }
+
+  @Builder
+  buildProgressBar() {
+    Stack({ alignContent: Alignment.Start }) {
+      Row().width('100%').height(2)
+        .backgroundColor(this.bgMode === 2 ? '#333333' : '#E8E8E8')
+      Row().width(`${this.scrollPercent}%`).height(2)
+        .backgroundColor(AppColor.Brand)
+    }
+    .width('100%').height(2)
   }
 
   @Builder

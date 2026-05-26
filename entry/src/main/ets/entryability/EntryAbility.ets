@@ -55,10 +55,4 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy(): void {
   }
-
-  onForeground(): void {
-  }
-
-  onBackground(): void {
-  }
 }

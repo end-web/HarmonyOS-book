@@ -214,42 +214,58 @@ export struct PlayerPage {
 
     console.info('[PlayerPage] extractCoverColor start, cover=' + cover);
 
-    let rgb: RgbColor | null = null;
-    try {
-      if (cover.startsWith('http')) {
-        rgb = await ColorPickerUtils.pickFromUrl(cover);
-      } else if (cover.startsWith('/')) {
-        rgb = await ColorPickerUtils.pickFromFile(cover);
-      } else {
-        rgb = await ColorPickerUtils.pickFromRawfile(this.context, cover);
+    // 异步提取，不阻塞 UI
+    setTimeout(async () => {
+      let rgb: RgbColor | null = null;
+      try {
+        if (cover.startsWith('http')) {
+          rgb = await ColorPickerUtils.pickFromUrl(cover);
+        } else if (cover.startsWith('/')) {
+          rgb = await ColorPickerUtils.pickFromFile(cover);
+        } else {
+          rgb = await ColorPickerUtils.pickFromRawfile(this.context, cover);
+        }
+      } catch (e) {
+        console.error('[PlayerPage] extractCoverColor failed: ' + JSON.stringify(e));
       }
-    } catch (e) {
-      console.error('[PlayerPage] extractCoverColor failed: ' + JSON.stringify(e));
-    }
 
-    if (!rgb) {
-      console.warn('[PlayerPage] extractCoverColor got null, keep default colors');
-      return;
-    }
+      if (!rgb) {
+        console.warn('[PlayerPage] extractCoverColor got null, keep default colors');
+        return;
+      }
 
-    if (cover !== this.lastCoverKey) {
-      console.warn('[PlayerPage] cover changed during extraction, abort');
-      return;
-    }
+      if (cover !== this.lastCoverKey) {
+        console.warn('[PlayerPage] cover changed during extraction, abort');
+        return;
+      }
 
-    const top = ColorPickerUtils.darken(rgb, 0.2);
-    const bottom = ColorPickerUtils.darken(rgb, 0.4);
-    this.bgTopColor = ColorPickerUtils.toHex(top);
-    this.bgBottomColor = ColorPickerUtils.toHex(bottom);
-    this.hasThemeColor = true;
+      const top = ColorPickerUtils.darken(rgb, 0.2);
+      const bottom = ColorPickerUtils.darken(rgb, 0.4);
+      this.bgTopColor = ColorPickerUtils.toHex(top);
+      this.bgBottomColor = ColorPickerUtils.toHex(bottom);
+      this.hasThemeColor = true;
 
-    console.info('[PlayerPage] extractCoverColor success, top=' + this.bgTopColor + ', bottom=' + this.bgBottomColor);
+      console.info('[PlayerPage] extractCoverColor success, top=' + this.bgTopColor + ', bottom=' + this.bgBottomColor);
+    }, 100);
+  }
+
+  pageTransition() {
+    PageTransitionEnter({ duration: 400, curve: curves.cubicBezierCurve(0.33, 0, 0.1, 1) })
+      .slide(SlideEffect.Bottom)
+    PageTransitionExit({ duration: 350, curve: curves.cubicBezierCurve(0.33, 0, 0.1, 1) })
+      .slide(SlideEffect.Bottom)
   }
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       // 背景层：模糊封面 + 主色调叠加
       Stack() {
+        // 兜底纯色背景（避免转场时透出）
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor(this.bgBottomColor)
+
         if (this.book && this.book.cover) {
           // 模糊封面背景
           if (this.book.cover.startsWith('http')) {
