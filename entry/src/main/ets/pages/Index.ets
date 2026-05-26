@@ -1,3 +1,4 @@
+import { common } from '@kit.AbilityKit';
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage } from './PlayerPage';
@@ -6,6 +7,8 @@ import { HistoryPage } from './HistoryPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
+import { PrivacyPage, PRIVACY_POLICY_VERSION } from './PrivacyPage';
+import { PreferenceService } from '../service/PreferenceService';
 
 @Entry
 @ComponentV2
@@ -14,6 +17,29 @@ struct Index {
   @Local playerScale: number = 1;
   @Local playerTranslateY: string = '0';
   @Local playerOpacity: number = 1;
+  @Local privacyAgreed: boolean = false;
+  @Local privacyChecked: boolean = false;
+
+  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+
+  aboutToAppear(): void {
+    this.checkPrivacyAgreed();
+  }
+
+  private async checkPrivacyAgreed(): Promise<void> {
+    try {
+      await PreferenceService.ensureReady(this.context);
+      const agreed = await PreferenceService.getPrivacyAgreedVersion();
+      this.privacyAgreed = agreed === PRIVACY_POLICY_VERSION;
+    } catch (_e) {
+      this.privacyAgreed = false;
+    }
+    this.privacyChecked = true;
+  }
+
+  private onPrivacyAgreed(): void {
+    this.privacyAgreed = true;
+  }
 
   private playerTransitionDelegate(op: NavigationOperation,
     isEnter: boolean): Array<NavDestinationTransition> | undefined {
@@ -101,18 +127,37 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+    } else if (name === 'privacy') {
+      NavDestination() {
+        PrivacyPage({ navStack: this.navStack, mode: 'view' })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
     }
   }
 
   build() {
-    Navigation(this.navStack) {
-      MainPage({ navStack: this.navStack })
+    if (!this.privacyChecked) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor($r('sys.color.background_primary'))
+    } else if (!this.privacyAgreed) {
+      PrivacyPage({
+        navStack: this.navStack,
+        mode: 'consent',
+        onAgreed: () => this.onPrivacyAgreed()
+      })
+    } else {
+      Navigation(this.navStack) {
+        MainPage({ navStack: this.navStack })
+      }
+      .navDestination(this.routerMap)
+      .hideTitleBar(true)
+      .mode(NavigationMode.Stack)
+      .width('100%')
+      .height('100%')
     }
-    .navDestination(this.routerMap)
-    .hideTitleBar(true)
-    .mode(NavigationMode.Stack)
-    .width('100%')
-    .height('100%')
   }
 }
 

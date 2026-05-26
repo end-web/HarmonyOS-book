@@ -94,6 +94,21 @@ export struct AboutPage {
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+
+          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row() {
+            Text('隐私政策')
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_secondary'))
+            Blank()
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(16)
+              .fontColor([$r('sys.color.font_tertiary')])
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+          .onClick(() => this.navStack.pushPathByName('privacy', ''))
         }
         .backgroundColor($r('sys.color.comp_background_primary'))
         .borderRadius(AppRadius.Lg)

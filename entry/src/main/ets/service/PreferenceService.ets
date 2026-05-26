@@ -23,6 +23,7 @@ const KEY_READER_BOOKMARKS = 'reader_bookmarks';
 const KEY_READER_FLIP_MODE = 'reader_flip_mode';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
+const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 
 export interface PlayHistoryItem {
   bookId: string;
@@ -57,13 +58,24 @@ interface BookmarkBucket {
 
 export class PreferenceService {
   private static store: preferences.Preferences | null = null;
+  private static initPromise: Promise<void> | null = null;
 
   static async init(context: common.UIAbilityContext): Promise<void> {
     if (PreferenceService.store) {
       return;
     }
-    const options: preferences.Options = { name: STORE_NAME };
-    PreferenceService.store = await preferences.getPreferences(context, options);
+    if (!PreferenceService.initPromise) {
+      const options: preferences.Options = { name: STORE_NAME };
+      PreferenceService.initPromise = preferences.getPreferences(context, options).then((s) => {
+        PreferenceService.store = s;
+      });
+    }
+    await PreferenceService.initPromise;
+  }
+
+  static async ensureReady(context: common.UIAbilityContext): Promise<void> {
+    if (PreferenceService.store) return;
+    await PreferenceService.init(context);
   }
 
   private static ensureStore(): preferences.Preferences {
@@ -244,6 +256,17 @@ export class PreferenceService {
   static async setReaderFontFamily(family: string): Promise<void> {
     const s = PreferenceService.ensureStore();
     await s.put(KEY_READER_FONT_FAMILY, family);
+    await s.flush();
+  }
+
+  static async getPrivacyAgreedVersion(): Promise<string> {
+    const s = PreferenceService.ensureStore();
+    return await s.get(KEY_PRIVACY_AGREED_VERSION, '') as string;
+  }
+
+  static async setPrivacyAgreedVersion(version: string): Promise<void> {
+    const s = PreferenceService.ensureStore();
+    await s.put(KEY_PRIVACY_AGREED_VERSION, version);
     await s.flush();
   }
 
