@@ -1,6 +1,7 @@
 import { http } from '@kit.NetworkKit';
 import { image } from '@kit.ImageKit';
 import { effectKit } from '@kit.ArkGraphics2D';
+import { fileIo } from '@kit.CoreFileKit';
 
 export interface RgbColor {
   r: number;
@@ -22,6 +23,18 @@ export class ColorPickerUtils {
   static darken(c: RgbColor, ratio: number): RgbColor {
     const k = Math.max(0, Math.min(1, 1 - ratio));
     return { r: Math.round(c.r * k), g: Math.round(c.g * k), b: Math.round(c.b * k) };
+  }
+
+  /** 同步读取已缓存的封面色（http URL / rawfile path / 沙箱绝对路径）。命中时可避免首帧默认色闪烁。 */
+  static getCached(cover: string): RgbColor | null {
+    if (!cover) return null;
+    if (cover.startsWith('http')) {
+      return ColorPickerUtils.cache.get(cover) || null;
+    }
+    if (cover.startsWith('/')) {
+      return ColorPickerUtils.cache.get('file:' + cover) || null;
+    }
+    return ColorPickerUtils.cache.get('raw:' + cover) || null;
   }
 
   static async pickFromUrl(url: string): Promise<RgbColor | null> {
@@ -88,8 +101,37 @@ export class ColorPickerUtils {
     }
   }
 
+  static async pickFromFile(path: string): Promise<RgbColor | null> {
+    if (!path) return null;
+    const key = 'file:' + path;
+    const cached = ColorPickerUtils.cache.get(key);
+    if (cached) return cached;
+    let file: fileIo.File | null = null;
+    try {
+      file = await fileIo.open(path, fileIo.OpenMode.READ_ONLY);
+      const stat = await fileIo.stat(file.fd);
+      const buf = new ArrayBuffer(stat.size);
+      await fileIo.read(file.fd, buf);
+      const source = image.createImageSource(buf);
+      const pixelMap = await source.createPixelMap();
+      const picker = await effectKit.createColorPicker(pixelMap);
+      const color = picker.getMainColorSync();
+      const rgb: RgbColor = { r: color.red, g: color.green, b: color.blue };
+      ColorPickerUtils.cache.set(key, rgb);
+      pixelMap.release();
+      source.release();
+      return rgb;
+    } catch (e) {
+      console.error('[ColorPicker] pickFromFile error: ' + JSON.stringify(e));
+      return null;
+    } finally {
+      if (file) {
+        try { fileIo.closeSync(file); } catch (_e) { /* ignore */ }
+      }
+    }
+  }
+
   private static async downloadImage(url: string): Promise<ArrayBuffer | null> {
-    console.info('[ColorPicker] downloadImage start: ' + url);
     const req = http.createHttp();
     try {
       const resp = await req.request(url, {

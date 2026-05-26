@@ -16,7 +16,7 @@ const PROFILE_ITEMS: ProfileItem[] = [
 
 @ComponentV2
 export struct ProfilePage {
-  @Local nickname: string = '听书用户';
+  @Local nickname: string = '网听';
   @Param navStack: NavPathStack = new NavPathStack();
 
   private onItemTap(id: string): void {
@@ -34,18 +34,11 @@ export struct ProfilePage {
   build() {
     Column({ space: AppSpace.Lg }) {
       Row({ space: AppSpace.Md }) {
-        Stack() {
-          Circle()
-            .width(56)
-            .height(56)
-            .fill(AppColor.Brand)
-          Text('U')
-            .fontSize(AppFont.TitleL)
-            .fontColor(AppColor.OnBrand)
-            .fontWeight(FontWeight.Bold)
-        }
-        .width(56)
-        .height(56)
+        Image($r('app.media.avatar'))
+          .width(56)
+          .height(56)
+          .borderRadius(28)
+          .objectFit(ImageFit.Cover)
 
         Column({ space: 4 }) {
           Text(this.nickname)

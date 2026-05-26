@@ -1,10 +1,10 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2 } from '@kit.ArkUI';
+import { AppStorageV2, promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, TocItem } from '../model/BookSource';
-import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
+import { PlayerState, PLAYER_STATE_KEY, ReadingState, READING_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
@@ -24,6 +24,7 @@ export struct BookDetailPage {
   @Local isFavorite: boolean = false;
   @Local loadingToc: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+  @Local readingState: ReadingState = AppStorageV2.connect(ReadingState, READING_STATE_KEY, () => new ReadingState())!;
   @Local isStartingPlay: boolean = false;
   @Local activeTab: number = 1;
   @Local bgColor: string = '#3A3A3A';
@@ -104,6 +105,8 @@ export struct BookDetailPage {
     try {
       if (cover.startsWith('http')) {
         rgb = await ColorPickerUtils.pickFromUrl(cover);
+      } else if (cover.startsWith('/')) {
+        rgb = await ColorPickerUtils.pickFromFile(cover);
       } else {
         const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
         rgb = await ColorPickerUtils.pickFromRawfile(ctx, cover);
@@ -118,6 +121,10 @@ export struct BookDetailPage {
 
   private async toggleFavorite(): Promise<void> {
     if (!this.book) return;
+    if (this.bookId.startsWith('import_') && this.isFavorite) {
+      promptAction.showToast({ message: '导入的书需在书架长按删除' });
+      return;
+    }
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
   }
 
@@ -173,6 +180,7 @@ export struct BookDetailPage {
     }
 
     // 有声书源，跳转到播放页
+    SearchCache.put(this.book);
     this.navStack.pushPathByName('player', this.book.id);
     try {
       if (target.source.type === 'url' && this.book.sourceUrl) {
@@ -218,6 +226,9 @@ export struct BookDetailPage {
   }
 
   private isPlayingChapter(ch: Chapter): boolean {
+    if (this.book?.category === 'novel') {
+      return this.readingState.currentBookId === this.bookId && this.readingState.currentChapterId === ch.id;
+    }
     if (!this.playerState.currentBook || !this.playerState.currentChapter) return false;
     return this.playerState.currentBook.id === this.bookId && this.playerState.currentChapter.id === ch.id;
   }
@@ -290,6 +301,20 @@ export struct BookDetailPage {
       // 封面
       if (this.book!.cover && this.book!.cover.startsWith('http')) {
         Image(this.book!.cover)
+          .width(100)
+          .height(130)
+          .borderRadius(AppRadius.Sm)
+          .objectFit(ImageFit.Cover)
+          .shadow({ radius: 16, color: '#44000000', offsetY: 4 })
+      } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+        Image('file://' + this.book!.cover)
+          .width(100)
+          .height(130)
+          .borderRadius(AppRadius.Sm)
+          .objectFit(ImageFit.Cover)
+          .shadow({ radius: 16, color: '#44000000', offsetY: 4 })
+      } else if (this.book!.cover) {
+        Image($rawfile(this.book!.cover))
           .width(100)
           .height(130)
           .borderRadius(AppRadius.Sm)
@@ -527,7 +552,7 @@ export struct BookDetailPage {
       .alignItems(HorizontalAlign.Start)
 
       if (this.isPlayingChapter(ch)) {
-        SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
+        SymbolGlyph(this.book?.category === 'novel' ? $r('sys.symbol.book') : $r('sys.symbol.speaker_wave_2_fill'))
           .fontSize(18).fontColor(['#D4380D'])
       }
     }

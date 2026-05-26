@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsTabs, HdsTabsController, HdsBarStyle } from '@kit.UIDesignKit';
 import { hdsMaterial } from '@hms.hds.hdsMaterial';
+import { emitter } from '@kit.BasicServicesKit';
 import { AppColor } from '../theme/Theme';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { HomePage } from './HomePage';
@@ -13,6 +14,7 @@ import { AudioService } from '../service/AudioService';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { WindowUtils } from '../utils/WindowUtils';
+import { EVT_SWITCH_TAB } from './ImportPage';
 
 @ComponentV2
 export struct MainPage {
@@ -23,12 +25,32 @@ export struct MainPage {
 
   private tabController: HdsTabsController = new HdsTabsController();
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private switchTabHandler: (e: emitter.EventData) => void = (e) => this.onSwitchTabEvent(e);
 
   aboutToAppear(): void {
     AudioService.getInstance().bind(this.playerState, this.context);
     this.restoreLastPlayed();
     WindowUtils.setStatusBarLight(false);
     this.restoreDefaultTab();
+    emitter.on(EVT_SWITCH_TAB, this.switchTabHandler);
+  }
+
+  aboutToDisappear(): void {
+    emitter.off(EVT_SWITCH_TAB, this.switchTabHandler);
+  }
+
+  private onSwitchTabEvent(e: emitter.EventData): void {
+    const data = e.data as Record<string, Object> | undefined;
+    if (!data) return;
+    const v = data['index'];
+    if (typeof v !== 'number') return;
+    const idx = v as number;
+    if (idx < 0 || idx > 3) return;
+    // 等导航 pop 完成再切，避免被吞
+    setTimeout(() => {
+      this.currentTab = idx;
+      this.tabController.changeIndex(idx);
+    }, 60);
   }
 
   private async restoreDefaultTab(): Promise<void> {
@@ -129,7 +151,8 @@ export struct MainPage {
       collapsed: this.miniBarCollapsed,
       onTapBody: () => this.navigateToPlayer(),
       onToggle: () => AudioService.getInstance().toggle(),
-      onNext: () => this.playNext()
+      onNext: () => this.playNext(),
+      onExpand: () => this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND)
     })
   }
 

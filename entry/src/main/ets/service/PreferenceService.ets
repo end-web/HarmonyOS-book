@@ -21,6 +21,8 @@ const KEY_READER_BRIGHTNESS = 'reader_brightness';
 const KEY_READER_SCROLL_POS = 'reader_scroll_pos_v2';
 const KEY_READER_BOOKMARKS = 'reader_bookmarks';
 const KEY_READER_FLIP_MODE = 'reader_flip_mode';
+const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
+const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
 
 export interface PlayHistoryItem {
   bookId: string;
@@ -253,6 +255,30 @@ export class PreferenceService {
   static async setReaderBrightness(v: number): Promise<void> {
     const s = PreferenceService.ensureStore();
     await s.put(KEY_READER_BRIGHTNESS, v);
+    await s.flush();
+  }
+
+  /** 0=共享焦点（默认，听书与其他音乐互斥）, 1=独立焦点（不与本应用其他音频互斥） */
+  static async getAudioInterruptMode(): Promise<number> {
+    const s = PreferenceService.ensureStore();
+    return await s.get(KEY_AUDIO_INTERRUPT_MODE, 0) as number;
+  }
+
+  static async setAudioInterruptMode(mode: number): Promise<void> {
+    const s = PreferenceService.ensureStore();
+    await s.put(KEY_AUDIO_INTERRUPT_MODE, mode);
+    await s.flush();
+  }
+
+  /** 失去焦点暂停后，是否在系统通知 RESUME 时自动恢复播放 */
+  static async getAudioAutoResume(): Promise<boolean> {
+    const s = PreferenceService.ensureStore();
+    return await s.get(KEY_AUDIO_AUTO_RESUME, true) as boolean;
+  }
+
+  static async setAudioAutoResume(enabled: boolean): Promise<void> {
+    const s = PreferenceService.ensureStore();
+    await s.put(KEY_AUDIO_AUTO_RESUME, enabled);
     await s.flush();
   }
 

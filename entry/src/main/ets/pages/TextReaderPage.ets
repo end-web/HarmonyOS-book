@@ -3,10 +3,11 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { vibrator } from '@kit.SensorServiceKit';
-import { mediaquery } from '@kit.ArkUI';
+import { mediaquery, AppStorageV2 } from '@kit.ArkUI';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { BookSource } from '../model/BookSource';
+import { ReadingState, READING_STATE_KEY } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
 import { BookSourceService } from '../service/BookSourceService';
 import { PreferenceService, ReaderBookmark } from '../service/PreferenceService';
@@ -117,11 +118,12 @@ export struct TextReaderPage {
   private saveTimer: number = -1;
   private hudTimer: number = -1;
   private toastTimer: number = -1;
-  private pinchBaseFontSize: number = FONT_DEFAULT;
-  private panBaseBrightness: number = 0.5;
   private restoring: boolean = false;
+  private userScrolled: boolean = false;
   private foldListener: (wide: boolean) => void = (wide) => { this.foldWide = wide; };
   private darkListener: mediaquery.MediaQueryListener | null = null;
+  private readingState: ReadingState = AppStorageV2.connect(ReadingState, READING_STATE_KEY, () => new ReadingState())!;
+  private scrollHideTimer: number = -1;
 
   aboutToAppear(): void {
     this.currentIndex = this.chapterIndex;
@@ -150,6 +152,7 @@ export struct TextReaderPage {
     if (this.saveTimer >= 0) clearTimeout(this.saveTimer);
     if (this.hudTimer >= 0) clearTimeout(this.hudTimer);
     if (this.toastTimer >= 0) clearTimeout(this.toastTimer);
+    if (this.scrollHideTimer >= 0) clearTimeout(this.scrollHideTimer);
     WindowUtils.setStatusBarLight(false);
   }
 
@@ -211,6 +214,8 @@ export struct TextReaderPage {
     this.currentChapter = this.book.chapters[index];
     this.currentIndex = index;
     this.restoring = true;
+    this.userScrolled = false;
+    this.readingState.set(this.book.id, this.currentChapter.id);
 
     try {
       const text = await this.fetchChapterText();
@@ -761,15 +766,31 @@ export struct TextReaderPage {
     }
     .width('100%')
     .height('100%')
-    .padding({ left: this.foldWide ? '12%' : '8%', right: this.foldWide ? '12%' : '8%' })
+    .padding({ left: this.foldWide ? '8%' : '5%', right: this.foldWide ? '8%' : '5%' })
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .cachedCount(8)
     .backgroundColor(this.resolvedBgOption().bg)
     .onReachEnd(() => {
+      if (this.restoring || this.loading) return;
+      if (!this.userScrolled) return;
       const chapters = this.book?.chapters || [];
       if (this.currentIndex < chapters.length - 1) {
         this.loadChapter(this.currentIndex + 1);
+      }
+    })
+    .onScrollStart(() => {
+      this.userScrolled = true;
+      // 滑动开始时隐藏工具栏
+      if (this.toolbarVisible) {
+        animateTo({ duration: AppMotion.Fast, curve: Curve.Smooth }, () => {
+          this.toolbarVisible = false;
+        });
+      }
+      // 清除之前的定时器
+      if (this.scrollHideTimer >= 0) {
+        clearTimeout(this.scrollHideTimer);
+        this.scrollHideTimer = -1;
       }
     })
     .onScrollIndex((first: number, _last: number) => {
@@ -781,6 +802,19 @@ export struct TextReaderPage {
         this.scrollPercent = Math.min(100, Math.max(0, first / (total - 1) * 100));
       }
       this.scheduleSaveScrollPos(first);
+    })
+    .onScrollStop(() => {
+      // 滚动停止后，延迟恢复工具栏显示（可选）
+      // 如果需要自动恢复工具栏，取消下面的注释
+      // if (this.scrollHideTimer >= 0) clearTimeout(this.scrollHideTimer);
+      // this.scrollHideTimer = setTimeout(() => {
+      //   if (!this.toolbarVisible) {
+      //     animateTo({ duration: AppMotion.Base, curve: Curve.Smooth }, () => {
+      //       this.toolbarVisible = true;
+      //     });
+      //   }
+      //   this.scrollHideTimer = -1;
+      // }, 2000);
     })
     .onAreaChange((_o, n) => {
       this.contentAreaHeight = n.height as number;
@@ -850,7 +884,7 @@ export struct TextReaderPage {
       }
       .width('100%')
       .height('100%')
-      .padding({ left: this.foldWide ? '12%' : '8%', right: this.foldWide ? '12%' : '8%', top: 16 })
+      .padding({ left: this.foldWide ? '8%' : '5%', right: this.foldWide ? '8%' : '5%', top: 16 })
       .clip(true)
       .alignItems(HorizontalAlign.Start)
       .backgroundColor(this.resolvedBgOption().bg)
@@ -1061,42 +1095,6 @@ export struct TextReaderPage {
         .onActionCancel(() => {
           if (this.dragDirection !== 0) {
             this.endFlipDrag(0);
-          }
-        })
-    )
-    .gesture(
-      PinchGesture({ fingers: 2 })
-        .onActionStart(() => { this.pinchBaseFontSize = this.fontSize; })
-        .onActionUpdate((evt: GestureEvent) => {
-          const target = this.pinchBaseFontSize * evt.scale;
-          const max = this.maxFontSize();
-          const clamped = Math.max(FONT_MIN, Math.min(max, target));
-          this.setFontSize(clamped, false);
-          this.showHud('font', this.fontSize);
-        })
-        .onActionEnd(() => { PreferenceService.setReaderFontSize(this.fontSize); })
-    )
-    .gesture(
-      PanGesture({ direction: PanDirection.Vertical, fingers: 1, distance: 8 })
-        .onActionStart((evt: GestureEvent) => {
-          const w = evt.target.area.width as number;
-          const x = evt.fingerList[0]?.localX ?? 0;
-          if (x > w * 0.25) return;
-          this.panBaseBrightness = this.brightnessVal >= 0 ? this.brightnessVal : 0.5;
-        })
-        .onActionUpdate((evt: GestureEvent) => {
-          const w = evt.target.area.width as number;
-          const startX = evt.fingerList[0]?.localX ?? 0;
-          if (startX > w * 0.25) return;
-          const h = evt.target.area.height as number;
-          const delta = -evt.offsetY / h;
-          const next = Math.max(0, Math.min(1, this.panBaseBrightness + delta));
-          this.setBrightness(next, false);
-          this.showHud('brightness', Math.round(next * 100));
-        })
-        .onActionEnd(() => {
-          if (this.brightnessVal >= 0) {
-            PreferenceService.setReaderBrightness(this.brightnessVal);
           }
         })
     )

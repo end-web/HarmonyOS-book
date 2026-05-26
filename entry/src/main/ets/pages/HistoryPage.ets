@@ -76,7 +76,12 @@ export struct HistoryPage {
       };
       this.navStack.pushPathByName('TextReaderPage', params);
     } else {
-      this.navStack.pushPathByName('player', entry.book.id);
+      const params: Record<string, Object> = {
+        'bookId': entry.book.id,
+        'chapterId': entry.chapterId,
+        'progressMs': entry.progressMs
+      };
+      this.navStack.pushPathByName('player', params);
     }
   }
 

@@ -1,34 +1,61 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppSpace, AppFont } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
-import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
+import { BookSource } from '../model/BookSource';
+import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
 import { AudioService } from '../service/AudioService';
+import { BookSourceService } from '../service/BookSourceService';
 import { PreferenceService } from '../service/PreferenceService';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 
+const DOMAIN = 0xFF00;
+const TAG = 'ListenBook_Player';
+
 @ComponentV2
 export struct PlayerPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
+  @Param resumeChapterId: string = '';
+  @Param resumeProgressMs: number = 0;
   @Local book: Book | null = null;
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
   @Local showSleepSheet: boolean = false;
-  @Local bgTopColor: string = '#5A8A85';
-  @Local bgBottomColor: string = '#3A6A65';
+  @Local bgTopColor: string = '#2A2A2A';
+  @Local bgBottomColor: string = '#0F0F0F';
   @Local hasThemeColor: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;;
+  @Local seeking: boolean = false;
+  @Local seekValueMs: number = 0;
 
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private speeds: number[] = [0.75, 1.0, 1.25, 1.75, 2.0];
   private lastCoverKey: string = '';
 
   aboutToAppear(): void {
+    this.primeFromCache();
     this.loadBook();
+  }
+
+  /** 同步从 SearchCache + ColorPickerUtils 缓存取得 book/cover/color，避免首帧默认色闪烁 */
+  private primeFromCache(): void {
+    const b = SearchCache.get(this.bookId);
+    if (!b) return;
+    this.book = b;
+    if (!b.cover) return;
+    const rgb = ColorPickerUtils.getCached(b.cover);
+    if (!rgb) return;
+    const top = ColorPickerUtils.darken(rgb, 0.2);
+    const bottom = ColorPickerUtils.darken(rgb, 0.4);
+    this.bgTopColor = ColorPickerUtils.toHex(top);
+    this.bgBottomColor = ColorPickerUtils.toHex(bottom);
+    this.hasThemeColor = true;
+    this.lastCoverKey = b.cover;
   }
 
   aboutToDisappear(): void {
@@ -49,9 +76,45 @@ export struct PlayerPage {
     this.isFavorite = await PreferenceService.isFavorite(b.id);
     this.extractCoverColor(b.cover);
 
-    // 仅绑定状态/上下文，不主动 play —— 启动由 BookDetailPage 负责
+    // 绑定全局状态/上下文
     AudioService.getInstance().bind(this.playerState, this.context);
+
+    // 历史记录入口：若指定了恢复章节，且当前 AudioService 没有在播放该章节，则主动起播 + seek
+    if (this.resumeChapterId) {
+      await this.tryResumePlay(b);
+    }
     console.info('[PlayerPage] loadBook complete');
+  }
+
+  private async tryResumePlay(book: Book): Promise<void> {
+    const target = book.chapters.find((c) => c.id === this.resumeChapterId);
+    if (!target) {
+      hilog.warn(DOMAIN, TAG, 'resume chapter not found: %{public}s', this.resumeChapterId);
+      return;
+    }
+    // 当前已经是同一书 + 同一章节：直接复用,不重新 seek 打断进度
+    const cur = this.playerState.currentChapter;
+    const curBook = this.playerState.currentBook;
+    if (curBook && cur && curBook.id === book.id && cur.id === target.id) {
+      hilog.info(DOMAIN, TAG, 'resume: already current chapter, skip restart');
+      return;
+    }
+    // url 类型 + 书源:解析真实播放地址
+    if (target.source.type === 'url' && book.sourceUrl) {
+      try {
+        const sourcesJson = await PreferenceService.getBookSources();
+        const sources = JSON.parse(sourcesJson) as BookSource[];
+        const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
+        if (source) {
+          const audioUrl = await BookSourceService.getAudioUrl(source, target.source.value);
+          target.source = { type: 'url', value: audioUrl };
+        }
+      } catch (e) {
+        hilog.error(DOMAIN, TAG, 'resume getAudioUrl failed');
+      }
+    }
+    SearchCache.put(book);
+    await AudioService.getInstance().playChapterAndSeek(book, target, this.resumeProgressMs);
   }
 
   private formatMs(ms: number): string {
@@ -124,6 +187,27 @@ export struct PlayerPage {
     this.showSleepSheet = false;
   }
 
+  private cyclePlayMode(): void {
+    const next: PlayMode = this.playerState.playMode === PlayMode.Sequence
+      ? PlayMode.ListLoop
+      : (this.playerState.playMode === PlayMode.ListLoop ? PlayMode.SingleLoop : PlayMode.Sequence);
+    AudioService.getInstance().setPlayMode(next);
+  }
+
+  private playModeIcon(): Resource {
+    if (this.playerState.playMode === PlayMode.SingleLoop) {
+      return $r('sys.symbol.repeat_1');
+    }
+    if (this.playerState.playMode === PlayMode.ListLoop) {
+      return $r('sys.symbol.repeat');
+    }
+    return $r('sys.symbol.arrow_right');
+  }
+
+  private playModeColor(): string {
+    return this.playerState.playMode === PlayMode.Sequence ? '#FFFFFF' : '#FFD480';
+  }
+
   private async extractCoverColor(cover: string): Promise<void> {
     if (!cover || cover === this.lastCoverKey) return;
     this.lastCoverKey = cover;
@@ -134,6 +218,8 @@ export struct PlayerPage {
     try {
       if (cover.startsWith('http')) {
         rgb = await ColorPickerUtils.pickFromUrl(cover);
+      } else if (cover.startsWith('/')) {
+        rgb = await ColorPickerUtils.pickFromFile(cover);
       } else {
         rgb = await ColorPickerUtils.pickFromRawfile(this.context, cover);
       }
@@ -168,6 +254,12 @@ export struct PlayerPage {
           // 模糊封面背景
           if (this.book.cover.startsWith('http')) {
             Image(this.book.cover)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .blur(60)
+          } else if (this.book.cover.startsWith('/')) {
+            Image('file://' + this.book.cover)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
@@ -244,9 +336,6 @@ export struct PlayerPage {
         .fontColor(['#FFFFFF'])
         .onClick(() => this.navStack.pop())
       Blank()
-      SymbolGlyph($r('sys.symbol.more'))
-        .fontSize(22)
-        .fontColor(['#FFFFFF'])
     }
     .width('100%')
     .height(48)
@@ -269,6 +358,13 @@ export struct PlayerPage {
           .onComplete(() => {
             console.info('[PlayerPage] cover image loaded: ' + this.book!.cover);
           })
+      } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+        Image('file://' + this.book!.cover)
+          .width('100%')
+          .aspectRatio(1)
+          .borderRadius(16)
+          .objectFit(ImageFit.Cover)
+          .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
       } else if (this.book!.cover) {
         Image($rawfile(this.book!.cover))
           .width('100%')
@@ -320,17 +416,6 @@ export struct PlayerPage {
           .onClick(() => this.toggleFavorite())
       }
       .width('100%')
-
-      // 调试信息：显示当前音频源
-      if (this.playerState.currentChapter) {
-        Text('音频源: ' + this.playerState.currentChapter.source.value.substring(0, 80))
-          .fontSize(10)
-          .fontColor('#FFFFFF88')
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .margin({ top: AppSpace.Xs })
-      }
     }
     .width('100%')
     .padding({ top: AppSpace.Lg })
@@ -340,7 +425,7 @@ export struct PlayerPage {
   buildProgress() {
     Column({ space: AppSpace.Xxs }) {
       Slider({
-        value: this.playerState.progressMs,
+        value: this.seeking ? this.seekValueMs : this.playerState.progressMs,
         min: 0,
         max: this.playerState.durationMs > 0 ? this.playerState.durationMs : 1,
         step: 1000,
@@ -351,14 +436,21 @@ export struct PlayerPage {
         .blockColor('#FFFFFF')
         .blockSize({ width: 14, height: 14 })
         .trackThickness(3)
+        .enabled(this.playerState.durationMs > 0)
         .onChange((value: number, mode: SliderChangeMode) => {
-          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+          if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
+            this.seeking = true;
+            this.seekValueMs = value;
+          } else if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            this.seekValueMs = value;
             AudioService.getInstance().seek(value);
+            // 留 200ms 给 AVPlayer 真正 seek 完成,避免旧 timeUpdate 让滑块回弹
+            setTimeout(() => { this.seeking = false; }, 200);
           }
         })
 
       Row() {
-        Text(this.formatMs(this.playerState.progressMs))
+        Text(this.formatMs(this.seeking ? this.seekValueMs : this.playerState.progressMs))
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF')
         Blank()
@@ -375,9 +467,10 @@ export struct PlayerPage {
   @Builder
   buildControls() {
     Row() {
-      SymbolGlyph($r('sys.symbol.repeat'))
+      SymbolGlyph(this.playModeIcon())
         .fontSize(22)
-        .fontColor(['#FFFFFF'])
+        .fontColor([this.playModeColor()])
+        .onClick(() => this.cyclePlayMode())
 
       Blank()
 

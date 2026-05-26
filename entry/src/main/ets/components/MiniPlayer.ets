@@ -14,6 +14,7 @@ export struct MiniPlayer {
   @Event onTapBody: () => void = () => {};
   @Event onToggle: () => void = () => {};
   @Event onNext: () => void = () => {};
+  @Event onExpand: () => void = () => {};
 
   @Local coverAngle: number = 0;
   private rotateTimer: number = -1;
@@ -58,18 +59,43 @@ export struct MiniPlayer {
       if (this.collapsed) {
         // 折叠态:只展示旋转封面圆,点击交给系统(HdsTabs 会自动展开 miniBar)
         Stack() {
-          Image($rawfile(this.playerState.currentBook.cover))
-            .width('100%')
-            .height('100%')
-            .borderRadius(28)
-            .objectFit(ImageFit.Cover)
-            .rotate({ angle: this.coverAngle })
-          Column()
-            .width(14)
-            .height(14)
-            .borderRadius(7)
-            .backgroundColor('#33000000')
-            .border({ width: 1, color: '#55FFFFFF' })
+          if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('http')) {
+            Image(this.playerState.currentBook.cover)
+              .width('100%')
+              .height('100%')
+              .borderRadius(28)
+              .objectFit(ImageFit.Cover)
+              .rotate({ angle: this.coverAngle })
+          } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
+            Image('file://' + this.playerState.currentBook.cover)
+              .width('100%')
+              .height('100%')
+              .borderRadius(28)
+              .objectFit(ImageFit.Cover)
+              .rotate({ angle: this.coverAngle })
+          } else if (this.playerState.currentBook.cover) {
+            Image($rawfile(this.playerState.currentBook.cover))
+              .width('100%')
+              .height('100%')
+              .borderRadius(28)
+              .objectFit(ImageFit.Cover)
+              .rotate({ angle: this.coverAngle })
+          }
+          Stack() {
+            SymbolGlyph(this.playerState.isPlaying
+              ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
+              .fontSize(16)
+              .fontColor(['#FFFFFF'])
+          }
+          .width(24)
+          .height(24)
+          .borderRadius(12)
+          .backgroundColor('#66000000')
+          .hitTestBehavior(HitTestMode.Block)
+          .onClick(() => {
+            this.onToggle();
+            this.onExpand();
+          })
         }
         .width('100%')
         .height('100%')
@@ -77,18 +103,28 @@ export struct MiniPlayer {
         // 展开态:完整长条
         Row({ space: AppSpace.Sm }) {
           Stack() {
-            Image($rawfile(this.playerState.currentBook.cover))
-              .width(40)
-              .height(40)
-              .borderRadius(20)
-              .objectFit(ImageFit.Cover)
-              .rotate({ angle: this.coverAngle })
-            Column()
-              .width(12)
-              .height(12)
-              .borderRadius(6)
-              .backgroundColor('#33000000')
-              .border({ width: 1, color: '#55FFFFFF' })
+            if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('http')) {
+              Image(this.playerState.currentBook.cover)
+                .width(40)
+                .height(40)
+                .borderRadius(20)
+                .objectFit(ImageFit.Cover)
+                .rotate({ angle: this.coverAngle })
+            } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
+              Image('file://' + this.playerState.currentBook.cover)
+                .width(40)
+                .height(40)
+                .borderRadius(20)
+                .objectFit(ImageFit.Cover)
+                .rotate({ angle: this.coverAngle })
+            } else if (this.playerState.currentBook.cover) {
+              Image($rawfile(this.playerState.currentBook.cover))
+                .width(40)
+                .height(40)
+                .borderRadius(20)
+                .objectFit(ImageFit.Cover)
+                .rotate({ angle: this.coverAngle })
+            }
           }
           .width(40)
           .height(40)

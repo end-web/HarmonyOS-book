@@ -5,6 +5,19 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
+          "storeFile": "C:/Users/ylwang112/.ohos/config/default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p12",
+          "storePassword": "0000001B0B369058F4BD3CD678131A91F9AE63AD3FB3B0AB02E1FB49F0F7C668FB792B18E060E02854E200",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BFB8A7BD3CA5DB31BDE6F245EDB330AE701AA004A63EE79F0B978035E089CD46E4D0990DC1397D3",
+          "signAlg": "SHA256withECDSA",
+          "profile": "C:/Users/ylwang112/.ohos/config/default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p7b",
+          "certpath": "C:/Users/ylwang112/.ohos/config/default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.cer"
+        }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
           "storeFile": "C:/Users/ylwang112/.ohos/config/release_ListenBook.p12",
           "storePassword": "0000001FD452BCDB4BB050B9BAC9C18A6251FD7B82AA2EFBC707483E0A273887432189CE50C3393FC9140568A568E4",
           "keyAlias": "releaseKey",
@@ -19,6 +32,19 @@
       {
         "name": "default",
         "signingConfig": "default",
+        "targetSdkVersion": "6.1.0(23)",
+        "compatibleSdkVersion": "6.1.0(23)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      },
+      {
+        "name": "release",
+        "signingConfig": "release",
         "targetSdkVersion": "6.1.0(23)",
         "compatibleSdkVersion": "6.1.0(23)",
         "runtimeOS": "HarmonyOS",
@@ -47,7 +73,8 @@
         {
           "name": "default",
           "applyToProducts": [
-            "default"
+            "default",
+            "release"
           ]
         }
       ]

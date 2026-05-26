@@ -1,9 +1,15 @@
 import { media } from '@kit.MediaKit';
+import { audio } from '@kit.AudioKit';
 import { common } from '@kit.AbilityKit';
+import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
-import { PlayerState } from '../model/PlayerState';
+import { BookSource } from '../model/BookSource';
+import { PlayerState, PlayMode } from '../model/PlayerState';
 import { PreferenceService } from './PreferenceService';
+import { BookSourceService } from './BookSourceService';
+import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
+import { BackgroundTaskService } from './BackgroundTaskService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
@@ -22,6 +28,23 @@ export class AudioService {
   private sleepTimer: number = -1;
   private sleepEndTime: number = 0;
   private isApplying: boolean = false;
+  private currentFile: fileIo.File | null = null;
+  /** 用户偏好的焦点模式：0=共享(SHARE_MODE)、1=独立(INDEPENDENT_MODE) */
+  private interruptMode: number = 0;
+  /** 失去焦点被强制暂停后，收到 RESUME 是否自动续播 */
+  private autoResume: boolean = true;
+  /** 标识当前暂停是否由系统焦点变化引起（用于决定 RESUME 时是否自动续播） */
+  private pausedByFocus: boolean = false;
+  /** 是否为短暂 duck 类打断（只有 duck 打断恢复时才自动续播） */
+  private wasDuckedInterrupt: boolean = false;
+  /** 上次暂停的时间戳，用于判断长时间静默后不自动播放 */
+  private lastPauseTime: number = 0;
+  /** 静默超时定时器，暂停超过阈值后 deactivate session */
+  private idleTimer: number = -1;
+  /** 静默多久后自动释放 session（ms），默认 15 分钟 */
+  private static readonly IDLE_TIMEOUT_MS: number = 15 * 60 * 1000;
+  /** 暂停超过多久后 AVSession play 不自动播放（ms），默认 30 分钟 */
+  private static readonly RESUME_THRESHOLD_MS: number = 30 * 60 * 1000;
 
   static getInstance(): AudioService {
     if (!AudioService.instance) {
@@ -33,6 +56,99 @@ export class AudioService {
   bind(state: PlayerState, context: common.UIAbilityContext): void {
     this.state = state;
     this.context = context;
+    this.loadFocusPrefs();
+    this.initAVSession();
+  }
+
+  private async loadFocusPrefs(): Promise<void> {
+    try {
+      this.interruptMode = await PreferenceService.getAudioInterruptMode();
+      this.autoResume = await PreferenceService.getAudioAutoResume();
+      if (this.player) {
+        this.applyInterruptMode(this.player);
+      }
+    } catch (err) {
+      const e = err as Error;
+      hilog.error(DOMAIN, TAG, 'loadFocusPrefs failed: %{public}s',
+        e && e.message ? e.message : JSON.stringify(err));
+    }
+  }
+
+  /** 设置音频焦点模式：0=SHARE_MODE, 1=INDEPENDENT_MODE */
+  async setInterruptMode(mode: number): Promise<void> {
+    this.interruptMode = mode;
+    await PreferenceService.setAudioInterruptMode(mode);
+    if (this.player) {
+      this.applyInterruptMode(this.player);
+    }
+  }
+
+  /** 设置失焦自动恢复开关 */
+  async setAutoResume(enabled: boolean): Promise<void> {
+    this.autoResume = enabled;
+    await PreferenceService.setAudioAutoResume(enabled);
+  }
+
+  private applyInterruptMode(p: media.AVPlayer): void {
+    try {
+      p.audioInterruptMode = this.interruptMode === 1
+        ? audio.InterruptMode.INDEPENDENT_MODE
+        : audio.InterruptMode.SHARE_MODE;
+    } catch (err) {
+      const e = err as Error;
+      hilog.error(DOMAIN, TAG, 'applyInterruptMode failed: %{public}s',
+        e && e.message ? e.message : JSON.stringify(err));
+    }
+  }
+
+  private initAVSession(): void {
+    if (!this.context) return;
+    const cbs: AVSessionCallbacks = {
+      onPlay: () => {
+        if (this.shouldRespondToSessionPlay()) {
+          this.toggle();
+        }
+      },
+      onPause: () => { this.toggle(); },
+      onPlayNext: () => { this.playNext(); },
+      onPlayPrevious: () => { this.playPrevious(); },
+      onSeek: (ms: number) => { this.seek(ms); }
+    };
+    AVSessionService.getInstance().setCallbacks(cbs);
+    AVSessionService.getInstance().init(this.context).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'init AVSession failed: %{public}s',
+        err?.message ?? JSON.stringify(err));
+    });
+  }
+
+  private async playNext(): Promise<void> {
+    if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
+    const chapters = this.state.currentBook.chapters;
+    const idx = chapters.findIndex((c) => c.id === this.state!.currentChapter!.id);
+    if (idx >= 0 && idx < chapters.length - 1) {
+      await this.playChapter(this.state.currentBook, chapters[idx + 1]);
+    } else if (this.state.playMode === PlayMode.ListLoop && chapters.length > 0) {
+      await this.playChapter(this.state.currentBook, chapters[0]);
+    }
+  }
+
+  private async playPrevious(): Promise<void> {
+    if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
+    const chapters = this.state.currentBook.chapters;
+    const idx = chapters.findIndex((c) => c.id === this.state!.currentChapter!.id);
+    if (idx > 0) {
+      await this.playChapter(this.state.currentBook, chapters[idx - 1]);
+    }
+  }
+
+  private syncPlaybackState(): void {
+    if (!this.state) return;
+    AVSessionService.getInstance().updatePlaybackState(
+      this.state.isPlaying,
+      this.state.progressMs,
+      this.state.speed,
+      this.state.durationMs
+    );
   }
 
   private async ensurePlayer(): Promise<media.AVPlayer> {
@@ -48,6 +164,9 @@ export class AudioService {
       } else if (newState === 'prepared') {
         this.state.durationMs = p.duration;
         hilog.info(DOMAIN, TAG, 'prepared, duration=%{public}d', p.duration);
+        // prepared 即上报一次 playbackState,让控制中心能立刻拿到 duration 渲染进度条
+        AVSessionService.getInstance().updateMetadataDuration(p.duration);
+        this.syncPlaybackState();
         if (this.pendingSeek > 0) {
           p.seek(this.pendingSeek, media.SeekMode.SEEK_PREV_SYNC);
           this.pendingSeek = 0;
@@ -55,13 +174,26 @@ export class AudioService {
         p.play();
       } else if (newState === 'playing') {
         this.state.isPlaying = true;
+        this.lastPauseTime = 0;
+        this.stopIdleTimer();
+        AVSessionService.getInstance().reactivate();
         this.startTick();
+        this.syncPlaybackState();
+        if (this.context) {
+          BackgroundTaskService.start(this.context);
+        }
       } else if (newState === 'paused') {
         this.state.isPlaying = false;
+        if (!this.pausedByFocus) {
+          this.recordPause();
+        }
         this.stopTick();
+        this.syncPlaybackState();
       } else if (newState === 'completed') {
         this.state.isPlaying = false;
+        this.recordPause();
         this.stopTick();
+        this.syncPlaybackState();
         this.autoPlayNext();
       }
     });
@@ -76,8 +208,99 @@ export class AudioService {
         e && e.message ? e.message : JSON.stringify(err));
       this.stopTick();
     });
+    p.on('audioInterrupt', (event: audio.InterruptEvent) => {
+      this.handleInterrupt(event);
+    });
+    this.applyInterruptMode(p);
     this.player = p;
     return p;
+  }
+
+  private handleInterrupt(event: audio.InterruptEvent): void {
+    hilog.info(DOMAIN, TAG, 'audioInterrupt forceType=%{public}d hintType=%{public}d',
+      event.forceType, event.hintType);
+    if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
+      if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE) {
+        this.pausedByFocus = true;
+        this.wasDuckedInterrupt = false;
+        this.recordPause();
+        if (this.state) {
+          this.state.isPlaying = false;
+        }
+        this.stopTick();
+        this.syncPlaybackState();
+      } else if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_STOP) {
+        this.pausedByFocus = false;
+        this.wasDuckedInterrupt = false;
+        this.recordPause();
+        if (this.state) {
+          this.state.isPlaying = false;
+        }
+        this.stopTick();
+        this.syncPlaybackState();
+      } else if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_DUCK) {
+        this.wasDuckedInterrupt = true;
+      } else if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_UNDUCK) {
+        this.wasDuckedInterrupt = false;
+      }
+    } else if (event.forceType === audio.InterruptForceType.INTERRUPT_SHARE) {
+      if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_RESUME) {
+        if (this.autoResume && this.pausedByFocus && this.wasDuckedInterrupt) {
+          this.pausedByFocus = false;
+          this.wasDuckedInterrupt = false;
+          this.resumeFromInterrupt();
+        } else {
+          this.pausedByFocus = false;
+          this.wasDuckedInterrupt = false;
+        }
+      }
+    }
+  }
+
+  private async resumeFromInterrupt(): Promise<void> {
+    try {
+      const p = await this.ensurePlayer();
+      if (p.state === 'paused') {
+        await p.play();
+      } else if (p.state === 'idle' || p.state === 'stopped') {
+        await this.resumeFromState();
+      }
+    } catch (err) {
+      const e = err as Error;
+      hilog.error(DOMAIN, TAG, 'resumeFromInterrupt failed: %{public}s',
+        e && e.message ? e.message : JSON.stringify(err));
+    }
+  }
+
+  private recordPause(): void {
+    this.lastPauseTime = Date.now();
+    this.startIdleTimer();
+  }
+
+  private startIdleTimer(): void {
+    this.stopIdleTimer();
+    this.idleTimer = setTimeout(() => {
+      hilog.info(DOMAIN, TAG, 'Idle timeout reached, deactivating AVSession');
+      AVSessionService.getInstance().deactivate();
+    }, AudioService.IDLE_TIMEOUT_MS);
+  }
+
+  private stopIdleTimer(): void {
+    if (this.idleTimer >= 0) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = -1;
+    }
+  }
+
+  /** AVSession play 指令是否应该响应（暂停超过阈值则不自动播放） */
+  private shouldRespondToSessionPlay(): boolean {
+    if (this.lastPauseTime <= 0) return true;
+    const idleMs = Date.now() - this.lastPauseTime;
+    if (idleMs > AudioService.RESUME_THRESHOLD_MS) {
+      hilog.info(DOMAIN, TAG, 'Ignoring session play: idle %{public}dms > threshold', idleMs);
+      return false;
+    }
+    return true;
   }
 
   private startTick(): void {
@@ -126,6 +349,7 @@ export class AudioService {
       this.state.currentChapter = chapter;
       this.state.progressMs = 0;
       this.state.durationMs = 0;
+      AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.applySource(p, chapter.source);
     } finally {
       this.isApplying = false;
@@ -136,6 +360,8 @@ export class AudioService {
     if (!this.context) return;
     hilog.info(DOMAIN, TAG, 'applySource type=%{public}s value=%{public}s',
       src.type, src.value ? src.value.substring(0, 200) : '');
+
+    this.closeCurrentFile();
 
     try {
       if (src.type === 'rawfile') {
@@ -152,27 +378,102 @@ export class AudioService {
         }
         p.url = src.value;
       } else if (src.type === 'file') {
-        p.url = 'file://' + src.value;
+        // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）
+        const f = await fileIo.open(src.value, fileIo.OpenMode.READ_ONLY);
+        const stat = await fileIo.stat(f.fd);
+        this.currentFile = f;
+        p.fdSrc = { fd: f.fd, offset: 0, length: stat.size };
       }
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'applySource failed: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
+      this.closeCurrentFile();
+    }
+  }
+
+  private closeCurrentFile(): void {
+    if (this.currentFile) {
+      try {
+        fileIo.closeSync(this.currentFile);
+      } catch (_e) { /* ignore */ }
+      this.currentFile = null;
     }
   }
 
   async toggle(): Promise<void> {
+    // 用户主动操作，清除焦点暂停标记
+    this.pausedByFocus = false;
+    // 冷启动后从持久化状态恢复:player 还没装载音源时,先按 currentChapter + progressMs 起播续播
+    if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped') {
+      if (this.state && this.state.currentBook && this.state.currentChapter) {
+        await this.resumeFromState();
+        return;
+      }
+    }
     const p = await this.ensurePlayer();
     if (p.state === 'playing') {
       await p.pause();
-    } else if (p.state === 'paused' || p.state === 'completed') {
+    } else if (p.state === 'paused') {
+      await p.play();
+    } else if (p.state === 'completed') {
+      // completed 直接 play 在部分机型不会重置进度,先 seek 到 0 再 play
+      p.seek(0, media.SeekMode.SEEK_PREV_SYNC);
+      if (this.state) {
+        this.state.progressMs = 0;
+      }
       await p.play();
     }
   }
 
+  /** 按 state 中的 currentBook/currentChapter/progressMs 起播续播。url 类型 + 书源会先重解析地址。 */
+  async resumeFromState(): Promise<void> {
+    if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
+    const book = this.state.currentBook;
+    const chapter = this.state.currentChapter;
+    const seekMs = this.state.progressMs;
+    if (chapter.source.type === 'url' && book.sourceUrl) {
+      try {
+        const sourcesJson = await PreferenceService.getBookSources();
+        const sources = JSON.parse(sourcesJson) as BookSource[];
+        const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
+        if (source) {
+          const audioUrl = await BookSourceService.getAudioUrl(source, chapter.source.value);
+          chapter.source = { type: 'url', value: audioUrl };
+        }
+      } catch (err) {
+        const e = err as Error;
+        hilog.error(DOMAIN, TAG, 'resumeFromState getAudioUrl failed: %{public}s',
+          e && e.message ? e.message : JSON.stringify(err));
+      }
+    }
+    await this.playChapterAndSeek(book, chapter, seekMs);
+  }
+
   async seek(ms: number): Promise<void> {
     const p = await this.ensurePlayer();
-    p.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
+    // 同步先把 state.progressMs 推到目标位置,避免 UI 滑块回弹
+    if (this.state) {
+      this.state.progressMs = ms;
+    }
+    if (p.state === 'completed') {
+      // completed 状态下需要先 seek + play 才能继续
+      p.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
+      await p.play();
+    } else {
+      p.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
+    }
+    this.syncPlaybackState();
+  }
+
+  async replayCurrent(): Promise<void> {
+    if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
+    await this.playChapterAndSeek(this.state.currentBook, this.state.currentChapter, 0);
+  }
+
+  setPlayMode(mode: PlayMode): void {
+    if (!this.state) return;
+    this.state.playMode = mode;
   }
 
   async setSpeed(speed: number): Promise<void> {
@@ -186,6 +487,7 @@ export class AudioService {
     if (target !== null) {
       p.setSpeed(target);
       if (this.state) this.state.speed = speed;
+      this.syncPlaybackState();
     }
   }
 
@@ -230,19 +532,39 @@ export class AudioService {
 
   async release(): Promise<void> {
     this.stopTick();
+    this.stopIdleTimer();
     if (this.player) {
       await this.player.release();
       this.player = null;
     }
+    this.closeCurrentFile();
+    if (this.context) {
+      await BackgroundTaskService.stop(this.context);
+    }
+    await AVSessionService.getInstance().destroy();
   }
 
   private autoPlayNext(): void {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
+    const mode = this.state.playMode;
     const chapters = this.state.currentBook.chapters;
     const idx = chapters.findIndex((c) => c.id === this.state!.currentChapter!.id);
-    if (idx >= 0 && idx < chapters.length - 1) {
-      this.playChapter(this.state.currentBook, chapters[idx + 1]);
+    if (idx < 0) return;
+
+    if (mode === PlayMode.SingleLoop) {
+      // 单集循环:重播当前章节
+      this.playChapterAndSeek(this.state.currentBook, chapters[idx], 0);
+      return;
     }
+    if (idx < chapters.length - 1) {
+      this.playChapter(this.state.currentBook, chapters[idx + 1]);
+      return;
+    }
+    if (mode === PlayMode.ListLoop && chapters.length > 0) {
+      // 列表循环:回到第一集
+      this.playChapter(this.state.currentBook, chapters[0]);
+    }
+    // 顺序播放:停在最后一集
   }
 
   async playChapterAndSeek(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
@@ -264,6 +586,7 @@ export class AudioService {
       this.state.progressMs = seekMs;
       this.state.durationMs = 0;
       this.pendingSeek = seekMs;
+      AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.applySource(p, chapter.source);
     } finally {
       this.isApplying = false;

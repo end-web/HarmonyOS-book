@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
+import { AudioService } from '../service/AudioService';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -33,6 +34,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    AudioService.getInstance().release().catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'AudioService release failed: %{public}s',
+        err?.message ?? JSON.stringify(err));
+    });
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

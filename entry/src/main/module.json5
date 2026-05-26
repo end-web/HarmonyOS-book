@@ -16,6 +16,9 @@
       },
       {
         "name": "ohos.permission.VIBRATE"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
       }
     ],
     "abilities": [
@@ -28,6 +31,9 @@
         "startWindowIcon": "$media:splash_text",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        "backgroundModes": [
+          "audioPlayback"
+        ],
         "skills": [
           {
             "entities": [
