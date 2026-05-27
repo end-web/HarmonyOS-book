@@ -18,7 +18,14 @@
         "name": "ohos.permission.VIBRATE"
       },
       {
-        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:keep_background_running_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
       }
     ],
     "abilities": [

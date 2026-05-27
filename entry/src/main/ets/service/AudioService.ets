@@ -8,6 +8,7 @@ import { BookSource } from '../model/BookSource';
 import { PlayerState, PlayMode } from '../model/PlayerState';
 import { PreferenceService } from './PreferenceService';
 import { BookSourceService } from './BookSourceService';
+import { DataService } from './DataService';
 import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
 
@@ -39,6 +40,10 @@ export class AudioService {
   private wasDuckedInterrupt: boolean = false;
   private idleTimer: number = -1;
   private static readonly IDLE_TIMEOUT_MS: number = 5 * 60 * 1000;
+  /** 节流写入 progressMs 的最近一次时间戳。AVPlayer timeUpdate ~100ms 一次,
+   *  但 progressMs 是 @Trace,会触发全局 V2 级联重渲染,降到 500ms 一次足够 UI 用 */
+  private lastProgressWriteAt: number = 0;
+  private static readonly PROGRESS_WRITE_INTERVAL_MS: number = 500;
 
   static getInstance(): AudioService {
     if (!AudioService.instance) {
@@ -187,8 +192,14 @@ export class AudioService {
       }
     });
     p.on('timeUpdate', (ms: number) => {
-      if (this.state) {
+      if (!this.state) return;
+      // 节流:跳进度 / 暂停 / 切章节时立即写,正常播放每 500ms 写一次,
+      // 避免 100ms 级 @Trace 抖动导致 V2 全局级联重绘
+      const now = Date.now();
+      const force = !this.state.isPlaying || Math.abs(ms - this.state.progressMs) > 1500;
+      if (force || now - this.lastProgressWriteAt >= AudioService.PROGRESS_WRITE_INTERVAL_MS) {
         this.state.progressMs = ms;
+        this.lastProgressWriteAt = now;
       }
     });
     p.on('error', (err: object) => {
@@ -296,16 +307,17 @@ export class AudioService {
 
   private async persistHistory(): Promise<void> {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
-    const bookId = this.state.currentBook.id;
+    const book = this.state.currentBook;
     const chapterId = this.state.currentChapter.id;
     const progressMs = this.state.progressMs;
     await PreferenceService.upsertHistory({
-      bookId,
+      bookId: book.id,
       chapterId,
       progressMs,
       updatedAt: Date.now()
     });
-    await PreferenceService.setLastPlayed(bookId, chapterId, progressMs);
+    await PreferenceService.setLastPlayed(book.id, chapterId, progressMs);
+    await DataService.upsertCachedBook(book);
   }
 
   async playChapter(book: Book, chapter: Chapter): Promise<void> {

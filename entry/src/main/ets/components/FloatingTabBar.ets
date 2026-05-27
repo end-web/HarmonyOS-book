@@ -1,4 +1,4 @@
-import { AppColor, AppSpace, AppFont } from '../theme/Theme';
+import { AppColor, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface TabItem {
@@ -14,9 +14,6 @@ const TABS: TabItem[] = [
   { id: 2, label: '我的', symbol: $r('sys.symbol.person'), symbolFill: $r('sys.symbol.person_fill') }
 ];
 
-/**
- * 底部 TabBar（贴底全宽）
- */
 @ComponentV2
 export struct FloatingTabBar {
   @Param selectedIndex: number = 0;
@@ -30,14 +27,22 @@ export struct FloatingTabBar {
             .fontSize(24)
             .fontColor([this.selectedIndex === tab.id ? AppColor.Brand : '#999999'])
             .renderingStrategy(SymbolRenderingStrategy.SINGLE)
+            .scale({
+              x: this.selectedIndex === tab.id ? 1.12 : 1,
+              y: this.selectedIndex === tab.id ? 1.12 : 1
+            })
+            .animation({ duration: AppMotion.Base, curve: AppCurve.Spring })
 
           Text(tab.label)
             .fontSize(AppFont.Caption)
             .fontColor(this.selectedIndex === tab.id ? AppColor.Brand : '#999999')
+            .opacity(this.selectedIndex === tab.id ? 1 : 0.8)
+            .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
         }
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
         .padding({ top: 12, bottom: 8 })
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.95 })
         .onClick(() => this.onTabChange(tab.id))
       }, (tab: TabItem) => tab.id.toString())
     }

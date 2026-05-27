@@ -478,6 +478,7 @@ export struct ImportPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('sys.color.background_primary'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder

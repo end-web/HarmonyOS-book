@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY, ReadingState, READING_STATE_KEY } from '../model/PlayerState';
@@ -30,10 +30,26 @@ export struct BookDetailPage {
   @Local bgColor: string = '#3A3A3A';
   @Local bgColorDark: string = '#1A1A1A';
   @Local hasThemeColor: boolean = false;
+  @Local debugInfo: string = '';
 
   aboutToAppear(): void {
-    this.loadBook();
+    // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
+    // 收藏状态 / TOC 拉取 / 取色等重活推迟到转场动画结束后,避免抢主线程
+    this.primeBookFromCache();
     WindowUtils.setStatusBarLight(true);
+    setTimeout(() => { this.loadBook(); }, AppMotion.Page);
+  }
+
+  /** 同步从 SearchCache 取 book,让首帧有内容,后续重活推迟 */
+  private primeBookFromCache(): void {
+    const cached = SearchCache.get(this.bookId);
+    if (cached) {
+      this.book = cached;
+      const cachedRgb = ColorPickerUtils.getCached(cached.cover);
+      if (cachedRgb) {
+        this.applyCoverColor(cachedRgb);
+      }
+    }
   }
 
   aboutToDisappear(): void {
@@ -43,13 +59,29 @@ export struct BookDetailPage {
   private async loadBook(): Promise<void> {
     const b = await this.findBookById(this.bookId);
     if (b) {
+      // 先快速渲染基础信息
       this.book = b;
       this.isFavorite = await PreferenceService.isFavorite(b.id);
+      // 先同步检查封面色缓存，命中则直接用，避免异步提取期间的默认灰闪烁
+      const cached = ColorPickerUtils.getCached(b.cover);
+      if (cached) {
+        this.applyCoverColor(cached);
+      }
+      // 取色异步执行,不阻塞首屏
       this.extractCoverColor(b.cover);
+      // 章节懒加载
       if (b.chapters.length === 0 && b.bookUrl && b.sourceUrl) {
-        await this.loadTocFromSource(b);
+        this.loadTocFromSource(b);
       }
     }
+  }
+
+  /** 一次性应用封面色，避免多次状态更新触发多次重绘 */
+  private applyCoverColor(rgb: RgbColor): void {
+    const dark = ColorPickerUtils.darken(rgb, 0.3);
+    this.bgColor = ColorPickerUtils.toHex(rgb);
+    this.bgColorDark = ColorPickerUtils.toHex(dark);
+    this.hasThemeColor = true;
   }
 
   private async findBookById(id: string): Promise<Book | null> {
@@ -62,12 +94,18 @@ export struct BookDetailPage {
 
   private async loadTocFromSource(book: Book): Promise<void> {
     this.loadingToc = true;
+    this.debugInfo = `bookUrl=${book.bookUrl}\nsourceUrl=${book.sourceUrl}`;
     try {
       const sourcesJson = await PreferenceService.getBookSources();
       const sources = JSON.parse(sourcesJson) as BookSource[];
       const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
+      this.debugInfo += `\nsource=${source ? source.bookSourceName : 'NOT FOUND'}`;
       if (source && book.bookUrl) {
         const tocItems = await BookSourceService.getBookToc(source, book.bookUrl);
+        this.debugInfo += `\ntocItems=${tocItems.length}`;
+        if (tocItems.length > 0) {
+          this.debugInfo += `\nfirst=${tocItems[0].name}`;
+        }
         book.chapters = tocItems.map((item: TocItem, idx: number): Chapter => ({
           id: `${book.id}-c${idx}`,
           index: idx + 1,
@@ -95,7 +133,9 @@ export struct BookDetailPage {
         this.book = cloned;
         SearchCache.put(cloned);
       }
-    } catch (_e) { /* ignore */ }
+    } catch (e) {
+      this.debugInfo += `\nERROR: ${e}`;
+    }
     this.loadingToc = false;
   }
 
@@ -113,10 +153,8 @@ export struct BookDetailPage {
       }
     } catch (_e) { /* ignore */ }
     if (!rgb) return;
-    const dark = ColorPickerUtils.darken(rgb, 0.3);
-    this.bgColor = ColorPickerUtils.toHex(rgb);
-    this.bgColorDark = ColorPickerUtils.toHex(dark);
-    this.hasThemeColor = true;
+    // 一次性更新，避免 3 次独立赋值触发 3 次重绘
+    this.applyCoverColor(rgb);
   }
 
   private async toggleFavorite(): Promise<void> {
@@ -126,6 +164,16 @@ export struct BookDetailPage {
       return;
     }
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
+    if (this.isFavorite) {
+      await DataService.upsertCachedBook(this.book);
+    } else if (!this.bookId.startsWith('import_')) {
+      // 取消收藏后,如果没有播放历史,也清掉缓存避免堆积
+      const history = await PreferenceService.getHistory();
+      const stillNeeded = history.some((h) => h.bookId === this.book!.id);
+      if (!stillNeeded) {
+        await DataService.removeCachedBook(this.book.id);
+      }
+    }
   }
 
   private isLocalNovel(chapter: Chapter): boolean {
@@ -288,8 +336,6 @@ export struct BookDetailPage {
         .fontSize(22)
         .fontColor([this.isFavorite ? '#FF6B8A' : '#FFFFFF'])
         .onClick(() => this.toggleFavorite())
-      SymbolGlyph($r('sys.symbol.share'))
-        .fontSize(22).fontColor(['#FFFFFF']).margin({ left: AppSpace.Md })
     }
     .width('100%')
     .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
@@ -298,38 +344,41 @@ export struct BookDetailPage {
   @Builder
   buildHeader() {
     Row({ space: AppSpace.Lg }) {
-      // 封面
-      if (this.book!.cover && this.book!.cover.startsWith('http')) {
-        Image(this.book!.cover)
-          .width(100)
-          .height(130)
+      // 封面（共享元素，飞向 PlayerPage / 飞回 BookCard）
+      Stack() {
+        if (this.book!.cover && this.book!.cover.startsWith('http')) {
+          Image(this.book!.cover)
+            .width(100)
+            .height(130)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
+        } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+          Image('file://' + this.book!.cover)
+            .width(100)
+            .height(130)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
+        } else if (this.book!.cover) {
+          Image($rawfile(this.book!.cover))
+            .width(100)
+            .height(130)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
+        } else {
+          Column() {
+            SymbolGlyph($r('sys.symbol.book'))
+              .fontSize(48).fontColor(['#FFFFFF'])
+          }
+          .width(100).height(130)
           .borderRadius(AppRadius.Sm)
-          .objectFit(ImageFit.Cover)
-          .shadow({ radius: 16, color: '#44000000', offsetY: 4 })
-      } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-        Image('file://' + this.book!.cover)
-          .width(100)
-          .height(130)
-          .borderRadius(AppRadius.Sm)
-          .objectFit(ImageFit.Cover)
-          .shadow({ radius: 16, color: '#44000000', offsetY: 4 })
-      } else if (this.book!.cover) {
-        Image($rawfile(this.book!.cover))
-          .width(100)
-          .height(130)
-          .borderRadius(AppRadius.Sm)
-          .objectFit(ImageFit.Cover)
-          .shadow({ radius: 16, color: '#44000000', offsetY: 4 })
-      } else {
-        Column() {
-          SymbolGlyph($r('sys.symbol.book'))
-            .fontSize(48).fontColor(['#FFFFFF'])
+          .backgroundColor('#33FFFFFF')
+          .justifyContent(FlexAlign.Center)
         }
-        .width(100).height(130)
-        .borderRadius(AppRadius.Sm)
-        .backgroundColor('#33FFFFFF')
-        .justifyContent(FlexAlign.Center)
       }
+      .geometryTransition('book-cover-' + this.bookId, { follow: true })
 
       // 书名信息
       Column({ space: AppSpace.Xs }) {
@@ -504,6 +553,17 @@ export struct BookDetailPage {
           Text('暂无章节信息')
             .fontSize(AppFont.Body)
             .fontColor($r('sys.color.font_tertiary'))
+          if (this.debugInfo) {
+            Text(this.debugInfo)
+              .fontSize(10)
+              .fontColor('#FF6B6B')
+              .margin({ top: 8 })
+              .padding(8)
+              .backgroundColor('#1AFFFFFF')
+              .borderRadius(4)
+              .maxLines(10)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {

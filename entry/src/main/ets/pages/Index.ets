@@ -1,4 +1,3 @@
-import { common } from '@kit.AbilityKit';
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage } from './PlayerPage';
@@ -7,68 +6,15 @@ import { HistoryPage } from './HistoryPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
-import { PrivacyPage, PRIVACY_POLICY_VERSION } from './PrivacyPage';
-import { PreferenceService } from '../service/PreferenceService';
+import { PrivacyPage } from './PrivacyPage';
+import { RuleEngineTestPage } from './RuleEngineTestPage';
 
 @Entry
 @ComponentV2
 struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
-  @Local playerScale: number = 1;
   @Local playerTranslateY: string = '0';
-  @Local playerOpacity: number = 1;
-  @Local privacyAgreed: boolean = false;
-  @Local privacyChecked: boolean = false;
-
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
-
-  aboutToAppear(): void {
-    this.checkPrivacyAgreed();
-  }
-
-  private async checkPrivacyAgreed(): Promise<void> {
-    try {
-      await PreferenceService.ensureReady(this.context);
-      const agreed = await PreferenceService.getPrivacyAgreedVersion();
-      this.privacyAgreed = agreed === PRIVACY_POLICY_VERSION;
-    } catch (_e) {
-      this.privacyAgreed = false;
-    }
-    this.privacyChecked = true;
-  }
-
-  private onPrivacyAgreed(): void {
-    this.privacyAgreed = true;
-  }
-
-  private playerTransitionDelegate(op: NavigationOperation,
-    isEnter: boolean): Array<NavDestinationTransition> | undefined {
-    if (op === NavigationOperation.PUSH && isEnter) {
-      this.playerScale = 0.85;
-      this.playerTranslateY = '100%';
-      this.playerOpacity = 0;
-      return [{
-        duration: 380,
-        curve: Curve.EaseOut,
-        event: () => {
-          this.playerScale = 1;
-          this.playerTranslateY = '0';
-          this.playerOpacity = 1;
-        }
-      }];
-    } else if (op === NavigationOperation.POP && !isEnter) {
-      return [{
-        duration: 320,
-        curve: Curve.EaseIn,
-        event: () => {
-          this.playerScale = 0.85;
-          this.playerTranslateY = '100%';
-          this.playerOpacity = 0;
-        }
-      }];
-    }
-    return undefined;
-  }
+  @Local playerBorderRadius: number = 0;
 
   @Builder
   routerMap(name: string, param: object) {
@@ -78,86 +24,113 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'player') {
       NavDestination() {
-        Column() {
-          PlayerPageWrapper({ navStack: this.navStack, param: param as Object })
-        }
-        .width('100%')
-        .height('100%')
-        .scale({ x: this.playerScale, y: this.playerScale })
-        .translate({ y: this.playerTranslateY })
-        .opacity(this.playerOpacity)
-        .borderRadius(this.playerScale < 1 ? 24 : 0)
-        .clip(true)
+        PlayerPageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
-      .backgroundColor(Color.Transparent)
-      .customTransition(
-        (op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-          return this.playerTransitionDelegate(op, isEnter);
-        })
+      .backgroundColor('#000000')
+      .translate({ y: this.playerTranslateY })
+      .borderRadius(this.playerBorderRadius)
+      .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
+        if (op === NavigationOperation.PUSH && isEnter) {
+          this.playerTranslateY = '100%';
+          this.playerBorderRadius = 20;
+          return [{
+            duration: 380,
+            curve: Curve.Friction,
+            event: () => {
+              this.playerTranslateY = '0';
+              this.playerBorderRadius = 0;
+            },
+            onTransitionEnd: () => {}
+          }];
+        } else if (op === NavigationOperation.POP && !isEnter) {
+          this.playerTranslateY = '0';
+          this.playerBorderRadius = 0;
+          return [{
+            duration: 320,
+            curve: Curve.FastOutSlowIn,
+            event: () => {
+              this.playerTranslateY = '100%';
+              this.playerBorderRadius = 20;
+            },
+            onTransitionEnd: () => {}
+          }];
+        }
+        return undefined;
+      })
     } else if (name === 'TextReaderPage') {
       NavDestination() {
         TextReaderPageWrapper({ navStack: this.navStack, param: param as Object as Record<string, Object> })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'history') {
       NavDestination() {
         HistoryPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'about') {
       NavDestination() {
         AboutPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'import') {
       NavDestination() {
         ImportPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'privacy') {
       NavDestination() {
-        PrivacyPage({ navStack: this.navStack, mode: 'view' })
+        PrivacyPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'RuleEngineTestPage') {
+      NavDestination() {
+        RuleEngineTestPageWrapper({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     }
   }
 
   build() {
-    if (!this.privacyChecked) {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor($r('sys.color.background_primary'))
-    } else if (!this.privacyAgreed) {
-      PrivacyPage({
-        navStack: this.navStack,
-        mode: 'consent',
-        onAgreed: () => this.onPrivacyAgreed()
-      })
-    } else {
-      Navigation(this.navStack) {
-        MainPage({ navStack: this.navStack })
-      }
-      .navDestination(this.routerMap)
-      .hideTitleBar(true)
-      .mode(NavigationMode.Stack)
-      .width('100%')
-      .height('100%')
+    Navigation(this.navStack) {
+      MainPage({ navStack: this.navStack })
     }
+    .navDestination(this.routerMap)
+    .hideTitleBar(true)
+    .mode(NavigationMode.Stack)
+    .width('100%')
+    .height('100%')
+  }
+}
+
+@ComponentV2
+struct RuleEngineTestPageWrapper {
+  @Param navStack: NavPathStack = new NavPathStack();
+
+  build() {
+    RuleEngineTestPage({ navStack: this.navStack })
   }
 }
 

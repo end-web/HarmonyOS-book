@@ -1,236 +1,283 @@
 /**
- * RuleAnalyzer - 规则分析器（平衡分组解析）
+ * RuleAnalyzer - 规则分析器（对齐 Legado RuleAnalyzer.kt）
  *
- * 参考 Legado 的 RuleAnalyzer.kt 实现
- * 核心功能：按分隔符分割规则，但保持括号/引号内的内容不被分割
- *
- * 示例：
- * - splitRule("&&"): "$.a && $.b" -> ["$.a", "$.b"]
- * - splitRule("&&"): "($.a || $.b) && $.c" -> ["($.a || $.b)", "$.c"]
- * - splitRule("@"): "div.title@text" -> ["div.title", "text"]
+ * 核心功能：按分隔符分割规则，精确跳过括号/引号/选择器内的内容
+ * 区分代码平衡（JSON/JS 用 [] 主平衡 + {} 副平衡）和规则平衡（CSS/XPath 单对称）
  */
 
-export class RuleAnalyzer {
-  private rule: string;
-  private pos: number = 0;
-  private balanceCode: boolean; // true=代码平衡({}), false=普通平衡([])
+const ESC = '\\';
 
-  // 分割结果类型（用于 ||、&&、%% 判断）
+export class RuleAnalyzer {
+  private queue: string;
+  private pos: number = 0;
+  private start: number = 0;
+  private startX: number = 0;
+  private rule: string[] = [];
+  private step: number = 0;
+  private code: boolean;
+
   public elementsType: string = "";
 
-  constructor(rule: string, balanceCode: boolean = false) {
-    this.rule = rule;
-    this.balanceCode = balanceCode;
+  constructor(data: string, code: boolean = false) {
+    this.queue = data;
+    this.code = code;
   }
 
-  /**
-   * 去除规则前置的 @ 或空白符
-   */
   trim(): void {
-    this.rule = this.rule.replace(/^[@\s]+/, '');
+    if (this.pos < this.queue.length &&
+      (this.queue[this.pos] === '@' || this.queue.charCodeAt(this.pos) < 33)) {
+      this.pos++;
+      while (this.pos < this.queue.length &&
+        (this.queue[this.pos] === '@' || this.queue.charCodeAt(this.pos) < 33)) {
+        this.pos++;
+      }
+      this.start = this.pos;
+      this.startX = this.pos;
+    }
   }
 
-  /**
-   * 分割规则（支持多个分隔符）
-   * @param separators 分隔符数组，如 ["&&", "||", "%%"]
-   * @returns 分割后的规则数组
-   */
-  splitRule(...separators: string[]): string[] {
-    if (separators.length === 0) {
-      return [this.rule];
-    }
-
-    // 记录第一个匹配的分隔符类型（用于 elementsType）
-    this.elementsType = "";
-
-    const result: string[] = [];
-    let current = "";
+  reSetPos(): void {
     this.pos = 0;
+    this.startX = 0;
+  }
 
-    while (this.pos < this.rule.length) {
-      // 检查是否匹配任一分隔符
-      let matched = false;
-      for (const sep of separators) {
-        if (this.rule.substring(this.pos, this.pos + sep.length) === sep) {
-          // 记录第一次匹配的分隔符类型
-          if (!this.elementsType) {
-            this.elementsType = sep;
-          }
-          // 只有相同类型的分隔符才分割
-          if (this.elementsType === sep) {
-            if (current.trim()) {
-              result.push(current.trim());
-            }
-            current = "";
-            this.pos += sep.length;
-            matched = true;
-            break;
-          }
+  private consumeTo(seq: string): boolean {
+    this.start = this.pos;
+    const offset = this.queue.indexOf(seq, this.pos);
+    if (offset !== -1) {
+      this.pos = offset;
+      return true;
+    }
+    return false;
+  }
+
+  private consumeToAny(...seq: string[]): boolean {
+    let p = this.pos;
+    while (p < this.queue.length) {
+      for (const s of seq) {
+        if (this.queue.substring(p, p + s.length) === s) {
+          this.step = s.length;
+          this.pos = p;
+          return true;
         }
       }
-
-      if (matched) continue;
-
-      // 处理括号平衡
-      const char = this.rule[this.pos];
-
-      if (char === '(' || char === '[' || char === '{') {
-        const closing = char === '(' ? ')' : char === '[' ? ']' : '}';
-        current += char;
-        this.pos++;
-        current += this.consumeUntil(closing);
-        continue;
-      }
-
-      // 处理引号
-      if (char === '"' || char === "'") {
-        current += char;
-        this.pos++;
-        current += this.consumeString(char);
-        continue;
-      }
-
-      // 普通字符
-      current += char;
-      this.pos++;
+      p++;
     }
-
-    // 添加最后一段
-    if (current.trim()) {
-      result.push(current.trim());
-    }
-
-    return result.length > 0 ? result : [this.rule];
+    return false;
   }
 
-  /**
-   * 消费字符直到遇到闭合符号（处理嵌套）
-   */
-  private consumeUntil(closing: string): string {
-    let content = "";
-    let depth = 1;
-    const opening = closing === ')' ? '(' : closing === ']' ? '[' : '{';
-
-    while (this.pos < this.rule.length && depth > 0) {
-      const char = this.rule[this.pos];
-
-      // 处理嵌套引号
-      if (char === '"' || char === "'") {
-        content += char;
-        this.pos++;
-        content += this.consumeString(char);
-        continue;
+  private findToAny(...chars: string[]): number {
+    let p = this.pos;
+    while (p < this.queue.length) {
+      for (const c of chars) {
+        if (this.queue[p] === c) return p;
       }
+      p++;
+    }
+    return -1;
+  }
 
-      // 处理嵌套括号
-      if (char === opening) {
-        depth++;
-      } else if (char === closing) {
-        depth--;
-        if (depth === 0) {
-          content += char;
-          this.pos++;
+  private chompCodeBalanced(open: string, close: string): boolean {
+    let p = this.pos;
+    let depth = 0;
+    let otherDepth = 0;
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+
+    while (p < this.queue.length) {
+      const c = this.queue[p];
+      p++;
+      if (c !== ESC) {
+        if (c === "'" && !inDoubleQuote) inSingleQuote = !inSingleQuote;
+        else if (c === '"' && !inSingleQuote) inDoubleQuote = !inDoubleQuote;
+        if (inSingleQuote || inDoubleQuote) continue;
+        if (c === '[') depth++;
+        else if (c === ']') depth--;
+        else if (depth === 0) {
+          if (c === open) otherDepth++;
+          else if (c === close) otherDepth--;
+        }
+      } else {
+        p++;
+      }
+      if (depth <= 0 && otherDepth <= 0) break;
+    }
+
+    if (depth > 0 || otherDepth > 0) return false;
+    this.pos = p;
+    return true;
+  }
+
+  private chompRuleBalanced(open: string, close: string): boolean {
+    let p = this.pos;
+    let depth = 0;
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+
+    while (p < this.queue.length) {
+      const c = this.queue[p];
+      p++;
+      if (c === "'" && !inDoubleQuote) inSingleQuote = !inSingleQuote;
+      else if (c === '"' && !inSingleQuote) inDoubleQuote = !inDoubleQuote;
+      if (inSingleQuote || inDoubleQuote) continue;
+      if (c === ESC) { p++; continue; }
+      if (c === open) depth++;
+      else if (c === close) depth--;
+      if (depth <= 0) break;
+    }
+
+    if (depth > 0) return false;
+    this.pos = p;
+    return true;
+  }
+
+  private chompBalanced(open: string, close: string): boolean {
+    if (this.code) {
+      return this.chompCodeBalanced(open, close);
+    }
+    return this.chompRuleBalanced(open, close);
+  }
+
+  splitRule(...split: string[]): string[] {
+    this.rule = [];
+    if (split.length === 0) return [this.queue];
+
+    if (split.length === 1) {
+      this.elementsType = split[0];
+      if (!this.consumeTo(this.elementsType)) {
+        this.rule.push(this.queue.substring(this.startX).trim());
+        return this.rule;
+      }
+      this.step = this.elementsType.length;
+    } else {
+      if (!this.consumeToAny(...split)) {
+        this.rule.push(this.queue.substring(this.startX).trim());
+        return this.rule;
+      }
+    }
+
+    // 主循环（合并首段/二段匹配逻辑）
+    while (true) {
+      const end = this.pos;
+      this.pos = this.start;
+
+      let resolved = false;
+      while (!resolved) {
+        const st = this.findToAny('[', '(');
+
+        if (st === -1) {
+          this.rule.push(this.queue.substring(this.startX, end).trim());
+          if (!this.elementsType) {
+            this.elementsType = this.queue.substring(end, end + this.step);
+          }
+          this.pos = end + this.step;
+          while (this.consumeTo(this.elementsType)) {
+            this.rule.push(this.queue.substring(this.start, this.pos).trim());
+            this.pos += this.step;
+          }
+          this.rule.push(this.queue.substring(this.pos).trim());
+          return this.rule;
+        }
+
+        if (st > end) {
+          this.rule.push(this.queue.substring(this.startX, end).trim());
+          if (!this.elementsType) {
+            this.elementsType = this.queue.substring(end, end + this.step);
+          }
+          this.pos = end + this.step;
+
+          while (this.consumeTo(this.elementsType) && this.pos < st) {
+            this.rule.push(this.queue.substring(this.start, this.pos).trim());
+            this.pos += this.step;
+          }
+
+          if (this.pos > st) {
+            this.startX = this.start;
+            resolved = true; // 继续外层 while 进入二段匹配
+          } else {
+            this.rule.push(this.queue.substring(this.pos).trim());
+            return this.rule;
+          }
           break;
         }
-      }
 
-      content += char;
-      this.pos++;
-    }
+        this.pos = st;
+        const next = this.queue[this.pos] === '[' ? ']' : ')';
+        if (!this.chompBalanced(this.queue[this.pos], next)) {
+          throw new Error(this.queue.substring(0, this.start) + ' 后未平衡');
+        }
 
-    return content;
-  }
-
-  /**
-   * 消费字符串（处理转义）
-   */
-  private consumeString(quote: string): string {
-    let content = "";
-    let escaped = false;
-
-    while (this.pos < this.rule.length) {
-      const char = this.rule[this.pos];
-
-      if (escaped) {
-        content += char;
-        escaped = false;
-        this.pos++;
-        continue;
-      }
-
-      if (char === '\\') {
-        content += char;
-        escaped = true;
-        this.pos++;
-        continue;
-      }
-
-      if (char === quote) {
-        content += char;
-        this.pos++;
-        break;
-      }
-
-      content += char;
-      this.pos++;
-    }
-
-    return content;
-  }
-
-  /**
-   * 替换规则中的内嵌部分（如 {{...}} 或 {$...}）
-   * @param start 起始标记
-   * @param end 结束标记
-   * @param replacer 替换函数
-   * @returns 替换后的规则
-   */
-  innerRule(start: string, end: string, replacer: (inner: string) => string): string {
-    let result = "";
-    let pos = 0;
-
-    while (pos < this.rule.length) {
-      const startIdx = this.rule.indexOf(start, pos);
-      if (startIdx === -1) {
-        result += this.rule.substring(pos);
-        break;
-      }
-
-      // 添加起始标记之前的内容
-      result += this.rule.substring(pos, startIdx);
-
-      // 查找结束标记（考虑嵌套）
-      let endIdx = startIdx + start.length;
-      let depth = 1;
-
-      while (endIdx < this.rule.length && depth > 0) {
-        if (this.rule.substring(endIdx, endIdx + start.length) === start) {
-          depth++;
-          endIdx += start.length;
-        } else if (this.rule.substring(endIdx, endIdx + end.length) === end) {
-          depth--;
-          if (depth === 0) {
-            break;
+        if (end <= this.pos) {
+          this.start = this.pos;
+          // 继续从新位置查找下一个分隔符（多分隔符模式重新探测）
+          let found: boolean;
+          if (split.length === 1) {
+            found = this.consumeTo(this.elementsType);
+          } else {
+            found = this.consumeToAny(...split);
           }
-          endIdx += end.length;
-        } else {
-          endIdx++;
+          if (!found) {
+            this.rule.push(this.queue.substring(this.startX).trim());
+            return this.rule;
+          }
+          resolved = true; // 找到新分隔位置，回到外层循环
         }
       }
+    }
+  }
 
-      if (depth === 0) {
-        // 提取内嵌内容并替换
-        const inner = this.rule.substring(startIdx + start.length, endIdx);
-        result += replacer(inner);
-        pos = endIdx + end.length;
-      } else {
-        // 未找到闭合标记，保持原样
-        result += this.rule.substring(startIdx);
-        break;
+  /**
+   * 替换内嵌规则（代码平衡模式）
+   * 如 {$.path} 用 chompCodeBalanced 提取平衡组
+   */
+  innerRuleBalanced(
+    inner: string,
+    startStep: number,
+    endStep: number,
+    fr: (rule: string) => string
+  ): string {
+    let st = '';
+    while (this.consumeTo(inner)) {
+      const posPre = this.pos;
+      if (this.chompCodeBalanced('{', '}')) {
+        const extracted = this.queue.substring(posPre + startStep, this.pos - endStep);
+        const frv = fr(extracted);
+        if (frv) {
+          st += this.queue.substring(this.startX, posPre) + frv;
+          this.startX = this.pos;
+          continue;
+        }
+      }
+      this.pos += inner.length;
+    }
+    if (this.startX === 0) return '';
+    st += this.queue.substring(this.startX);
+    return st;
+  }
+
+  /**
+   * 替换内嵌规则（简单 start/end 匹配模式）
+   * 如 {{expr}} 用 startStr="{{" endStr="}}" 提取
+   */
+  innerRule(
+    startStr: string,
+    endStr: string,
+    fr: (rule: string) => string
+  ): string {
+    let st = '';
+    while (this.consumeTo(startStr)) {
+      this.pos += startStr.length;
+      const posPre = this.pos;
+      if (this.consumeTo(endStr)) {
+        const extracted = this.queue.substring(posPre, this.pos);
+        const frv = fr(extracted);
+        st += this.queue.substring(this.startX, posPre - startStr.length) + frv;
+        this.pos += endStr.length;
+        this.startX = this.pos;
       }
     }
-
-    return result;
+    if (this.startX === 0) return this.queue;
+    st += this.queue.substring(this.startX);
+    return st;
   }
 }
-

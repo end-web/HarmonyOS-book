@@ -1,8 +1,6 @@
-import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
-import { PreferenceService } from '../service/PreferenceService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'PrivacyPage';
@@ -65,50 +63,13 @@ const POLICY_SECTIONS: PolicySection[] = [
 @ComponentV2
 export struct PrivacyPage {
   @Param navStack: NavPathStack = new NavPathStack();
-  @Param mode: string = 'view';
-  @Event onAgreed: () => void = () => {};
-
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
-
-  private async agree(): Promise<void> {
-    try {
-      await PreferenceService.setPrivacyAgreedVersion(PRIVACY_POLICY_VERSION);
-    } catch (err) {
-      const e = err as Error;
-      hilog.error(DOMAIN, TAG, 'save privacy agreed failed: %{public}s',
-        e?.message ?? JSON.stringify(err));
-    }
-    this.onAgreed();
-  }
-
-  private exitApp(): void {
-    try {
-      this.context.getApplicationContext().killAllProcesses();
-    } catch (err) {
-      const e = err as Error;
-      hilog.error(DOMAIN, TAG, 'killAllProcesses failed: %{public}s',
-        e?.message ?? JSON.stringify(err));
-    }
-  }
 
   build() {
     Column() {
-      if (this.mode === 'view') {
-        this.buildHeader()
-      } else {
-        this.buildConsentTitle()
-      }
+      this.buildHeader()
 
       Scroll() {
         Column({ space: AppSpace.Lg }) {
-          if (this.mode === 'consent') {
-            Text('请在使用前阅读以下隐私政策。继续使用即代表你已阅读并同意本政策内容。')
-              .fontSize(AppFont.Body)
-              .fontColor($r('sys.color.font_secondary'))
-              .lineHeight(22)
-              .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-          }
-
           ForEach(POLICY_SECTIONS, (sec: PolicySection) => {
             Column({ space: AppSpace.Sm }) {
               Text(sec.title)
@@ -131,19 +92,16 @@ export struct PrivacyPage {
           }, (sec: PolicySection) => sec.title)
         }
         .width('100%')
-        .padding({ bottom: this.mode === 'consent' ? 160 : WindowUtils.getBottomSafeVp() + AppSpace.Xl })
+        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Xl })
       }
       .layoutWeight(1)
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
-
-      if (this.mode === 'consent') {
-        this.buildConsentFooter()
-      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('sys.color.background_primary'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder
@@ -164,53 +122,5 @@ export struct PrivacyPage {
       top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
       left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Md
     })
-  }
-
-  @Builder
-  buildConsentTitle() {
-    Column({ space: AppSpace.Xs }) {
-      Text('欢迎使用网听')
-        .fontSize(AppFont.TitleL)
-        .fontColor($r('sys.color.font_primary'))
-        .fontWeight(FontWeight.Bold)
-      Text('隐私政策')
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_tertiary'))
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({
-      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl,
-      left: AppSpace.Lg, right: AppSpace.Lg, bottom: AppSpace.Lg
-    })
-  }
-
-  @Builder
-  buildConsentFooter() {
-    Column({ space: AppSpace.Sm }) {
-      Button('同意并继续')
-        .width('100%')
-        .height(48)
-        .backgroundColor(AppColor.Brand)
-        .fontColor('#FFFFFF')
-        .fontSize(AppFont.BodyL)
-        .borderRadius(AppRadius.Md)
-        .onClick(() => this.agree())
-
-      Button('不同意并退出')
-        .width('100%')
-        .height(48)
-        .backgroundColor(Color.Transparent)
-        .fontColor($r('sys.color.font_tertiary'))
-        .fontSize(AppFont.Body)
-        .onClick(() => this.exitApp())
-    }
-    .width('100%')
-    .padding({
-      left: AppSpace.Lg, right: AppSpace.Lg,
-      top: AppSpace.Md,
-      bottom: WindowUtils.getBottomSafeVp() + AppSpace.Md
-    })
-    .backgroundColor($r('sys.color.background_primary'))
   }
 }

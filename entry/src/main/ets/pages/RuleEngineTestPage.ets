@@ -2,9 +2,11 @@
  * 规则引擎测试页面（ArkTS 兼容）
  */
 
-import { AnalyzeRule } from '../service/rule/AnalyzeRule';
+import { AnalyzeRule, AnalyzeContext } from '../service/rule/AnalyzeRule';
 import { RuleAnalyzer } from '../service/rule/RuleAnalyzer';
 import { jsonPath } from '../service/rule/JSONPath';
+import { AppSpace, AppFont } from '../theme/Theme';
+import { WindowUtils } from '../utils/WindowUtils';
 
 interface Chapter {
   title: string;
@@ -19,99 +21,170 @@ interface TestData {
   data: ChaptersWrap;
 }
 
-interface TemplateVars extends Record<string, Object> {
-  baseUrl: string;
-  bookId: string;
-}
-
-@Entry
 @ComponentV2
-struct RuleEngineTestPage {
+export struct RuleEngineTestPage {
+  @Param navStack: NavPathStack = new NavPathStack();
   @Local testResults: string[] = [];
+  @Local passCount: number = 0;
+  @Local failCount: number = 0;
 
   aboutToAppear() {
     this.runTests();
   }
 
+  assert(name: string, actual: string | null, expected: string | null): void {
+    const pass = actual === expected;
+    if (pass) { this.passCount++; } else { this.failCount++; }
+    const icon = pass ? 'PASS' : 'FAIL';
+    this.addResult(`${icon} ${name}`);
+    if (!pass) {
+      this.addResult(`  got: ${actual}`);
+      this.addResult(`  want: ${expected}`);
+    }
+  }
+
+  assertList(name: string, actual: string[], expected: string[]): void {
+    const pass = JSON.stringify(actual) === JSON.stringify(expected);
+    if (pass) { this.passCount++; } else { this.failCount++; }
+    const icon = pass ? 'PASS' : 'FAIL';
+    this.addResult(`${icon} ${name}`);
+// PLACEHOLDER_CONTINUE
+    if (!pass) {
+      this.addResult(`  got: ${JSON.stringify(actual)}`);
+      this.addResult(`  want: ${JSON.stringify(expected)}`);
+    }
+  }
+
   async runTests() {
     this.testResults = [];
-    this.addResult('=== 规则引擎测试 ===\n');
+    this.passCount = 0;
+    this.failCount = 0;
+    this.addResult('=== Rule Engine Tests ===\n');
+    await this.testRuleAnalyzer();
+    await this.testJsonPath();
+    await this.testCssSelector();
+    await this.testChainOperator();
+    await this.testVariableSystem();
+    await this.testFallbackOperator();
+    await this.testGetElements();
+    await this.testRegexReplace();
+    await this.testXPath();
+    this.addResult(`\n=== ${this.passCount} passed, ${this.failCount} failed ===`);
+  }
 
-    this.addResult('测试 1: RuleAnalyzer 分割');
-    const analyzer1 = new RuleAnalyzer('$.a && $.b && $.c');
-    const result1 = analyzer1.splitRule('&&');
-    this.addResult(`输入: $.a && $.b && $.c`);
-    this.addResult(`输出: ${JSON.stringify(result1)}`);
-    this.addResult(`期望: ["$.a", "$.b", "$.c"]`);
-    this.addResult(JSON.stringify(result1) === JSON.stringify(['$.a', '$.b', '$.c']) ? '✓ 通过\n' : '✗ 失败\n');
+  async testRuleAnalyzer() {
+    this.addResult('\n--- RuleAnalyzer ---');
+    const a1 = new RuleAnalyzer('$.a && $.b && $.c');
+    this.assertList('split &&', a1.splitRule('&&', '||', '%%'), ['$.a', '$.b', '$.c']);
+    const a2 = new RuleAnalyzer('($.a || $.b) && $.c');
+    const r2 = a2.splitRule('&&', '||', '%%');
+    this.assertList('balanced parens', r2, ['($.a || $.b)', '$.c']);
+    const a3 = new RuleAnalyzer('div.list@tag.a@href');
+    this.assertList('@ chain split', a3.splitRule('@'), ['div.list', 'tag.a', 'href']);
+  }
 
-    this.addResult('测试 2: 括号平衡');
-    const analyzer2 = new RuleAnalyzer('($.a || $.b) && $.c');
-    const result2 = analyzer2.splitRule('&&', '||');
-    this.addResult(`输入: ($.a || $.b) && $.c`);
-    this.addResult(`输出: ${JSON.stringify(result2)}`);
-    this.addResult(`期望: ["($.a || $.b)", "$.c"]`);
-    this.addResult(JSON.stringify(result2) === JSON.stringify(['($.a || $.b)', '$.c']) ? '✓ 通过\n' : '✗ 失败\n');
-
-    this.addResult('测试 3: JSONPath 解析');
-    const chapters: Chapter[] = [
-      { title: '第一章', url: '/chapter/1' },
-      { title: '第二章', url: '/chapter/2' },
-      { title: '第三章', url: '/chapter/3' },
+  async testJsonPath() {
+    this.addResult('\n--- JSONPath ---');
+    const chs: Chapter[] = [
+      { title: 'Ch1', url: '/1' }, { title: 'Ch2', url: '/2' }
     ];
-    const testData: TestData = { data: { chapters } };
-    const result3 = jsonPath(testData, '$.data.chapters[*].title');
-    this.addResult(`输入: $.data.chapters[*].title`);
-    this.addResult(`输出: ${JSON.stringify(result3)}`);
-    this.addResult(`期望: ["第一章", "第二章", "第三章"]`);
-    this.addResult(JSON.stringify(result3) === JSON.stringify(['第一章', '第二章', '第三章']) ? '✓ 通过\n' : '✗ 失败\n');
+    const td: TestData = { data: { chapters: chs } };
+    const r = jsonPath(td, '$.data.chapters[*].title');
+    this.assertList('wildcard', r as string[], ['Ch1', 'Ch2']);
+    const a = new AnalyzeRule(td);
+    const r2 = await a.getStringList('$.data.chapters[*].url');
+    this.assertList('AnalyzeRule JSON list', r2, ['/1', '/2']);
+  }
+// PLACEHOLDER_CSS
 
-    this.addResult('测试 4: AnalyzeRule - JSONPath');
-    const analyzer4 = new AnalyzeRule(testData);
-    const result4 = await analyzer4.getStringList('$.data.chapters[*].title');
-    this.addResult(`输入: $.data.chapters[*].title`);
-    this.addResult(`输出: ${JSON.stringify(result4)}`);
-    this.addResult(`期望: ["第一章", "第二章", "第三章"]`);
-    this.addResult(JSON.stringify(result4) === JSON.stringify(['第一章', '第二章', '第三章']) ? '✓ 通过\n' : '✗ 失败\n');
+  async testCssSelector() {
+    this.addResult('\n--- CSS Selector ---');
+    const html = '<div class="book"><h1 class="title">BookName</h1><span class="author">Author1</span><a href="/c1" class="ch">Ch1</a><a href="/c2" class="ch">Ch2</a></div>';
+    const a1 = new AnalyzeRule(html);
+    const r1 = await a1.getString('.title@text');
+    this.assert('class@text', r1, 'BookName');
+    const a2 = new AnalyzeRule(html);
+    const r2 = await a2.getString('.author@text');
+    this.assert('author@text', r2, 'Author1');
+    const a3 = new AnalyzeRule(html);
+    const r3 = await a3.getStringList('.ch@href');
+    this.assertList('list @href', r3, ['/c1', '/c2']);
+  }
 
-    this.addResult('测试 5: 模板变量替换');
-    const vars: TemplateVars = { baseUrl: 'https://example.com', bookId: '123' };
-    const analyzer5 = new AnalyzeRule('', { variables: vars });
-    const result5 = await analyzer5.getString('{{baseUrl}}/book/{{bookId}}');
-    this.addResult(`输入: {{baseUrl}}/book/{{bookId}}`);
-    this.addResult(`输出: ${result5}`);
-    this.addResult(`期望: https://example.com/book/123`);
-    this.addResult(result5 === 'https://example.com/book/123' ? '✓ 通过\n' : '✗ 失败\n');
+  async testChainOperator() {
+    this.addResult('\n--- Chain @ ---');
+    const html = '<div class="list"><div class="item"><a href="/b1">Book1</a></div><div class="item"><a href="/b2">Book2</a></div></div>';
+    const a = new AnalyzeRule(html);
+    const r = await a.getStringList('.item@tag.a@text');
+    this.assertList('chain .item@tag.a@text', r, ['Book1', 'Book2']);
+  }
 
-    this.addResult('测试 6: CSS 选择器');
-    const htmlContent = `
-      <html>
-        <body>
-          <div class="book">
-            <h1 class="title">测试书名</h1>
-            <div class="author">作者：张三</div>
-            <a href="/chapter/1" class="chapter">第一章</a>
-            <a href="/chapter/2" class="chapter">第二章</a>
-          </div>
-        </body>
-      </html>
-    `;
-    const analyzer6 = new AnalyzeRule(htmlContent);
-    const result6 = await analyzer6.getString('.title@text');
-    this.addResult(`输入: .title@text`);
-    this.addResult(`输出: ${result6}`);
-    this.addResult(`期望: 测试书名`);
-    this.addResult(result6 === '测试书名' ? '✓ 通过\n' : '✗ 失败\n');
+  async testVariableSystem() {
+    this.addResult('\n--- Variables ---');
+    const vars: Record<string, string> = { "host": 'https://example.com', "id": '42' };
+    const ctx = new AnalyzeContext('https://example.com', vars);
+    const a = new AnalyzeRule('test', ctx);
+    const r = await a.getString('@get:{host}/book/@get:{id}');
+    this.assert('@get template', r, 'https://example.com/book/42');
+  }
 
-    this.addResult('测试 7: CSS 选择器列表');
-    const analyzer7 = new AnalyzeRule(htmlContent);
-    const result7 = await analyzer7.getStringList('.chapter@href');
-    this.addResult(`输入: .chapter@href`);
-    this.addResult(`输出: ${JSON.stringify(result7)}`);
-    this.addResult(`期望: ["/chapter/1", "/chapter/2"]`);
-    this.addResult(JSON.stringify(result7) === JSON.stringify(['/chapter/1', '/chapter/2']) ? '✓ 通过\n' : '✗ 失败\n');
+  async testFallbackOperator() {
+    this.addResult('\n--- Fallback || ---');
+    const html = '<div><span class="missing"></span><span class="backup">FallbackVal</span></div>';
+    const a = new AnalyzeRule(html);
+    const r = await a.getString('.notexist@text || .backup@text');
+    this.assert('|| fallback', r, 'FallbackVal');
+  }
+// PLACEHOLDER_ELEMENTS
 
-    this.addResult('=== 测试完成 ===');
+  async testGetElements() {
+    this.addResult('\n--- getElements ---');
+    const html = '<ul><li class="item">A</li><li class="item">B</li><li class="item">C</li></ul>';
+    const a = new AnalyzeRule(html);
+    const els = await a.getElements('.item');
+    this.assert('element count', String(els.length), '3');
+    if (els.length === 3) {
+      const a2 = new AnalyzeRule(els[0]);
+      const t = await a2.getString('@text');
+      this.assert('element[0] text', t, 'A');
+    }
+  }
+
+  async testRegexReplace() {
+    this.addResult('\n--- Regex ## ---');
+    const html = '<div class="info">Price: $19.99 USD</div>';
+    const a = new AnalyzeRule(html);
+    const r = await a.getString('.info@text##Price:\\s*##');
+    this.assert('## replace', r, '$19.99 USD');
+  }
+
+  async testXPath() {
+    this.addResult('\n--- XPath ---');
+    const html = '<div class="book"><h1 class="title">XBookName</h1><a href="/c1" class="ch">Ch1</a><a href="/c2" class="ch">Ch2</a></div>';
+
+    const a1 = new AnalyzeRule(html);
+    const r1 = await a1.getString('@xpath://h1/text()');
+    this.assert('xpath text()', r1, 'XBookName');
+
+    const a2 = new AnalyzeRule(html);
+    const r2 = await a2.getStringList('@xpath://a/@href');
+    this.assertList('xpath @href list', r2, ['/c1', '/c2']);
+
+    const a3 = new AnalyzeRule(html);
+    const r3 = await a3.getString('@xpath://h1[@class="title"]/text()');
+    this.assert('xpath attr predicate', r3, 'XBookName');
+
+    const a4 = new AnalyzeRule(html);
+    const r4 = await a4.getString('@xpath://a[contains(@href,"c2")]/text()');
+    this.assert('xpath contains()', r4, 'Ch2');
+
+    const a5 = new AnalyzeRule(html);
+    const r5 = await a5.getString('@xpath://a[2]/@href');
+    this.assert('xpath [2]', r5, '/c2');
+
+    const a6 = new AnalyzeRule(html);
+    const r6 = await a6.getString('@xpath://a[last()]/text()');
+    this.assert('xpath last()', r6, 'Ch2');
   }
 
   addResult(text: string) {
@@ -120,16 +193,33 @@ struct RuleEngineTestPage {
 
   build() {
     Column() {
-      Text('规则引擎测试')
-        .fontSize(24)
-        .fontWeight(FontWeight.Bold)
-        .margin({ top: 20, bottom: 20 })
+      Row({ space: AppSpace.Sm }) {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(24)
+          .fontColor([$r('sys.color.font_primary')])
+          .onClick(() => this.navStack.pop())
+        Text('规则引擎测试')
+          .fontSize(AppFont.Title)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Bold)
+          .layoutWeight(1)
+        Text(`${this.passCount} / ${this.failCount}`)
+          .fontSize(AppFont.Caption)
+          .fontColor(this.failCount > 0 ? '#e53935' : '#43a047')
+      }
+      .width('100%')
+      .padding({
+        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
+        left: AppSpace.Md,
+        right: AppSpace.Md,
+        bottom: AppSpace.Sm
+      })
 
       Scroll() {
         Column() {
           ForEach(this.testResults, (result: string) => {
             Text(result)
-              .fontSize(14)
+              .fontSize(13)
               .fontFamily('monospace')
               .width('100%')
               .padding({ left: 10, right: 10, top: 2, bottom: 2 })
@@ -138,10 +228,17 @@ struct RuleEngineTestPage {
       }
       .width('100%')
       .layoutWeight(1)
-      .backgroundColor('#f5f5f5')
+      .backgroundColor($r('sys.color.comp_background_primary'))
       .padding(10)
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
     .height('100%')
+    .backgroundColor($r('sys.color.background_primary'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }
+
+
+

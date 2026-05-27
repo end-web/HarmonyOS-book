@@ -127,17 +127,20 @@ export struct TextReaderPage {
 
   aboutToAppear(): void {
     this.currentIndex = this.chapterIndex;
-    FoldUtil.init();
-    this.foldWide = FoldUtil.isWide();
-    FoldUtil.onChange(this.foldListener);
+    // 转场期间只做最轻的同步初始化,重活推迟到动画结束
     this.darkListener = mediaquery.matchMediaSync('(dark-mode: true)');
     this.sysDark = this.darkListener.matches;
     this.darkListener.on('change', (res: mediaquery.MediaQueryResult) => {
       this.sysDark = res.matches;
       this.applyStatusBar();
     });
-    this.loadPrefs();
-    this.loadBook();
+    setTimeout(() => {
+      FoldUtil.init();
+      this.foldWide = FoldUtil.isWide();
+      FoldUtil.onChange(this.foldListener);
+      this.loadPrefs();
+      this.loadBook();
+    }, AppMotion.Page);
   }
 
   aboutToDisappear(): void {
@@ -157,12 +160,21 @@ export struct TextReaderPage {
   }
 
   private async loadPrefs(): Promise<void> {
-    this.fontSize = await PreferenceService.getReaderFontSize();
-    this.lineSpacing = await PreferenceService.getReaderLineSpacing();
-    this.bgMode = await PreferenceService.getReaderBgMode();
-    this.fontFamily = await PreferenceService.getReaderFontFamily();
-    this.brightnessVal = await PreferenceService.getReaderBrightness();
-    this.flipMode = await PreferenceService.getReaderFlipMode();
+    // 6 项 prefs 并行读取,避免串行 await 累计 IO 等待
+    const results = await Promise.all([
+      PreferenceService.getReaderFontSize(),
+      PreferenceService.getReaderLineSpacing(),
+      PreferenceService.getReaderBgMode(),
+      PreferenceService.getReaderFontFamily(),
+      PreferenceService.getReaderBrightness(),
+      PreferenceService.getReaderFlipMode()
+    ]);
+    this.fontSize = results[0];
+    this.lineSpacing = results[1];
+    this.bgMode = results[2];
+    this.fontFamily = results[3];
+    this.brightnessVal = results[4];
+    this.flipMode = results[5];
     if (this.brightnessVal >= 0) {
       await BrightnessUtil.setWindowBrightness(this.brightnessVal);
     }
@@ -190,6 +202,7 @@ export struct TextReaderPage {
       progressMs: 0,
       updatedAt: Date.now()
     });
+    await DataService.upsertCachedBook(this.book);
   }
 
   private async loadBook(): Promise<void> {
@@ -567,6 +580,7 @@ export struct TextReaderPage {
       backgroundColor: this.resolvedBgOption().bg,
       onDisappear: () => { this.sheetType = 'none'; this.sheetOpen = false; }
     })
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder

@@ -24,6 +24,8 @@ const KEY_READER_FLIP_MODE = 'reader_flip_mode';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
+const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
+const KEY_CACHED_BOOKS = 'cached_books_v1';
 
 export interface PlayHistoryItem {
   bookId: string;
@@ -313,6 +315,34 @@ export class PreferenceService {
   static async setReaderFlipMode(v: number): Promise<void> {
     const s = PreferenceService.ensureStore();
     await s.put(KEY_READER_FLIP_MODE, v);
+    await s.flush();
+  }
+
+  /** 首页书籍栅格列数：1 / 2 / 3，默认 3 */
+  static async getHomeGridColumns(): Promise<number> {
+    const s = PreferenceService.ensureStore();
+    const v = await s.get(KEY_HOME_GRID_COLUMNS, 3) as number;
+    if (v < 1) return 1;
+    if (v > 3) return 3;
+    return v;
+  }
+
+  static async setHomeGridColumns(cols: number): Promise<void> {
+    const s = PreferenceService.ensureStore();
+    const clamped = cols < 1 ? 1 : (cols > 3 ? 3 : cols);
+    await s.put(KEY_HOME_GRID_COLUMNS, clamped);
+    await s.flush();
+  }
+
+  /** 缓存书池：来自搜索 / 在线源的书籍快照,用于让收藏 + 历史能在书架/历史页找到对应 Book */
+  static async getCachedBooks(): Promise<string> {
+    const s = PreferenceService.ensureStore();
+    return await s.get(KEY_CACHED_BOOKS, '[]') as string;
+  }
+
+  static async putCachedBookJson(json: string): Promise<void> {
+    const s = PreferenceService.ensureStore();
+    await s.put(KEY_CACHED_BOOKS, json);
     await s.flush();
   }
 

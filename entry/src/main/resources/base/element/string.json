@@ -11,6 +11,14 @@
     {
       "name": "EntryAbility_label",
       "value": "网听"
+    },
+    {
+      "name": "keep_background_running_reason",
+      "value": "用于后台播放音频"
+    },
+    {
+      "name": "read_pasteboard_reason",
+      "value": "用于粘贴书源链接"
     }
   ]
 }

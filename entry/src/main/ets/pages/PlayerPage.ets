@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AppColor, AppSpace, AppFont } from '../theme/Theme';
+import { AppColor, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
@@ -29,6 +29,7 @@ export struct PlayerPage {
   @Local bgTopColor: string = '#2A2A2A';
   @Local bgBottomColor: string = '#0F0F0F';
   @Local hasThemeColor: boolean = false;
+  @Local renderBlur: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;;
   @Local seeking: boolean = false;
   @Local seekValueMs: number = 0;
@@ -39,7 +40,12 @@ export struct PlayerPage {
 
   aboutToAppear(): void {
     this.primeFromCache();
-    this.loadBook();
+    // loadBook 内含 AVSession 初始化、prefs 读取、可能的网络请求,推迟到转场结束后再执行,
+    // 让 380ms 的 push 动画跑得干净
+    setTimeout(() => {
+      this.renderBlur = true;
+      this.loadBook();
+    }, AppMotion.Page);
   }
 
   /** 同步从 SearchCache + ColorPickerUtils 缓存取得 book/cover/color，避免首帧默认色闪烁 */
@@ -149,6 +155,9 @@ export struct PlayerPage {
   private async toggleFavorite(): Promise<void> {
     if (!this.book) return;
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
+    if (this.isFavorite) {
+      await DataService.upsertCachedBook(this.book);
+    }
   }
 
   private async cycleSpeed(): Promise<void> {
@@ -249,13 +258,6 @@ export struct PlayerPage {
     }, 100);
   }
 
-  pageTransition() {
-    PageTransitionEnter({ duration: 400, curve: curves.cubicBezierCurve(0.33, 0, 0.1, 1) })
-      .slide(SlideEffect.Bottom)
-    PageTransitionExit({ duration: 350, curve: curves.cubicBezierCurve(0.33, 0, 0.1, 1) })
-      .slide(SlideEffect.Bottom)
-  }
-
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       // 背景层：模糊封面 + 主色调叠加
@@ -267,25 +269,27 @@ export struct PlayerPage {
           .backgroundColor(this.bgBottomColor)
 
         if (this.book && this.book.cover) {
-          // 模糊封面背景
           if (this.book.cover.startsWith('http')) {
             Image(this.book.cover)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
-              .blur(60)
+              .blur(this.renderBlur ? 60 : 0)
+              .animation({ duration: 600, curve: Curve.EaseOut })
           } else if (this.book.cover.startsWith('/')) {
             Image('file://' + this.book.cover)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
-              .blur(60)
+              .blur(this.renderBlur ? 60 : 0)
+              .animation({ duration: 600, curve: Curve.EaseOut })
           } else {
             Image($rawfile(this.book.cover))
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
-              .blur(60)
+              .blur(this.renderBlur ? 60 : 0)
+              .animation({ duration: 600, curve: Curve.EaseOut })
           }
         }
 
@@ -312,15 +316,9 @@ export struct PlayerPage {
           this.buildControls()
           this.buildBottomBar()
         } else {
-          // 加载中状态
-          Column() {
-            Text('加载中...')
-              .fontSize(AppFont.Body)
-              .fontColor('#FFFFFF')
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
+          Column()
+            .width('100%')
+            .height('100%')
         }
       }
       .width('100%')
@@ -360,47 +358,51 @@ export struct PlayerPage {
   @Builder
   buildCover() {
     Column() {
-      if (this.book!.cover && this.book!.cover.startsWith('http')) {
-        Image(this.book!.cover)
+      Stack() {
+        if (this.book!.cover && this.book!.cover.startsWith('http')) {
+          Image(this.book!.cover)
+            .width('100%')
+            .aspectRatio(1)
+            .borderRadius(16)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+            .alt($r('app.media.startIcon'))
+            .onError(() => {
+              console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
+            })
+            .onComplete(() => {
+              console.info('[PlayerPage] cover image loaded: ' + this.book!.cover);
+            })
+        } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+          Image('file://' + this.book!.cover)
+            .width('100%')
+            .aspectRatio(1)
+            .borderRadius(16)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+        } else if (this.book!.cover) {
+          Image($rawfile(this.book!.cover))
+            .width('100%')
+            .aspectRatio(1)
+            .borderRadius(16)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+        } else {
+          Column() {
+            SymbolGlyph($r('sys.symbol.music'))
+              .fontSize(80)
+              .fontColor(['#FFFFFF'])
+          }
           .width('100%')
           .aspectRatio(1)
           .borderRadius(16)
-          .objectFit(ImageFit.Cover)
-          .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-          .alt($r('app.media.startIcon'))
-          .onError(() => {
-            console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
-          })
-          .onComplete(() => {
-            console.info('[PlayerPage] cover image loaded: ' + this.book!.cover);
-          })
-      } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-        Image('file://' + this.book!.cover)
-          .width('100%')
-          .aspectRatio(1)
-          .borderRadius(16)
-          .objectFit(ImageFit.Cover)
-          .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-      } else if (this.book!.cover) {
-        Image($rawfile(this.book!.cover))
-          .width('100%')
-          .aspectRatio(1)
-          .borderRadius(16)
-          .objectFit(ImageFit.Cover)
-          .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-      } else {
-        Column() {
-          SymbolGlyph($r('sys.symbol.music'))
-            .fontSize(80)
-            .fontColor(['#FFFFFF'])
+          .backgroundColor('#55FFFFFF')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
         }
-        .width('100%')
-        .aspectRatio(1)
-        .borderRadius(16)
-        .backgroundColor('#55FFFFFF')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
       }
+      .width('100%')
+      .geometryTransition('book-cover-' + this.bookId, { follow: true })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -493,6 +495,7 @@ export struct PlayerPage {
       SymbolGlyph($r('sys.symbol.backward_end_fill'))
         .fontSize(32)
         .fontColor(['#FFFFFF'])
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
         .onClick(() => this.playPrev())
 
       Blank()
@@ -511,6 +514,7 @@ export struct PlayerPage {
       }
       .width(64)
       .height(64)
+      .clickEffect({ level: ClickEffectLevel.MIDDLE, scale: 0.92 })
       .onClick(() => this.togglePlay())
 
       Blank()
@@ -518,6 +522,7 @@ export struct PlayerPage {
       SymbolGlyph($r('sys.symbol.forward_end_fill'))
         .fontSize(32)
         .fontColor(['#FFFFFF'])
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
         .onClick(() => this.playNext())
 
       Blank()

@@ -11,6 +11,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 export struct FavoritePage {
   @Local favoriteBooks: Book[] = [];
   @Local historyMap: Record<string, PlayHistoryItem> = {};
+  @Local chapterIdxMap: Record<string, number> = {};
   @Local loading: boolean = true;
   @Local dragging: boolean = false;
   @Local trashHover: boolean = false;
@@ -38,7 +39,7 @@ export struct FavoritePage {
     if (!this.context) return;
     const ids = await PreferenceService.getFavorites();
     const allBooks = await DataService.getBooks(this.context);
-    this.favoriteBooks = allBooks.filter((b) => ids.includes(b.id));
+    const books = allBooks.filter((b) => ids.includes(b.id));
     const history = await PreferenceService.getHistory();
     const map: Record<string, PlayHistoryItem> = {};
     for (const item of history) {
@@ -46,7 +47,17 @@ export struct FavoritePage {
         map[item.bookId] = item;
       }
     }
+    // 预算每本书的 chapterId → chapterIndex,避免后续 build / click 反复 findIndex
+    const idxMap: Record<string, number> = {};
+    for (const b of books) {
+      const h = map[b.id];
+      if (!h || !b.chapters || b.chapters.length === 0) continue;
+      const idx = b.chapters.findIndex(c => c.id === h.chapterId);
+      if (idx >= 0) idxMap[b.id] = idx;
+    }
+    this.favoriteBooks = books;
     this.historyMap = map;
+    this.chapterIdxMap = idxMap;
     this.loading = false;
   }
 
@@ -54,9 +65,8 @@ export struct FavoritePage {
     const unit = book.category === 'novel' ? '章' : '集';
     const h = this.historyMap[book.id];
     if (h && book.chapterCount > 0) {
-      const chapters = book.chapters;
-      const idx = chapters.findIndex(c => c.id === h.chapterId);
-      if (idx >= 0) {
+      const idx = this.chapterIdxMap[book.id];
+      if (idx !== undefined && idx >= 0) {
         return `${idx + 1}${unit}/${book.chapterCount}${unit}`;
       }
       return `共${book.chapterCount}${unit}`;
@@ -67,11 +77,11 @@ export struct FavoritePage {
     return book.author || '';
   }
 
-  private async handleBookTap(book: Book): Promise<void> {
+  private handleBookTap(book: Book): void {
     const onPop = (): void => { this.loadFavorites(); };
-    // 实时读最新历史,避免 historyMap 缓存滞后(从子页 pop 回来时新进度可能还没刷进缓存)
-    const histList = await PreferenceService.getHistory();
-    const history = histList.find(h => h.bookId === book.id);
+    SearchCache.put(book);
+    // 直接用已缓存的 historyMap,避免每次点击都 IO
+    const history = this.historyMap[book.id];
     // 没有进度 → 详情页让用户选章节
     if (!history) {
       this.navStack.pushPathByName('detail', book.id, onPop);
@@ -83,8 +93,8 @@ export struct FavoritePage {
       return;
     }
     // 有进度但定位不到对应章节(可能 TOC 重排) → 详情页
-    const idx = book.chapters.findIndex(c => c.id === history.chapterId);
-    if (idx < 0) {
+    const idx = this.chapterIdxMap[book.id];
+    if (idx === undefined || idx < 0) {
       this.navStack.pushPathByName('detail', book.id, onPop);
       return;
     }
@@ -154,39 +164,60 @@ export struct FavoritePage {
   }
 
   build() {
-    Stack({ alignContent: Alignment.Center }) {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // 内容层
+      Grid() {
+        ForEach(this.favoriteBooks, (book: Book) => {
+          GridItem() {
+            this.buildBookTile(book)
+          }
+        }, (book: Book) => book.id)
+        GridItem() {
+          this.buildAddTile()
+        }
+      }
+      .columnsTemplate('1fr 1fr 1fr')
+      .columnsGap(AppSpace.Sm)
+      .rowsGap(AppSpace.Md)
+      .width('100%')
+      .height('100%')
+      .padding({
+        left: AppSpace.Md,
+        right: AppSpace.Md,
+        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL,
+        bottom: 160
+      })
+      .scrollBar(BarState.Off)
+
+      // 浮顶标题（去掉 backgroundBlurStyle,改用纯色背景,转场时省 GPU）
       Column() {
         Text('书架')
           .fontSize(AppFont.TitleL)
           .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
-          .padding({ left: AppSpace.Md, top: WindowUtils.getStatusBarHeightVp() + AppSpace.Lg, bottom: AppSpace.Md })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({
+        left: AppSpace.Md,
+        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
+        bottom: AppSpace.Sm
+      })
+      .backgroundColor($r('sys.color.background_primary'))
 
-        Grid() {
-          ForEach(this.favoriteBooks, (book: Book) => {
-            GridItem() {
-              this.buildBookTile(book)
-            }
-          }, (book: Book) => book.id)
-          GridItem() {
-            this.buildAddTile()
-          }
-        }
-        .columnsTemplate('1fr 1fr 1fr')
-        .columnsGap(AppSpace.Sm)
-        .rowsGap(AppSpace.Md)
-        .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: 160 })
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
+      // 拖动删除浮层（自己居中）
+      Column() {
+        this.buildTrashZone()
       }
       .width('100%')
       .height('100%')
-      .alignItems(HorizontalAlign.Start)
-
-      this.buildTrashZone()
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .hitTestBehavior(HitTestMode.Transparent)
     }
     .width('100%')
     .height('100%')
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder
@@ -271,7 +302,7 @@ export struct FavoritePage {
       .width('100%')
       .borderRadius(AppRadius.Md)
       .clip(true)
-      .shadow({ radius: 8, color: '#22000000', offsetY: 3 })
+      .shadow({ radius: 4, color: '#1A000000', offsetY: 1 })
 
       Text(book.title)
         .fontSize(AppFont.Body)
@@ -289,7 +320,7 @@ export struct FavoritePage {
     }
     .scale(this.draggingBookId === book.id ? { x: 0.92, y: 0.92 } : { x: 1, y: 1 })
     .opacity(this.draggingBookId === book.id ? 0.4 : 1)
-    .animation({ duration: 200, curve: Curve.FastOutSlowIn })
+    .animation(this.dragging ? { duration: 200, curve: Curve.FastOutSlowIn } : null)
     .onDragStart(() => {
       this.draggingBookId = book.id;
       this.dragging = true;
@@ -322,7 +353,7 @@ export struct FavoritePage {
     .borderRadius(35)
     .backgroundColor(AppColor.Brand)
     .justifyContent(FlexAlign.Center)
-    .shadow({ radius: 16, color: '#66000000', offsetY: 6 })
+    .shadow({ radius: 8, color: '#44000000', offsetY: 3 })
   }
 
   @Builder

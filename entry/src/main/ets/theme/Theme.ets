@@ -1,3 +1,5 @@
+import { curves } from '@kit.ArkUI';
+
 export class AppColor {
   static readonly Brand: string = '#0A59F7';
   static readonly BrandSoft: string = '#3B7BF9';
@@ -44,4 +46,23 @@ export class AppMotion {
   static readonly Fast: number = 150;
   static readonly Base: number = 250;
   static readonly Slow: number = 350;
+  static readonly Page: number = 380;
+}
+
+/**
+ * 统一动效曲线 token
+ * - Standard: 通用进出场（默认）
+ * - Emphasized: 大幅位移/页面级强调
+ * - Decelerate: 入场（慢出快进）
+ * - Accelerate: 出场（快出慢进）
+ * - Spring: 轻量弹簧（点选/Tab）
+ * - SpringSoft: 柔性弹簧（Sheet/弹层）
+ */
+export class AppCurve {
+  static readonly Standard = curves.cubicBezierCurve(0.2, 0, 0, 1);
+  static readonly Emphasized = curves.cubicBezierCurve(0.33, 0, 0.1, 1);
+  static readonly Decelerate = curves.cubicBezierCurve(0, 0, 0, 1);
+  static readonly Accelerate = curves.cubicBezierCurve(0.4, 0, 1, 1);
+  static readonly Spring = curves.springMotion(0.4, 0.85);
+  static readonly SpringSoft = curves.springMotion(0.6, 0.9);
 }
