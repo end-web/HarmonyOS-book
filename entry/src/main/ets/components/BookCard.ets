@@ -16,9 +16,20 @@ export struct BookCard {
   @Local imageLoadFailed: boolean = false;
   @Local appeared: boolean = false;
 
+  private static shownIds: Set<string> = new Set();
+
   aboutToAppear(): void {
+    if (BookCard.shownIds.has(this.book.id)) {
+      this.appeared = true;
+      return;
+    }
+    BookCard.shownIds.add(this.book.id);
     const delay = Math.min(this.indexHint, 8) * 35;
     setTimeout(() => { this.appeared = true; }, delay);
+  }
+
+  static resetAnimations(): void {
+    BookCard.shownIds.clear();
   }
 
   private firstChar(): string {
@@ -95,7 +106,6 @@ export struct BookCard {
       .borderRadius(AppRadius.Md)
       .clip(true)
       .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-      .geometryTransition('book-cover-' + this.book.id, { follow: true })
 
       Column({ space: 2 }) {
         Text(this.book.title)
@@ -117,7 +127,6 @@ export struct BookCard {
     }
     .scale({ x: this.pressed ? 0.96 : 1, y: this.pressed ? 0.96 : 1 })
     .opacity(this.appeared ? 1 : 0)
-    .translate({ y: this.appeared ? 0 : 12 })
     .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.97 })
     .onTouch((e: TouchEvent) => {

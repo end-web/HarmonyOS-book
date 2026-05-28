@@ -7,25 +7,42 @@ export interface SearchRule {
   intro: string;
   kind: string;
   lastChapter: string;
+  wordCount?: string;
+  checkKeyWord?: string;
 }
 
 export interface TocRule {
   chapterList: string;
   chapterName: string;
   chapterUrl: string;
+  nextTocUrl?: string;
+  isVip?: string;
+  isPay?: string;
+  isVolume?: string;
+  updateTime?: string;
 }
 
 export interface ContentRule {
   content: string;
-  audioUrl: string;
+  audioUrl?: string;
+  nextContentUrl?: string;
+  replaceRegex?: string;
+  sourceRegex?: string;
+  webJs?: string;
 }
 
 export interface BookInfoRule {
+  init?: string;
   name: string;
   author: string;
   coverUrl: string;
   intro: string;
+  kind?: string;
+  wordCount?: string;
+  lastChapter?: string;
   tocUrl: string;
+  canReName?: string;
+  downloadUrls?: string;
 }
 
 export interface ExploreRule {
@@ -42,22 +59,29 @@ export interface ExploreRule {
 export interface BookSource {
   bookSourceUrl: string;
   bookSourceName: string;
-  bookSourceType: number;
+  bookSourceType: number; // 0=文本, 1=音频, 2=图片, 3=文件
   bookSourceGroup: string;
+  bookSourceComment?: string;
   enabled: boolean;
   enabledExplore: boolean;
   searchUrl: string;
   exploreUrl: string;
   header: string;
-  loginUrl: string;
+  loginUrl?: string;
+  loginUi?: string;
+  loginCheckJs?: string;
+  bookUrlPattern?: string;
   respondTime: number;
   customOrder: number;
   weight: number;
+  concurrentRate?: string;
   ruleSearch: SearchRule;
   ruleToc: TocRule;
   ruleContent: ContentRule;
   ruleBookInfo: BookInfoRule;
   ruleExplore: ExploreRule;
+  lastUpdateTime?: number;
+  subscriptionUrl?: string; // 记录该书源来自哪个订阅源 URL
 }
 
 export interface SourceSubscription {
@@ -75,11 +99,29 @@ export interface SearchResult {
   intro: string;
   kind: string;
   lastChapter: string;
+  wordCount?: string;
   sourceName: string;
   sourceUrl: string;
+  variables?: Record<string, string>;
 }
 
 export interface TocItem {
   name: string;
   url: string;
+  isVip?: boolean;
+  isPay?: boolean;
+  isVolume?: boolean;
+  updateTime?: string;
+}
+
+export interface BookInfo {
+  name: string;
+  author: string;
+  coverUrl: string;
+  intro: string;
+  kind: string;
+  wordCount: string;
+  lastChapter: string;
+  tocUrl: string;
+  variables?: Record<string, string>;
 }

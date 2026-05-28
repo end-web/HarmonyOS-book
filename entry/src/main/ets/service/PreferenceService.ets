@@ -80,21 +80,26 @@ export class PreferenceService {
     await PreferenceService.init(context);
   }
 
-  private static ensureStore(): preferences.Preferences {
+  private static async ensureStore(): Promise<preferences.Preferences> {
     if (!PreferenceService.store) {
-      throw new Error('PreferenceService not initialized');
+      if (PreferenceService.initPromise) {
+        await PreferenceService.initPromise;
+      }
+      if (!PreferenceService.store) {
+        throw new Error('PreferenceService not initialized');
+      }
     }
     return PreferenceService.store;
   }
 
   static async getFavorites(): Promise<string[]> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_FAVORITES, '[]') as string;
     return JSON.parse(raw) as string[];
   }
 
   static async toggleFavorite(bookId: string): Promise<boolean> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const list = await PreferenceService.getFavorites();
     const idx = list.indexOf(bookId);
     let added: boolean;
@@ -116,13 +121,13 @@ export class PreferenceService {
   }
 
   static async getHistory(): Promise<PlayHistoryItem[]> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_HISTORY, '[]') as string;
     return JSON.parse(raw) as PlayHistoryItem[];
   }
 
   static async upsertHistory(item: PlayHistoryItem): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const list = await PreferenceService.getHistory();
     const idx = list.findIndex((it) => it.bookId === item.bookId);
     if (idx >= 0) {
@@ -137,7 +142,7 @@ export class PreferenceService {
   }
 
   static async removeHistory(bookId: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const list = await PreferenceService.getHistory();
     const filtered = list.filter((it) => it.bookId !== bookId);
     await s.put(KEY_HISTORY, JSON.stringify(filtered));
@@ -145,14 +150,14 @@ export class PreferenceService {
   }
 
   static async setLastPlayed(bookId: string, chapterId: string, progressMs: number = 0): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const item: LastPlayedItem = { bookId, chapterId, progressMs };
     await s.put(KEY_LAST_PLAYED, JSON.stringify(item));
     await s.flush();
   }
 
   static async getLastPlayed(): Promise<LastPlayedItem | null> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_LAST_PLAYED, '') as string;
     if (!raw) return null;
     try {
@@ -163,164 +168,164 @@ export class PreferenceService {
   }
 
   static async getColorMode(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_COLOR_MODE, ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) as number;
   }
 
   static async setColorMode(mode: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_COLOR_MODE, mode);
     await s.flush();
   }
 
   static async getImportedBooks(): Promise<string> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_IMPORTED_BOOKS, '[]') as string;
   }
 
   static async saveImportedBooks(json: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_IMPORTED_BOOKS, json);
     await s.flush();
   }
 
   static async getSourceSubscriptions(): Promise<string> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_SOURCE_SUBSCRIPTIONS, '[]') as string;
   }
 
   static async saveSourceSubscriptions(json: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_SOURCE_SUBSCRIPTIONS, json);
     await s.flush();
   }
 
   static async getBookSources(): Promise<string> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_BOOK_SOURCES, '[]') as string;
   }
 
   static async saveBookSources(json: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_BOOK_SOURCES, json);
     await s.flush();
   }
 
   static async getDefaultTab(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_DEFAULT_TAB, 0) as number;
   }
 
   static async setDefaultTab(idx: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_DEFAULT_TAB, idx);
     await s.flush();
   }
 
   static async getReaderFontSize(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_READER_FONT_SIZE, 18) as number;
   }
 
   static async setReaderFontSize(size: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_READER_FONT_SIZE, size);
     await s.flush();
   }
 
   static async getReaderLineSpacing(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_READER_LINE_SPACING, 1.8) as number;
   }
 
   static async setReaderLineSpacing(v: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_READER_LINE_SPACING, v);
     await s.flush();
   }
 
   static async getReaderBgMode(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_READER_BG_MODE, -1) as number;
   }
 
   static async setReaderBgMode(mode: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_READER_BG_MODE, mode);
     await s.flush();
   }
 
   static async getReaderFontFamily(): Promise<string> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_READER_FONT_FAMILY, 'HarmonyOS Sans') as string;
   }
 
   static async setReaderFontFamily(family: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_READER_FONT_FAMILY, family);
     await s.flush();
   }
 
   static async getPrivacyAgreedVersion(): Promise<string> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_PRIVACY_AGREED_VERSION, '') as string;
   }
 
   static async setPrivacyAgreedVersion(version: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_PRIVACY_AGREED_VERSION, version);
     await s.flush();
   }
 
   static async getReaderBrightness(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_READER_BRIGHTNESS, -1) as number;
   }
 
   static async setReaderBrightness(v: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_READER_BRIGHTNESS, v);
     await s.flush();
   }
 
   /** 0=共享焦点（默认，听书与其他音乐互斥）, 1=独立焦点（不与本应用其他音频互斥） */
   static async getAudioInterruptMode(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_AUDIO_INTERRUPT_MODE, 0) as number;
   }
 
   static async setAudioInterruptMode(mode: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_AUDIO_INTERRUPT_MODE, mode);
     await s.flush();
   }
 
   /** 失去焦点暂停后，是否在系统通知 RESUME 时自动恢复播放 */
   static async getAudioAutoResume(): Promise<boolean> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_AUDIO_AUTO_RESUME, true) as boolean;
   }
 
   static async setAudioAutoResume(enabled: boolean): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_AUDIO_AUTO_RESUME, enabled);
     await s.flush();
   }
 
   static async getReaderFlipMode(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_READER_FLIP_MODE, 0) as number;
   }
 
   static async setReaderFlipMode(v: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_READER_FLIP_MODE, v);
     await s.flush();
   }
 
   /** 首页书籍栅格列数：1 / 2 / 3，默认 3 */
   static async getHomeGridColumns(): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const v = await s.get(KEY_HOME_GRID_COLUMNS, 3) as number;
     if (v < 1) return 1;
     if (v > 3) return 3;
@@ -328,7 +333,7 @@ export class PreferenceService {
   }
 
   static async setHomeGridColumns(cols: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const clamped = cols < 1 ? 1 : (cols > 3 ? 3 : cols);
     await s.put(KEY_HOME_GRID_COLUMNS, clamped);
     await s.flush();
@@ -336,18 +341,18 @@ export class PreferenceService {
 
   /** 缓存书池：来自搜索 / 在线源的书籍快照,用于让收藏 + 历史能在书架/历史页找到对应 Book */
   static async getCachedBooks(): Promise<string> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     return await s.get(KEY_CACHED_BOOKS, '[]') as string;
   }
 
   static async putCachedBookJson(json: string): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     await s.put(KEY_CACHED_BOOKS, json);
     await s.flush();
   }
 
   static async getReaderScrollPos(bookId: string, chapterId: string): Promise<number> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_READER_SCROLL_POS, '[]') as string;
     const arr = JSON.parse(raw) as ScrollPosEntry[];
     const key = `${bookId}:${chapterId}`;
@@ -356,7 +361,7 @@ export class PreferenceService {
   }
 
   static async setReaderScrollPos(bookId: string, chapterId: string, paraIndex: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_READER_SCROLL_POS, '[]') as string;
     const arr = JSON.parse(raw) as ScrollPosEntry[];
     const key = `${bookId}:${chapterId}`;
@@ -376,7 +381,7 @@ export class PreferenceService {
   }
 
   static async getBookmarks(bookId: string): Promise<ReaderBookmark[]> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_READER_BOOKMARKS, '[]') as string;
     const arr = JSON.parse(raw) as BookmarkBucket[];
     const hit = arr.find((b) => b.bookId === bookId);
@@ -384,7 +389,7 @@ export class PreferenceService {
   }
 
   static async addBookmark(bookId: string, mark: ReaderBookmark): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_READER_BOOKMARKS, '[]') as string;
     const arr = JSON.parse(raw) as BookmarkBucket[];
     let bucket = arr.find((b) => b.bookId === bookId);
@@ -403,7 +408,7 @@ export class PreferenceService {
   }
 
   static async removeBookmark(bookId: string, chapterId: string, paraIndex: number): Promise<void> {
-    const s = PreferenceService.ensureStore();
+    const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_READER_BOOKMARKS, '[]') as string;
     const arr = JSON.parse(raw) as BookmarkBucket[];
     const bucket = arr.find((b) => b.bookId === bookId);

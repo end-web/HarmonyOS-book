@@ -101,7 +101,28 @@ export struct BookDetailPage {
       const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
       this.debugInfo += `\nsource=${source ? source.bookSourceName : 'NOT FOUND'}`;
       if (source && book.bookUrl) {
-        const tocItems = await BookSourceService.getBookToc(source, book.bookUrl);
+        // 先获取书籍详情，提取正确的 tocUrl
+        let tocUrl = book.bookUrl;
+        const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+        // 合并 search 时的 @put 变量 + getBookInfo 时的 @put 变量
+        const mergedVars: Record<string, string> = {};
+        if (book.variables) {
+          for (const k of Object.keys(book.variables)) {
+            mergedVars[k] = book.variables[k];
+          }
+        }
+        if (bookInfo?.variables) {
+          for (const k of Object.keys(bookInfo.variables)) {
+            mergedVars[k] = bookInfo.variables[k];
+          }
+        }
+        if (bookInfo) {
+          if (bookInfo.tocUrl) tocUrl = bookInfo.tocUrl;
+          if (bookInfo.intro && !book.intro) book.intro = bookInfo.intro;
+        }
+        this.debugInfo += `\ntocUrl=${tocUrl}`;
+
+        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
         this.debugInfo += `\ntocItems=${tocItems.length}`;
         if (tocItems.length > 0) {
           this.debugInfo += `\nfirst=${tocItems[0].name}`;
@@ -132,6 +153,10 @@ export struct BookDetailPage {
         };
         this.book = cloned;
         SearchCache.put(cloned);
+        // 已收藏的在线书：同步把最新 toc 写回 cachedBooks,保证书架直接进播放器有完整章节
+        if (this.isFavorite) {
+          await DataService.upsertCachedBook(cloned);
+        }
       }
     } catch (e) {
       this.debugInfo += `\nERROR: ${e}`;
@@ -165,6 +190,12 @@ export struct BookDetailPage {
     }
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
     if (this.isFavorite) {
+      // 在线书:章节还没拉到就先把 toc 拉齐再写缓存,避免书架点击时拿到空 chapters
+      const needToc = (!this.book.chapters || this.book.chapters.length === 0)
+        && !!this.book.bookUrl && !!this.book.sourceUrl;
+      if (needToc) {
+        await this.loadTocFromSource(this.book);
+      }
       await DataService.upsertCachedBook(this.book);
     } else if (!this.bookId.startsWith('import_')) {
       // 取消收藏后,如果没有播放历史,也清掉缓存避免堆积

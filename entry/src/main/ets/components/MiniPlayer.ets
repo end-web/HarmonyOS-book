@@ -12,13 +12,15 @@ export struct MiniPlayer {
 
   @Local coverAngle: number = 0;
   @Local rotating: boolean = false;
+  private animationTimer: number = -1;
+  private startTime: number = 0;
 
   aboutToAppear(): void {
     this.syncRotate();
   }
 
   aboutToDisappear(): void {
-    this.rotating = false;
+    this.stopRotate();
   }
 
   @Monitor('playerState.isPlaying')
@@ -37,101 +39,73 @@ export struct MiniPlayer {
   private startRotate(): void {
     if (this.rotating) return;
     this.rotating = true;
-    this.tickRotate();
-  }
-
-  private tickRotate(): void {
-    if (!this.rotating) return;
-    this.getUIContext().animateTo({
-      duration: 12000,
-      curve: Curve.Linear,
-      onFinish: () => { this.tickRotate(); }
-    }, () => {
-      this.coverAngle = this.coverAngle + 360;
-    });
+    this.startTime = Date.now();
+    const animate = () => {
+      if (!this.rotating) return;
+      const elapsed = Date.now() - this.startTime;
+      this.coverAngle = (elapsed / 12000) * 360;
+    };
+    this.animationTimer = setInterval(animate, 16);
   }
 
   private stopRotate(): void {
     if (!this.rotating) return;
     this.rotating = false;
-    this.getUIContext().animateTo({ duration: 0 }, () => {
-      this.coverAngle = this.coverAngle % 360;
-    });
+    if (this.animationTimer >= 0) {
+      clearInterval(this.animationTimer);
+      this.animationTimer = -1;
+    }
+    this.coverAngle = this.coverAngle % 360;
   }
 
   private bookId(): string {
     return this.playerState.currentBook ? this.playerState.currentBook.id : '';
   }
 
+  @Builder
+  coverImageBuilder(): void {
+    if (this.playerState.currentBook) {
+      if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('http')) {
+        Image(this.playerState.currentBook.cover)
+          .width('100%')
+          .height('100%')
+          .borderRadius(this.collapsed ? 28 : 20)
+          .objectFit(ImageFit.Cover)
+          .rotate({ angle: this.coverAngle })
+          .id('mini-cover-img')
+      } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
+        Image('file://' + this.playerState.currentBook.cover)
+          .width('100%')
+          .height('100%')
+          .borderRadius(this.collapsed ? 28 : 20)
+          .objectFit(ImageFit.Cover)
+          .rotate({ angle: this.coverAngle })
+          .id('mini-cover-img')
+      } else if (this.playerState.currentBook.cover) {
+        Image($rawfile(this.playerState.currentBook.cover))
+          .width('100%')
+          .height('100%')
+          .borderRadius(this.collapsed ? 28 : 20)
+          .objectFit(ImageFit.Cover)
+          .rotate({ angle: this.coverAngle })
+          .id('mini-cover-img')
+      }
+    }
+  }
+
   build() {
     if (this.playerState.currentBook) {
       if (this.collapsed) {
         Stack() {
-          if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('http')) {
-            Image(this.playerState.currentBook.cover)
-              .width('100%')
-              .height('100%')
-              .borderRadius(28)
-              .objectFit(ImageFit.Cover)
-              .rotate({ angle: this.coverAngle })
-          } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
-            Image('file://' + this.playerState.currentBook.cover)
-              .width('100%')
-              .height('100%')
-              .borderRadius(28)
-              .objectFit(ImageFit.Cover)
-              .rotate({ angle: this.coverAngle })
-          } else if (this.playerState.currentBook.cover) {
-            Image($rawfile(this.playerState.currentBook.cover))
-              .width('100%')
-              .height('100%')
-              .borderRadius(28)
-              .objectFit(ImageFit.Cover)
-              .rotate({ angle: this.coverAngle })
-          }
-          Stack() {
-            SymbolGlyph(this.playerState.isPlaying
-              ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
-              .fontSize(16)
-              .fontColor(['#FFFFFF'])
-          }
-          .width(24)
-          .height(24)
-          .borderRadius(12)
-          .backgroundColor('#66000000')
-          .hitTestBehavior(HitTestMode.Block)
-          .onClick(() => {
-            this.onToggle();
-            this.onExpand();
-          })
+          this.coverImageBuilder()
         }
         .width('100%')
         .height('100%')
+        .onClick(() => this.onExpand())
       } else {
         Row({ space: AppSpace.Sm }) {
           Stack() {
-            if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('http')) {
-              Image(this.playerState.currentBook.cover)
-                .width(40)
-                .height(40)
-                .borderRadius(20)
-                .objectFit(ImageFit.Cover)
-                .rotate({ angle: this.coverAngle })
-            } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
-              Image('file://' + this.playerState.currentBook.cover)
-                .width(40)
-                .height(40)
-                .borderRadius(20)
-                .objectFit(ImageFit.Cover)
-                .rotate({ angle: this.coverAngle })
-            } else if (this.playerState.currentBook.cover) {
-              Image($rawfile(this.playerState.currentBook.cover))
-                .width(40)
-                .height(40)
-                .borderRadius(20)
-                .objectFit(ImageFit.Cover)
-                .rotate({ angle: this.coverAngle })
-            }
+            this.coverImageBuilder()
           }
           .width(40)
           .height(40)

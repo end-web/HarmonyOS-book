@@ -12,6 +12,7 @@ import { PreferenceService } from '../service/PreferenceService';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
+import { ChapterCacheService } from '../service/ChapterCacheService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
@@ -65,6 +66,8 @@ export struct PlayerPage {
   }
 
   aboutToDisappear(): void {
+    // 退出播放页时立即把进度落盘,避免书架要等下一个 5s tick 才能看到最新进度
+    AudioService.getInstance().flushHistory();
   }
 
   private async loadBook(): Promise<void> {
@@ -105,18 +108,23 @@ export struct PlayerPage {
       hilog.info(DOMAIN, TAG, 'resume: already current chapter, skip restart');
       return;
     }
-    // url 类型 + 书源:解析真实播放地址
+    // url 类型 + 书源:解析真实播放地址（优先读预加载缓存）
     if (target.source.type === 'url' && book.sourceUrl) {
-      try {
-        const sourcesJson = await PreferenceService.getBookSources();
-        const sources = JSON.parse(sourcesJson) as BookSource[];
-        const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
-        if (source) {
-          const audioUrl = await BookSourceService.getAudioUrl(source, target.source.value);
-          target.source = { type: 'url', value: audioUrl };
+      const cached = ChapterCacheService.getInstance().getAudioUrl(target.id);
+      if (cached) {
+        target.source = { type: 'url', value: cached };
+      } else {
+        try {
+          const sourcesJson = await PreferenceService.getBookSources();
+          const sources = JSON.parse(sourcesJson) as BookSource[];
+          const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
+          if (source) {
+            const audioUrl = await BookSourceService.getAudioUrl(source, target.source.value);
+            target.source = { type: 'url', value: audioUrl };
+          }
+        } catch (e) {
+          hilog.error(DOMAIN, TAG, 'resume getAudioUrl failed');
         }
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, 'resume getAudioUrl failed');
       }
     }
     SearchCache.put(book);
@@ -140,7 +148,9 @@ export struct PlayerPage {
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
     if (idx > 0) {
-      await AudioService.getInstance().playChapter(this.book, this.book.chapters[idx - 1]);
+      const ch = this.book.chapters[idx - 1];
+      this.applyCachedUrl(ch);
+      await AudioService.getInstance().playChapter(this.book, ch);
     }
   }
 
@@ -148,7 +158,17 @@ export struct PlayerPage {
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
     if (idx >= 0 && idx < this.book.chapters.length - 1) {
-      await AudioService.getInstance().playChapter(this.book, this.book.chapters[idx + 1]);
+      const ch = this.book.chapters[idx + 1];
+      this.applyCachedUrl(ch);
+      await AudioService.getInstance().playChapter(this.book, ch);
+    }
+  }
+
+  private applyCachedUrl(chapter: Chapter): void {
+    if (chapter.source.type !== 'url') return;
+    const cached = ChapterCacheService.getInstance().getAudioUrl(chapter.id);
+    if (cached) {
+      chapter.source = { type: 'url', value: cached };
     }
   }
 

@@ -1,122 +1,34 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BookSource, SearchResult, TocItem, SourceSubscription } from '../model/BookSource';
-import { AnalyzeRule, AnalyzeContext } from './rule/AnalyzeRule';
+import { BookSource, SearchResult, TocItem, SourceSubscription, BookInfo } from '../model/BookSource';
+import { AnalyzeRule, AnalyzeContext, BookContext } from './rule/AnalyzeRule';
+import { AnalyzeUrl, AnalyzedUrl } from './rule/AnalyzeUrl';
 import { HttpClient } from './http/HttpClient';
+import { HttpResult } from './http/HttpResult';
 import { SourceDataService } from './SourceDataService';
+import { getJSExecutor } from './js/JSExecutor';
+import { getSourceContext } from './rule/SourceContext';
+import { getJsoup } from './rule/JsoupBridge';
 
-const DOMAIN = 0x0000;
 const TAG = 'BookSourceService';
+
+interface TemplateContext {
+  key?: string;
+  page?: number;
+  speakText?: string;
+  speakSpeed?: number;
+  book?: Object;
+  chapter?: Object;
+  baseUrl?: string;
+  result?: Object;
+}
 
 interface ExploreSection {
   source: BookSource;
   books: SearchResult[];
 }
 
-function parseHeaders(header: string): Record<string, string> {
-  try {
-    return JSON.parse(header) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function resolveUrl(base: string, relative: string): string {
-  if (!relative) return '';
-  if (relative.startsWith('http://') || relative.startsWith('https://') || relative.startsWith('//')) {
-    return relative;
-  }
-  // 从 base URL 提取 origin
-  const match = base.match(/^(https?:\/\/[^/]+)/);
-  if (!match) return relative;
-  const origin = match[1];
-  if (relative.startsWith('/')) {
-    return origin + relative;
-  }
-  // 相对路径
-  const basePath = base.substring(0, base.lastIndexOf('/') + 1);
-  return basePath + relative;
-}
-
-interface UrlConfig {
-  method?: string;
-  body?: string;
-  charset?: string;
-  headers?: Record<string, string>;
-}
-
-export interface ParsedUrl {
-  url: string;
-  method: string;
-  body?: string;
-  charset?: string;
-  headers?: Record<string, string>;
-}
-
-/**
- * 解析 Legado URL 配置（格式：url, {"method":"POST","body":"...","headers":{...}}）
- * 所有 HTTP 请求场景共用：search / toc / content / audio
- */
-export function parseUrlConfig(raw: string): ParsedUrl {
-  const configMatch = raw.match(/^(.*?)\s*,\s*(\{[\s\S]*\})\s*$/);
-  if (configMatch) {
-    const url = configMatch[1].trim();
-    try {
-      const config: UrlConfig = JSON.parse(configMatch[2]) as UrlConfig;
-      return {
-        url,
-        method: (config.method || 'GET').toUpperCase(),
-        body: config.body,
-        charset: config.charset,
-        headers: config.headers,
-      };
-    } catch {
-      // JSON 解析失败，当作普通 URL
-    }
-  }
-  return { url: raw, method: 'GET' };
-}
-
-/**
- * 合并书源全局 header 与单次请求 header
- */
-function mergeHeaders(sourceHeader: string | undefined, extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = sourceHeader ? parseHeaders(sourceHeader) : {};
-  if (extra) {
-    const keys = Object.keys(extra);
-    for (const k of keys) {
-      headers[k] = extra[k];
-    }
-  }
-  return headers;
-}
-
-/**
- * 通用 HTTP 请求：自动解析 url,{...} 配置，支持 GET/POST 和自定义 headers
- */
-async function fetchWithConfig(rawUrl: string, sourceHeader?: string): Promise<string> {
-  const parsed = parseUrlConfig(rawUrl);
-  const headers = mergeHeaders(sourceHeader, parsed.headers);
-  console.info(`[fetchWithConfig] url=${parsed.url}, method=${parsed.method}`);
-  if (parsed.method === 'POST') {
-    return HttpClient.post(parsed.url, parsed.body || '', headers);
-  }
-  return HttpClient.get(parsed.url, headers);
-}
-
-function buildSearchUrl(searchUrl: string, keyword: string, page: number): ParsedUrl {
-  // 替换 Legado 标准模板变量
-  let raw = searchUrl
-    .replace(/\{\{key\}\}/g, encodeURIComponent(keyword))
-    .replace(/\{\{keyword\}\}/g, encodeURIComponent(keyword))
-    .replace(/\{\{searchKey\}\}/g, encodeURIComponent(keyword))
-    .replace(/\{\{page\}\}/g, String(page))
-    .replace(/\{\{searchPage\}\}/g, String(page))
-    .replace(/\{\{pageSize\}\}/g, '20');
-
-  return parseUrlConfig(raw);
-}
-
 export class BookSourceService {
+  // ──────────────────── 书源管理 ────────────────────
+
   static async fetchSourcesFromUrl(subscriptionUrl: string): Promise<BookSource[]> {
     try {
       const body = await HttpClient.get(subscriptionUrl);
@@ -135,204 +47,381 @@ export class BookSourceService {
     }
   }
 
+  static buildSubscription(url: string, sources: BookSource[]): SourceSubscription {
+    const firstName = sources.length > 0 ? sources[0].bookSourceGroup || '未命名' : '未命名';
+    return { url, name: firstName, count: sources.length, lastUpdate: Date.now() };
+  }
+
+  // ──────────────────── 搜索 ────────────────────
+
   static async searchBooks(source: BookSource, keyword: string, page: number = 1): Promise<SearchResult[]> {
     try {
-      const parsed = buildSearchUrl(source.searchUrl, keyword, page);
-      const headers = mergeHeaders(source.header, parsed.headers);
+      if (!source.searchUrl) return [];
 
-      let body: string;
-      if (parsed.method === 'POST') {
-        body = await HttpClient.post(parsed.url, parsed.body || '', headers);
-      } else {
-        body = await HttpClient.get(parsed.url, headers);
+      // 设置书源上下文（供 source.key 访问）
+      const sourceContext = getSourceContext();
+      sourceContext.setSource({
+        bookSourceUrl: source.bookSourceUrl,
+        bookSourceName: source.bookSourceName,
+        bookSourceType: source.bookSourceType
+      });
+
+      const analyzeUrl = new AnalyzeUrl(source.searchUrl, {
+        key: keyword, page, baseUrl: source.bookSourceUrl,
+      }, source.header);
+      const analyzed = await analyzeUrl.getUrl();
+      console.info(`[${TAG}] search: ${source.bookSourceName} -> ${analyzed.url}`);
+      let body = await BookSourceService.fetch(analyzed);
+
+      // 执行 loginCheckJs（搜索前验证）
+      if (source.loginCheckJs) {
+        body = await BookSourceService.executeLoginCheck(source, body, keyword);
+      }
+
+      // 检查 checkKeyWord（搜索结果验证）
+      if (source.ruleSearch?.checkKeyWord) {
+        if (!body.includes(source.ruleSearch.checkKeyWord)) {
+          console.warn(`[${TAG}] checkKeyWord failed: ${source.ruleSearch.checkKeyWord}`);
+          return [];
+        }
       }
 
       const rule = source.ruleSearch;
-      const ctx = new AnalyzeContext(source.bookSourceUrl);
+      const ctx = new AnalyzeContext(analyzed.url);
       const analyzer = new AnalyzeRule(body, ctx);
-      const items = await analyzer.getElements(rule.bookList);
-      hilog.info(DOMAIN, TAG, `searchBooks: found ${items.length} items`);
+      const items: Object[] = await analyzer.getElements(rule.bookList);
       if (items.length === 0) return [];
-      // 打印第一个 item 的内容用于调试
-      if (items.length > 0) {
-        const firstItem = typeof items[0] === 'string' ? items[0] : JSON.stringify(items[0]);
-        hilog.info(DOMAIN, TAG, `searchBooks: first item=${firstItem.substring(0, 500)}`);
-      }
 
       const results: SearchResult[] = [];
-      const baseUrl = source.bookSourceUrl;
-      for (const item of items) {
-        const a = new AnalyzeRule(item, ctx);
+      for (let idx = 0; idx < items.length; idx++) {
+        const item: Object = items[idx];
+        const itemCtx = new AnalyzeContext(analyzed.url);
+        const a = new AnalyzeRule(item, itemCtx);
         const name = await a.getString(rule.name) || '';
+        if (!name) continue;
         const author = await a.getString(rule.author) || '';
         const coverUrlRaw = await a.getString(rule.coverUrl) || '';
         const bookUrlRaw = await a.getString(rule.bookUrl) || '';
-        hilog.info(DOMAIN, TAG, `searchBooks: rule.bookUrl="${rule.bookUrl}", bookUrlRaw="${bookUrlRaw}"`);
         const intro = await a.getString(rule.intro) || '';
         const kind = await a.getString(rule.kind) || '';
         const lastChapter = await a.getString(rule.lastChapter) || '';
-        const r: SearchResult = {
+        const wordCount = rule.wordCount ? await a.getString(rule.wordCount) || '' : '';
+
+        results.push({
           name, author,
-          coverUrl: resolveUrl(baseUrl, coverUrlRaw),
-          bookUrl: resolveUrl(baseUrl, bookUrlRaw),
-          intro, kind, lastChapter,
+          coverUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, coverUrlRaw),
+          bookUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, bookUrlRaw),
+          intro, kind, lastChapter, wordCount,
           sourceName: source.bookSourceName,
           sourceUrl: source.bookSourceUrl,
-        };
-        results.push(r);
+          variables: itemCtx.variables,
+        });
       }
       return results;
-    } catch {
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      console.error(`[${TAG}] searchBooks error: ${msg}`);
       return [];
     }
   }
 
-  static async getBookToc(source: BookSource, tocUrl: string): Promise<TocItem[]> {
+  // ──────────────────── 书籍详情 ────────────────────
+
+  static async getBookInfo(source: BookSource, bookUrl: string, variables?: Record<string, string>): Promise<BookInfo | null> {
     try {
-      console.info(`[BookSourceService] getBookToc: url=${tocUrl}`);
-      const body = await fetchWithConfig(tocUrl, source.header);
-      console.info(`[BookSourceService] getBookToc: body length=${body.length}, first 200=${body.substring(0, 200)}`);
+      const rule = source.ruleBookInfo;
+      if (!rule) return null;
 
-      const rule = source.ruleToc;
-      console.info(`[BookSourceService] getBookToc: rule.chapterList=${rule.chapterList}`);
-      const ctx = new AnalyzeContext(tocUrl);
+      // 兜底：将单花括号 {key} 转换为 Legado 标准语法 {{java.get('key')}}
+      let processedUrl = bookUrl.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match: string, key: string): string => {
+        return `{{java.get('${key}')}}`;
+      });
+
+      // 使用 AnalyzeUrl 解析 URL 模板（支持 {{key}} / <js>...</js> / @js:）
+      try {
+        const analyzeUrl = new AnalyzeUrl(processedUrl, { baseUrl: source.bookSourceUrl }, source.header, variables);
+        const analyzed = await analyzeUrl.getUrl();
+        processedUrl = analyzed.url;
+      } catch (e) {
+        console.error(`[${TAG}] getBookInfo AnalyzeUrl failed: ${e}, fallback to raw URL`);
+      }
+
+      const body = await BookSourceService.fetchWithSource(processedUrl, source);
+      const ctx = new AnalyzeContext(processedUrl);
+      ctx.book = { origin: source.bookSourceUrl, bookUrl: bookUrl, name: '' } as BookContext;
       const analyzer = new AnalyzeRule(body, ctx);
-      const items = await analyzer.getElements(rule.chapterList);
-      console.info(`[BookSourceService] getBookToc: items.length=${items.length}`);
-      if (items.length === 0) return [];
 
-      const baseUrl = tocUrl;
-      const toc: TocItem[] = [];
-      for (const item of items) {
-        const a = new AnalyzeRule(item, ctx);
-        const name = await a.getString(rule.chapterName) || '';
-        let url = await a.getString(rule.chapterUrl) || '';
-        if (name && url) {
-          // 有声书 chapterUrl 可能直接就是音频 URL（如 $.mp3Filepath）
-          // 也可能包含 ,{...} 配置，此时 resolveUrl 只处理 URL 部分
-          const parsed = parseUrlConfig(url);
-          const resolved = resolveUrl(baseUrl, parsed.url);
-          // 保留配置部分供 getAudioUrl 使用
-          url = parsed.url !== url
-            ? resolved + ',' + url.substring(url.indexOf(','))
-            : resolved;
-          const t: TocItem = { name, url };
-          toc.push(t);
+      // init 规则：预处理内容
+      if (rule.init) {
+        const initContent = await analyzer.getString(rule.init);
+        if (initContent) {
+          analyzer.setContent(initContent);
         }
       }
-      return toc;
-    } catch {
-      return [];
+
+      const name = await analyzer.getString(rule.name) || '';
+      const author = await analyzer.getString(rule.author) || '';
+      const coverUrlRaw = await analyzer.getString(rule.coverUrl) || '';
+      const intro = await analyzer.getString(rule.intro) || '';
+      const kind = rule.kind ? await analyzer.getString(rule.kind) || '' : '';
+      const wordCount = rule.wordCount ? await analyzer.getString(rule.wordCount) || '' : '';
+      const lastChapter = rule.lastChapter ? await analyzer.getString(rule.lastChapter) || '' : '';
+      const tocUrlRaw = await analyzer.getString(rule.tocUrl) || '';
+      // tocUrl 可能包含多行（多个匹配结果用 \n 连接），只取第一个有效 URL
+      const tocUrlFirst = tocUrlRaw.split('\n').map((s: string) => s.trim())
+        .find((s: string) => s.length > 0 && !s.toLowerCase().startsWith('javascript:')) || '';
+      const tocUrlResolved = tocUrlFirst ? AnalyzeUrl.resolveUrl(bookUrl, tocUrlFirst) : '';
+
+      return {
+        name, author,
+        coverUrl: AnalyzeUrl.resolveUrl(bookUrl, coverUrlRaw),
+        intro, kind, wordCount, lastChapter,
+        tocUrl: tocUrlResolved || bookUrl,
+        variables: ctx.variables,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      console.error(`[${TAG}] getBookInfo error: ${msg}, bookUrl=${bookUrl}`);
+      return null;
     }
   }
+
+  // ──────────────────── 目录（支持分页） ────────────────────
+
+  static async getBookToc(source: BookSource, tocUrl: string, variables?: Record<string, string>): Promise<TocItem[]> {
+    const rule = source.ruleToc;
+    const allItems: TocItem[] = [];
+    let currentUrl: string = tocUrl.replace(/[\r\n\t]/g, '').trim();
+
+    // 兜底：将单花括号 {key} 转换为 Legado 标准语法 {{java.get('key')}}
+    // 某些书源（如猫眼看书）的 bookUrl 包含 {aQnGo9} 占位符，需要手动转换
+    currentUrl = currentUrl.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match: string, key: string): string => {
+      return `{{java.get('${key}')}}`;
+    });
+
+    // Legado 对齐：使用 AnalyzeUrl 解析 URL 模板（支持 {{key}} / <js>...</js> / @js:）
+    // 将 variables 注入到 JavaBridge，让 AnalyzeUrl 的 evalJS 能通过 java.get(key) 读取
+    try {
+      const analyzeUrl = new AnalyzeUrl(currentUrl, { baseUrl: source.bookSourceUrl }, source.header, variables);
+      const analyzed = await analyzeUrl.getUrl();
+      currentUrl = analyzed.url;
+    } catch (e) {
+      console.error(`[${TAG}] getBookToc AnalyzeUrl failed: ${e}, fallback to raw URL`);
+    }
+    let hasMore: boolean = true;
+    const visitedUrls = new Set<string>();
+    const maxPages = 50;
+
+    while (hasMore && !visitedUrls.has(currentUrl) && visitedUrls.size < maxPages) {
+      visitedUrls.add(currentUrl);
+      try {
+        const body = await BookSourceService.fetchWithSource(currentUrl, source);
+        const ctx = new AnalyzeContext(currentUrl);
+        ctx.book = { origin: source.bookSourceUrl, bookUrl: tocUrl, name: '' } as BookContext;
+        const analyzer = new AnalyzeRule(body, ctx);
+        const items: Object[] = await analyzer.getElements(rule.chapterList);
+        console.info(`[${TAG}] getBookToc: rule=${rule.chapterList}, items=${items.length}, bodyLen=${body.length}`);
+
+        for (let idx = 0; idx < items.length; idx++) {
+          const item: Object = items[idx];
+          const a = new AnalyzeRule(item, ctx);
+          const name = await a.getString(rule.chapterName) || '';
+          let url = await a.getString(rule.chapterUrl) || '';
+          if (!name) continue;
+
+          url = url ? AnalyzeUrl.resolveUrl(currentUrl, url) : '';
+          if (!url) url = currentUrl;
+
+          const tocItem: TocItem = { name, url };
+          if (rule.isVip) {
+            const vip = await a.getString(rule.isVip);
+            tocItem.isVip = vip === 'true' || vip === '1';
+          }
+          if (rule.isVolume) {
+            const vol = await a.getString(rule.isVolume);
+            tocItem.isVolume = vol === 'true' || vol === '1';
+          }
+          if (rule.updateTime) {
+            tocItem.updateTime = await a.getString(rule.updateTime) || undefined;
+          }
+          allItems.push(tocItem);
+        }
+
+        // 下一页
+        if (rule.nextTocUrl) {
+          const nextUrlRaw = await analyzer.getString(rule.nextTocUrl);
+          const nextUrl = nextUrlRaw ? AnalyzeUrl.resolveUrl(currentUrl, nextUrlRaw) : '';
+          if (nextUrl) {
+            currentUrl = nextUrl;
+          } else {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : JSON.stringify(e);
+        console.error(`[${TAG}] getBookToc page error: ${msg}, url=${currentUrl}`);
+        hasMore = false;
+      }
+    }
+
+    return allItems;
+  }
+
+  // ──────────────────── 音频 URL ────────────────────
 
   static async getAudioUrl(source: BookSource, chapterUrl: string): Promise<string> {
     try {
       const rule = source.ruleContent;
       const contentRule = rule.audioUrl || rule.content;
 
-      // ruleContent 为空 → chapterUrl 本身就是音频 URL
       if (!contentRule || contentRule.trim().length === 0) {
         return chapterUrl;
       }
 
-      // @js:baseUrl → 直接返回 chapterUrl
       const trimmed = contentRule.trim();
       if (trimmed === '@js:baseUrl' || trimmed === 'baseUrl') {
         return chapterUrl;
       }
 
-      // 判断是否需要请求：纯 JSONPath / CSS 选择器需要先请求内容
-      // @js: 可能需要请求（取决于是否引用 src/result）
-      const needsFetch = trimmed.startsWith('$.') || trimmed.startsWith('$[') ||
-        trimmed.startsWith('@css:') || trimmed.startsWith('@@') ||
-        trimmed.startsWith('//') || trimmed.startsWith('@xpath:') ||
-        trimmed.includes('src') || trimmed.includes('result') ||
-        trimmed.startsWith('@js:') || trimmed.startsWith('<js>');
-
-      if (!needsFetch) {
-        // 纯字段名如 playPathAacv224||playUrl64 → chapterUrl 的 JSON 响应中提取
-        const body = await fetchWithConfig(chapterUrl, source.header);
-        const contentCtx = new AnalyzeContext(chapterUrl);
-        const analyzer = new AnalyzeRule(body, contentCtx);
-        const audioUrl = await analyzer.getString(contentRule);
-        return audioUrl || chapterUrl;
-      }
-
-      const body = await fetchWithConfig(chapterUrl, source.header);
-      const contentCtx = new AnalyzeContext(chapterUrl);
-      const analyzer = new AnalyzeRule(body, contentCtx);
+      const body = await BookSourceService.fetchWithSource(chapterUrl, source);
+      const ctx = new AnalyzeContext(chapterUrl);
+      ctx.book = { origin: source.bookSourceUrl, bookUrl: chapterUrl, name: '' } as BookContext;
+      const analyzer = new AnalyzeRule(body, ctx);
       const audioUrl = await analyzer.getString(contentRule);
-      return audioUrl || chapterUrl;
+      if (!audioUrl) return chapterUrl;
+
+      return AnalyzeUrl.resolveUrl(chapterUrl, audioUrl);
     } catch {
       return chapterUrl;
     }
   }
 
-  static async getTextContent(source: BookSource, chapterUrl: string): Promise<string> {
+  // ──────────────────── 文本内容（支持多页） ────────────────────
+
+  static async getTextContent(source: BookSource, chapterUrl: string, nextChapterUrl?: string): Promise<string> {
     try {
-      const body = await fetchWithConfig(chapterUrl, source.header);
       const rule = source.ruleContent;
-      const textCtx = new AnalyzeContext(chapterUrl);
-      const analyzer = new AnalyzeRule(body, textCtx);
-      const content = await analyzer.getString(rule.content);
-      return content || '';
-    } catch {
+      const allContent: string[] = [];
+      let currentUrl: string = chapterUrl;
+      let hasMore: boolean = true;
+      const visitedUrls = new Set<string>();
+      const maxPages = 20;
+
+      while (hasMore && !visitedUrls.has(currentUrl) && visitedUrls.size < maxPages) {
+        visitedUrls.add(currentUrl);
+
+        // 防止循环到下一章
+        if (nextChapterUrl && currentUrl === nextChapterUrl) break;
+
+        const body = await BookSourceService.fetchWithSource(currentUrl, source);
+        const ctx = new AnalyzeContext(currentUrl);
+        ctx.book = { origin: source.bookSourceUrl, bookUrl: currentUrl, name: '' } as BookContext;
+        const analyzer = new AnalyzeRule(body, ctx);
+        const content = await analyzer.getString(rule.content);
+        if (content) {
+          allContent.push(content);
+        }
+
+        // 下一页
+        if (rule.nextContentUrl) {
+          const nextUrl = await analyzer.getString(rule.nextContentUrl);
+          if (nextUrl) {
+            const resolved = AnalyzeUrl.resolveUrl(currentUrl, nextUrl);
+            if (resolved !== nextChapterUrl) {
+              currentUrl = resolved;
+            } else {
+              hasMore = false;
+            }
+          } else {
+            hasMore = false;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      let result = allContent.join('\n');
+
+      // sourceRegex：提取音频 URL（bookSourceType=1 时使用）
+      if (rule.sourceRegex && result) {
+        try {
+          const regex = new RegExp(rule.sourceRegex);
+          const match = result.match(regex);
+          if (match && match[0]) {
+            result = match[0];
+            console.info(`[${TAG}] sourceRegex matched: ${result.substring(0, 100)}`);
+          } else {
+            console.warn(`[${TAG}] sourceRegex no match: ${rule.sourceRegex}`);
+          }
+        } catch (e) {
+          console.error(`[${TAG}] sourceRegex error: ${e}`);
+        }
+      }
+
+      // 应用全局替换规则
+      if (rule.replaceRegex && result) {
+        try {
+          const replaceRules = rule.replaceRegex.split('&&');
+          for (const rr of replaceRules) {
+            const parts = rr.split('##');
+            if (parts.length >= 1) {
+              const pattern = parts[0];
+              const replacement = parts.length > 1 ? parts[1] : '';
+              const regex = new RegExp(pattern, 'g');
+              result = result.replace(regex, replacement);
+            }
+          }
+        } catch { /* ignore replace errors */ }
+      }
+
+      return result;
+    } catch (e) {
+      console.error(`[${TAG}] getTextContent error:`, e);
       return '';
     }
   }
 
-  static buildSubscription(url: string, sources: BookSource[]): SourceSubscription {
-    const firstName = sources.length > 0 ? sources[0].bookSourceGroup || '未命名' : '未命名';
-    const s: SourceSubscription = { url, name: firstName, count: sources.length, lastUpdate: Date.now() };
-    return s;
-  }
+  // ──────────────────── 发现/推荐 ────────────────────
 
-  /**
-   * 从书源获取推荐/发现内容
-   */
   static async getExploreBooks(source: BookSource): Promise<SearchResult[]> {
     try {
-      if (!source.exploreUrl || !source.ruleExplore) {
-        return [];
-      }
+      if (!source.exploreUrl || !source.ruleExplore) return [];
 
-      const headers: Record<string, string> = source.header ? parseHeaders(source.header) : {};
-      const body = await HttpClient.get(source.exploreUrl, headers);
+      const analyzeUrl = new AnalyzeUrl(source.exploreUrl, {
+        page: 1, baseUrl: source.bookSourceUrl,
+      }, source.header);
+      const analyzed = await analyzeUrl.getUrl();
+      const body = await BookSourceService.fetch(analyzed);
 
       const rule = source.ruleExplore;
-      const ctx = new AnalyzeContext(source.bookSourceUrl);
+      const ctx = new AnalyzeContext(analyzed.url);
       const analyzer = new AnalyzeRule(body, ctx);
-      const items = await analyzer.getElements(rule.bookList);
-      hilog.info(DOMAIN, TAG, `searchBooks: found ${items.length} items`);
+      const items: Object[] = await analyzer.getElements(rule.bookList);
       if (items.length === 0) return [];
-      // 打印第一个 item 的内容用于调试
-      if (items.length > 0) {
-        const firstItem = typeof items[0] === 'string' ? items[0] : JSON.stringify(items[0]);
-        hilog.info(DOMAIN, TAG, `searchBooks: first item=${firstItem.substring(0, 500)}`);
-      }
 
       const results: SearchResult[] = [];
-      const baseUrl = source.bookSourceUrl;
-      for (const item of items) {
+      for (let idx = 0; idx < items.length; idx++) {
+        const item: Object = items[idx];
         const a = new AnalyzeRule(item, ctx);
         const name = await a.getString(rule.name) || '';
+        if (!name) continue;
         const author = await a.getString(rule.author) || '';
         const coverUrlRaw = await a.getString(rule.coverUrl) || '';
         const bookUrlRaw = await a.getString(rule.bookUrl) || '';
-        hilog.info(DOMAIN, TAG, `searchBooks: rule.bookUrl="${rule.bookUrl}", bookUrlRaw="${bookUrlRaw}"`);
         const intro = await a.getString(rule.intro) || '';
         const kind = await a.getString(rule.kind) || '';
         const lastChapter = await a.getString(rule.lastChapter) || '';
-        const r: SearchResult = {
+
+        results.push({
           name, author,
-          coverUrl: resolveUrl(baseUrl, coverUrlRaw),
-          bookUrl: resolveUrl(baseUrl, bookUrlRaw),
+          coverUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, coverUrlRaw),
+          bookUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, bookUrlRaw),
           intro, kind, lastChapter,
           sourceName: source.bookSourceName,
           sourceUrl: source.bookSourceUrl,
-        };
-        results.push(r);
+        });
       }
       return results;
     } catch {
@@ -340,35 +429,92 @@ export class BookSourceService {
     }
   }
 
-  /**
-   * 从所有已启用书源获取推荐内容
-   */
   static async getAllExploreBooks(): Promise<ExploreSection[]> {
     const sources = await SourceDataService.getSources();
     const enabledSources = sources.filter((s: BookSource) =>
-      s.enabled !== false &&
-      s.exploreUrl &&
-      s.exploreUrl.length > 0 &&
-      s.ruleExplore &&
-      s.bookSourceType === 0  // 只获取文本源的推荐
+      s.enabled !== false && s.exploreUrl && s.exploreUrl.length > 0 && s.ruleExplore
     );
 
     const results: ExploreSection[] = [];
-
-    // 并行获取所有书源的推荐
     const tasks = enabledSources.map(async (source: BookSource) => {
       try {
         const books = await BookSourceService.getExploreBooks(source);
         if (books.length > 0) {
-          const section: ExploreSection = { source, books };
-          results.push(section);
+          results.push({ source, books });
         }
-      } catch {
-        // 忽略单个书源的错误
-      }
+      } catch { /* ignore */ }
     });
 
     await Promise.all(tasks);
     return results;
+  }
+
+  // ──────────────────── HTTP 工具 ────────────────────
+
+  private static async fetch(analyzed: AnalyzedUrl): Promise<string> {
+    if (analyzed.method === 'POST') {
+      return HttpClient.post(analyzed.url, analyzed.body || '', analyzed.headers);
+    }
+    return HttpClient.get(analyzed.url, analyzed.headers);
+  }
+
+  /**
+   * 执行 loginCheckJs（搜索前验证）
+   * 用于处理反爬虫、跳转、Cookie 验证等场景
+   */
+  private static async executeLoginCheck(source: BookSource, body: string, keyword: string): Promise<string> {
+    try {
+      if (!source.loginCheckJs) return body;
+
+      console.info(`[${TAG}] executeLoginCheck: ${source.bookSourceName}`);
+      const executor = getJSExecutor();
+      const jsoup = getJsoup();
+
+      // 创建 result 对象（模拟 Legado 的 Response）
+      const result = new HttpResult(body);
+
+      // 准备上下文
+      const ctx: Record<string, Object> = {};
+      ctx['result'] = result;
+      ctx['source'] = getSourceContext();
+      ctx['key'] = keyword;
+      ctx['baseUrl'] = source.bookSourceUrl;
+
+      // 注入 org.jsoup.Jsoup（简化：通过全局访问）
+      // loginCheckJs 中的 org.jsoup.Jsoup.parse 会通过 JSExecutor 处理
+
+      // 执行 loginCheckJs
+      const newResult = await executor.eval(source.loginCheckJs, ctx);
+
+      // 如果返回新的 result，提取 body
+      if (newResult && typeof newResult === 'object') {
+        // 尝试调用 body() 方法
+        const resultObj = newResult as Record<string, Function>;
+        const bodyMethod = resultObj['body'];
+        if (bodyMethod && typeof bodyMethod === 'function') {
+          return String(bodyMethod());
+        }
+      }
+
+      // 如果返回字符串，直接使用
+      if (typeof newResult === 'string') {
+        return newResult;
+      }
+
+      // 否则返回原始 body
+      return body;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      console.error(`[${TAG}] executeLoginCheck error: ${msg}`);
+      return body;
+    }
+  }
+
+  private static async fetchWithSource(url: string, source: BookSource): Promise<string> {
+    const cleanUrl = url.replace(/[\r\n\t]/g, '').trim();
+    const analyzeUrl = new AnalyzeUrl(cleanUrl, { baseUrl: source.bookSourceUrl }, source.header);
+    const analyzed = await analyzeUrl.getUrl();
+    console.info(`[${TAG}] fetchWithSource: ${analyzed.url}`);
+    return BookSourceService.fetch(analyzed);
   }
 }

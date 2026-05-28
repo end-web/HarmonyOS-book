@@ -1,9 +1,14 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { promptAction } from '@kit.ArkUI';
+import { emitter } from '@kit.BasicServicesKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
-import { Book } from '../model/Book';
+import { Book, Chapter } from '../model/Book';
+import { BookSource, TocItem } from '../model/BookSource';
+import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
+import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 
@@ -16,16 +21,24 @@ export struct FavoritePage {
   @Local dragging: boolean = false;
   @Local trashHover: boolean = false;
   @Local draggingBookId: string = '';
+  @Local isRefreshing: boolean = false;
+  @Local resolvingTocId: string = '';
   @Param visible: boolean = false;
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
   @Event onGotoStore: () => void = () => {};
 
   private context: common.UIAbilityContext | null = null;
+  private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadFavorites();
+    emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
+  }
+
+  aboutToDisappear(): void {
+    emitter.off(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
   }
 
   @Monitor('visible')
@@ -33,6 +46,27 @@ export struct FavoritePage {
     if (this.visible) {
       this.loadFavorites();
     }
+  }
+
+  /** 收到播放/阅读进度更新事件:只重算历史相关 map,不重拉书清单,避免列表抖动 */
+  private async onHistoryUpdated(_e: emitter.EventData): Promise<void> {
+    if (!this.context || this.favoriteBooks.length === 0) return;
+    const history = await PreferenceService.getHistory();
+    const map: Record<string, PlayHistoryItem> = {};
+    for (const item of history) {
+      if (!map[item.bookId]) {
+        map[item.bookId] = item;
+      }
+    }
+    const idxMap: Record<string, number> = {};
+    for (const b of this.favoriteBooks) {
+      const h = map[b.id];
+      if (!h || !b.chapters || b.chapters.length === 0) continue;
+      const idx = b.chapters.findIndex((c) => c.id === h.chapterId);
+      if (idx >= 0) idxMap[b.id] = idx;
+    }
+    this.historyMap = map;
+    this.chapterIdxMap = idxMap;
   }
 
   async loadFavorites(): Promise<void> {
@@ -87,9 +121,13 @@ export struct FavoritePage {
       this.navStack.pushPathByName('detail', book.id, onPop);
       return;
     }
-    // 章节列表尚未加载（书源类型首次进入）→ 也走详情页,由详情页拉 TOC
+    // 章节列表尚未加载 → 在线书源主动拉 toc 后恢复进度;否则交给详情页
     if (!book.chapters || book.chapters.length === 0) {
-      this.navStack.pushPathByName('detail', book.id, onPop);
+      if (book.bookUrl && book.sourceUrl && !book.id.startsWith('import_')) {
+        this.resumeOnlineWithToc(book, history, onPop);
+      } else {
+        this.navStack.pushPathByName('detail', book.id, onPop);
+      }
       return;
     }
     // 有进度但定位不到对应章节(可能 TOC 重排) → 详情页
@@ -112,6 +150,68 @@ export struct FavoritePage {
         'progressMs': history.progressMs as Object
       };
       this.navStack.pushPathByName('player', params, onPop);
+    }
+  }
+
+  /** 老收藏的在线书没缓存章节时,先拉 toc 再恢复进度;期间禁用重复点击 */
+  private async resumeOnlineWithToc(book: Book, history: PlayHistoryItem, onPop: () => void): Promise<void> {
+    if (this.resolvingTocId) return;
+    this.resolvingTocId = book.id;
+    promptAction.showToast({ message: '加载章节中...' });
+    try {
+      const sourcesJson = await PreferenceService.getBookSources();
+      const sources = JSON.parse(sourcesJson) as BookSource[];
+      const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
+      if (!source) {
+        promptAction.showToast({ message: '书源已删除,请到详情页重新选择' });
+        this.navStack.pushPathByName('detail', book.id, onPop);
+        return;
+      }
+      let tocUrl = book.bookUrl;
+      const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+      const mergedVars: Record<string, string> = {};
+      if (book.variables) {
+        for (const k of Object.keys(book.variables)) mergedVars[k] = book.variables[k];
+      }
+      if (bookInfo?.variables) {
+        for (const k of Object.keys(bookInfo.variables)) mergedVars[k] = bookInfo.variables[k];
+      }
+      if (bookInfo?.tocUrl) tocUrl = bookInfo.tocUrl;
+      const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
+      if (tocItems.length === 0) {
+        promptAction.showToast({ message: '章节加载失败' });
+        this.navStack.pushPathByName('detail', book.id, onPop);
+        return;
+      }
+      book.chapters = tocItems.map((item: TocItem, idx: number): Chapter => ({
+        id: `${book.id}-c${idx}`,
+        index: idx + 1,
+        title: item.name,
+        duration: 0,
+        source: { type: 'url', value: item.url }
+      }));
+      book.chapterCount = book.chapters.length;
+      // 持久化新 toc,下次点击不用再拉
+      await DataService.upsertCachedBook(book);
+      SearchCache.put(book);
+      const idx = book.chapters.findIndex((c) => c.id === history.chapterId);
+      if (idx < 0) {
+        // 章节顺序变了,定位不回去 → 交给详情页让用户选
+        this.navStack.pushPathByName('detail', book.id, onPop);
+        return;
+      }
+      this.chapterIdxMap[book.id] = idx;
+      const params: Record<string, Object> = {
+        'bookId': book.id as Object,
+        'chapterId': history.chapterId as Object,
+        'progressMs': history.progressMs as Object
+      };
+      this.navStack.pushPathByName('player', params, onPop);
+    } catch (_e) {
+      promptAction.showToast({ message: '章节加载失败' });
+      this.navStack.pushPathByName('detail', book.id, onPop);
+    } finally {
+      this.resolvingTocId = '';
     }
   }
 
@@ -166,28 +266,33 @@ export struct FavoritePage {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // 内容层
-      Grid() {
-        ForEach(this.favoriteBooks, (book: Book) => {
+      Refresh({ refreshing: $$this.isRefreshing }) {
+        Grid() {
+          ForEach(this.favoriteBooks, (book: Book) => {
+            GridItem() {
+              this.buildBookTile(book)
+            }
+          }, (book: Book) => book.id)
           GridItem() {
-            this.buildBookTile(book)
+            this.buildAddTile()
           }
-        }, (book: Book) => book.id)
-        GridItem() {
-          this.buildAddTile()
         }
+        .columnsTemplate('1fr 1fr 1fr')
+        .columnsGap(AppSpace.Sm)
+        .rowsGap(AppSpace.Md)
+        .width('100%')
+        .height('100%')
+        .padding({
+          left: AppSpace.Md,
+          right: AppSpace.Md,
+          top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL,
+          bottom: WindowUtils.getFloatingTabBottomVp()
+        })
+        .scrollBar(BarState.Off)
       }
-      .columnsTemplate('1fr 1fr 1fr')
-      .columnsGap(AppSpace.Sm)
-      .rowsGap(AppSpace.Md)
-      .width('100%')
-      .height('100%')
-      .padding({
-        left: AppSpace.Md,
-        right: AppSpace.Md,
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL,
-        bottom: 160
+      .onRefreshing(() => {
+        this.loadFavorites().finally(() => { this.isRefreshing = false; });
       })
-      .scrollBar(BarState.Off)
 
       // 浮顶标题（去掉 backgroundBlurStyle,改用纯色背景,转场时省 GPU）
       Column() {
@@ -334,7 +439,7 @@ export struct FavoritePage {
       }, 100);
     })
     .onClick(() => {
-      if (!this.dragging) {
+      if (!this.dragging && !this.resolvingTocId) {
         this.handleBookTap(book);
       }
     })

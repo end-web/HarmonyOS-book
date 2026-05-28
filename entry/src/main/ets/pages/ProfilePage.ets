@@ -48,7 +48,7 @@ export struct ProfilePage {
       .padding({
         left: AppSpace.Md,
         right: AppSpace.Md,
-        bottom: AppSpace.Xl
+        bottom: WindowUtils.getFloatingTabBottomVp()
       })
     }
     .width('100%')

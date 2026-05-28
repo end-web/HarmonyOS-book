@@ -21,6 +21,19 @@ export class BookDataSource implements IDataSource {
     this.listeners.forEach((l) => l.onDataReloaded());
   }
 
+  appendBooks(newBooks: Book[]): void {
+    const start = this.books.length;
+    this.books.push(...newBooks);
+    for (let i = start; i < this.books.length; i++) {
+      this.listeners.forEach((l) => l.onDataAdd(i));
+    }
+  }
+
+  clear(): void {
+    this.books = [];
+    this.listeners.forEach((l) => l.onDataReloaded());
+  }
+
   registerDataChangeListener(listener: DataChangeListener): void {
     if (!this.listeners.includes(listener)) {
       this.listeners.push(listener);

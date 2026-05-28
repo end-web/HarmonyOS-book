@@ -43,4 +43,20 @@ export class WindowUtils {
   static getBottomSafeVp(): number {
     return WindowUtils.bottomPx / WindowUtils.density;
   }
+
+  // HdsTabs 悬浮 Tab 栏估算高度(BottomTabBarStyle 在 floating 模式下约 60vp)
+  private static readonly FLOATING_TAB_BAR_HEIGHT: number = 60;
+  // MainPage 中 barBottomMargin 与 bottomSafe 之间额外保留的间距,需与 MainPage 配置保持一致
+  private static readonly FLOATING_TAB_BOTTOM_GAP: number = 8;
+
+  /**
+   * 悬浮 Tab 区域占用的底部高度(vp)
+   * 用于 TabContent 内可滚动容器的 bottom padding,避免最后一项被悬浮 Tab 遮挡
+   */
+  static getFloatingTabBottomVp(): number {
+    return WindowUtils.FLOATING_TAB_BAR_HEIGHT
+      + WindowUtils.FLOATING_TAB_BOTTOM_GAP
+      + WindowUtils.getBottomSafeVp()
+      + 8;
+  }
 }

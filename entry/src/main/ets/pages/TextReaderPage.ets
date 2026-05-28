@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, emitter } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { vibrator } from '@kit.SensorServiceKit';
@@ -11,11 +11,13 @@ import { ReadingState, READING_STATE_KEY } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
 import { BookSourceService } from '../service/BookSourceService';
 import { PreferenceService, ReaderBookmark } from '../service/PreferenceService';
+import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BrightnessUtil } from '../utils/BrightnessUtil';
 import { FoldUtil } from '../utils/FoldUtil';
 import { ParagraphDataSource, splitParagraphs } from '../utils/ParagraphDataSource';
+import { ChapterCacheService } from '../service/ChapterCacheService';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const DOMAIN = 0xFF00;
@@ -203,6 +205,8 @@ export struct TextReaderPage {
       updatedAt: Date.now()
     });
     await DataService.upsertCachedBook(this.book);
+    // 通知书架等订阅方刷新进度文案,避免必须切 tab 才看到最新章节
+    emitter.emit(EVT_HISTORY_UPDATED, { data: { bookId: this.book.id } });
   }
 
   private async loadBook(): Promise<void> {
@@ -252,7 +256,8 @@ export struct TextReaderPage {
           setTimeout((): void => { this.restoring = false; }, 150);
         } else {
           setTimeout((): void => {
-            this.scroller.scrollToIndex(restorePara);
+            // +1 补头部 spacer ListItem 的偏移,确保段落对齐到屏幕顶端
+            this.scroller.scrollToIndex(restorePara + 1);
             if (total > 1) {
               this.scrollPercent = Math.min(100, Math.max(0, restorePara / (total - 1) * 100));
             }
@@ -266,6 +271,7 @@ export struct TextReaderPage {
         setTimeout((): void => { this.restoring = false; }, 150);
       }
       this.saveProgress();
+      ChapterCacheService.getInstance().preloadTextChapters(this.book, index);
     } catch (err) {
       const error = err as BusinessError;
       this.errorMsg = `加载失败: ${error.message}`;
@@ -283,6 +289,9 @@ export struct TextReaderPage {
       const text = await this.readLocalText(src.value);
       return text || '文件内容为空';
     }
+    // 优先读预加载缓存
+    const cached = ChapterCacheService.getInstance().getTextContent(this.currentChapter.id);
+    if (cached) return cached;
     if (!this.book.sourceUrl) return '书源信息缺失';
     const sourcesJson = await PreferenceService.getBookSources();
     const sources = JSON.parse(sourcesJson) as BookSource[];
@@ -454,11 +463,12 @@ export struct TextReaderPage {
     const idx = this.book.chapters.findIndex((c) => c.id === m.chapterId);
     this.sheetOpen = false;
     if (idx < 0) return;
+    // +1 补头部 spacer ListItem 的偏移
     if (idx === this.currentIndex) {
-      this.scroller.scrollToIndex(m.paraIndex);
+      this.scroller.scrollToIndex(m.paraIndex + 1);
     } else {
       this.loadChapter(idx).then((): void => {
-        setTimeout((): void => { this.scroller.scrollToIndex(m.paraIndex); }, 80);
+        setTimeout((): void => { this.scroller.scrollToIndex(m.paraIndex + 1); }, 80);
       });
     }
   }
@@ -820,7 +830,8 @@ export struct TextReaderPage {
       } else {
         this.scrollPercent = Math.min(100, Math.max(0, first / (total - 1) * 100));
       }
-      this.scheduleSaveScrollPos(first);
+      // List 第一个 ListItem 是头部 spacer,first 比真实段落 index 大 1;统一存段落 index
+      this.scheduleSaveScrollPos(Math.max(0, first - 1));
     })
     .onScrollStop(() => {
       // 滚动停止后，延迟恢复工具栏显示（可选）

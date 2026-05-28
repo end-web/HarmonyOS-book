@@ -32,4 +32,5 @@ export interface Book {
   chapters: Chapter[];
   bookUrl: string;
   sourceUrl: string;
+  variables?: Record<string, string>;
 }

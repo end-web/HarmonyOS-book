@@ -47,24 +47,18 @@ export struct SettingsPage {
   @Local defaultTab: number = 0;
   @Local focusMode: number = 0;
   @Local autoResume: boolean = true;
+  @Local isLoaded: boolean = false;
 
   aboutToAppear(): void {
-    this.loadColorMode();
-    this.loadDefaultTab();
-    this.loadAudioFocusPrefs();
+    this.loadPrefs();
   }
 
-  private async loadColorMode(): Promise<void> {
+  private async loadPrefs(): Promise<void> {
     this.currentMode = await PreferenceService.getColorMode();
-  }
-
-  private async loadDefaultTab(): Promise<void> {
     this.defaultTab = await PreferenceService.getDefaultTab();
-  }
-
-  private async loadAudioFocusPrefs(): Promise<void> {
     this.focusMode = await PreferenceService.getAudioInterruptMode();
     this.autoResume = await PreferenceService.getAudioAutoResume();
+    this.isLoaded = true;
   }
 
   private async setDefaultTab(idx: number): Promise<void> {
@@ -83,37 +77,39 @@ export struct SettingsPage {
   }
 
   private async setColorMode(mode: number): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const appCtx = ctx.getApplicationContext();
     try {
-      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const appCtx = ctx.getApplicationContext();
       appCtx.setColorMode(mode);
-      this.currentMode = mode;
-      await PreferenceService.setColorMode(mode);
-    } catch (_e) { /* ignore */ }
+    } catch (_e) { /* system API may throw on invalid context */ }
+    this.currentMode = mode;
+    await PreferenceService.setColorMode(mode);
   }
 
   build() {
     Column() {
       this.buildHeader()
 
-      Scroll() {
-        Column({ space: AppSpace.Lg }) {
-          this.buildAppearanceGroup()
-          this.buildLaunchGroup()
-          this.buildPlaybackGroup()
-          this.buildDeveloperGroup()
+      if (this.isLoaded) {
+        Scroll() {
+          Column({ space: AppSpace.Lg }) {
+            this.buildAppearanceGroup()
+            this.buildLaunchGroup()
+            this.buildPlaybackGroup()
+            this.buildDeveloperGroup()
+          }
+          .width('100%')
+          .padding({
+            left: AppSpace.Md,
+            right: AppSpace.Md,
+            top: AppSpace.Sm,
+            bottom: AppSpace.Xl
+          })
         }
-        .width('100%')
-        .padding({
-          left: AppSpace.Md,
-          right: AppSpace.Md,
-          top: AppSpace.Sm,
-          bottom: AppSpace.Xl
-        })
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
     .height('100%')

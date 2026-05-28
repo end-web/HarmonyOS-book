@@ -3,6 +3,7 @@ import { audio } from '@kit.AudioKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { emitter } from '@kit.BasicServicesKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { PlayerState, PlayMode } from '../model/PlayerState';
@@ -11,9 +12,13 @@ import { BookSourceService } from './BookSourceService';
 import { DataService } from './DataService';
 import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
+import { ChapterCacheService } from './ChapterCacheService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
+
+/** 播放历史落盘后广播的事件名,书架等页面订阅以实时刷新进度文案 */
+export const EVT_HISTORY_UPDATED = 'app.history.updated';
 
 /**
  * AVPlayer 单例封装
@@ -166,6 +171,8 @@ export class AudioService {
           p.seek(this.pendingSeek, media.SeekMode.SEEK_PREV_SYNC);
           this.pendingSeek = 0;
         }
+        // 立即设置播放状态，让UI立即响应
+        this.state.isPlaying = true;
         p.play();
       } else if (newState === 'playing') {
         this.state.isPlaying = true;
@@ -261,6 +268,10 @@ export class AudioService {
     try {
       const p = await this.ensurePlayer();
       if (p.state === 'paused') {
+        // 立即设置播放状态
+        if (this.state) {
+          this.state.isPlaying = true;
+        }
         await p.play();
       } else if (p.state === 'idle' || p.state === 'stopped') {
         await this.resumeFromState();
@@ -318,6 +329,12 @@ export class AudioService {
     });
     await PreferenceService.setLastPlayed(book.id, chapterId, progressMs);
     await DataService.upsertCachedBook(book);
+    emitter.emit(EVT_HISTORY_UPDATED, { data: { bookId: book.id } });
+  }
+
+  /** 主动把当前进度立刻落盘,供 PlayerPage 退出 / 暂停等场景调用 */
+  async flushHistory(): Promise<void> {
+    await this.persistHistory();
   }
 
   async playChapter(book: Book, chapter: Chapter): Promise<void> {
@@ -340,6 +357,7 @@ export class AudioService {
       this.state.durationMs = 0;
       AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.applySource(p, chapter.source);
+      this.triggerPreload(book, chapter);
     } finally {
       this.isApplying = false;
     }
@@ -420,12 +438,17 @@ export class AudioService {
       await p.pause();
     } else if (p.state === 'paused') {
       this.stopIdleTimer();
+      // 立即设置播放状态，让UI立即响应
+      if (this.state) {
+        this.state.isPlaying = true;
+      }
       await p.play();
     } else if (p.state === 'completed') {
       // completed 直接 play 在部分机型不会重置进度,先 seek 到 0 再 play
       p.seek(0, media.SeekMode.SEEK_PREV_SYNC);
       if (this.state) {
         this.state.progressMs = 0;
+        this.state.isPlaying = true;
       }
       await p.play();
     }
@@ -593,8 +616,15 @@ export class AudioService {
       this.pendingSeek = seekMs;
       AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.applySource(p, chapter.source);
+      this.triggerPreload(book, chapter);
     } finally {
       this.isApplying = false;
     }
+  }
+
+  private triggerPreload(book: Book, chapter: Chapter): void {
+    const idx = book.chapters.findIndex((c) => c.id === chapter.id);
+    if (idx < 0) return;
+    ChapterCacheService.getInstance().preloadAudioChapters(book, idx);
   }
 }

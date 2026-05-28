@@ -2,18 +2,25 @@ import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { BookSource, SourceSubscription } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
+import { SourceDataSource } from '../utils/SourceDataSource';
+import { SourceListItem } from '../components/SourceListItem';
 import { WindowUtils } from '../utils/WindowUtils';
 import { common } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { pasteboard } from '@kit.BasicServicesKit';
+import { emitter } from '@kit.BasicServicesKit';
 import { promptAction } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
 
+export const EVT_SOURCES_CHANGED = 'app.sources.changed';
+
+function emitSourcesChanged(): void {
+  emitter.emit(EVT_SOURCES_CHANGED);
+}
+
 enum ImportMethod {
   Network = 0,
-  LocalFile = 1,
-  Clipboard = 2
+  LocalFile = 1
 }
 
 interface ImportResult {
@@ -29,35 +36,80 @@ export struct SourcePage {
   @Local allSources: BookSource[] = [];
   @Local showAddSheet: boolean = false;
   @Local inputUrl: string = '';
+  @Local inputName: string = '';
   @Local isLoading: boolean = false;
   @Local loadingUrl: string = '';
   @Local activeTab: number = 0;
+  @Local sourceTypeFilter: number = -1;
   @Local importMethod: ImportMethod = ImportMethod.Network;
   @Local statusMessage: string = '';
   @Local showPreview: boolean = false;
   @Local previewSources: BookSource[] = [];
   @Local selectedPreviewIds: Set<string> = new Set();
   @Local headerOffset: number = 0;
+  @Local isSelectMode: boolean = false;
+  @Local selectedSourceUrls: Set<string> = new Set();
+  @Local isRefreshing: boolean = false;
+
+  @Local isSelectAll: boolean = false;
 
   private readonly COLLAPSE_HEIGHT: number = 56;
   private readonly TAB_HEIGHT: number = 40;
   private subScroller: Scroller = new Scroller();
   private srcScroller: Scroller = new Scroller();
   private context: common.UIAbilityContext | null = null;
+  private sourceDataSource: SourceDataSource = new SourceDataSource();
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadData();
   }
-
   private async loadData(): Promise<void> {
     try {
       this.subscriptions = await SourceDataService.getSubscriptions();
       this.allSources = await SourceDataService.getSources();
+      this.applySourceFilter();
     } catch (_e) {
       this.subscriptions = [];
       this.allSources = [];
+      this.applySourceFilter();
     }
+  }
+
+  private applySourceFilter(): void {
+    const list = this.sourceTypeFilter < 0
+      ? this.allSources
+      : this.allSources.filter((s: BookSource): boolean =>
+          (s.bookSourceType ?? 0) === this.sourceTypeFilter);
+    this.sourceDataSource.setSources(list);
+  }
+
+  private setSourceTypeFilter(type: number): void {
+    if (this.sourceTypeFilter === type) return;
+    this.sourceTypeFilter = type;
+    this.applySourceFilter();
+    if (this.isSelectMode) {
+      this.exitSelectMode();
+    }
+  }
+
+  private getFilterLabel(): string {
+    switch (this.sourceTypeFilter) {
+      case 0: return '小说';
+      case 1: return '有声书';
+      case 2: return '漫画';
+      case 3: return '文件';
+      default: return '全部';
+    }
+  }
+
+  private countSourcesByType(type: number): number {
+    if (type < 0) return this.allSources.length;
+    let n = 0;
+    for (const s of this.allSources) {
+      if ((s.bookSourceType ?? 0) === type) n++;
+    }
+    return n;
   }
 
   private async saveSubscriptions(): Promise<void> {
@@ -68,7 +120,6 @@ export struct SourcePage {
     const url = this.inputUrl.trim();
     if (!url) return;
     if (this.subscriptions.some((s: SourceSubscription): boolean => s.url === url)) {
-      this.statusMessage = '该书源已存在';
       promptAction.showToast({ message: '该书源已存在' });
       return;
     }
@@ -84,11 +135,15 @@ export struct SourcePage {
       }
       promptAction.showToast({ message: this.statusMessage });
       this.inputUrl = '';
+      this.inputName = '';
       this.showAddSheet = false;
     } catch (e) {
       this.statusMessage = '网络请求失败，请检查网络后重试';
       promptAction.showToast({ message: this.statusMessage });
-      const sub: SourceSubscription = { url, name: '加载失败', count: 0, lastUpdate: Date.now() };
+      const customName = this.inputName.trim();
+      const sub: SourceSubscription = {
+        url, name: customName || '加载失败', count: 0, lastUpdate: Date.now()
+      };
       this.subscriptions.push(sub);
       await this.saveSubscriptions();
     }
@@ -104,6 +159,7 @@ export struct SourcePage {
       if (existingUrls.has(source.bookSourceUrl)) {
         result.duplicate++;
       } else {
+        source.subscriptionUrl = url; // 标记来源
         result.success++;
         result.sources.push(source);
       }
@@ -112,15 +168,20 @@ export struct SourcePage {
     if (result.sources.length > 0) {
       await SourceDataService.addSources(result.sources);
       this.allSources = await SourceDataService.getSources();
+      this.applySourceFilter();
+      emitSourcesChanged();
     }
 
+    const customName = this.inputName.trim();
     const sub = BookSourceService.buildSubscription(url, sources);
+    if (customName) {
+      sub.name = customName;
+    }
     this.subscriptions.push(sub);
     await this.saveSubscriptions();
 
     return result;
   }
-
   private async pickLocalFile(): Promise<void> {
     try {
       if (!this.context) return;
@@ -163,52 +224,9 @@ export struct SourcePage {
     }
   }
 
-  private async importFromClipboard(): Promise<void> {
-    try {
-      const pb = pasteboard.getSystemPasteboard();
-      const hasData = await pb.hasData();
-      if (!hasData) {
-        this.statusMessage = '剪贴板为空';
-        promptAction.showToast({ message: this.statusMessage });
-        return;
-      }
-
-      this.isLoading = true;
-      this.statusMessage = '正在读取剪贴板...';
-
-      const data = await pb.getData();
-      const text = data.getPrimaryText() || '';
-
-      if (!text) {
-        this.statusMessage = '剪贴板未检测到有效内容';
-        promptAction.showToast({ message: this.statusMessage });
-        this.isLoading = false;
-        return;
-      }
-
-      const sources: BookSource[] = BookSourceService.parseSourcesFromJson(text);
-
-      if (sources.length === 0) {
-        this.statusMessage = '剪贴板未检测到有效书源';
-        promptAction.showToast({ message: this.statusMessage });
-        this.isLoading = false;
-        return;
-      }
-
-      this.statusMessage = `已读取 ${sources.length} 个书源`;
-      this.previewSources = sources;
-      this.selectedPreviewIds = new Set(sources.map((s: BookSource): string => s.bookSourceUrl));
-      this.showPreview = true;
-      this.isLoading = false;
-    } catch (e) {
-      this.statusMessage = '读取剪贴板失败';
-      promptAction.showToast({ message: this.statusMessage });
-      this.isLoading = false;
-    }
-  }
-
   private async confirmImportPreview(): Promise<void> {
-    const selected = this.previewSources.filter((s: BookSource): boolean => this.selectedPreviewIds.has(s.bookSourceUrl));
+    const selected = this.previewSources.filter((s: BookSource): boolean =>
+      this.selectedPreviewIds.has(s.bookSourceUrl));
     if (selected.length === 0) {
       promptAction.showToast({ message: '请至少选择一个书源' });
       return;
@@ -224,6 +242,7 @@ export struct SourcePage {
       if (existingUrls.has(source.bookSourceUrl)) {
         result.duplicate++;
       } else {
+        // 本地导入的书源不标记 subscriptionUrl（留空）
         result.success++;
         result.sources.push(source);
       }
@@ -232,6 +251,8 @@ export struct SourcePage {
     if (result.sources.length > 0) {
       await SourceDataService.addSources(result.sources);
       this.allSources = await SourceDataService.getSources();
+      this.applySourceFilter();
+      emitSourcesChanged();
     }
 
     this.statusMessage = `导入成功！共 ${result.success} 个书源`;
@@ -273,28 +294,157 @@ export struct SourcePage {
       this.subscriptions[index] = BookSourceService.buildSubscription(sub.url, sources);
       await this.saveSubscriptions();
       if (sources.length > 0) {
-        await SourceDataService.saveSources(sources);
+        // 给新书源打上订阅源标记
+        for (const source of sources) {
+          source.subscriptionUrl = sub.url;
+        }
+        // 获取当前所有书源，删除该订阅源的旧书源
+        const allSources = await SourceDataService.getSources();
+        const otherSources = allSources.filter((s: BookSource) => s.subscriptionUrl !== sub.url);
+        // 合并：其他订阅源的书源 + 刚刷新的书源
+        const merged = otherSources.concat(sources);
+        await SourceDataService.saveSources(merged);
         this.allSources = await SourceDataService.getSources();
+        this.applySourceFilter();
+        emitSourcesChanged();
       }
     } catch (_e) { /* ignore */ }
     this.isLoading = false;
     this.loadingUrl = '';
   }
 
-  private async deleteSource(index: number): Promise<void> {
+  private async deleteSubscription(index: number): Promise<void> {
+    const sub = this.subscriptions[index];
     this.subscriptions.splice(index, 1);
     await this.saveSubscriptions();
+    if (!sub) return;
+    // 同步删除该订阅源下的所有书源
+    const remaining = this.allSources.filter((s: BookSource): boolean =>
+      s.subscriptionUrl !== sub.url);
+    const removed = this.allSources.length - remaining.length;
+    if (removed > 0) {
+      await SourceDataService.saveSources(remaining);
+      this.allSources = remaining;
+      this.applySourceFilter();
+      emitSourcesChanged();
+      promptAction.showToast({ message: `已删除订阅及其下 ${removed} 个书源` });
+    } else {
+      promptAction.showToast({ message: '已删除订阅' });
+    }
   }
 
   private async toggleSourceEnabled(source: BookSource): Promise<void> {
     source.enabled = !source.enabled;
     await SourceDataService.saveSources(this.allSources);
     this.allSources = [...this.allSources];
+    this.applySourceFilter();
+    emitSourcesChanged();
   }
 
+  private enterSelectMode(sourceUrl: string): void {
+    this.isSelectMode = true;
+    this.isSelectAll = false;
+    this.selectedSourceUrls = new Set([sourceUrl]);
+  }
+
+  private exitSelectMode(): void {
+    this.isSelectMode = false;
+    this.isSelectAll = false;
+    this.selectedSourceUrls = new Set();
+  }
+
+  private toggleSourceSelection(sourceUrl: string): void {
+    if (this.isSelectAll) {
+      this.isSelectAll = false;
+      this.selectedSourceUrls = new Set(
+        this.allSources
+          .filter((s: BookSource): boolean => s.bookSourceUrl !== sourceUrl)
+          .map((s: BookSource): string => s.bookSourceUrl)
+      );
+    } else {
+      if (this.selectedSourceUrls.has(sourceUrl)) {
+        this.selectedSourceUrls.delete(sourceUrl);
+      } else {
+        this.selectedSourceUrls.add(sourceUrl);
+      }
+      this.selectedSourceUrls = new Set(this.selectedSourceUrls);
+    }
+    if (!this.isSelectAll && this.selectedSourceUrls.size === 0) {
+      this.isSelectMode = false;
+    }
+  }
+
+  private selectAllSources(): void {
+    this.isSelectAll = !this.isSelectAll;
+    this.selectedSourceUrls = new Set();
+  }
+
+  private isSourceSelected(sourceUrl: string): boolean {
+    if (this.isSelectAll) {
+      return !this.selectedSourceUrls.has(sourceUrl);
+    }
+    return this.selectedSourceUrls.has(sourceUrl);
+  }
+
+  private getSelectedCount(): number {
+    if (this.isSelectAll) {
+      return this.allSources.length - this.selectedSourceUrls.size;
+    }
+    return this.selectedSourceUrls.size;
+  }
+
+  private async deleteSelectedSources(): Promise<void> {
+    const count = this.getSelectedCount();
+    if (count === 0) return;
+    let remaining: BookSource[];
+    if (this.isSelectAll) {
+      remaining = this.allSources.filter((s: BookSource): boolean =>
+        this.selectedSourceUrls.has(s.bookSourceUrl));
+    } else {
+      remaining = this.allSources.filter((s: BookSource): boolean =>
+        !this.selectedSourceUrls.has(s.bookSourceUrl));
+    }
+    await SourceDataService.saveSources(remaining);
+    this.allSources = remaining;
+    this.applySourceFilter();
+    emitSourcesChanged();
+    promptAction.showToast({ message: `已删除 ${count} 个书源` });
+    this.exitSelectMode();
+  }
+
+  private invertSelection(): void {
+    if (this.isSelectAll) {
+      const excluded = new Set(this.selectedSourceUrls);
+      this.isSelectAll = false;
+      this.selectedSourceUrls = excluded;
+    } else {
+      const selected = new Set(this.selectedSourceUrls);
+      this.isSelectAll = true;
+      this.selectedSourceUrls = selected;
+    }
+    if (!this.isSelectAll && this.selectedSourceUrls.size === 0) {
+      this.isSelectMode = false;
+    }
+  }
+
+  private async batchSetEnabled(enabled: boolean): Promise<void> {
+    for (const source of this.allSources) {
+      if (this.isSourceSelected(source.bookSourceUrl)) {
+        source.enabled = enabled;
+      }
+    }
+    await SourceDataService.saveSources(this.allSources);
+    this.allSources = [...this.allSources];
+    this.applySourceFilter();
+    emitSourcesChanged();
+    const count = this.getSelectedCount();
+    promptAction.showToast({ message: `已${enabled ? '启用' : '禁用'} ${count} 个书源` });
+    this.exitSelectMode();
+  }
   private updateHeaderOffset(scroller: Scroller): void {
-    const y = scroller.currentOffset().yOffset;
-    let h = y;
+    const offset = scroller.currentOffset();
+    if (!offset) return;
+    let h = offset.yOffset;
     if (h < 0) h = 0;
     if (h > this.COLLAPSE_HEIGHT) h = this.COLLAPSE_HEIGHT;
     if (Math.abs(h - this.headerOffset) >= 0.5) {
@@ -312,7 +462,6 @@ export struct SourcePage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // 内容层
       Tabs({ index: this.activeTab, barPosition: BarPosition.Start }) {
         TabContent() {
           this.buildSubscriptionList()
@@ -327,15 +476,23 @@ export struct SourcePage {
       .animationDuration(220)
       .onChange((index: number) => {
         this.activeTab = index;
+        if (this.isSelectMode && index !== 1) {
+          this.exitSelectMode();
+        }
+        const hasContent = index === 0
+          ? this.subscriptions.length > 0
+          : this.allSources.length > 0;
+        if (!hasContent) {
+          this.headerOffset = 0;
+          return;
+        }
         const s = index === 0 ? this.subScroller : this.srcScroller;
         this.updateHeaderOffset(s);
       })
       .width('100%')
       .height('100%')
 
-      // 顶部浮层(沉浸光感 + 折叠)
       Column() {
-        // 折叠区: 标题 + 操作按钮
         Column() {
           Row() {
             Text('书源管理')
@@ -343,21 +500,29 @@ export struct SourcePage {
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Bold)
             Blank()
-            Row({ space: AppSpace.Sm }) {
-              SymbolGlyph($r('sys.symbol.questionmark_circle'))
-                .fontSize(20)
-                .fontColor([$r('sys.color.font_tertiary')])
-                .onClick(() => {
-                  promptAction.showToast({ message: '长按书源可删除或刷新' });
-                })
-              SymbolGlyph($r('sys.symbol.plus_circle'))
-                .fontSize(22)
-                .fontColor([AppColor.Brand])
-                .onClick(() => {
-                  this.showAddSheet = true;
-                  this.statusMessage = '';
-                  this.importMethod = ImportMethod.Network;
-                })
+            if (this.isSelectMode) {
+              Text('取消')
+                .fontSize(AppFont.Body)
+                .fontColor(AppColor.Brand)
+                .onClick(() => this.exitSelectMode())
+            } else {
+              Row({ space: AppSpace.Sm }) {
+                SymbolGlyph($r('sys.symbol.questionmark_circle'))
+                  .fontSize(20)
+                  .fontColor([$r('sys.color.font_tertiary')])
+                  .onClick(() => {
+                    promptAction.showToast({ message: '长按书源可进入批量管理模式' });
+                  })
+                SymbolGlyph($r('sys.symbol.plus_circle'))
+                  .fontSize(22)
+                  .fontColor([AppColor.Brand])
+                  .onClick(() => {
+                    this.showAddSheet = true;
+                    this.statusMessage = '';
+                    this.importMethod = ImportMethod.Network;
+                    this.inputName = '';
+                  })
+              }
             }
           }
           .width('100%')
@@ -371,17 +536,32 @@ export struct SourcePage {
         .opacity(1 - this.collapseRatio())
         .clip(true)
 
-        // Tab 行(吸顶)
         Row() {
           this.buildTabItem('订阅源', 0)
           this.buildTabItem('全部书源', 1)
           Blank()
+          if (this.isSelectMode) {
+            Text(`已选 ${this.getSelectedCount()}`)
+              .fontSize(AppFont.Caption)
+              .fontColor(AppColor.Brand)
+          } else if (this.activeTab === 1) {
+            this.buildFilterPill()
+          }
         }
         .width('100%')
         .height(this.TAB_HEIGHT)
         .padding({ left: AppSpace.Md, right: AppSpace.Md })
       }
       .width('100%')
+
+      if (this.isSelectMode) {
+        Column() {
+          this.buildBatchActionBar()
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+        .position({ bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Sm })
+      }
     }
     .width('100%')
     .height('100%')
@@ -391,6 +571,7 @@ export struct SourcePage {
       onDisappear: () => {
         this.statusMessage = '';
         this.inputUrl = '';
+        this.inputName = '';
         this.showPreview = false;
         this.previewSources = [];
         this.selectedPreviewIds = new Set();
@@ -398,7 +579,6 @@ export struct SourcePage {
     })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
-
   @Builder
   buildTabItem(title: string, idx: number) {
     Text(title)
@@ -419,6 +599,94 @@ export struct SourcePage {
   }
 
   @Builder
+  buildFilterPill() {
+    Row({ space: 4 }) {
+      Text(`${this.getFilterLabel()} ${this.countSourcesByType(this.sourceTypeFilter)}`)
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.sourceTypeFilter < 0 ? $r('sys.color.font_primary') : AppColor.Brand)
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(12)
+        .fontColor([this.sourceTypeFilter < 0 ? $r('sys.color.font_secondary') : AppColor.Brand])
+    }
+    .padding({ left: 12, right: 10, top: 6, bottom: 6 })
+    .borderRadius(16)
+    .backgroundColor(this.sourceTypeFilter < 0 ? '#B3FFFFFF' : '#1A0A59F7')
+    .border({ width: 0.5, color: this.sourceTypeFilter < 0 ? '#22000000' : '#330A59F7' })
+    .shadow({ radius: 4, color: '#11000000', offsetY: 1 })
+    .bindMenu(this.buildFilterMenu(), { placement: Placement.BottomRight })
+  }
+
+  @Builder
+  buildFilterMenu() {
+    Menu() {
+      MenuItem({ content: `全部  ${this.countSourcesByType(-1)}` })
+        .selected(this.sourceTypeFilter === -1)
+        .selectIcon(true)
+        .onChange(() => this.setSourceTypeFilter(-1))
+      MenuItem({ content: `小说  ${this.countSourcesByType(0)}` })
+        .selected(this.sourceTypeFilter === 0)
+        .selectIcon(true)
+        .onChange(() => this.setSourceTypeFilter(0))
+      MenuItem({ content: `有声书  ${this.countSourcesByType(1)}` })
+        .selected(this.sourceTypeFilter === 1)
+        .selectIcon(true)
+        .onChange(() => this.setSourceTypeFilter(1))
+      MenuItem({ content: `漫画  ${this.countSourcesByType(2)}` })
+        .selected(this.sourceTypeFilter === 2)
+        .selectIcon(true)
+        .onChange(() => this.setSourceTypeFilter(2))
+      MenuItem({ content: `文件  ${this.countSourcesByType(3)}` })
+        .selected(this.sourceTypeFilter === 3)
+        .selectIcon(true)
+        .onChange(() => this.setSourceTypeFilter(3))
+    }
+  }
+
+  @Builder
+  buildBatchActionBar() {
+    Column({ space: AppSpace.Xs }) {
+      Row({ space: AppSpace.Xs }) {
+        this.buildPillButton(this.isSelectAll ? '取消全选' : '全选',
+          this.isSelectAll ? AppColor.Brand : $r('sys.color.font_primary'),
+          this.isSelectAll ? '#1A0A59F7' : '#B3FFFFFF',
+          () => this.selectAllSources())
+        this.buildPillButton('反选', $r('sys.color.font_primary'), '#B3FFFFFF',
+          () => this.invertSelection())
+        this.buildPillButton('启用', '#34C759', '#1A34C759',
+          () => this.batchSetEnabled(true))
+        this.buildPillButton('禁用', '#FF9500', '#1AFF9500',
+          () => this.batchSetEnabled(false))
+      }
+      Row({ space: AppSpace.Xs }) {
+        this.buildPillButton(`删除 (${this.getSelectedCount()})`, Color.White,
+          this.getSelectedCount() > 0 ? '#FF3B30' : '#CCCCCC',
+          () => { if (this.getSelectedCount() > 0) this.deleteSelectedSources(); })
+        this.buildPillButton('取消', $r('sys.color.font_primary'), '#B3FFFFFF',
+          () => this.exitSelectMode())
+      }
+    }
+    .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: AppSpace.Xs, bottom: AppSpace.Xs })
+    .borderRadius(AppRadius.Xl)
+    .backgroundColor('#E6FFFFFF')
+    .backdropBlur(20)
+    .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+  }
+
+  @Builder
+  buildPillButton(label: string, fontColor: ResourceColor, bgColor: ResourceColor, action: () => void) {
+    Text(label)
+      .fontSize(13)
+      .fontWeight(FontWeight.Medium)
+      .fontColor(fontColor)
+      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
+      .borderRadius(16)
+      .backgroundColor(bgColor)
+      .border({ width: 0.5, color: '#22000000' })
+      .onClick(() => action())
+  }
+
+  @Builder
   importSheetContent() {
     if (this.showPreview) {
       this.previewSheet()
@@ -426,7 +694,6 @@ export struct SourcePage {
       this.addSourceSheet()
     }
   }
-
   @Builder
   buildSubscriptionList() {
     if (this.subscriptions.length === 0) {
@@ -446,71 +713,75 @@ export struct SourcePage {
       .padding({ top: this.contentTopPadding() })
       .justifyContent(FlexAlign.Center)
     } else {
-      Scroll(this.subScroller) {
-        Column({ space: 0 }) {
-          Column() {
-            ForEach(this.subscriptions, (sub: SourceSubscription, idx: number) => {
-              Row() {
-                Column({ space: 4 }) {
-                  Text(sub.name)
-                    .fontSize(AppFont.BodyL)
-                    .fontColor($r('sys.color.font_secondary'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(sub.url)
-                    .fontSize(AppFont.Caption)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(`${sub.count} 个书源`)
-                    .fontSize(AppFont.Caption)
-                    .fontColor(AppColor.Brand)
-                }
-                .layoutWeight(1)
-                .alignItems(HorizontalAlign.Start)
+      Refresh({ refreshing: $$this.isRefreshing }) {
+        Scroll(this.subScroller) {
+          Column({ space: 0 }) {
+            Column() {
+              ForEach(this.subscriptions, (sub: SourceSubscription, idx: number) => {
+                Row() {
+                  Column({ space: 4 }) {
+                    Text(sub.name)
+                      .fontSize(AppFont.BodyL)
+                      .fontColor($r('sys.color.font_secondary'))
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Text(sub.url)
+                      .fontSize(AppFont.Caption)
+                      .fontColor($r('sys.color.font_tertiary'))
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Text(`${sub.count} 个书源`)
+                      .fontSize(AppFont.Caption)
+                      .fontColor(AppColor.Brand)
+                  }
+                  .layoutWeight(1)
+                  .alignItems(HorizontalAlign.Start)
 
-                if (this.isLoading && this.loadingUrl === sub.url) {
-                  LoadingProgress().width(20).height(20).color(AppColor.Brand)
-                } else {
-                  Row({ space: AppSpace.Sm }) {
-                    SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-                      .fontSize(18)
-                      .fontColor([AppColor.Brand])
-                      .onClick(() => this.refreshSource(idx))
-                    SymbolGlyph($r('sys.symbol.trash'))
-                      .fontSize(18)
-                      .fontColor(['#FF4444'])
-                      .onClick(() => this.deleteSource(idx))
+                  if (this.isLoading && this.loadingUrl === sub.url) {
+                    LoadingProgress().width(20).height(20).color(AppColor.Brand)
+                  } else {
+                    Row({ space: AppSpace.Sm }) {
+                      SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+                        .fontSize(18)
+                        .fontColor([AppColor.Brand])
+                        .onClick(() => this.refreshSource(idx))
+                      SymbolGlyph($r('sys.symbol.trash'))
+                        .fontSize(18)
+                        .fontColor(['#FF4444'])
+                        .onClick(() => this.deleteSubscription(idx))
+                    }
                   }
                 }
-              }
-              .width('100%')
-              .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
+                .width('100%')
+                .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
 
-              if (idx < this.subscriptions.length - 1) {
-                Divider().color($r('sys.color.comp_divider')).margin({ left: AppSpace.Lg, right: AppSpace.Lg })
-              }
-            }, (sub: SourceSubscription, _idx: number) => sub.url)
+                if (idx < this.subscriptions.length - 1) {
+                  Divider().color($r('sys.color.comp_divider')).margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+                }
+              }, (sub: SourceSubscription, _idx: number) => sub.url)
+            }
+            .backgroundColor($r('sys.color.comp_background_primary'))
+            .borderRadius(AppRadius.Lg)
+            .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
           }
-          .backgroundColor($r('sys.color.comp_background_primary'))
-          .borderRadius(AppRadius.Lg)
-          .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding({ top: this.contentTopPadding() + AppSpace.Sm, bottom: WindowUtils.getFloatingTabBottomVp() })
         }
         .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ top: this.contentTopPadding() + AppSpace.Sm, bottom: 160 })
+        .height('100%')
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .onDidScroll(() => {
+          this.updateHeaderOffset(this.subScroller);
+        })
       }
-      .width('100%')
-      .height('100%')
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
-      .onDidScroll(() => {
-        this.updateHeaderOffset(this.subScroller);
+      .onRefreshing(() => {
+        this.loadData().finally(() => { this.isRefreshing = false; });
       })
     }
   }
-
   @Builder
   buildSourceList() {
     if (this.allSources.length === 0) {
@@ -527,98 +798,103 @@ export struct SourcePage {
       .padding({ top: this.contentTopPadding() })
       .justifyContent(FlexAlign.Center)
     } else {
-      Scroll(this.srcScroller) {
-        Column({ space: 0 }) {
-          Column() {
-            ForEach(this.allSources, (source: BookSource, idx: number) => {
-              Row() {
-                Column({ space: 2 }) {
-                  Text(source.bookSourceName)
-                    .fontSize(AppFont.Body)
-                    .fontColor($r('sys.color.font_secondary'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(source.bookSourceUrl)
-                    .fontSize(AppFont.Caption)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                }
-                .layoutWeight(1)
-                .alignItems(HorizontalAlign.Start)
-
-                Toggle({ type: ToggleType.Switch, isOn: source.enabled !== false })
-                  .selectedColor(AppColor.Brand)
-                  .onChange((isOn: boolean) => {
-                    source.enabled = isOn;
-                    this.toggleSourceEnabled(source);
-                  })
-              }
-              .width('100%')
-              .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
-
-              if (idx < this.allSources.length - 1) {
-                Divider().color($r('sys.color.comp_divider')).margin({ left: AppSpace.Lg, right: AppSpace.Lg })
-              }
-            }, (source: BookSource) => source.bookSourceUrl)
+      Refresh({ refreshing: $$this.isRefreshing }) {
+        List({ scroller: this.srcScroller }) {
+          ListItem() {
+            Column().height(this.contentTopPadding() + AppSpace.Sm)
           }
-          .backgroundColor($r('sys.color.comp_background_primary'))
-          .borderRadius(AppRadius.Lg)
-          .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
+
+          LazyForEach(this.sourceDataSource, (source: BookSource) => {
+            ListItem() {
+              SourceListItem({
+                source: source,
+                isSelectMode: this.isSelectMode,
+                isSelected: this.isSourceSelected(source.bookSourceUrl),
+                onTap: () => {
+                  if (this.isSelectMode) {
+                    this.toggleSourceSelection(source.bookSourceUrl);
+                  }
+                },
+                onLongPress: () => this.enterSelectMode(source.bookSourceUrl),
+                onToggleEnabled: (isOn: boolean) => {
+                  source.enabled = isOn;
+                  this.toggleSourceEnabled(source);
+                }
+              })
+                .reuse({ reuseId: () => this.isSelectMode ? 'select' : 'normal' })
+            }
+          }, (source: BookSource) => source.bookSourceUrl)
+
+          ListItem() {
+            Column().height(this.isSelectMode
+              ? WindowUtils.getFloatingTabBottomVp() + 72
+              : WindowUtils.getFloatingTabBottomVp())
+          }
         }
         .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ top: this.contentTopPadding() + AppSpace.Sm, bottom: 160 })
+        .height('100%')
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .cachedCount(10)
+        .divider({
+          strokeWidth: 0.5,
+          color: $r('sys.color.comp_divider'),
+          startMargin: AppSpace.Lg,
+          endMargin: AppSpace.Lg
+        })
+        .onDidScroll(() => {
+          this.updateHeaderOffset(this.srcScroller);
+        })
       }
-      .width('100%')
-      .height('100%')
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
-      .onDidScroll(() => {
-        this.updateHeaderOffset(this.srcScroller);
+      .onRefreshing(() => {
+        this.loadData().finally(() => { this.isRefreshing = false; });
       })
     }
   }
-
   @Builder
   addSourceSheet() {
     Column({ space: AppSpace.Lg }) {
-      Text('书源导入')
-        .fontSize(AppFont.TitleL)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('sys.color.font_primary'))
-        .width('100%')
+      Row() {
+        Text('导入书源')
+          .fontSize(AppFont.TitleL)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+        Text('支持 JSON / TXT 格式')
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+          .margin({ left: AppSpace.Sm })
+        Blank()
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Bottom)
 
-      Text('可将网上获取的书源链接或文件导入到本 App 中')
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_tertiary'))
-        .width('100%')
-
-      // 导入方式选择
       Row({ space: AppSpace.Sm }) {
-        this.buildImportMethodTab('从网络导入', ImportMethod.Network)
-        this.buildImportMethodTab('从本地导入', ImportMethod.LocalFile)
-        this.buildImportMethodTab('从剪贴板导入', ImportMethod.Clipboard)
+        this.buildMethodCard('网络导入', '输入远程链接', $r('sys.symbol.link'), ImportMethod.Network)
+        this.buildMethodCard('本地文件', '从文件管理选择', $r('sys.symbol.doc'), ImportMethod.LocalFile)
       }
       .width('100%')
 
-      // 导入内容区
       if (this.importMethod === ImportMethod.Network) {
         this.buildNetworkImport()
-      } else if (this.importMethod === ImportMethod.LocalFile) {
-        this.buildLocalFileImport()
       } else {
-        this.buildClipboardImport()
+        this.buildLocalFileImport()
       }
 
-      // 状态提示
       if (this.statusMessage) {
-        Text(this.statusMessage)
-          .fontSize(AppFont.Caption)
-          .fontColor(this.statusMessage.includes('失败') || this.statusMessage.includes('错误') ?
-            '#FF3B30' : $r('sys.color.font_tertiary'))
-          .width('100%')
-          .textAlign(TextAlign.Center)
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph(this.statusMessage.includes('失败') || this.statusMessage.includes('错误') ?
+            $r('sys.symbol.exclamationmark_circle') : $r('sys.symbol.checkmark_circle'))
+            .fontSize(16)
+            .fontColor([this.statusMessage.includes('失败') || this.statusMessage.includes('错误') ?
+              '#FF3B30' : '#34C759'])
+          Text(this.statusMessage)
+            .fontSize(AppFont.Body)
+            .fontColor(this.statusMessage.includes('失败') || this.statusMessage.includes('错误') ?
+              '#FF3B30' : '#34C759')
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: AppSpace.Sm })
       }
     }
     .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Lg, bottom: AppSpace.Xl })
@@ -626,137 +902,137 @@ export struct SourcePage {
   }
 
   @Builder
-  buildImportMethodTab(label: string, method: ImportMethod) {
-    Text(label)
-      .fontSize(AppFont.Body)
-      .fontColor(this.importMethod === method ? AppColor.Brand : $r('sys.color.font_tertiary'))
-      .fontWeight(this.importMethod === method ? FontWeight.Medium : FontWeight.Normal)
-      .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
-      .borderRadius(AppRadius.Pill)
-      .backgroundColor(this.importMethod === method ? '#1A0A59F7' : $r('sys.color.comp_background_primary'))
-      .onClick(() => {
-        this.importMethod = method;
-        this.statusMessage = '';
-      })
+  buildMethodCard(title: string, desc: string, icon: Resource, method: ImportMethod) {
+    Column({ space: AppSpace.Xs }) {
+      SymbolGlyph(icon)
+        .fontSize(28)
+        .fontColor([this.importMethod === method ? AppColor.Brand : $r('sys.color.font_tertiary')])
+      Text(title)
+        .fontSize(AppFont.Body)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.importMethod === method ? AppColor.Brand : $r('sys.color.font_primary'))
+      Text(desc)
+        .fontSize(AppFont.Caption)
+        .fontColor($r('sys.color.font_tertiary'))
+    }
+    .layoutWeight(1)
+    .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
+    .borderRadius(AppRadius.Lg)
+    .backgroundColor(this.importMethod === method ? '#0D0A59F7' : $r('sys.color.comp_background_primary'))
+    .border({
+      width: 1.5,
+      color: this.importMethod === method ? AppColor.Brand : Color.Transparent
+    })
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => {
+      this.importMethod = method;
+      this.statusMessage = '';
+    })
+    .animation({ duration: 200, curve: Curve.EaseOut })
   }
-
   @Builder
   buildNetworkImport() {
     Column({ space: AppSpace.Md }) {
-      Column({ space: AppSpace.Xs }) {
-        Text('书源链接地址')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
+      Column({ space: AppSpace.Sm }) {
+        Text('书源链接')
+          .fontSize(AppFont.Body)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
           .width('100%')
 
-        TextInput({ placeholder: '例如：https://xxx.com/source.json', text: this.inputUrl!! })
+        TextInput({ placeholder: 'https://xxx.com/source.json', text: this.inputUrl!! })
           .width('100%')
           .height(44)
           .borderRadius(AppRadius.Md)
-          .backgroundColor($r('sys.color.background_primary'))
+          .backgroundColor($r('sys.color.comp_background_primary'))
       }
 
-      Text('支持远程 JSON / TXT 格式书源')
-        .fontSize(AppFont.Caption)
-        .fontColor($r('sys.color.font_tertiary'))
-        .width('100%')
+      Column({ space: AppSpace.Sm }) {
+        Text('自定义名称（选填）')
+          .fontSize(AppFont.Body)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+          .width('100%')
+
+        TextInput({ placeholder: '为这个订阅源起个名字', text: this.inputName!! })
+          .width('100%')
+          .height(44)
+          .borderRadius(AppRadius.Md)
+          .backgroundColor($r('sys.color.comp_background_primary'))
+      }
 
       Button(this.isLoading ? '加载中...' : '开始导入')
         .width('100%')
-        .height(44)
-        .backgroundColor(AppColor.Brand)
-        .fontColor('#FFFFFF')
+        .height(48)
+        .backgroundColor(this.inputUrl.trim().length > 0 ? AppColor.Brand : '#CCCCCC')
+        .fontColor(Color.White)
+        .fontSize(AppFont.BodyL)
         .borderRadius(AppRadius.Md)
         .enabled(!this.isLoading && this.inputUrl.trim().length > 0)
         .onClick(() => this.addSource())
     }
     .width('100%')
+    .padding({ top: AppSpace.Sm })
   }
 
   @Builder
   buildLocalFileImport() {
     Column({ space: AppSpace.Md }) {
       Column({ space: AppSpace.Xs }) {
-        Text('从"文件管理"中选择')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .width('100%')
-
-        Text('支持 .json / .txt 格式')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .width('100%')
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.doc_text'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_tertiary')])
+          Text('支持 .json / .txt 格式书源文件')
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_triangle'))
+            .fontSize(16)
+            .fontColor(['#FF9500'])
+          Text('请勿导入来源不明的书源')
+            .fontSize(AppFont.Body)
+            .fontColor('#FF9500')
+        }
       }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
 
       Button(this.isLoading ? '解析中...' : '选择文件')
         .width('100%')
-        .height(44)
+        .height(48)
         .backgroundColor(AppColor.Brand)
-        .fontColor('#FFFFFF')
+        .fontColor(Color.White)
+        .fontSize(AppFont.BodyL)
         .borderRadius(AppRadius.Md)
         .enabled(!this.isLoading)
         .onClick(() => this.pickLocalFile())
-
-      Text('提示：请勿导入来源不明的书源')
-        .fontSize(AppFont.Caption)
-        .fontColor('#FF9500')
-        .width('100%')
-        .textAlign(TextAlign.Center)
     }
     .width('100%')
-  }
-
-  @Builder
-  buildClipboardImport() {
-    Column({ space: AppSpace.Md }) {
-      Column({ space: AppSpace.Xs }) {
-        Text('读取剪贴板内容')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .width('100%')
-
-        Text('剪贴板内容需为标准书源格式')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .width('100%')
-      }
-
-      Button(this.isLoading ? '读取中...' : '读取剪贴板内容')
-        .width('100%')
-        .height(44)
-        .backgroundColor(AppColor.Brand)
-        .fontColor('#FFFFFF')
-        .borderRadius(AppRadius.Md)
-        .enabled(!this.isLoading)
-        .onClick(() => this.importFromClipboard())
-    }
-    .width('100%')
+    .padding({ top: AppSpace.Sm })
   }
 
   @Builder
   previewSheet() {
     Column({ space: AppSpace.Md }) {
-      Text(`待导入书源预览（${this.previewSources.length}个）`)
-        .fontSize(AppFont.TitleL)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('sys.color.font_primary'))
-        .width('100%')
-
       Row() {
-        Button(this.selectedPreviewIds.size === this.previewSources.length ? '反选' : '全选')
+        Text(`待导入书源（${this.previewSources.length}个）`)
+          .fontSize(AppFont.TitleL)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+        Blank()
+        Text(this.selectedPreviewIds.size === this.previewSources.length ? '反选' : '全选')
           .fontSize(AppFont.Body)
-          .height(32)
-          .backgroundColor($r('sys.color.comp_background_primary'))
           .fontColor(AppColor.Brand)
           .onClick(() => this.toggleAllPreview())
-
-        Blank()
-
-        Text(`已选 ${this.selectedPreviewIds.size} 个`)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_tertiary'))
       }
       .width('100%')
+
+      Text(`已选 ${this.selectedPreviewIds.size} / ${this.previewSources.length} 个`)
+        .fontSize(AppFont.Body)
+        .fontColor($r('sys.color.font_tertiary'))
+        .width('100%')
 
       Scroll() {
         Column({ space: AppSpace.Xs }) {
@@ -764,6 +1040,7 @@ export struct SourcePage {
             Row({ space: AppSpace.Md }) {
               Checkbox()
                 .select(this.selectedPreviewIds.has(source.bookSourceUrl))
+                .selectedColor(AppColor.Brand)
                 .onChange(() => this.togglePreviewSelection(source.bookSourceUrl))
 
               Column({ space: AppSpace.Xs }) {
@@ -772,7 +1049,6 @@ export struct SourcePage {
                   .fontColor($r('sys.color.font_primary'))
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
-
                 Text(source.bookSourceUrl)
                   .fontSize(AppFont.Caption)
                   .fontColor($r('sys.color.font_tertiary'))
@@ -793,18 +1069,13 @@ export struct SourcePage {
       .layoutWeight(1)
       .scrollBar(BarState.Auto)
 
-      Text('请勾选您信任的书源再导入')
-        .fontSize(AppFont.Caption)
-        .fontColor('#FF9500')
-        .width('100%')
-        .textAlign(TextAlign.Center)
-
       Row({ space: AppSpace.Md }) {
         Button('取消')
           .layoutWeight(1)
-          .height(44)
+          .height(48)
           .backgroundColor($r('sys.color.comp_background_primary'))
           .fontColor($r('sys.color.font_primary'))
+          .fontSize(AppFont.BodyL)
           .borderRadius(AppRadius.Md)
           .onClick(() => {
             this.showPreview = false;
@@ -812,11 +1083,12 @@ export struct SourcePage {
             this.selectedPreviewIds.clear();
           })
 
-        Button(this.isLoading ? '导入中...' : `确认导入（${this.selectedPreviewIds.size}个）`)
+        Button(this.isLoading ? '导入中...' : `确认导入（${this.selectedPreviewIds.size}）`)
           .layoutWeight(2)
-          .height(44)
-          .backgroundColor(AppColor.Brand)
-          .fontColor('#FFFFFF')
+          .height(48)
+          .backgroundColor(this.selectedPreviewIds.size > 0 ? AppColor.Brand : '#CCCCCC')
+          .fontColor(Color.White)
+          .fontSize(AppFont.BodyL)
           .borderRadius(AppRadius.Md)
           .enabled(!this.isLoading && this.selectedPreviewIds.size > 0)
           .onClick(() => this.confirmImportPreview())

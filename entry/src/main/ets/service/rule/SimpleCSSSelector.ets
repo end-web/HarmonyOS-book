@@ -219,17 +219,37 @@ function splitIndexer(selector: string): SplitIndexerResult {
     return result;
   }
 
-  // 3) .N 索引(纯数字结尾,且前面是合法标识符或 ] 或 ))
-  // 例：a.novelname.0 → 取所有 .novelname 中第 0 个
-  const dotIndexMatch = s.match(/\.(-?\d+)\s*$/);
+  // 3) .N 或 .N:M 或 .N:M:step 索引（支持范围和步长）
+  // 匹配 .数字 或 .数字:数字 或 .数字:数字:数字
+  const dotIndexMatch = s.match(/\.(-?\d+(?::-?\d+(?::-?\d+)?)?)\s*$/);
   if (dotIndexMatch) {
-    const idx = parseInt(dotIndexMatch[1], 10);
-    const indexSpec: IndexSpec = { picks: [idx] };
-    const result: SplitIndexerResult = {
-      base: s.substring(0, s.length - dotIndexMatch[0].length),
-      index: indexSpec
-    };
-    return result;
+    const indexPart = dotIndexMatch[1];
+    if (indexPart.includes(':')) {
+      // 范围或步长形式 .start:end 或 .start:end:step
+      const parts = indexPart.split(':');
+      if (parts.length === 2 || parts.length === 3) {
+        const start = parseInt(parts[0], 10);
+        const end = parseInt(parts[1], 10);
+        const step = parts.length === 3 ? parseInt(parts[2], 10) : 1;
+        if (!Number.isNaN(start) && !Number.isNaN(end) && !Number.isNaN(step)) {
+          const indexSpec: IndexSpec = { range: [start, end, step] };
+          const result: SplitIndexerResult = {
+            base: s.substring(0, s.length - dotIndexMatch[0].length),
+            index: indexSpec
+          };
+          return result;
+        }
+      }
+    } else {
+      // 单个索引 .N
+      const idx = parseInt(indexPart, 10);
+      const indexSpec: IndexSpec = { picks: [idx] };
+      const result: SplitIndexerResult = {
+        base: s.substring(0, s.length - dotIndexMatch[0].length),
+        index: indexSpec
+      };
+      return result;
+    }
   }
 
   const noIndexResult: SplitIndexerResult = { base: s };
@@ -328,11 +348,16 @@ function parseSelector(selector: string): ParsedSelector {
     remaining = remaining.replace(idMatch[0], '');
   }
 
-  // 多个 class 暂只取第一个(简化)
-  const classMatch = remaining.match(/\.([\w-]+)/);
-  if (classMatch) {
-    result.className = classMatch[1];
+  // 多类名支持：.a.b.c → 提取所有类名
+  const classNames: string[] = [];
+  let classMatch = remaining.match(/\.([\w-]+)/);
+  while (classMatch) {
+    classNames.push(classMatch[1]);
     remaining = remaining.replace(classMatch[0], '');
+    classMatch = remaining.match(/\.([\w-]+)/);
+  }
+  if (classNames.length > 0) {
+    result.className = classNames.join(' ');
   }
 
   // 属性匹配 [name], [name=value], [name*=value], [name^=value], [name$=value]
@@ -359,7 +384,10 @@ function matchesSelector(element: HTMLElement, parsed: ParsedSelector): boolean 
   if (parsed.id && element.attributes['id'] !== parsed.id) return false;
   if (parsed.className) {
     const classes = (element.attributes['class'] || '').split(/\s+/);
-    if (!classes.includes(parsed.className)) return false;
+    const requiredClasses = parsed.className.split(/\s+/);
+    for (const rc of requiredClasses) {
+      if (!classes.includes(rc)) return false;
+    }
   }
   if (parsed.attrName) {
     const attrValue = element.attributes[parsed.attrName.toLowerCase()];
@@ -619,6 +647,26 @@ export class SimpleCSSSelector {
   }
 
   static querySelectorAll(root: HTMLElement, selector: string): HTMLElement[] {
+    // 支持逗号分隔的 OR 选择器
+    if (selector.includes(',')) {
+      const parts = selector.split(',').map((s) => s.trim());
+      const allResults: HTMLElement[] = [];
+      const seen = new Set<HTMLElement>();
+      for (const part of parts) {
+        const results = SimpleCSSSelector.querySelectorAllSingle(root, part);
+        for (const r of results) {
+          if (!seen.has(r)) {
+            seen.add(r);
+            allResults.push(r);
+          }
+        }
+      }
+      return allResults;
+    }
+    return SimpleCSSSelector.querySelectorAllSingle(root, selector);
+  }
+
+  private static querySelectorAllSingle(root: HTMLElement, selector: string): HTMLElement[] {
     const segs = parseSegments(selector);
     let elements: HTMLElement[] = [root];
 

@@ -5,8 +5,8 @@
  *  - JSON 模式（$. / @Json:）
  *  - CSS/JSoup 模式（Default）
  *  - JavaScript 模式（@js: / <js>...</js>）
- *  - XPath 模式（占位，待实现）
- *  - 正则模式（Regex）
+ *  - XPath 模式（@xpath: / //）
+ *  - 正则模式（Regex / :regex:）
  *  - 操作符：|| && %%
  *  - ##pattern##replacement（全替换）/ ##pattern##replacement### 取首条
  *  - @put:{key:value} 存变量 / @get:{key} 取变量
@@ -19,10 +19,7 @@ import { jsonPath } from './JSONPath';
 import { getJSExecutor } from '../js/JSExecutor';
 import { SimpleCSSSelector, HTMLElement } from './SimpleCSSSelector';
 import { SimpleXPath } from './SimpleXPath';
-import hilog from '@ohos.hilog';
-
-const DOMAIN = 0xFF00;
-const TAG = 'AnalyzeRule';
+import { AnalyzeByRegex } from './AnalyzeByRegex';
 
 export enum RuleMode {
   Json = 'Json',
@@ -32,19 +29,29 @@ export enum RuleMode {
   Js = 'Js',
 }
 
+export interface BookContext {
+  origin: string;
+  bookUrl: string;
+  name: string;
+  author?: string;
+}
+
 export class AnalyzeContext {
   variables: Record<string, string> = {};
   baseUrl: string = '';
+  redirectUrl: string = '';
+  book: BookContext | null = null;
+  chapter: Record<string, Object> | null = null;
 
   constructor(baseUrl: string = '', variables?: Record<string, string>) {
     this.baseUrl = baseUrl;
+    this.redirectUrl = baseUrl;
     if (variables) {
       this.variables = variables;
     }
   }
 }
 
-// 内部：单段解析结果
 interface SourceRule {
   rule: string;
   mode: RuleMode;
@@ -54,14 +61,27 @@ interface SourceRule {
   putMap: Record<string, string>;
 }
 
-// @put:{...} 模式
 const PUT_PATTERN = /@put:\{([^}]+)\}/g;
-// @get:{key}
 const GET_PATTERN = /@get:\{([^}]+)\}/g;
-// {{...}} 内嵌表达式
 const EVAL_PATTERN = /\{\{([\s\S]+?)\}\}/g;
-// {$.path} 内嵌 JSONPath
 const JSON_EVAL_PATTERN = /\{\$\.([^}]+)\}/g;
+const CSS_EVAL_PATTERN = /\{\{@@([^}]+)\}\}/g;
+
+// 规则缓存（LRU 16 条）
+const ruleCache = new Map<string, SourceRule[]>();
+const CACHE_LIMIT = 16;
+
+function cacheRule(key: string, rules: SourceRule[]): void {
+  if (ruleCache.size >= CACHE_LIMIT) {
+    const iter = ruleCache.keys();
+    const first = iter.next();
+    if (!first.done) {
+      const firstKey: string = first.value as string;
+      ruleCache.delete(firstKey);
+    }
+  }
+  ruleCache.set(key, rules);
+}
 
 interface JsTagPart {
   start: number;
@@ -73,10 +93,25 @@ export class AnalyzeRule {
   private content: Object;
   private context: AnalyzeContext;
   private mode: RuleMode = RuleMode.Default;
+  private isJSON: boolean = false;
 
   constructor(content: Object, context?: AnalyzeContext) {
     this.content = content;
     this.context = context ?? new AnalyzeContext();
+    this.isJSON = this.detectIsJson(content);
+  }
+
+  setContent(content: Object): void {
+    this.content = content;
+    this.isJSON = this.detectIsJson(content);
+  }
+
+  setBaseUrl(url: string): void {
+    this.context.baseUrl = url;
+  }
+
+  getVariables(): Record<string, string> {
+    return this.context.variables;
   }
 
   // ──────────────────── 公开 API ────────────────────
@@ -84,7 +119,6 @@ export class AnalyzeRule {
   async getString(rule: string): Promise<string | null> {
     if (!rule) return null;
 
-    // 顶层 || 回退：依次尝试，第一个非空即返回
     const orAnalyzer = new RuleAnalyzer(rule);
     const orParts = orAnalyzer.splitRule('||');
     if (orParts.length > 1 && orAnalyzer.elementsType === '||') {
@@ -102,49 +136,56 @@ export class AnalyzeRule {
   private async getStringSingle(rule: string): Promise<string | null> {
     if (!rule) return null;
     const ruleList = this.splitSourceRule(rule);
-    hilog.info(DOMAIN, TAG, `getStringSingle: rule="${rule}", split into ${ruleList.length} parts`);
     if (ruleList.length === 0) return null;
 
     let result: Object = this.content;
     for (let i = 0; i < ruleList.length; i++) {
       const sr = ruleList[i];
-      hilog.info(DOMAIN, TAG, `Step ${i + 1}/${ruleList.length}: rule="${sr.rule}", mode=${sr.mode}`);
       await this.applyPut(sr.putMap, result);
       const effective = await this.makeUpRule(sr.rule, result);
-      hilog.info(DOMAIN, TAG, `Step ${i + 1}: effective="${effective}"`);
       if (!effective) continue;
-      // 纯模板规则（@get/{{}}/{$.}）：makeUpRule 替换后没有选择器内容，直接作为字面量返回
       if (this.isPureTemplate(sr.rule)) {
         result = effective;
-        hilog.info(DOMAIN, TAG, `Step ${i + 1}: pure template, result="${result}"`);
         continue;
       }
       const raw = await this.executeByMode(effective, sr.mode, result);
-      hilog.info(DOMAIN, TAG, `Step ${i + 1}: raw result=${JSON.stringify(raw)?.substring(0, 100)}`);
       if (raw === null || raw === undefined) return null;
       let str: string;
       if (Array.isArray(raw)) {
-        str = (raw as Object[]).map(String).join('\n');
+        str = (raw as Object[]).map((x: Object): string => AnalyzeRule.safeStringify(x)).join('\n');
       } else {
-        str = String(raw);
+        str = AnalyzeRule.safeStringify(raw);
       }
       result = this.applyReplace(str, sr);
-      hilog.info(DOMAIN, TAG, `Step ${i + 1}: final result="${String(result).substring(0, 100)}"`);
     }
-    const resultStr = String(result);
-    hilog.info(DOMAIN, TAG, `getStringSingle final: "${resultStr.substring(0, 100)}"`);
+    const resultStr = AnalyzeRule.safeStringify(result);
+    if (!resultStr && ruleList.some((sr) => sr.replaceRegex)) return '';
     return resultStr || null;
   }
 
-  /** 判断规则是否仅由 @get/@put/{{}}/{$.} 模板组成（无选择器语法） */
+  /** 安全地把任意值转成字符串：原始类型直接转，普通对象走 JSON.stringify,
+   *  避免 String({}) 产出 "[object Object]" 后被当作变量值/URL 片段使用 */
+  private static safeStringify(v: Object | string | number | boolean | null | undefined): string {
+    if (v === null || v === undefined) return '';
+    const t = typeof v;
+    if (t === 'string') return v as string;
+    if (t === 'number' || t === 'boolean') return String(v);
+    // Array / Object：避免 [object Object]
+    try {
+      const s = String(v);
+      if (s !== '[object Object]') return s;
+      return JSON.stringify(v);
+    } catch {
+      return '';
+    }
+  }
+
   private isPureTemplate(rule: string): boolean {
-    // 剥离 @get:{...} / @put:{...} / {{...}} / {$.path}
     const stripped = rule
       .replace(/@get:\{[^}]+\}/g, '')
       .replace(/@put:\{[^}]+\}/g, '')
       .replace(/\{\{[\s\S]+?\}\}/g, '')
       .replace(/\{\$\.[^}]+\}/g, '');
-    // 剩余部分若不含选择器/路径关键字符,则是纯模板
     return !/[\.\$\[@]|\/\//.test(stripped);
   }
 
@@ -161,7 +202,7 @@ export class AnalyzeRule {
     const results: string[][] = [];
     for (const r of rules) {
       const sub = new AnalyzeRule(this.content, this.context);
-      const temp = await sub.getStringList(r);
+      const temp = await sub.getStringListSingle(r);
       if (temp.length > 0) {
         results.push(temp);
         if (analyzer.elementsType === '||') break;
@@ -185,7 +226,7 @@ export class AnalyzeRule {
       let result: Object = this.content;
       for (const r of rules) {
         const sub = new AnalyzeRule(result, this.context);
-        const temp = await sub.getStringList(r);
+        const temp = await sub.getStringListSingle(r);
         if (!temp || temp.length === 0) return [];
         result = temp;
       }
@@ -195,64 +236,125 @@ export class AnalyzeRule {
     return results.flat();
   }
 
-  /**
-   * 获取元素列表（用于 bookList / chapterList 迭代）
-   */
   async getElements(rule: string): Promise<Object[]> {
     if (!rule) return [];
-    this.detectMode(rule);
 
-    if (this.mode === RuleMode.Json) {
-      const cleanRule = rule.startsWith('@') ? rule.substring(1) : rule;
-      const data: Object = typeof this.content === 'string'
-        ? JSON.parse(this.content) as Object
-        : this.content;
-      const finalRule = cleanRule.toLowerCase().startsWith('json:')
-        ? cleanRule.substring(5) : cleanRule;
-      const list = jsonPath(data, finalRule);
-      return Array.isArray(list) ? list : (list ? [list] : []);
+    const analyzer = new RuleAnalyzer(rule);
+    const parts = analyzer.splitRule('||', '&&');
+
+    if (parts.length > 1 && analyzer.elementsType === '||') {
+      for (const part of parts) {
+        const result = await this.getElementsSingle(part);
+        if (result.length > 0) return result;
+      }
+      return [];
     }
 
-    if (this.mode === RuleMode.Default) {
+    if (parts.length > 1 && analyzer.elementsType === '&&') {
+      let elements: Object[] = [this.content];
+      for (const part of parts) {
+        const nextElements: Object[] = [];
+        for (const el of elements) {
+          const sub = new AnalyzeRule(el, this.context);
+          const found = await sub.getElementsSingle(part);
+          for (const f of found) nextElements.push(f);
+        }
+        if (nextElements.length === 0) return [];
+        elements = nextElements;
+      }
+      return elements;
+    }
+
+    return this.getElementsSingle(rule);
+  }
+
+  private async getElementsSingle(rule: string): Promise<Object[]> {
+    this.detectMode(rule);
+
+    // 处理反转标记
+    let actualRule = rule;
+    let reverse = false;
+    if (actualRule.startsWith('-')) {
+      reverse = true;
+      actualRule = actualRule.substring(1);
+    } else if (actualRule.startsWith('+')) {
+      actualRule = actualRule.substring(1);
+    }
+
+    let result: Object[];
+
+    if (this.mode === RuleMode.Json) {
+      const cleanRule = this.stripModePrefix(actualRule);
+      const data: Object = typeof this.content === 'string'
+        ? JSON.parse(this.content) as Object : this.content;
+      const list = jsonPath(data, cleanRule);
+      result = Array.isArray(list) ? list : (list ? [list] : []);
+    } else if (this.mode === RuleMode.Default) {
       const html = typeof this.content === 'string'
         ? this.content : JSON.stringify(this.content);
       const root = SimpleCSSSelector.parseHTML(html);
-      let cleanRule = rule;
-      if (cleanRule.toLowerCase().startsWith('@css:')) cleanRule = cleanRule.substring(5);
-      else if (cleanRule.startsWith('@@')) cleanRule = cleanRule.substring(2);
+      const cleanRule = this.stripModePrefix(actualRule);
       const elements = SimpleCSSSelector.querySelectorAll(root, cleanRule);
-      return elements.map((el) => SimpleCSSSelector.outerHTML(el));
+      result = elements.map((el) => SimpleCSSSelector.outerHTML(el));
+    } else if (this.mode === RuleMode.XPath) {
+      const html = typeof this.content === 'string'
+        ? this.content : JSON.stringify(this.content);
+      const root = SimpleCSSSelector.parseHTML(html);
+      const cleanRule = this.stripModePrefix(actualRule);
+      const elements = SimpleXPath.evaluateNodes(root, cleanRule);
+      result = elements.map((el) => SimpleCSSSelector.outerHTML(el));
+    } else if (this.mode === RuleMode.Js) {
+      const jsResult = await this.executeJs(actualRule);
+      if (Array.isArray(jsResult)) {
+        result = jsResult as Object[];
+      } else {
+        result = jsResult ? [jsResult] : [];
+      }
+    } else if (this.mode === RuleMode.Regex) {
+      const content = String(this.content);
+      const cleanRule = this.stripModePrefix(actualRule);
+      const elements = AnalyzeByRegex.getElements(content, [cleanRule]);
+      result = elements.map((groups) => groups[0]);
+    } else {
+      result = [];
     }
 
-    if (this.mode === RuleMode.Js) {
-      const result = await this.executeJs(rule);
-      if (Array.isArray(result)) return result;
-      return result ? [result] : [];
-    }
+    if (reverse) result.reverse();
+    return result;
+  }
 
-    return [];
+  private stripModePrefix(rule: string): string {
+    const lower = rule.toLowerCase();
+    if (lower.startsWith('@json:')) return rule.substring(6);
+    if (lower.startsWith('json:')) return rule.substring(5);
+    if (lower.startsWith('@xpath:')) return rule.substring(7);
+    if (lower.startsWith('xpath:')) return rule.substring(6);
+    if (lower.startsWith('@css:')) return rule.substring(5);
+    if (rule.startsWith('@@')) return rule.substring(2);
+    if (lower.startsWith('@js:')) return rule.substring(4);
+    if (lower.startsWith('js:')) return rule.substring(3);
+    return rule;
   }
 
   // ──────────────────── 规则分解 ────────────────────
 
-  /**
-   * 将完整 rule 字符串分解成 SourceRule 链（按 && 切分，每段独立执行）
-   */
   private splitSourceRule(ruleStr: string): SourceRule[] {
     if (!ruleStr) return [];
 
-    // 先把 <js>...</js> 和 @js: 块整体提取为 Js 段
+    // 缓存查找
+    const cached = ruleCache.get(ruleStr);
+    if (cached) return cached;
+
     const list: SourceRule[] = [];
     const jsTagRegex = /<js>([\s\S]+?)<\/js>/gi;
     const atJsRegex = /^@?js:/i;
 
-    // 整体是 JS?
     if (atJsRegex.test(ruleStr.trim())) {
       list.push(this.buildSourceRule(ruleStr, RuleMode.Js));
+      cacheRule(ruleStr, list);
       return list;
     }
 
-    // 有 <js> 块 → 拆分前后
     const jsParts: JsTagPart[] = [];
     let m: RegExpExecArray | null = jsTagRegex.exec(ruleStr);
     while (m !== null) {
@@ -275,49 +377,35 @@ export class AnalyzeRule {
         const after = ruleStr.substring(pos).trim();
         if (after) list.push(this.buildSourceRule(after, RuleMode.Default));
       }
+      cacheRule(ruleStr, list);
       return list;
     }
 
-    // 链式规则：按 @js: / @css: / @json: / @xpath: 等模式前缀拆分
-    // Legado 用 @ 作为链式分隔符，如 $.url@js:result.split('/')[2]
     const chainParts = this.splitChainRule(ruleStr);
     if (chainParts.length > 1) {
-      for (let i = 0; i < chainParts.length; i++) {
-        const cp = chainParts[i].trim();
-        // 第一个部分用 Default，后续部分让 buildSourceRule 自动检测模式
-        const mode = (i === 0) ? RuleMode.Default : RuleMode.Default;
-        const sr = this.buildSourceRule(cp, mode);
-        // buildSourceRule 会根据规则前缀（@js:/@css: 等）自动设置正确的 mode
+      for (const cp of chainParts) {
+        const sr = this.buildSourceRule(cp.trim(), RuleMode.Default);
         list.push(sr);
       }
+      cacheRule(ruleStr, list);
       return list;
     }
 
-    // 普通规则
     list.push(this.buildSourceRule(ruleStr, RuleMode.Default));
+    cacheRule(ruleStr, list);
     return list;
   }
 
-  /**
-   * 按 @mode: 链式分隔符拆分规则
-   * 如 "http://api.com/@js:result" → ["http://api.com/", "@js:result"]
-   * 注意：只在不在括号/引号内的 @ 才作为分隔符
-   */
   private splitChainRule(ruleStr: string): string[] {
-    // 匹配 @js: / @css: / @json: / @xpath: / @put: / @get: 模式前缀
-    const modePattern = /@(js|css|json|xpath|put|get):/gi;
+    const modePattern = /@(js|css|json|xpath):/gi;
     const parts: string[] = [];
     let lastEnd = 0;
     let match: RegExpExecArray | null = modePattern.exec(ruleStr);
-    hilog.info(DOMAIN, TAG, `splitChainRule: input="${ruleStr}"`);
     while (match !== null) {
-      hilog.info(DOMAIN, TAG, `splitChainRule: found match="${match[0]}" at index=${match.index}`);
-      // 检查 @ 前面是否有内容（不是开头才算链式）
       if (match.index > 0) {
         const before = ruleStr.substring(lastEnd, match.index);
         if (before.trim()) {
           parts.push(before);
-          hilog.info(DOMAIN, TAG, `splitChainRule: added before="${before}"`);
         }
         lastEnd = match.index;
       }
@@ -327,10 +415,8 @@ export class AnalyzeRule {
       const remaining = ruleStr.substring(lastEnd);
       if (remaining.trim()) {
         parts.push(remaining);
-        hilog.info(DOMAIN, TAG, `splitChainRule: added remaining="${remaining}"`);
       }
     }
-    hilog.info(DOMAIN, TAG, `splitChainRule: result: ${parts.length} parts: ${JSON.stringify(parts)}`);
     return parts;
   }
 
@@ -344,26 +430,22 @@ export class AnalyzeRule {
       putMap: {},
     };
 
-    // 1. 分离 @put:{...}
     let rule = ruleStr.replace(PUT_PATTERN, (_match: string, json: string): string => {
       try {
         const obj = JSON.parse(`{${json}}`) as Record<string, string>;
         const keys = Object.keys(obj);
         for (const k of keys) sr.putMap[k] = obj[k];
-      } catch (e) {
-        // 忽略解析失败
-      }
+      } catch { /* ignore */ }
       return '';
     }).trim();
 
-    // 2. 检测模式前缀
     const lower = rule.toLowerCase();
     if (lower.startsWith('@json:') || lower.startsWith('json:')) {
       sr.mode = RuleMode.Json;
-      rule = rule.substring(rule.toLowerCase().startsWith('@json:') ? 6 : 5);
+      rule = rule.substring(lower.startsWith('@json:') ? 6 : 5);
     } else if (lower.startsWith('@xpath:') || lower.startsWith('xpath:')) {
       sr.mode = RuleMode.XPath;
-      rule = rule.substring(rule.toLowerCase().startsWith('@xpath:') ? 7 : 6);
+      rule = rule.substring(lower.startsWith('@xpath:') ? 7 : 6);
     } else if (lower.startsWith('@css:') || lower.startsWith('@@')) {
       sr.mode = RuleMode.Default;
       rule = lower.startsWith('@@') ? rule.substring(2) : rule.substring(5);
@@ -374,16 +456,18 @@ export class AnalyzeRule {
       sr.mode = RuleMode.Json;
     } else if (rule.startsWith('//')) {
       sr.mode = RuleMode.XPath;
+    } else if (lower.startsWith(':regex:')) {
+      sr.mode = RuleMode.Regex;
+      rule = rule.substring(7);
     } else if (defaultMode !== RuleMode.Js) {
-      // 内容是 JSON → Json 模式
-      if (this.isJson(this.content)) {
+      if (this.isJSON) {
         sr.mode = RuleMode.Json;
       } else {
         sr.mode = RuleMode.Default;
       }
     }
 
-    // 3. 分离 ##pattern##replacement（###表示取首条）
+    // 分离 ##pattern##replacement
     const hashIdx = rule.indexOf('##');
     if (hashIdx > 0) {
       const afterHash = rule.substring(hashIdx + 2);
@@ -391,26 +475,24 @@ export class AnalyzeRule {
       const parts = afterHash.split('##');
       sr.replaceRegex = parts[0] || '';
       sr.replacement = parts.length > 1 ? parts[1] : '';
-      sr.replaceFirst = parts.length > 2; // ### 存在第三段
+      sr.replaceFirst = parts.length > 2;
     }
 
     sr.rule = rule.trim();
     return sr;
   }
 
-  // ──────────────────── makeUpRule（替换 @get / {{expr}} / {$.path}）────────────────────
+  // ──────────────────── makeUpRule ────────────────────
 
   private async makeUpRule(rule: string, result: Object): Promise<string> {
     if (!rule) return rule;
     let out = rule;
 
-    // 1. @get:{key} → 取变量
     out = out.replace(GET_PATTERN, (_match: string, key: string): string => {
       const vars = this.context.variables;
       return (vars && vars[key] !== undefined) ? vars[key] : '';
     });
 
-    // 2. {$.path} → JSONPath 对当前 result 求值
     out = out.replace(JSON_EVAL_PATTERN, (_match: string, path: string): string => {
       try {
         const data: Object = typeof result === 'string'
@@ -418,15 +500,35 @@ export class AnalyzeRule {
         const val = jsonPath(data, '$.' + path);
         if (val === null || val === undefined) return '';
         return Array.isArray(val) ? (val as Object[]).map((x: Object) => String(x)).join('') : String(val);
-      } catch (e) {
+      } catch {
         return '';
       }
     });
 
-    // 3. {{expr}} → 先处理可同步求值的，再异步处理 JS 表达式
+    // 处理 {{@@...}} CSS 规则内嵌求值
+    const cssEvalMatches: Array<[string, string]> = [];
+    out = out.replace(CSS_EVAL_PATTERN, (whole: string, cssRule: string): string => {
+      cssEvalMatches.push([whole, cssRule]);
+      return whole;
+    });
+
+    if (cssEvalMatches.length > 0) {
+      for (const pair of cssEvalMatches) {
+        try {
+          const sub = new AnalyzeRule(result, this.context);
+          const v = await sub.getString(pair[1]);
+          if (v !== null && v.length > 0) {
+            out = out.replace(pair[0], v);
+          }
+        } catch { /* keep original */ }
+      }
+    }
+
     const evalMatches: Array<[string, string]> = [];
     out = out.replace(EVAL_PATTERN, (whole: string, inner: string): string => {
       const trimmed = inner.trim();
+      // 跳过已处理的 {{@@...}}
+      if (trimmed.startsWith('@@')) return whole;
       const getMatch = trimmed.match(/^@get:\{([^}]+)\}$/);
       if (getMatch) {
         const vars = this.context.variables;
@@ -439,7 +541,7 @@ export class AnalyzeRule {
           const val = jsonPath(data, trimmed);
           if (val === null || val === undefined) return whole;
           return Array.isArray(val) ? (val as Object[]).map((x: Object) => String(x)).join('') : String(val);
-        } catch (e) {
+        } catch {
           return whole;
         }
       }
@@ -447,12 +549,12 @@ export class AnalyzeRule {
       return whole;
     });
 
-    // 异步求值剩余的 JS 表达式
     if (evalMatches.length > 0) {
       const executor = getJSExecutor();
       const ctx: Record<string, Object> = {};
       ctx['result'] = result;
       ctx['baseUrl'] = this.context.baseUrl || '';
+      ctx['src'] = this.content;
       if (this.context.variables) {
         const vars = this.context.variables;
         for (const k of Object.keys(vars)) ctx[k] = vars[k];
@@ -463,7 +565,7 @@ export class AnalyzeRule {
           if (v !== null && v !== undefined) {
             out = out.replace(pair[0], String(v));
           }
-        } catch (e) { /* 求值失败保留原样 */ }
+        } catch { /* keep original */ }
       }
     }
 
@@ -480,19 +582,23 @@ export class AnalyzeRule {
     }
     for (const key of keys) {
       const valRule = putMap[key];
+      let stored: string = '';
       if (valRule && (valRule.startsWith('$.') || valRule.startsWith('@css:')
-        || valRule.startsWith('@@') || valRule.startsWith('@json:'))) {
+        || valRule.startsWith('@@') || valRule.startsWith('@json:')
+        || valRule.startsWith('@xpath:') || valRule.startsWith('//'))) {
         try {
           const sub = new AnalyzeRule(result, this.context);
           const v = await sub.getString(valRule);
-          if (v && this.context.variables) {
-            this.context.variables[key] = v;
-          }
-        } catch (e) {
-          this.context.variables[key] = valRule;
+          stored = v ?? '';
+        } catch {
+          stored = valRule;
         }
       } else {
-        this.context.variables[key] = valRule;
+        stored = valRule ?? '';
+      }
+      stored = AnalyzeRule.safeStringify(stored);
+      if (stored && stored !== '[object Object]' && this.context.variables) {
+        this.context.variables[key] = stored;
       }
     }
   }
@@ -502,13 +608,11 @@ export class AnalyzeRule {
   private applyReplace(str: string, sr: SourceRule): string {
     if (!sr.replaceRegex) return str;
     try {
-      const regex = new RegExp(sr.replaceRegex, 'g');
       if (sr.replaceFirst) {
-        // 取第一个匹配到的组，然后替换
-        const firstMatch = str.match(new RegExp(sr.replaceRegex));
-        if (!firstMatch) return '';
-        return firstMatch[0].replace(regex, sr.replacement);
+        const regex = new RegExp(sr.replaceRegex);
+        return str.replace(regex, sr.replacement);
       }
+      const regex = new RegExp(sr.replaceRegex, 'g');
       return str.replace(regex, sr.replacement);
     } catch {
       return str;
@@ -543,7 +647,10 @@ export class AnalyzeRule {
     try {
       const data: Object = typeof this.content === 'string'
         ? JSON.parse(this.content) as Object : this.content;
-      return jsonPath(data, cleanRule);
+      const result = jsonPath(data, cleanRule);
+      if (!result || (Array.isArray(result) && result.length === 0)) return null;
+      if (Array.isArray(result) && result.length === 1) return result[0];
+      return result;
     } catch {
       return null;
     }
@@ -560,9 +667,6 @@ export class AnalyzeRule {
       if (end > start) code = code.substring(start, end);
     }
 
-    // 包装代码以捕获有声书常用的副作用变量（yp_url / url）
-    // Legado Rhino 引擎会返回 if/else 最后一条语句的值，标准 JS 不会
-    // 所以需要显式声明变量 + 末尾返回
     const needsWrap = code.includes('yp_url') || /(?:^|[\s;])url\s*=/.test(code);
     if (needsWrap) {
       code = 'var yp_url, url;\n' + code + '\n' +
@@ -572,38 +676,34 @@ export class AnalyzeRule {
 
     const executor = getJSExecutor();
     const ctx: Record<string, Object> = {};
-    // 链式规则时，result 是前一步的输出；否则是原始内容
-    ctx['result'] = chainResult !== undefined ? chainResult : this.content;
+    const raw = chainResult !== undefined ? chainResult : this.content;
+    // Legado 兼容：result 传给 JS 时确保是 string（书源规则常用 result.split 等字符串方法）
+    ctx['result'] = typeof raw === 'string' ? raw : JSON.stringify(raw);
     ctx['baseUrl'] = this.context.baseUrl || '';
-    ctx['src'] = this.content;
+    ctx['src'] = typeof this.content === 'string' ? this.content : JSON.stringify(this.content);
+    if (this.context.book) ctx['book'] = this.context.book;
+    if (this.context.chapter) ctx['chapter'] = this.context.chapter;
     if (this.context.variables) {
       const vars = this.context.variables;
       for (const k of Object.keys(vars)) ctx[k] = vars[k];
     }
     try {
       return await executor.eval(code, ctx);
-    } catch (error) {
-      console.error('[AnalyzeRule] JS 执行失败:', error);
+    } catch {
       return null;
     }
   }
 
-  /**
-   * CSS 默认模式：支持链式 @ 分隔符
-   * 末尾支持：text / textNodes / html / outerHtml / ownText / src / href / @attr(name)
-   */
   private executeDefault(rule: string): Object | null {
     const html = typeof this.content === 'string'
       ? this.content : JSON.stringify(this.content);
 
     const root = SimpleCSSSelector.parseHTML(html);
 
-    // 处理 @CSS: 前缀
     let cleanRule = rule;
     if (cleanRule.toLowerCase().startsWith('@css:')) cleanRule = cleanRule.substring(5);
     if (cleanRule.startsWith('@@')) cleanRule = cleanRule.substring(2);
 
-    // 用 @ 切分链式规则（@ 作为分隔，RuleAnalyzer 已实现）
     const analyzer = new RuleAnalyzer(cleanRule);
     const parts = analyzer.splitRule('@');
 
@@ -614,7 +714,6 @@ export class AnalyzeRule {
       return texts.length === 1 ? texts[0] : texts;
     }
 
-    // 多段链式
     let elements = SimpleCSSSelector.querySelectorAll(root, parts[0]);
 
     for (let i = 1; i < parts.length - 1; i++) {
@@ -657,26 +756,20 @@ export class AnalyzeRule {
       case 'all':
         return SimpleCSSSelector.outerHTML(el);
       default: {
-        // @attr(name) 形式
         const attrMatch = attr.match(/^attr\(([^)]+)\)$/i);
         if (attrMatch) {
           return SimpleCSSSelector.getAttribute(el, attrMatch[1]);
         }
-        // 直接属性名
         return SimpleCSSSelector.getAttribute(el, attr);
       }
     }
   }
 
-  private executeRegex(rule: string): string | null {
+  private executeRegex(rule: string): Object | null {
     const content = String(this.content);
-    try {
-      const regex = new RegExp(rule);
-      const match = content.match(regex);
-      return match ? match[0] : null;
-    } catch {
-      return null;
-    }
+    const results = AnalyzeByRegex.getStringList(content, rule);
+    if (results.length === 0) return null;
+    return results.length === 1 ? results[0] : results;
   }
 
   private executeXPath(rule: string): Object | null {
@@ -710,7 +803,6 @@ export class AnalyzeRule {
         arr = str ? str.split('\n').filter((s) => s.trim().length > 0) : [];
       }
 
-      // 应用 ## 替换
       if (sr.replaceRegex) {
         arr = arr.map((s) => this.applyReplace(s, sr)).filter((s) => s.length > 0);
       }
@@ -725,24 +817,28 @@ export class AnalyzeRule {
   // ──────────────────── 工具 ────────────────────
 
   private detectMode(rule: string): void {
-    const lower = rule.toLowerCase();
-    if (lower.startsWith('@json:') || lower.startsWith('json:')
-      || rule.startsWith('$.') || rule.startsWith('$[')) {
+    const cleanRule = rule.startsWith('-') || rule.startsWith('+') ? rule.substring(1) : rule;
+    const cleanLower = cleanRule.toLowerCase();
+
+    if (cleanLower.startsWith('@json:') || cleanLower.startsWith('json:')
+      || cleanRule.startsWith('$.') || cleanRule.startsWith('$[')) {
       this.mode = RuleMode.Json;
-    } else if (lower.startsWith('@js:') || lower.startsWith('js:') || rule.includes('<js>')) {
+    } else if (cleanLower.startsWith('@js:') || cleanLower.startsWith('js:') || cleanRule.includes('<js>')) {
       this.mode = RuleMode.Js;
-    } else if (lower.startsWith('@xpath:') || rule.startsWith('//')) {
+    } else if (cleanLower.startsWith('@xpath:') || cleanRule.startsWith('//')) {
       this.mode = RuleMode.XPath;
-    } else if (lower.startsWith('@css:') || rule.startsWith('@@')) {
+    } else if (cleanLower.startsWith('@css:') || cleanRule.startsWith('@@')) {
       this.mode = RuleMode.Default;
-    } else if (this.isJson(this.content)) {
+    } else if (cleanLower.startsWith(':regex:')) {
+      this.mode = RuleMode.Regex;
+    } else if (this.isJSON) {
       this.mode = RuleMode.Json;
     } else {
       this.mode = RuleMode.Default;
     }
   }
 
-  private isJson(content: Object): boolean {
+  private detectIsJson(content: Object): boolean {
     if (typeof content === 'object') return true;
     if (typeof content !== 'string') return false;
     const trimmed = (content as string).trim();
