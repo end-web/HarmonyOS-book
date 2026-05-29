@@ -453,9 +453,9 @@ export class BookSourceService {
 
   private static async fetch(analyzed: AnalyzedUrl): Promise<string> {
     if (analyzed.method === 'POST') {
-      return HttpClient.post(analyzed.url, analyzed.body || '', analyzed.headers);
+      return HttpClient.post(analyzed.url, analyzed.body || '', analyzed.headers, analyzed.charset);
     }
-    return HttpClient.get(analyzed.url, analyzed.headers);
+    return HttpClient.get(analyzed.url, analyzed.headers, analyzed.charset);
   }
 
   /**
@@ -514,7 +514,24 @@ export class BookSourceService {
     const cleanUrl = url.replace(/[\r\n\t]/g, '').trim();
     const analyzeUrl = new AnalyzeUrl(cleanUrl, { baseUrl: source.bookSourceUrl }, source.header);
     const analyzed = await analyzeUrl.getUrl();
-    console.info(`[${TAG}] fetchWithSource: ${analyzed.url}`);
+    // 若详情/章节 URL 自身没声明 charset，复用 search/explore 的 charset 推断
+    if (!analyzed.charset) {
+      const inferred = BookSourceService.inferCharset(source);
+      if (inferred) analyzed.charset = inferred;
+    }
+    console.info(`[${TAG}] fetchWithSource: ${analyzed.url} charset=${analyzed.charset || 'utf-8'}`);
     return BookSourceService.fetch(analyzed);
+  }
+
+  /** 从 source.searchUrl / exploreUrl 中提取 ,{ "charset": "..." } 作为该源默认编码 */
+  private static inferCharset(source: BookSource): string {
+    const candidates: string[] = [];
+    if (source.searchUrl) candidates.push(source.searchUrl);
+    if (source.exploreUrl) candidates.push(source.exploreUrl);
+    for (const c of candidates) {
+      const m = c.match(/,\s*\{[^}]*"charset"\s*:\s*"([^"]+)"/i);
+      if (m) return m[1];
+    }
+    return '';
   }
 }

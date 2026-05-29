@@ -57,10 +57,8 @@ export struct HomePage {
   private async loadSourceCount(): Promise<void> {
     try {
       const sources = await SourceDataService.getSources();
-      // 与 doSearch 里的过滤口径保持一致：电子书 + 有声书
-      this.sourceCount = sources.filter(s =>
-        (s.bookSourceType === 0 || s.bookSourceType === 1) && s.enabled !== false
-      ).length;
+      // 口径：所有启用源（type=0 文本 / 1 音频 / 2 图片 / 3 文件 / 未填）都计入
+      this.sourceCount = sources.filter(s => s.enabled !== false).length;
     } catch (_e) {
       this.sourceCount = 0;
     }
@@ -83,8 +81,9 @@ export struct HomePage {
     BookCard.resetAnimations();
     try {
       const sources = await SourceDataService.getSources();
+      // type=1 走有声列表；其它（0 文本 / 2 图片 / 3 文件 / 未填）都按文本搜索
       const textSources =
-        sources.filter(s => s.bookSourceType === 0 && s.enabled !== false);
+        sources.filter(s => s.bookSourceType !== 1 && s.enabled !== false);
       const audioSources =
         sources.filter(s => s.bookSourceType === 1 && s.enabled !== false);
       this.pendingCount = textSources.length + audioSources.length;

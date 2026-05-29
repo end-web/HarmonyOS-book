@@ -1,0 +1,10 @@
+{
+  "network-security-config": {
+    "base-config": {
+      "cleartextTrafficPermitted": true
+    },
+    "component-config": {
+      "Network Kit": true
+    }
+  }
+}

@@ -13,6 +13,7 @@
 
 import { getJSExecutor } from '../js/JSExecutor';
 import { getJavaBridge } from './JavaBridge';
+import { CharsetCodec } from '../../utils/CharsetCodec';
 
 export interface UrlOption {
   method: string;
@@ -35,6 +36,11 @@ export interface AnalyzedUrl {
   webView?: boolean;
   webJs?: string;
   retry: number;
+}
+
+interface UrlSplit {
+  baseUrl: string;
+  option: UrlOption;
 }
 
 interface TemplateContext {
@@ -65,84 +71,56 @@ export class AnalyzeUrl {
   }
 
   async getUrl(): Promise<AnalyzedUrl> {
-    let url = this.ruleUrl;
+    // 1. 拆出 ,{...} 配置，先拿到 charset/method 等
+    const split = this.splitConfig(this.ruleUrl);
+    let baseUrl = split.baseUrl;
+    const option = split.option;
+    const charset = option.charset || '';
 
-    // 1. 执行 @js: 和 <js>...</js> 块
-    url = await this.analyzeJs(url);
+    // 2. 在 baseUrl 上执行 @js: / <js>...</js>
+    baseUrl = await this.analyzeJs(baseUrl);
 
-    // 2. 替换模板变量 {{key}}, {{page}}, <page1,page2>
-    url = await this.replaceTemplateVars(url);
+    // 3. 替换模板变量（按 charset percent-encode）
+    baseUrl = await this.replaceTemplateVars(baseUrl, charset);
 
-    // 3. 解析 URL 配置（,{...}）
-    return this.parseUrlWithOptions(url);
-  }
+    // 3.5 GET：URL 中已有的非 ASCII 字符按 charset percent-encode（保留已编码的 %XX）
+    baseUrl = AnalyzeUrl.reencodeUrlQuery(baseUrl, charset);
 
-  private async analyzeJs(url: string): Promise<string> {
-    // <js>...</js> 块
-    const jsTagRegex = /<js>([\s\S]+?)<\/js>/gi;
-    let result = url;
-    let match = jsTagRegex.exec(result);
-    while (match !== null) {
-      const code = match[1];
-      const jsResult = await this.evalJs(code);
-      result = result.replace(match[0], jsResult);
-      jsTagRegex.lastIndex = 0;
-      match = jsTagRegex.exec(result);
+    // 3.6 POST：body 是 a=1&b=2 形式时，按 charset 重编码 value
+    let bodyOut = option.body;
+    if ((option.method || 'GET').toUpperCase() === 'POST' && bodyOut && bodyOut.indexOf('=') > 0) {
+      bodyOut = AnalyzeUrl.reencodeFormBody(bodyOut, charset);
     }
 
-    // @js:code（整个 URL 是 JS）
-    if (/^@?js:/i.test(result.trim())) {
-      const code = result.replace(/^@?js:/i, '');
-      result = await this.evalJs(code);
+    // 4. 合并 headers
+    const headers: Record<string, string> = {};
+    const srcKeys = Object.keys(this.sourceHeaders);
+    for (const sk of srcKeys) {
+      headers[sk] = this.sourceHeaders[sk];
     }
-
-    return result;
-  }
-
-  private async replaceTemplateVars(url: string): Promise<string> {
-    let result = url;
-    const page = this.context.page || 1;
-    const key = this.context.key || '';
-
-    // <page1,page2,page3> 分页语法
-    result = result.replace(/<([^>]+)>/g, (_match: string, inner: string): string => {
-      if (inner.includes(',')) {
-        const pages = inner.split(',');
-        const idx = Math.min(page - 1, pages.length - 1);
-        return pages[Math.max(0, idx)].trim();
+    if (option.headers) {
+      const keys = Object.keys(option.headers);
+      for (const k of keys) {
+        headers[k] = option.headers[k];
       }
-      return inner;
-    });
-
-    // {{key}} / {{keyword}} / {{searchKey}}
-    result = result.replace(/\{\{key\}\}/g, encodeURIComponent(key));
-    result = result.replace(/\{\{keyword\}\}/g, encodeURIComponent(key));
-    result = result.replace(/\{\{searchKey\}\}/g, encodeURIComponent(key));
-
-    // {{page}} / {{searchPage}}
-    result = result.replace(/\{\{page\}\}/g, String(page));
-    result = result.replace(/\{\{searchPage\}\}/g, String(page));
-    result = result.replace(/\{\{pageSize\}\}/g, '20');
-
-    // {{js_expression}} 内嵌 JS
-    const evalPattern = /\{\{([\s\S]+?)\}\}/g;
-    let evalMatch = evalPattern.exec(result);
-    while (evalMatch !== null) {
-      const expr = evalMatch[1].trim();
-      // 跳过已替换的纯数字/已编码内容
-      if (!/^(key|keyword|searchKey|page|searchPage|pageSize)$/.test(expr)) {
-        const jsResult = await this.evalJs(expr);
-        result = result.replace(evalMatch[0], jsResult);
-        evalPattern.lastIndex = 0;
-      }
-      evalMatch = evalPattern.exec(result);
     }
 
-    return result;
+    // 5. 剥离 ## 源分组标记
+    baseUrl = AnalyzeUrl.stripSourceGroup(baseUrl);
+
+    return {
+      url: baseUrl,
+      method: option.method || 'GET',
+      body: bodyOut,
+      charset: option.charset,
+      headers,
+      webView: option.webView,
+      webJs: option.webJs,
+      retry: option.retry || 0,
+    };
   }
 
-  private parseUrlWithOptions(url: string): AnalyzedUrl {
-    // 查找 ,{ 配置部分
+  private splitConfig(url: string): UrlSplit {
     const configIdx = this.findConfigStart(url);
     let baseUrl: string;
     let option: UrlOption = { method: 'GET' };
@@ -170,33 +148,73 @@ export class AnalyzeUrl {
     } else {
       baseUrl = url.trim();
     }
+    const result: UrlSplit = { baseUrl, option };
+    return result;
+  }
 
-    // 合并 headers
-    const headers: Record<string, string> = {};
-    const srcKeys = Object.keys(this.sourceHeaders);
-    for (const sk of srcKeys) {
-      headers[sk] = this.sourceHeaders[sk];
+  private async analyzeJs(url: string): Promise<string> {
+    // <js>...</js> 块
+    const jsTagRegex = /<js>([\s\S]+?)<\/js>/gi;
+    let result = url;
+    let match = jsTagRegex.exec(result);
+    while (match !== null) {
+      const code = match[1];
+      const jsResult = await this.evalJs(code);
+      result = result.replace(match[0], jsResult);
+      jsTagRegex.lastIndex = 0;
+      match = jsTagRegex.exec(result);
     }
-    if (option.headers) {
-      const keys = Object.keys(option.headers);
-      for (const k of keys) {
-        headers[k] = option.headers[k];
+
+    // @js:code（整个 URL 是 JS）
+    if (/^@?js:/i.test(result.trim())) {
+      const code = result.replace(/^@?js:/i, '');
+      result = await this.evalJs(code);
+    }
+
+    return result;
+  }
+
+  private async replaceTemplateVars(url: string, charset?: string): Promise<string> {
+    let result = url;
+    const page = this.context.page || 1;
+    const key = this.context.key || '';
+    const enc = (s: string): string => CharsetCodec.encodeUriForCharset(s, charset);
+
+    // <page1,page2,page3> 分页语法
+    result = result.replace(/<([^>]+)>/g, (_match: string, inner: string): string => {
+      if (inner.includes(',')) {
+        const pages = inner.split(',');
+        const idx = Math.min(page - 1, pages.length - 1);
+        return pages[Math.max(0, idx)].trim();
       }
+      return inner;
+    });
+
+    // {{key}} / {{keyword}} / {{searchKey}}
+    result = result.replace(/\{\{key\}\}/g, enc(key));
+    result = result.replace(/\{\{keyword\}\}/g, enc(key));
+    result = result.replace(/\{\{searchKey\}\}/g, enc(key));
+
+    // {{page}} / {{searchPage}}
+    result = result.replace(/\{\{page\}\}/g, String(page));
+    result = result.replace(/\{\{searchPage\}\}/g, String(page));
+    result = result.replace(/\{\{pageSize\}\}/g, '20');
+
+    // {{js_expression}} 内嵌 JS
+    const evalPattern = /\{\{([\s\S]+?)\}\}/g;
+    let evalMatch = evalPattern.exec(result);
+    while (evalMatch !== null) {
+      const expr = evalMatch[1].trim();
+      // 跳过已替换的纯数字/已编码内容
+      if (!/^(key|keyword|searchKey|page|searchPage|pageSize)$/.test(expr)) {
+        const jsResult = await this.evalJs(expr);
+        result = result.replace(evalMatch[0], jsResult);
+        evalPattern.lastIndex = 0;
+      }
+      evalMatch = evalPattern.exec(result);
     }
 
-    // Legado 书源 URL 中 ## 后跟源分组标记（如 ##@曦灵），需要剥离
-    baseUrl = AnalyzeUrl.stripSourceGroup(baseUrl);
-
-    return {
-      url: baseUrl,
-      method: option.method || 'GET',
-      body: option.body,
-      charset: option.charset,
-      headers,
-      webView: option.webView,
-      webJs: option.webJs,
-      retry: option.retry || 0,
-    };
+    return result;
   }
 
   private findConfigStart(url: string): number {
@@ -248,6 +266,75 @@ export class AnalyzeUrl {
     } catch {
       return {};
     }
+  }
+
+  /** 把 URL 中 query 段（? 之后）的非 ASCII 字符按 charset 重编码，跳过已 percent-encoded */
+  static reencodeUrlQuery(url: string, charset?: string): string {
+    if (!url) return url;
+    const qIdx = url.indexOf('?');
+    if (qIdx < 0) return url;
+    const beforeQ = url.substring(0, qIdx + 1);
+    const afterQ = url.substring(qIdx + 1);
+    // 拆 fragment（#...）
+    let frag = '';
+    let q = afterQ;
+    const hashIdx = afterQ.indexOf('#');
+    if (hashIdx >= 0) {
+      frag = afterQ.substring(hashIdx);
+      q = afterQ.substring(0, hashIdx);
+    }
+    // 按 & 切对，再按 = 切 key/value，分别重编码
+    const pairs = q.split('&');
+    const out: string[] = [];
+    for (const pair of pairs) {
+      if (!pair) { out.push(pair); continue; }
+      const eq = pair.indexOf('=');
+      if (eq < 0) {
+        out.push(AnalyzeUrl.encodeIfNeeded(pair, charset));
+      } else {
+        const k = pair.substring(0, eq);
+        const v = pair.substring(eq + 1);
+        out.push(AnalyzeUrl.encodeIfNeeded(k, charset) + '=' + AnalyzeUrl.encodeIfNeeded(v, charset));
+      }
+    }
+    return beforeQ + out.join('&') + frag;
+  }
+
+  /** 把 form-urlencoded body 按 charset 重编码 */
+  static reencodeFormBody(body: string, charset?: string): string {
+    return AnalyzeUrl.reencodeUrlQuery('?' + body, charset).substring(1);
+  }
+
+  /** 含未编码非 ASCII 字符时按 charset percent-encode；保留已存在的 %XX */
+  private static encodeIfNeeded(s: string, charset?: string): string {
+    if (!s) return s;
+    // 全是 ASCII（含 %XX）就不动
+    let allAscii = true;
+    for (let i = 0; i < s.length; i++) {
+      if (s.charCodeAt(i) > 127) { allAscii = false; break; }
+    }
+    if (allAscii) return s;
+    // 拼回去：把 %XX 段保留原样，其它按 charset 编码
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+      const ch = s.charAt(i);
+      if (ch === '%' && i + 2 < s.length && /[0-9A-Fa-f]{2}/.test(s.substring(i + 1, i + 3))) {
+        out += s.substring(i, i + 3);
+        i += 3;
+        continue;
+      }
+      // 收集到连续非 % 的子串，整段 encode
+      let j = i;
+      while (j < s.length) {
+        const cj = s.charAt(j);
+        if (cj === '%' && j + 2 < s.length && /[0-9A-Fa-f]{2}/.test(s.substring(j + 1, j + 3))) break;
+        j++;
+      }
+      out += CharsetCodec.encodeUriForCharset(s.substring(i, j), charset);
+      i = j;
+    }
+    return out;
   }
 
   /** 剥离 Legado 书源 URL 中的 ##分组标记（如 ##@曦灵） */

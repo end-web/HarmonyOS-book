@@ -22,6 +22,7 @@ import { getJavaBridge } from '../rule/JavaBridge';
 import { getCookieManager } from '../rule/CookieManager';
 import { getSourceContext } from '../rule/SourceContext';
 import { getJsoup } from '../rule/JsoupBridge';
+import { getWebViewJSEngine } from './WebViewJSEngine';
 
 export interface JSExecutorConfig {
   host?: string;
@@ -39,6 +40,17 @@ interface JSEvalResponse {
   success: boolean;
   result?: Object;
   error?: string;
+}
+
+interface ScriptStmtResult {
+  value: Object | undefined;
+  returned: boolean;
+}
+
+interface IfStmtMatch {
+  cond: string;
+  thenStmt: string;
+  elseStmt?: string;
 }
 
 export class JSExecutor {
@@ -79,7 +91,14 @@ export class JSExecutor {
       if (shimResult !== undefined) return shimResult;
     }
 
-    // 如果需要 java 桥且有 HTTP 代理，优先使用代理（支持异步 java 方法）
+    // 优先：本地脚本求值（async，原生支持 await java.ajax / java.connect 与多行赋值）
+    // 这是 Legado 书源最常见的"拼 URL → ajax → 取新页面"模式
+    if (needsJava && (code.includes('java.ajax') || code.includes('java.connect'))) {
+      const asyncResult = await this.tryAsyncScript(code.trim(), context);
+      if (asyncResult !== undefined) return asyncResult;
+    }
+
+    // 如果需要 java 桥且有 HTTP 代理，使用代理（支持其它复杂 java 方法）
     if (needsJava && this.proxyAvailable !== false) {
       try {
         const javaBridge = getJavaBridge();
@@ -113,7 +132,19 @@ export class JSExecutor {
     }
 
     // 降级：尝试更宽松的本地解析
-    return this.tryLocalEvalRelaxed(code.trim(), context);
+    const relaxedResult = this.tryLocalEvalRelaxed(code.trim(), context);
+    if (relaxedResult !== null) {
+      return relaxedResult;
+    }
+
+    // 最终降级：使用 WebView JS 引擎（完整 ES6+ 支持）
+    try {
+      const webViewEngine = getWebViewJSEngine();
+      const result = await webViewEngine.eval(code, context);
+      return result;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -208,6 +239,68 @@ export class JSExecutor {
       return sourceContext.type;
     }
 
+    // 内置：Date.now() / new Date().getTime() / Math.random()
+    if (code === 'Date.now()' || code === 'new Date().getTime()' || code === 'new Date().valueOf()') {
+      return Date.now();
+    }
+    if (code === 'Math.random()') {
+      return Math.random();
+    }
+    // Math.floor(...) / Math.ceil(...) / Math.round(...)
+    const mathMatch = code.match(/^Math\.(floor|ceil|round|abs)\((.+)\)$/);
+    if (mathMatch) {
+      const inner = this.tryLocalEval(mathMatch[2], ctx);
+      if (inner === undefined) return undefined;
+      const n = Number(inner);
+      if (Number.isNaN(n)) return 0;
+      switch (mathMatch[1]) {
+        case 'floor': return Math.floor(n);
+        case 'ceil': return Math.ceil(n);
+        case 'round': return Math.round(n);
+        case 'abs': return Math.abs(n);
+      }
+    }
+    // JSON.parse('...') / JSON.parse(varName)
+    const jsonParseMatch = code.match(/^JSON\.parse\((.+)\)$/);
+    if (jsonParseMatch) {
+      const inner = this.tryLocalEval(jsonParseMatch[1], ctx);
+      if (inner === undefined) return undefined;
+      try {
+        return JSON.parse(String(inner)) as Object;
+      } catch { return undefined; }
+    }
+    // JSON.stringify(varName)
+    const jsonStrMatch = code.match(/^JSON\.stringify\((.+)\)$/);
+    if (jsonStrMatch) {
+      const inner = this.tryLocalEval(jsonStrMatch[1], ctx);
+      if (inner === undefined) return undefined;
+      try {
+        return JSON.stringify(inner);
+      } catch { return undefined; }
+    }
+    // java.base64Encode/Decode/randomUUID/timeFormat — 通过 javaBridge
+    const javaB64Enc = code.match(/^java\.base64Encode(?:r)?\((.+)\)$/);
+    if (javaB64Enc) {
+      const inner = this.tryLocalEval(javaB64Enc[1], ctx);
+      if (inner === undefined) return undefined;
+      return getJavaBridge().base64Encode(String(inner));
+    }
+    const javaB64Dec = code.match(/^java\.base64Decode(?:r)?\((.+)\)$/);
+    if (javaB64Dec) {
+      const inner = this.tryLocalEval(javaB64Dec[1], ctx);
+      if (inner === undefined) return undefined;
+      return getJavaBridge().base64Decode(String(inner));
+    }
+    if (code === 'java.randomUUID()') {
+      return getJavaBridge().randomUUID();
+    }
+    const javaTime = code.match(/^java\.timeFormat\((.+)\)$/);
+    if (javaTime) {
+      const inner = this.tryLocalEval(javaTime[1], ctx);
+      if (inner === undefined) return undefined;
+      return getJavaBridge().timeFormat(Number(inner));
+    }
+
     // cookie.removeCookie(url) - 移除 Cookie
     const cookieRemoveMatch = code.match(/^cookie\.removeCookie\(['"](.+)['"]\)$/);
     if (cookieRemoveMatch) {
@@ -253,6 +346,279 @@ export class JSExecutor {
     if (assignResult !== undefined) return assignResult;
 
     return undefined;
+  }
+
+  /**
+   * Async 脚本求值：处理 Legado 书源中含 java.ajax / java.connect 的命令式 JS。
+   *
+   * 支持的语法：
+   *  - var/let/const X = expr;     声明赋值
+   *  - X = expr;                    重新赋值（含已有变量如 result）
+   *  - if (cond) stmt; [else stmt;] 单语句条件
+   *  - return expr;                 显式返回
+   *  - java.ajax(arg) / java.connect(arg) / java.get(arg) / java.put(k,v) / java.log(arg)
+   *  - 表达式：字符串字面量、数字、变量引用、a + b 拼接、obj.prop、obj.method(...)
+   *  - 最后一行作为返回值
+   *
+   * 不支持的复杂语法（return undefined 让上层降级）：
+   *  - for/while、try/catch、对象/数组字面量、箭头函数、嵌套块
+   */
+  private async tryAsyncScript(code: string, ctx: Record<string, Object>): Promise<Object | undefined> {
+    const lines = this.splitStatements(code);
+    if (lines.length === 0) return undefined;
+
+    const localVars: Record<string, Object> = {};
+    for (const k of Object.keys(ctx)) localVars[k] = ctx[k];
+
+    const result = await this.runStatements(lines, localVars);
+    if (result.returned) return result.value;
+    return result.value;
+  }
+
+  /** 顺序执行语句序列，返回 { value, returned }。returned=true 表示遇到 return。 */
+  private async runStatements(
+    lines: string[], localVars: Record<string, Object>
+  ): Promise<ScriptStmtResult> {
+    let lastValue: Object | undefined = undefined;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // 显式 return
+      if (/^return\b/.test(line)) {
+        const expr = line.replace(/^return\s*/, '').trim() || '""';
+        const v = await this.evalExprAsync(expr, localVars);
+        if (v === undefined) {
+          const r1: ScriptStmtResult = { value: undefined, returned: true };
+          return r1;
+        }
+        const r2: ScriptStmtResult = { value: v, returned: true };
+        return r2;
+      }
+      // if (cond) stmt
+      const ifMatch = this.matchIfStatement(line);
+      if (ifMatch) {
+        const condVal = await this.evalExprAsync(ifMatch.cond, localVars);
+        const truthy = !!condVal && condVal !== '0' && condVal !== 'false';
+        const branch = truthy ? ifMatch.thenStmt : ifMatch.elseStmt;
+        if (branch) {
+          const sub = await this.runStatements([branch], localVars);
+          if (sub.returned) return sub;
+          if (sub.value !== undefined) lastValue = sub.value;
+        }
+        continue;
+      }
+      // var/let/const X = expr
+      const declMatch = line.match(/^(?:var|let|const)\s+(\w+)\s*=\s*(.+)$/);
+      if (declMatch) {
+        const v = await this.evalExprAsync(declMatch[2], localVars);
+        if (v === undefined) {
+          const r: ScriptStmtResult = { value: undefined, returned: false };
+          return r;
+        }
+        localVars[declMatch[1]] = v;
+        lastValue = v;
+        continue;
+      }
+      // X = expr
+      const assignMatch = line.match(/^(\w+)\s*=\s*(.+)$/);
+      if (assignMatch) {
+        const v = await this.evalExprAsync(assignMatch[2], localVars);
+        if (v === undefined) {
+          const r: ScriptStmtResult = { value: undefined, returned: false };
+          return r;
+        }
+        localVars[assignMatch[1]] = v;
+        lastValue = v;
+        continue;
+      }
+      // 单纯表达式
+      const v = await this.evalExprAsync(line, localVars);
+      if (v === undefined) {
+        const r: ScriptStmtResult = { value: undefined, returned: false };
+        return r;
+      }
+      lastValue = v;
+    }
+    const r: ScriptStmtResult = { value: lastValue, returned: false };
+    return r;
+  }
+
+  /** 匹配 if (cond) thenStmt; else elseStmt; 单行/单语句版本 */
+  private matchIfStatement(line: string): IfStmtMatch | null {
+    if (!/^if\s*\(/.test(line)) return null;
+    let i = 2;
+    while (i < line.length && line[i] !== '(') i++;
+    if (line[i] !== '(') return null;
+    let depth = 1;
+    let j = i + 1;
+    while (j < line.length && depth > 0) {
+      if (line[j] === '(') depth++;
+      else if (line[j] === ')') depth--;
+      if (depth === 0) break;
+      j++;
+    }
+    if (depth !== 0) return null;
+    const cond = line.substring(i + 1, j).trim();
+    const rest = line.substring(j + 1).trim();
+    const elseIdx = this.findTopLevelElse(rest);
+    let thenStmt: string;
+    let elseStmt: string | undefined = undefined;
+    if (elseIdx >= 0) {
+      thenStmt = rest.substring(0, elseIdx).replace(/;\s*$/, '').trim();
+      elseStmt = rest.substring(elseIdx + 4).replace(/^\s*/, '').replace(/;\s*$/, '').trim();
+    } else {
+      thenStmt = rest.replace(/;\s*$/, '').trim();
+    }
+    if (thenStmt.startsWith('{') && thenStmt.endsWith('}')) thenStmt = thenStmt.substring(1, thenStmt.length - 1).trim();
+    if (elseStmt && elseStmt.startsWith('{') && elseStmt.endsWith('}')) elseStmt = elseStmt.substring(1, elseStmt.length - 1).trim();
+    const result: IfStmtMatch = { cond, thenStmt, elseStmt };
+    return result;
+  }
+
+  private findTopLevelElse(s: string): number {
+    let depth = 0;
+    let inStr: string | null = null;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (inStr) {
+        if (c === '\\' && i + 1 < s.length) { i++; continue; }
+        if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === '"' || c === "'") { inStr = c; continue; }
+      if (c === '(' || c === '{' || c === '[') depth++;
+      else if (c === ')' || c === '}' || c === ']') depth--;
+      else if (depth === 0 && c === 'e' && s.substring(i, i + 4) === 'else'
+               && (i === 0 || /\s|\}|\)/.test(s[i - 1]))
+               && (i + 4 >= s.length || /\s|\{|\(/.test(s[i + 4]))) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** 把脚本切成顶层语句（按 ;/\n，但忽略字符串/正则中的分号） */
+  private splitStatements(code: string): string[] {
+    const out: string[] = [];
+    let buf = '';
+    let inStr: string | null = null;
+    for (let i = 0; i < code.length; i++) {
+      const c = code[i];
+      if (inStr) {
+        buf += c;
+        if (c === '\\' && i + 1 < code.length) { buf += code[i + 1]; i++; continue; }
+        if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') { inStr = c; buf += c; continue; }
+      if (c === ';' || c === '\n') {
+        const t = buf.trim();
+        if (t) out.push(t);
+        buf = '';
+        continue;
+      }
+      buf += c;
+    }
+    const tail = buf.trim();
+    if (tail) out.push(tail);
+    return out;
+  }
+
+  /** 异步表达式求值：识别 java.xxx(...) 调用，否则交给同步本地求值器 */
+  private async evalExprAsync(expr: string, vars: Record<string, Object>): Promise<Object | undefined> {
+    const e = expr.trim().replace(/;$/, '').trim();
+    if (!e) return '';
+
+    // java.ajax(arg) / java.connect(arg) / java.getString(arg)
+    const ajaxMatch = e.match(/^java\.(ajax|connect|getString)\(([^)]*)\)$/);
+    if (ajaxMatch) {
+      const argExpr = ajaxMatch[2].trim();
+      const urlVal = argExpr ? await this.evalExprAsync(argExpr, vars) : '';
+      const url = urlVal === undefined ? '' : String(urlVal);
+      if (!url) return '';
+      const javaBridge = getJavaBridge();
+      try {
+        return await javaBridge.ajax(url);
+      } catch {
+        return '';
+      }
+    }
+
+    // java.put(k, v)
+    const putMatch = e.match(/^java\.put\(([^,]+),\s*(.+)\)$/);
+    if (putMatch) {
+      const keyVal = await this.evalExprAsync(putMatch[1], vars);
+      const valVal = await this.evalExprAsync(putMatch[2], vars);
+      if (keyVal === undefined || valVal === undefined) return undefined;
+      const javaBridge = getJavaBridge();
+      javaBridge.put(String(keyVal), String(valVal));
+      return String(valVal);
+    }
+
+    // java.get(k)
+    const getMatch = e.match(/^java\.get\((.+)\)$/);
+    if (getMatch) {
+      const keyVal = await this.evalExprAsync(getMatch[1], vars);
+      if (keyVal === undefined) return undefined;
+      const javaBridge = getJavaBridge();
+      return javaBridge.get(String(keyVal));
+    }
+
+    // java.log(arg)
+    const logMatch = e.match(/^java\.log\((.+)\)$/);
+    if (logMatch) {
+      const v = await this.evalExprAsync(logMatch[1], vars);
+      if (v !== undefined) {
+        const javaBridge = getJavaBridge();
+        javaBridge.log(String(v));
+      }
+      return '';
+    }
+
+    // a + b + c 拼接：先尝试 async 处理，因为单段可能也是 java.ajax 调用
+    if (e.includes('+') && !/^['"`]/.test(e)) {
+      const parts = this.splitTopLevelPlus(e);
+      if (parts.length > 1) {
+        let acc = '';
+        for (const p of parts) {
+          const v = await this.evalExprAsync(p.trim(), vars);
+          if (v === undefined) return undefined;
+          acc += String(v);
+        }
+        return acc;
+      }
+    }
+
+    // 普通同步表达式
+    const sync = this.tryLocalEval(e, vars);
+    return sync;
+  }
+
+  /** 按顶层 + 切分（忽略字符串、括号内的 +） */
+  private splitTopLevelPlus(expr: string): string[] {
+    const out: string[] = [];
+    let buf = '';
+    let depth = 0;
+    let inStr: string | null = null;
+    for (let i = 0; i < expr.length; i++) {
+      const c = expr[i];
+      if (inStr) {
+        buf += c;
+        if (c === '\\' && i + 1 < expr.length) { buf += expr[i + 1]; i++; continue; }
+        if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') { inStr = c; buf += c; continue; }
+      if (c === '(' || c === '[') { depth++; buf += c; continue; }
+      if (c === ')' || c === ']') { depth--; buf += c; continue; }
+      if (c === '+' && depth === 0) {
+        out.push(buf);
+        buf = '';
+        continue;
+      }
+      buf += c;
+    }
+    if (buf.trim()) out.push(buf);
+    return out;
   }
 
   private tryLocalEvalRelaxed(code: string, ctx: Record<string, Object>): Object | null {
@@ -359,6 +725,12 @@ export class JSExecutor {
 
   private evalStringMethod(str: string, method: string, argsStr?: string): Object | undefined {
     const args = argsStr ? this.parseArgs(argsStr) : [];
+    const toRegex = (v: Object): RegExp | null => {
+      if (typeof v !== 'string') return null;
+      const m = (v as string).match(/^\/(.+)\/([gimsuy]*)$/);
+      if (!m) return null;
+      try { return new RegExp(m[1], m[2]); } catch { return null; }
+    };
     switch (method) {
       case 'trim': return str.trim();
       case 'trimStart': case 'trimLeft': return str.trimStart();
@@ -366,11 +738,26 @@ export class JSExecutor {
       case 'toLowerCase': return str.toLowerCase();
       case 'toUpperCase': return str.toUpperCase();
       case 'length': return str.length;
-      case 'split': return args.length > 0 ? str.split(String(args[0])) : [str];
-      case 'replace':
-        return args.length >= 2 ? str.replace(String(args[0]), String(args[1])) : str;
-      case 'replaceAll':
-        return args.length >= 2 ? str.split(String(args[0])).join(String(args[1])) : str;
+      case 'split': {
+        if (args.length === 0) return [str];
+        const re = toRegex(args[0]);
+        return re ? str.split(re) : str.split(String(args[0]));
+      }
+      case 'replace': {
+        if (args.length < 2) return str;
+        const re = toRegex(args[0]);
+        return re ? str.replace(re, String(args[1])) : str.replace(String(args[0]), String(args[1]));
+      }
+      case 'replaceAll': {
+        if (args.length < 2) return str;
+        const re = toRegex(args[0]);
+        if (re) {
+          // 强制 g 标志
+          const flags = re.flags.includes('g') ? re.flags : (re.flags + 'g');
+          return str.replace(new RegExp(re.source, flags), String(args[1]));
+        }
+        return str.split(String(args[0])).join(String(args[1]));
+      }
       case 'substring': case 'slice': {
         const start = args.length > 0 ? Number(args[0]) : 0;
         const end = args.length > 1 ? Number(args[1]) : undefined;
@@ -384,9 +771,11 @@ export class JSExecutor {
       case 'match': {
         if (args.length === 0) return undefined;
         try {
-          const regex = new RegExp(String(args[0]));
-          const m = str.match(regex);
-          return m ? m[0] : undefined;
+          const re = toRegex(args[0]) ?? new RegExp(String(args[0]));
+          const m = str.match(re);
+          if (!m) return undefined;
+          // 全局匹配返回数组，非全局返回首个匹配
+          return re.flags.includes('g') ? Array.from(m) as Object[] : m[0];
         } catch { return undefined; }
       }
       case 'charAt': return args.length > 0 ? str.charAt(Number(args[0])) : '';
@@ -418,10 +807,12 @@ export class JSExecutor {
     const args: Object[] = [];
     let current = '';
     let inStr: string | null = null;
+    let inRegex = false;
     let depth = 0;
 
     for (let i = 0; i < argsStr.length; i++) {
       const c = argsStr[i];
+      const prev = i > 0 ? argsStr[i - 1] : '';
       if (inStr) {
         if (c === inStr && argsStr[i - 1] !== '\\') {
           current += c;
@@ -429,9 +820,26 @@ export class JSExecutor {
         } else {
           current += c;
         }
+      } else if (inRegex) {
+        current += c;
+        if (c === '\\' && i + 1 < argsStr.length) { current += argsStr[i + 1]; i++; continue; }
+        if (c === '/') {
+          // 吃掉 flags
+          let k = i + 1;
+          while (k < argsStr.length && /[gimsuy]/.test(argsStr[k])) {
+            current += argsStr[k];
+            k++;
+          }
+          i = k - 1;
+          inRegex = false;
+        }
       } else if (c === '"' || c === "'") {
         current += c;
         inStr = c;
+      } else if (c === '/' && (current.trim() === '' || prev === ',' || prev === '(')) {
+        // 正则字面量起点：在 arg 起始位置
+        current += c;
+        inRegex = true;
       } else if (c === '(' || c === '[') {
         current += c;
         depth++;
@@ -456,6 +864,8 @@ export class JSExecutor {
         (val.startsWith('"') && val.endsWith('"'))) {
       return val.substring(1, val.length - 1);
     }
+    // 保留 /regex/flags 字面量原样（evalStringMethod 会识别）
+    if (/^\/.+\/[gimsuy]*$/.test(val)) return val;
     if (val === 'true') return true;
     if (val === 'false') return false;
     if (val === 'null' || val === 'undefined') return '';

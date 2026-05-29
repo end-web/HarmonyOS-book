@@ -160,7 +160,26 @@ export class AnalyzeRule {
     }
     const resultStr = AnalyzeRule.safeStringify(result);
     if (!resultStr && ruleList.some((sr) => sr.replaceRegex)) return '';
-    return resultStr || null;
+    if (!resultStr) return null;
+    return AnalyzeRule.unescapeHtml(resultStr);
+  }
+
+  /** HTML 实体解转义：&amp; &lt; &gt; &quot; &apos; &nbsp; &#39; &#x2F; 等 */
+  static unescapeHtml(s: string): string {
+    if (!s || s.indexOf('&') < 0) return s;
+    return s
+      .replace(/&#x([0-9a-fA-F]+);/g, (_m: string, hex: string): string => {
+        try { return String.fromCodePoint(parseInt(hex, 16)); } catch { return _m; }
+      })
+      .replace(/&#(\d+);/g, (_m: string, dec: string): string => {
+        try { return String.fromCodePoint(parseInt(dec, 10)); } catch { return _m; }
+      })
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
   }
 
   /** 安全地把任意值转成字符串：原始类型直接转，普通对象走 JSON.stringify,
@@ -555,6 +574,8 @@ export class AnalyzeRule {
       ctx['result'] = result;
       ctx['baseUrl'] = this.context.baseUrl || '';
       ctx['src'] = this.content;
+      if (this.context.book) ctx['book'] = this.context.book;
+      if (this.context.chapter) ctx['chapter'] = this.context.chapter;
       if (this.context.variables) {
         const vars = this.context.variables;
         for (const k of Object.keys(vars)) ctx[k] = vars[k];
@@ -607,16 +628,35 @@ export class AnalyzeRule {
 
   private applyReplace(str: string, sr: SourceRule): string {
     if (!sr.replaceRegex) return str;
+    // 处理 replacement 中的 \n / \r / \t / \\ 转义
+    const replacement = AnalyzeRule.unescapeReplacement(sr.replacement);
     try {
       if (sr.replaceFirst) {
         const regex = new RegExp(sr.replaceRegex);
-        return str.replace(regex, sr.replacement);
+        return str.replace(regex, replacement);
       }
       const regex = new RegExp(sr.replaceRegex, 'g');
-      return str.replace(regex, sr.replacement);
+      return str.replace(regex, replacement);
     } catch {
       return str;
     }
+  }
+
+  private static unescapeReplacement(s: string): string {
+    if (!s || s.indexOf('\\') < 0) return s;
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charAt(i);
+      if (c === '\\' && i + 1 < s.length) {
+        const n = s.charAt(i + 1);
+        if (n === 'n') { out += '\n'; i++; continue; }
+        if (n === 'r') { out += '\r'; i++; continue; }
+        if (n === 't') { out += '\t'; i++; continue; }
+        if (n === '\\') { out += '\\'; i++; continue; }
+      }
+      out += c;
+    }
+    return out;
   }
 
   // ──────────────────── 执行分发 ────────────────────
@@ -624,29 +664,48 @@ export class AnalyzeRule {
   private async executeByMode(rule: string, mode: RuleMode, result: Object): Promise<Object | null> {
     switch (mode) {
       case RuleMode.Json:
-        return this.executeJson(rule);
+        return this.executeJson(rule, result);
       case RuleMode.Js:
         return this.executeJs(rule, result);
       case RuleMode.Default:
-        return this.executeDefault(rule);
+        return this.executeDefault(rule, result);
       case RuleMode.XPath:
-        return this.executeXPath(rule);
+        return this.executeXPath(rule, result);
       case RuleMode.Regex:
-        return this.executeRegex(rule);
+        return this.executeRegex(rule, result);
       default:
         return null;
     }
   }
 
-  private executeJson(rule: string): Object | null {
+  /** 链式规则中，每段的输入可能是上一段产出的字符串/数组/对象，按各 mode 期望统一成可消费形式 */
+  private resolveChainSource(chainResult: Object): Object {
+    // 链未启动（result === this.content）或为空对象，回落到原始 content
+    if (chainResult === this.content) return this.content;
+    if (chainResult === null || chainResult === undefined) return this.content;
+    // 数组多结果时，让 CSS/XPath/JSON 等针对每个元素取值——这里先取首元素或拼接
+    if (Array.isArray(chainResult)) {
+      const arr = chainResult as Object[];
+      if (arr.length === 0) return this.content;
+      // 全字符串数组按换行拼接（兼容 HTML 片段连续解析）
+      if (arr.every((x: Object) => typeof x === 'string')) {
+        return (arr as string[]).join('\n');
+      }
+      return arr[0];
+    }
+    return chainResult;
+  }
+
+  private executeJson(rule: string, chainResult: Object): Object | null {
     let cleanRule = rule;
     const lower = cleanRule.toLowerCase();
     if (lower.startsWith('json:')) cleanRule = cleanRule.substring(5);
     if (lower.startsWith('@json:')) cleanRule = cleanRule.substring(6);
 
     try {
-      const data: Object = typeof this.content === 'string'
-        ? JSON.parse(this.content) as Object : this.content;
+      const source = this.resolveChainSource(chainResult);
+      const data: Object = typeof source === 'string'
+        ? JSON.parse(source) as Object : source;
       const result = jsonPath(data, cleanRule);
       if (!result || (Array.isArray(result) && result.length === 0)) return null;
       if (Array.isArray(result) && result.length === 1) return result[0];
@@ -694,9 +753,10 @@ export class AnalyzeRule {
     }
   }
 
-  private executeDefault(rule: string): Object | null {
-    const html = typeof this.content === 'string'
-      ? this.content : JSON.stringify(this.content);
+  private executeDefault(rule: string, chainResult: Object): Object | null {
+    const source = this.resolveChainSource(chainResult);
+    const html = typeof source === 'string'
+      ? source : JSON.stringify(source);
 
     const root = SimpleCSSSelector.parseHTML(html);
 
@@ -765,16 +825,18 @@ export class AnalyzeRule {
     }
   }
 
-  private executeRegex(rule: string): Object | null {
-    const content = String(this.content);
+  private executeRegex(rule: string, chainResult: Object): Object | null {
+    const source = this.resolveChainSource(chainResult);
+    const content = typeof source === 'string' ? source : JSON.stringify(source);
     const results = AnalyzeByRegex.getStringList(content, rule);
     if (results.length === 0) return null;
     return results.length === 1 ? results[0] : results;
   }
 
-  private executeXPath(rule: string): Object | null {
-    const html = typeof this.content === 'string'
-      ? this.content : JSON.stringify(this.content);
+  private executeXPath(rule: string, chainResult: Object): Object | null {
+    const source = this.resolveChainSource(chainResult);
+    const html = typeof source === 'string'
+      ? source : JSON.stringify(source);
     const root = SimpleCSSSelector.parseHTML(html);
     const list = SimpleXPath.evaluateStringList(root, rule);
     if (list.length === 0) return null;

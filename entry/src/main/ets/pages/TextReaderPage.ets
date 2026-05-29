@@ -4,7 +4,9 @@ import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { vibrator } from '@kit.SensorServiceKit';
 import { mediaquery, AppStorageV2 } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius } from '../theme/Theme';
+import { PageFlipNodeController, DrawPosition, DrawState, TIMER_DURATION } from '../utils/PageNodeController';
 import { Book, Chapter } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { ReadingState, READING_STATE_KEY } from '../model/PlayerState';
@@ -47,9 +49,9 @@ const FONT_DEFAULT = 18;
 const CHAPTER_GROUP_SIZE = 1000;
 
 const FLIP_MODE_OPTIONS: FlipModeOption[] = [
-  { label: '滚动', icon: $r('sys.symbol.text_alignleft') }
-  // { label: '翻页', icon: $r('sys.symbol.arrow_left_arrow_right') },
-  // { label: '仿真', icon: $r('sys.symbol.book') }
+  { label: '滚动', icon: $r('sys.symbol.text_alignleft') },
+  { label: '翻页', icon: $r('sys.symbol.arrow_left_arrow_right') },
+  { label: '仿真', icon: $r('sys.symbol.book') }
 ];
 
 // mode -1=跟随系统  0=纸白  1=护眼  2=夜间
@@ -113,6 +115,19 @@ export struct TextReaderPage {
   @Local bookmarks: ReaderBookmark[] = [];
   @Local sysDark: boolean = false;
 
+  // 仿真翻页相关
+  @Local emulationFlipVisible: boolean = false;
+  @Local emulationPagePixelMap: image.PixelMap | null = null;
+  private pageFlipController: PageFlipNodeController = new PageFlipNodeController();
+  private emulationDrawPosition: DrawPosition = DrawPosition.DP_NONE;
+  private emulationGestureStartX: number = 0;
+  private emulationGestureStartY: number = 0;
+  private emulationLastX: number = 0;
+  private emulationIsDrawing: boolean = false;
+  private emulationPageMoveForward: number = 0;
+  private emulationGestureMoveForward: number = 0;
+  private emulationTimer: number = -1;
+
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private scroller: Scroller = new Scroller();
   private chapterListScroller: Scroller = new Scroller();
@@ -158,6 +173,7 @@ export struct TextReaderPage {
     if (this.hudTimer >= 0) clearTimeout(this.hudTimer);
     if (this.toastTimer >= 0) clearTimeout(this.toastTimer);
     if (this.scrollHideTimer >= 0) clearTimeout(this.scrollHideTimer);
+    if (this.emulationTimer >= 0) clearInterval(this.emulationTimer);
     WindowUtils.setStatusBarLight(false);
   }
 
@@ -766,9 +782,69 @@ export struct TextReaderPage {
   buildContent() {
     if (this.flipMode === 0) {
       this.buildScrollContent()
-    } else {
+    } else if (this.flipMode === 1) {
       this.buildPageContent()
+    } else {
+      this.buildEmulationFlipContent()
     }
+  }
+
+  @Builder
+  buildEmulationFlipContent() {
+    Stack() {
+      // 底层：下一页
+      this.buildSinglePage(this.currentPage + 1, false)
+
+      // 中间层：当前页
+      Column() {
+        this.buildSinglePage(this.currentPage, true)
+      }
+      .width('100%')
+      .height('100%')
+      .id('middlePage')
+      .visibility(this.emulationFlipVisible ? Visibility.Hidden : Visibility.Visible)
+
+      // 上层：仿真翻页绘制层
+      NodeContainer(this.pageFlipController)
+        .width('100%')
+        .height('100%')
+        .visibility(this.emulationFlipVisible ? Visibility.Visible : Visibility.Hidden)
+    }
+    .alignContent(Alignment.TopStart)
+    .width('100%')
+    .height('100%')
+    .clip(true)
+    .backgroundColor(this.resolvedBgOption().bg)
+    .onAreaChange((_o, n) => {
+      this.contentAreaHeight = n.height as number;
+      this.pageWidth = n.width as number;
+      this.refreshPages();
+    })
+    .gesture(
+      GestureGroup(GestureMode.Exclusive,
+        TapGesture({ count: 2 })
+          .onAction(() => { this.toggleBookmarkAtCurrent(); }),
+        TapGesture({ count: 1 })
+          .onAction(() => {
+            animateTo({ duration: AppMotion.Base, curve: Curve.Smooth }, () => {
+              this.toolbarVisible = !this.toolbarVisible;
+            });
+          }),
+        PanGesture({ fingers: 1, distance: 5 })
+          .onActionStart((evt: GestureEvent) => {
+            this.startEmulationFlip(evt.fingerList[0].localX, evt.fingerList[0].localY);
+          })
+          .onActionUpdate((evt: GestureEvent) => {
+            this.updateEmulationFlip(evt.fingerList[0].localX, evt.fingerList[0].localY);
+          })
+          .onActionEnd(() => {
+            this.endEmulationFlip();
+          })
+          .onActionCancel(() => {
+            this.endEmulationFlip();
+          })
+      )
+    )
   }
 
   @Builder
@@ -1058,76 +1134,247 @@ export struct TextReaderPage {
     });
   }
 
+  // ============ 仿真翻页 ============
+
+  private startEmulationFlip(x: number, y: number): void {
+    if (this.flipping) return;
+    this.emulationGestureStartX = x;
+    this.emulationGestureStartY = y;
+    this.emulationLastX = x;
+
+    // 根据纵坐标判断触摸区域
+    const height = this.contentAreaHeight;
+    if (y < height / 3) {
+      this.emulationDrawPosition = DrawPosition.DP_TOP;
+    } else if (y > height * 2 / 3) {
+      this.emulationDrawPosition = DrawPosition.DP_BOTTOM;
+    } else {
+      this.emulationDrawPosition = DrawPosition.DP_MIDDLE;
+    }
+  }
+
+  private updateEmulationFlip(x: number, y: number): void {
+    if (this.flipping) return;
+
+    // 判断滑动方向
+    if (!this.emulationIsDrawing) {
+      if (x > this.emulationGestureStartX) {
+        // 向右滑，翻到上一页
+        this.emulationPageMoveForward = 1;
+        if (this.currentPage <= 0 && this.currentIndex <= 0) {
+          return;
+        }
+      } else {
+        // 向左滑，翻到下一页
+        this.emulationPageMoveForward = -1;
+        if (this.currentPage >= this.pageCount - 1 && this.currentIndex >= (this.book?.chapters.length || 1) - 1) {
+          return;
+        }
+      }
+
+      // 截图当前页面
+      this.captureCurrentPage();
+      this.emulationIsDrawing = true;
+      this.emulationFlipVisible = true;
+    }
+
+    // 更新手势方向
+    if (x > this.emulationLastX) {
+      this.emulationGestureMoveForward = 1;
+    } else if (x < this.emulationLastX) {
+      this.emulationGestureMoveForward = -1;
+    }
+    this.emulationLastX = x;
+
+    // 更新绘制参数
+    this.pageFlipController.updateDrawParams(
+      this.pageWidth,
+      this.contentAreaHeight,
+      x,
+      y,
+      this.emulationDrawPosition,
+      DrawState.DS_MOVING,
+      this.emulationPagePixelMap
+    );
+  }
+
+  private endEmulationFlip(): void {
+    if (!this.emulationIsDrawing) return;
+
+    // 执行自动翻页动画
+    this.autoFlipEmulationPage();
+    this.emulationIsDrawing = false;
+  }
+
+  private captureCurrentPage(): void {
+    try {
+      // 使用 componentSnapshot 截图
+      const snapshot = this.getUIContext().getComponentSnapshot();
+      if (this.emulationPageMoveForward < 0) {
+        // 向左翻，截图当前页
+        this.emulationPagePixelMap = snapshot.getSync('middlePage');
+      } else {
+        // 向右翻，截图上一页
+        this.emulationPagePixelMap = snapshot.getSync('leftPage');
+      }
+    } catch (e) {
+      const err = e as BusinessError;
+      hilog.error(DOMAIN, TAG, `captureCurrentPage failed: ${err.message}`);
+    }
+  }
+
+  private autoFlipEmulationPage(): void {
+    const num = 30;
+    const startX = this.emulationLastX;
+    const startY = this.emulationGestureStartY;
+
+    if (this.emulationGestureMoveForward < 0) {
+      // 向左翻，自动完成
+      const xDiff = (0 - startX) / num;
+      const yDiff = 0;
+
+      this.emulationTimer = setInterval(() => {
+        const newX = this.emulationLastX + xDiff;
+        const newY = startY;
+
+        if (newX <= 0) {
+          this.finishEmulationGesture();
+        } else {
+          this.emulationLastX = newX;
+          this.pageFlipController.updateDrawParams(
+            this.pageWidth,
+            this.contentAreaHeight,
+            newX,
+            newY,
+            this.emulationDrawPosition,
+            DrawState.DS_RELEASE,
+            this.emulationPagePixelMap
+          );
+        }
+      }, TIMER_DURATION);
+    } else {
+      // 向右翻，自动还原
+      const xDiff = (this.pageWidth - startX) / num;
+
+      this.emulationTimer = setInterval(() => {
+        const newX = this.emulationLastX + xDiff;
+
+        if (newX >= this.pageWidth) {
+          this.finishEmulationGesture();
+        } else {
+          this.emulationLastX = newX;
+          this.pageFlipController.updateDrawParams(
+            this.pageWidth,
+            this.contentAreaHeight,
+            newX,
+            startY,
+            this.emulationDrawPosition,
+            DrawState.DS_RELEASE,
+            this.emulationPagePixelMap
+          );
+        }
+      }, TIMER_DURATION);
+    }
+  }
+
+  private finishEmulationGesture(): void {
+    if (this.emulationTimer >= 0) {
+      clearInterval(this.emulationTimer);
+      this.emulationTimer = -1;
+    }
+
+    // 更新页面
+    if (this.emulationPageMoveForward < 0 && this.emulationGestureMoveForward < 0) {
+      // 向左翻页成功
+      this.commitFlip(-1);
+    } else if (this.emulationPageMoveForward > 0 && this.emulationGestureMoveForward > 0) {
+      // 向右翻页成功
+      this.commitFlip(1);
+    }
+
+    // 重置状态
+    this.emulationFlipVisible = false;
+    this.emulationIsDrawing = false;
+    this.emulationPageMoveForward = 0;
+    this.emulationGestureMoveForward = 0;
+    this.emulationLastX = 0;
+    this.emulationPagePixelMap = null;
+    this.pageFlipController.reset();
+  }
+
   // 单击中间 toggle 工具栏 / 双击书签 / 捏合字号 / 左侧上下滑亮度
   @Builder
   buildTapZones() {
-    Row() {
-      if (this.flipMode > 0) {
-        // 左侧点击翻上页
-        Column()
-          .width('30%')
-          .height('100%')
-          .onClick(() => this.flipByTap(1))
-        // 中间 toggle 工具栏
-        Column()
-          .width('40%')
-          .height('100%')
-          .gesture(
-            GestureGroup(GestureMode.Exclusive,
-              TapGesture({ count: 2 }).onAction(() => { this.toggleBookmarkAtCurrent(); }),
-              TapGesture({ count: 1 }).onAction(() => {
-                animateTo({ duration: AppMotion.Base, curve: Curve.Smooth }, () => {
-                  this.toolbarVisible = !this.toolbarVisible;
-                });
-              })
+    // 仿真翻页模式下，手势由 buildEmulationFlipContent 处理
+    if (this.flipMode !== 2) {
+      Row() {
+        if (this.flipMode === 1) {
+          // 左侧点击翻上页
+          Column()
+            .width('30%')
+            .height('100%')
+            .onClick(() => this.flipByTap(1))
+          // 中间 toggle 工具栏
+          Column()
+            .width('40%')
+            .height('100%')
+            .gesture(
+              GestureGroup(GestureMode.Exclusive,
+                TapGesture({ count: 2 }).onAction(() => { this.toggleBookmarkAtCurrent(); }),
+                TapGesture({ count: 1 }).onAction(() => {
+                  animateTo({ duration: AppMotion.Base, curve: Curve.Smooth }, () => {
+                    this.toolbarVisible = !this.toolbarVisible;
+                  });
+                })
+              )
             )
-          )
-        // 右侧点击翻下页
-        Column()
-          .width('30%')
-          .height('100%')
-          .onClick(() => this.flipByTap(-1))
-      } else {
-        Column()
-          .width('100%')
-          .height('100%')
+          // 右侧点击翻下页
+          Column()
+            .width('30%')
+            .height('100%')
+            .onClick(() => this.flipByTap(-1))
+        } else {
+          Column()
+            .width('100%')
+            .height('100%')
+        }
       }
-    }
-    .width('100%')
-    .height('100%')
-    .hitTestBehavior(HitTestMode.Transparent)
-    .gesture(
-      GestureGroup(GestureMode.Exclusive,
-        TapGesture({ count: 2 }).onAction(() => { this.toggleBookmarkAtCurrent(); }),
-        TapGesture({ count: 1 }).onAction(() => {
-          if (this.flipMode > 0) return;
-          animateTo({ duration: AppMotion.Base, curve: Curve.Smooth }, () => {
-            this.toolbarVisible = !this.toolbarVisible;
-          });
-        })
+      .width('100%')
+      .height('100%')
+      .hitTestBehavior(HitTestMode.Transparent)
+      .gesture(
+        GestureGroup(GestureMode.Exclusive,
+          TapGesture({ count: 2 }).onAction(() => { this.toggleBookmarkAtCurrent(); }),
+          TapGesture({ count: 1 }).onAction(() => {
+            if (this.flipMode > 0) return;
+            animateTo({ duration: AppMotion.Base, curve: Curve.Smooth }, () => {
+              this.toolbarVisible = !this.toolbarVisible;
+            });
+          })
+        )
       )
-    )
-    .gesture(
-      PanGesture({ direction: PanDirection.Horizontal, fingers: 1, distance: 10 })
-        .onActionStart((evt: GestureEvent) => {
-          if (this.flipMode === 0 || this.flipping) return;
-          const dir = evt.offsetX < 0 ? -1 : 1;
-          this.startFlipDrag(dir);
-        })
-        .onActionUpdate((evt: GestureEvent) => {
-          if (this.flipMode === 0 || this.dragDirection === 0) return;
-          this.updateFlipDrag(evt.offsetX);
-        })
-        .onActionEnd((evt: GestureEvent) => {
-          if (this.flipMode === 0 || this.dragDirection === 0) return;
-          this.endFlipDrag(evt.velocityX);
-        })
-        .onActionCancel(() => {
-          if (this.dragDirection !== 0) {
-            this.endFlipDrag(0);
-          }
-        })
-    )
+      .gesture(
+        PanGesture({ direction: PanDirection.Horizontal, fingers: 1, distance: 10 })
+          .onActionStart((evt: GestureEvent) => {
+            if (this.flipMode !== 1 || this.flipping) return;
+            const dir = evt.offsetX < 0 ? -1 : 1;
+            this.startFlipDrag(dir);
+          })
+          .onActionUpdate((evt: GestureEvent) => {
+            if (this.flipMode !== 1 || this.dragDirection === 0) return;
+            this.updateFlipDrag(evt.offsetX);
+          })
+          .onActionEnd((evt: GestureEvent) => {
+            if (this.flipMode !== 1 || this.dragDirection === 0) return;
+            this.endFlipDrag(evt.velocityX);
+          })
+          .onActionCancel(() => {
+            if (this.dragDirection !== 0) {
+              this.endFlipDrag(0);
+            }
+          })
+      )
+    }
   }
 
   @Builder

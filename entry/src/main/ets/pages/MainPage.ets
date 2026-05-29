@@ -15,6 +15,7 @@ import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
+import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 
 @ComponentV2
 export struct MainPage {
@@ -92,7 +93,8 @@ export struct MainPage {
   }
 
   build() {
-    HdsTabs({ controller: this.tabController }) {
+    Stack() {
+      HdsTabs({ controller: this.tabController }) {
       TabContent() {
         HomePage({ onBookTap: (id: string) => this.navigateToDetail(id) })
       }
@@ -142,6 +144,12 @@ export struct MainPage {
     .height('100%')
     .backgroundColor($r('sys.color.background_primary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+      // WebView JS 引擎（不可见，用于执行复杂书源 JS 规则）
+      WebViewJSEngineHost()
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder

@@ -41,6 +41,7 @@ export interface ParsedSelector {
   pseudo?: string; // first-child / last-child / nth-child(n) / nth-last-child(n)
   pseudoArg?: number;
   childrenOnly?: boolean; // children 关键字
+  not?: string; // :not(子选择器原文)
 }
 
 interface SplitIndexerResult {
@@ -321,6 +322,24 @@ function parseSelector(selector: string): ParsedSelector {
     remaining = remaining.replace(containsMatch[0], '');
   }
 
+  // :not(子选择器) — 提取子选择器原文以便后续递归 match
+  const notIdx = remaining.toLowerCase().indexOf(':not(');
+  if (notIdx >= 0) {
+    let depth = 0;
+    let j = notIdx + 4; // 指向 (
+    while (j < remaining.length) {
+      if (remaining[j] === '(') depth++;
+      else if (remaining[j] === ')') {
+        depth--;
+        if (depth === 0) { j++; break; }
+      }
+      j++;
+    }
+    const inner = remaining.substring(notIdx + 5, j - 1);
+    result.not = inner;
+    remaining = remaining.substring(0, notIdx) + remaining.substring(j);
+  }
+
   const nthMatch = remaining.match(/:nth-child\((\d+)\)/);
   if (nthMatch) {
     result.pseudo = 'nth-child';
@@ -423,6 +442,14 @@ function matchesSelector(element: HTMLElement, parsed: ParsedSelector): boolean 
       if (siblings.length - idx !== parsed.pseudoArg) return false;
     }
   }
+  if (parsed.not) {
+    // :not(sub) — sub 可能是逗号分隔的多组，任一匹配即排除
+    const subParts = parsed.not.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    for (const sub of subParts) {
+      const subParsed = parseSelector(sub);
+      if (matchesSelector(element, subParsed)) return false;
+    }
+  }
   return true;
 }
 
@@ -456,12 +483,12 @@ function queryDirectChildren(root: HTMLElement, selector: string): HTMLElement[]
 
 function parseSegments(selector: string): SegmentSpec[] {
   const segs: SegmentSpec[] = [];
-  // 用空格 / > 切分,保留组合器
+  // 用空格 / > / + / ~ 切分,保留组合器
   const tokens: string[] = [];
   const combinators: string[] = [];
   let buf = '';
   let i = 0;
-  // 同时要把 [..] 的整体保留(防止内部空格被切)
+  // 同时要把 [..] 和 :not(...) 的整体保留(防止内部空格被切)
   while (i < selector.length) {
     const ch = selector[i];
     if (ch === '[') {
@@ -472,16 +499,32 @@ function parseSegments(selector: string): SegmentSpec[] {
         continue;
       }
     }
-    if (ch === '>') {
+    // :not(...) 整段保留，括号可能嵌套
+    if (ch === ':' && selector.substring(i, i + 5).toLowerCase() === ':not(') {
+      let depth = 0;
+      let j = i;
+      while (j < selector.length) {
+        if (selector[j] === '(') depth++;
+        else if (selector[j] === ')') {
+          depth--;
+          if (depth === 0) { j++; break; }
+        }
+        j++;
+      }
+      buf += selector.substring(i, j);
+      i = j;
+      continue;
+    }
+    if (ch === '>' || ch === '+' || ch === '~') {
       if (buf.trim()) tokens.push(buf.trim());
-      combinators.push('>');
+      combinators.push(ch);
       buf = '';
       i++;
       while (i < selector.length && selector[i] === ' ') i++;
     } else if (ch === ' ') {
       let j = i + 1;
       while (j < selector.length && selector[j] === ' ') j++;
-      if (j < selector.length && selector[j] === '>') {
+      if (j < selector.length && (selector[j] === '>' || selector[j] === '+' || selector[j] === '~')) {
         i = j;
       } else {
         if (buf.trim()) tokens.push(buf.trim());
@@ -678,6 +721,29 @@ export class SimpleCSSSelector {
         // children 关键字:取所有当前元素的直接子元素
         for (const el of elements) {
           for (const c of el.children) next.push(c);
+        }
+      } else if (seg.combinator === '+') {
+        // 紧邻兄弟：取每个 element 的下一个同级元素，符合 baseSelector
+        const parsed = parseSelector(seg.baseSelector);
+        for (const el of elements) {
+          if (!el.parent) continue;
+          const sibs = el.parent.children;
+          const idx = sibs.indexOf(el);
+          if (idx < 0 || idx + 1 >= sibs.length) continue;
+          const sib = sibs[idx + 1];
+          if (matchesSelector(sib, parsed)) next.push(sib);
+        }
+      } else if (seg.combinator === '~') {
+        // 通用兄弟：取每个 element 的所有后续同级元素
+        const parsed = parseSelector(seg.baseSelector);
+        for (const el of elements) {
+          if (!el.parent) continue;
+          const sibs = el.parent.children;
+          const idx = sibs.indexOf(el);
+          if (idx < 0) continue;
+          for (let s = idx + 1; s < sibs.length; s++) {
+            if (matchesSelector(sibs[s], parsed)) next.push(sibs[s]);
+          }
         }
       } else {
         for (const element of elements) {
