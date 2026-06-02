@@ -160,7 +160,7 @@ export struct MiniPlayer {
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 0, right: AppSpace.Md })
+        .padding({ left: AppSpace.Xs, right: AppSpace.Md })
       }
     }
   }

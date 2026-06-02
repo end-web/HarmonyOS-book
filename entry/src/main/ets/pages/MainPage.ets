@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
-import { HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
+import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { AppRadius, AppSpace } from '../theme/Theme';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
@@ -21,32 +21,25 @@ import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtrac
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
- * 监听者(MainPage)收到后做"已在播这本书 → 直接进 player 不打断"等判断,
- * 把 Home/Favorite/MiniPlayer/BookDetail 的点击行为统一。
  */
 export const EVT_NAVIGATE_TO_BOOK = 'app.navigate.to.book';
 
 export interface NavigateToBookPayload {
   bookId: string;
-  /** 调用方已知的 chapterId(可选,FavoritePage 知道历史时传) */
   chapterId?: string;
-  /** 调用方已知的恢复进度(可选,FavoritePage/BookDetailPage 传) */
   progressMs?: number;
-  /** 是否强制走详情(BookDetail 入口需要) */
   forceDetail?: boolean;
 }
 
-// 胶囊高度估算:HdsTabs 悬浮胶囊默认 ~60vp,MiniPlayer 胶囊取相近高度
-const FLOATING_TAB_HEIGHT: number = 60;
-const MINI_PLAYER_HEIGHT: number = 60;
-const FLOATING_GAP: number = 12; // 上下两排胶囊之间的垂直间距
-const FLOATING_BOTTOM: number = 4; // HdsTabs barBottomMargin（越小整体越贴底）
+const FLOATING_BOTTOM: number = 4;
 
 @ComponentV2
 export struct MainPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Local currentTab: number = 0;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+  /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
+  @Local miniBarCollapsed: boolean = false;
 
   private tabController: HdsTabsController = new HdsTabsController();
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -79,21 +72,12 @@ export struct MainPage {
     this.navigateToBook(bookId, chapterId, progressMs, forceDetail);
   }
 
-  /**
-   * 统一收口:决定点击书籍后走 player 还是 detail。
-   * - 强制 detail(BookDetailPage 入口): 进 detail
-   * - 已在播该书: 直接 push player(不带 chapter/progress,PlayerPage 复用 live state,不打断播放)
-   * - 有历史(caller 传了 chapterId): 直接 push player 带恢复参数
-   * - 否则: 进 detail 让用户挑章节
-   */
   private navigateToBook(bookId: string, chapterId: string, progressMs: number, forceDetail: boolean): void {
     if (forceDetail) {
       this.navStack.pushPathByName('detail', bookId);
       return;
     }
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      // 当前正在播这本书:直接进 player,什么 resume 参数都不传,
-      // PlayerPage 内部 tryResumePlay 看到 resumeChapterId='' 不会调 playChapterAndSeek
       this.navStack.pushPathByName('player', bookId);
       return;
     }
@@ -137,20 +121,17 @@ export struct MainPage {
     if (!last) return;
     const book = await DataService.getBookById(this.context, last.bookId);
     if (!book) return;
-    // 标题优先定位:连载更新/TOC 重排后旧 chapterId 会指向错误章节
     const idx = DataService.resolveChapterIndex(book, last.chapterId, last.chapterTitle);
     if (idx < 0) return;
     const chapter = book.chapters[idx];
     this.playerState.currentBook = book;
     this.playerState.currentChapter = chapter;
     this.playerState.progressMs = last.progressMs;
-    // prepared 之前用持久化时长撑住 Slider max,避免冷启动滑块停在 0
     const savedDuration = (last.durationMs && last.durationMs > 0)
       ? last.durationMs
       : (chapter.duration > 0 ? chapter.duration * 1000 : 0);
     this.playerState.durationMs = savedDuration;
     this.playerState.isPlaying = false;
-    // 让 PlaybackStore 也知道"当前书是这本"——MiniPlayer 点击就能直接进 player 不打断
     PlaybackStore.getInstance().update(
       book.id, chapter.id, idx,
       chapter.source?.value ?? '', false
@@ -170,13 +151,52 @@ export struct MainPage {
     });
   }
 
+  /**
+   * 迷你栏内容 Builder
+   * 由 HdsTabs 官方管理折叠/展开状态:
+   * - 折叠态(COLLAPSE): 显示一个圆形播放控制按钮
+   * - 展开态(EXPAND): 显示完整的 MiniPlayer
+   */
+  @Builder
+  miniBarBuilder(): void {
+    if (this.playerState.currentBook) {
+      MiniPlayer({
+        playerState: this.playerState,
+        collapsed: this.miniBarCollapsed,
+        onTapBody: () => {
+          // 折叠态:点击封面 → 展开迷你栏(不进播放器);展开态:进播放器
+          if (this.miniBarCollapsed) {
+            this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
+          } else {
+            this.navigateToPlayer();
+          }
+        },
+        onToggle: () => AudioService.getInstance().toggle(),
+        onNext: () => this.playNext(),
+        onExpand: () => {
+          if (this.miniBarCollapsed) {
+            this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
+          } else {
+            this.navigateToPlayer();
+          }
+        }
+      })
+    }
+  }
+
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       HdsTabs({ controller: this.tabController }) {
         TabContent() {
           HomePage({
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
-            onBlockMore: (block: HomeBlockSection) => this.openBlockMore(block)
+            onBlockMore: (block: HomeBlockSection) => this.openBlockMore(block),
+            onScrollDirection: (down: boolean) => {
+              // 向下滑动 → 折叠;向上/顶部 → 展开
+              this.tabController.applyMiniBarStyle(
+                down ? HdsBarStyle.COLLAPSE : HdsBarStyle.EXPAND
+              );
+            }
           })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.house'), $r('sys.symbol.house_fill'), '首页'))
@@ -210,41 +230,26 @@ export struct MainPage {
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-        }
+        },
+        // 智感握持:左右手自动跟手
+        adaptToHandedness: true,
+        // 迷你栏配置:HdsTabs 会自动管理折叠/展开
+        miniBar: this.playerState.currentBook ? {
+          miniBarBuilder: () => this.miniBarBuilder(),
+          miniBarStyle: HdsBarStyle.EXPAND, // 默认展开样式,滚动时系统自动折叠
+          enableMiniBarBackground: true,
+          enableMiniBarClip: true,
+          // 系统切换样式时同步给 MiniPlayer,让它切换内部布局(折叠态只显示封面)
+          onBarStyleChange: (miniStyle: HdsBarStyle) => {
+            this.miniBarCollapsed = miniStyle === HdsBarStyle.COLLAPSE;
+          }
+        } : undefined
       })
       .onChange((index: number) => { this.currentTab = index; })
       .width('100%')
       .height('100%')
       .backgroundColor($r('sys.color.background_primary'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-
-      if (this.playerState.currentBook) {
-        Row() {
-          MiniPlayer({
-            playerState: this.playerState,
-            collapsed: false,
-            onTapBody: () => this.navigateToPlayer(),
-            onToggle: () => AudioService.getInstance().toggle(),
-            onNext: () => this.playNext(),
-            onExpand: () => this.navigateToPlayer()
-          })
-        }
-        .height(MINI_PLAYER_HEIGHT)
-        .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-        .margin({
-          left: AppSpace.Lg,
-          right: AppSpace.Lg,
-          bottom: WindowUtils.getBottomSafeVp() + FLOATING_BOTTOM + FLOATING_TAB_HEIGHT + FLOATING_GAP
-        })
-        .borderRadius(AppRadius.Pill)
-        .backgroundEffect({
-          radius: 32,
-          saturation: 1.2,
-          brightness: 1.05,
-          color: '#26FFFFFF'
-        })
-        .shadow({ radius: 20, color: '#26000000', offsetY: 3 })
-      }
 
       WebViewJSEngineHost()
       WebViewAudioExtractorHost()
@@ -266,8 +271,6 @@ export struct MainPage {
 
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
-    // MiniPlayer 点击:走统一入口,PlaybackStore 命中→直接进 player 不带 chapter 参数,
-    // PlayerPage 会复用 live state,绝不触发 reset
     this.navigateToBook(this.playerState.currentBook.id, '', 0, false);
   }
 

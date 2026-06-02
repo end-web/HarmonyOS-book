@@ -45,6 +45,7 @@ export class AppFont {
 export class AppMotion {
   static readonly Fast: number = 150;
   static readonly Base: number = 250;
+  static readonly Standard: number = 250; // 标准动画时长（与 Base 相同）
   static readonly Slow: number = 350;
   static readonly Page: number = 380;
 }

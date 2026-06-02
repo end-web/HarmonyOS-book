@@ -37,6 +37,8 @@ export struct HomePage {
 
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
+  @Event onScrollerReady: (scroller: Scroller) => void = () => {};
+  @Event onScrollDirection: (down: boolean) => void = () => {};
 
   private contentScroller: Scroller = new Scroller();
   private audioDataSource: BookDataSource = new BookDataSource();
@@ -47,11 +49,17 @@ export struct HomePage {
     this.loadSourceCount();
     this.loadHomeBlocks();
   };
+  /** 上一次滚动位置,用于判断滚动方向(向下/向上) */
+  private lastScrollOffset: number = 0;
+  /** 当前是否处于折叠态,避免向同方向重复触发 applyMiniBarStyle */
+  private currentCollapsed: boolean = false;
 
   aboutToAppear(): void {
     this.loadSourceCount();
     this.loadHomeBlocks();
     emitter.on(EVT_SOURCES_CHANGED, this.sourcesChangedHandler);
+    // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
+    this.onScrollerReady(this.contentScroller);
   }
 
   aboutToDisappear(): void {
@@ -383,6 +391,27 @@ export struct HomePage {
       .height('100%')
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
+      .onScroll(() => {
+        // 阈值过滤抖动,只关心明确的方向
+        const offset = this.contentScroller.currentOffset().yOffset;
+        const delta = offset - this.lastScrollOffset;
+        const THRESHOLD = 6;
+
+        if (offset <= 0 || delta < -THRESHOLD) {
+          // 顶部 或 向上滑动 → 展开
+          if (this.currentCollapsed) {
+            this.currentCollapsed = false;
+            this.onScrollDirection(false);
+          }
+        } else if (delta > THRESHOLD) {
+          // 向下滑动 → 折叠
+          if (!this.currentCollapsed) {
+            this.currentCollapsed = true;
+            this.onScrollDirection(true);
+          }
+        }
+        this.lastScrollOffset = offset;
+      })
       .cachedCount(5)
       .clip(false) // 允许内容穿透到标题栏下方产生光感效果
     }
