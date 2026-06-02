@@ -1,7 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
-import { util } from '@kit.ArkTS';
 import { zlib, emitter } from '@kit.BasicServicesKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { media } from '@kit.MediaKit';
@@ -10,7 +9,6 @@ import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
-import { TextSplitter, ChapterText } from '../utils/TextSplitter';
 import { WindowUtils } from '../utils/WindowUtils';
 
 export const EVT_SWITCH_TAB = 'app.nav.switchTab';
@@ -23,7 +21,6 @@ interface PickedFile {
 }
 
 const AUDIO_EXTS: string[] = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac'];
-const NOVEL_EXTS: string[] = ['.txt', '.epub'];
 
 @ComponentV2
 export struct ImportPage {
@@ -46,7 +43,7 @@ export struct ImportPage {
     try {
       const opt = new picker.DocumentSelectOptions();
       opt.maxSelectNumber = 50;
-      opt.fileSuffixFilters = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.txt', '.epub', '.zip'];
+      opt.fileSuffixFilters = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.zip'];
       const dp = new picker.DocumentViewPicker(this.context);
       const uris = await dp.select(opt);
       if (!uris || uris.length === 0) return;
@@ -99,10 +96,6 @@ export struct ImportPage {
     const fullName = new fileUri.FileUri(uri).name;
     const dotIdx = fullName.lastIndexOf('.');
     return dotIdx > 0 ? fullName.substring(dotIdx).toLowerCase() : '';
-  }
-
-  private isNovelFile(ext: string): boolean {
-    return NOVEL_EXTS.includes(ext);
   }
 
   private isAudioExt(ext: string): boolean {
@@ -200,7 +193,7 @@ export struct ImportPage {
       if (dot <= 0) continue;
       const ext = name.substring(dot).toLowerCase();
       const base = name.substring(0, dot);
-      if (this.isAudioExt(ext) || this.isNovelFile(ext)) {
+      if (this.isAudioExt(ext)) {
         out.push({ uri: full, name: base, ext });
       }
     }
@@ -244,28 +237,21 @@ export struct ImportPage {
         return;
       }
 
-      // 2. 按集数自然排序：音频按文件名、小说按文件名
+      // 2. 按集数自然排序
       expanded.sort((a, b) => this.naturalCompare(a.name, b.name));
 
-      // 3. 分类
-      const novelFiles = expanded.filter(f => this.isNovelFile(f.ext));
-      const audioFiles = expanded.filter(f => !this.isNovelFile(f.ext));
+      const audioFiles = expanded.filter(f => this.isAudioExt(f.ext));
+      if (audioFiles.length === 0) {
+        this.importing = false;
+        this.progressText = '没有可导入的音频文件';
+        return;
+      }
 
-      if (novelFiles.length > 0) {
-        const dir = this.context.filesDir + '/novel/' + bookId;
-        await fileIo.mkdir(dir, true);
-        const book = await this.importNovelBook(bookId, dir, novelFiles);
-        await DataService.addImportedBook(book);
-        await PreferenceService.toggleFavorite(book.id);
-      }
-      if (audioFiles.length > 0) {
-        const aid = novelFiles.length > 0 ? bookId + '_audio' : bookId;
-        const dir = this.context.filesDir + '/audio/' + aid;
-        await fileIo.mkdir(dir, true);
-        const book = await this.importAudioBook(aid, dir, audioFiles);
-        await DataService.addImportedBook(book);
-        await PreferenceService.toggleFavorite(book.id);
-      }
+      const dir = this.context.filesDir + '/audio/' + bookId;
+      await fileIo.mkdir(dir, true);
+      const book = await this.importAudioBook(bookId, dir, audioFiles);
+      await DataService.addImportedBook(book);
+      await PreferenceService.toggleFavorite(book.id);
 
       this.importing = false;
       this.progressText = '';
@@ -339,99 +325,6 @@ export struct ImportPage {
     };
   }
 
-  private async importNovelBook(bookId: string, sandboxDir: string, files: PickedFile[]): Promise<Book> {
-    const allChapters: Chapter[] = [];
-    let chapterIdx = 0;
-
-    for (let f = 0; f < files.length; f++) {
-      const pf = files[f];
-      this.progressText = `读取 ${pf.name + pf.ext}`;
-
-      if (pf.ext === '.epub') {
-        // epub 暂不解析，原样保存为单章节
-        const destPath = sandboxDir + '/' + pf.name + pf.ext;
-        try {
-          const srcFile = await fileIo.open(pf.uri, fileIo.OpenMode.READ_ONLY);
-          const dstFile = await fileIo.open(destPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
-          await fileIo.copyFile(srcFile.fd, dstFile.fd);
-          await fileIo.close(srcFile);
-          await fileIo.close(dstFile);
-        } catch (_e) { continue; }
-        chapterIdx++;
-        allChapters.push({
-          id: bookId + '-c' + chapterIdx, index: chapterIdx,
-          title: pf.name, duration: 0,
-          source: { type: 'file', value: destPath }
-        });
-        continue;
-      }
-
-      // txt: 读取 + 解码 + 切章
-      const text = await this.readPickedText(pf.uri);
-      this.progressText = `切分章节 ${pf.name}`;
-      const chunks: ChapterText[] = TextSplitter.split(text, pf.name);
-
-      for (let i = 0; i < chunks.length; i++) {
-        const ch = chunks[i];
-        chapterIdx++;
-        const destPath = `${sandboxDir}/c_${chapterIdx}.txt`;
-        try {
-          const dst = await fileIo.open(destPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
-          const encoder = util.TextEncoder.create('utf-8');
-          const buf = encoder.encodeInto(ch.content);
-          await fileIo.write(dst.fd, buf.buffer);
-          await fileIo.close(dst);
-        } catch (_e) { continue; }
-        allChapters.push({
-          id: bookId + '-c' + chapterIdx, index: chapterIdx,
-          title: ch.title, duration: 0,
-          source: { type: 'file', value: destPath }
-        });
-        if (i % 50 === 0) {
-          this.progressText = `写入章节 ${i + 1}/${chunks.length}`;
-        }
-      }
-    }
-
-    return {
-      id: bookId, title: this.bookTitle, author: this.bookAuthor || '未知',
-      narrator: '', cover: this.coverPath, category: 'novel', intro: '本地小说',
-      totalDuration: 0, chapterCount: allChapters.length, rating: 0,
-      tags: ['本地小说'], chapters: allChapters, bookUrl: '', sourceUrl: ''
-    };
-  }
-
-  private async readPickedText(uri: string): Promise<string> {
-    try {
-      const file = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
-      try {
-        const stat = await fileIo.stat(file.fd);
-        const size = stat.size;
-        if (size === 0) return '';
-        const buf = new ArrayBuffer(size);
-        await fileIo.read(file.fd, buf);
-        const bytes = new Uint8Array(buf);
-        try {
-          const dec = util.TextDecoder.create('utf-8', { fatal: true, ignoreBOM: false });
-          return dec.decodeToString(bytes);
-        } catch (_e) {
-          try {
-            const dec = util.TextDecoder.create('gbk');
-            return dec.decodeToString(bytes);
-          } catch (_e2) {
-            const dec = util.TextDecoder.create('utf-8');
-            return dec.decodeToString(bytes);
-          }
-        }
-      } finally {
-        await fileIo.close(file);
-      }
-    } catch (err) {
-      console.error('Failed to read file:', uri, err);
-      return '';
-    }
-  }
-
   // PLACEHOLDER_BUILD
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
@@ -497,7 +390,7 @@ export struct ImportPage {
             Text('点击选择文件')
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
-            Text('音频:mp3/m4a/flac/wav/ogg/aac  小说:txt/epub  打包:zip')
+            Text('音频:mp3/m4a/flac/wav/ogg/aac  打包:zip')
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
             Text('支持选 .zip 自动解压；多文件按集数自然排序')

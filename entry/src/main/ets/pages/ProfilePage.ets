@@ -9,7 +9,6 @@ interface ProfileItem {
 }
 
 const CONTENT_ITEMS: ProfileItem[] = [
-  { icon: $r('sys.symbol.clock'), label: '历史记录', id: 'history', iconBg: '#FF9F0A' },
   { icon: $r('sys.symbol.arrow_down_circle'), label: '本地导入', id: 'import', iconBg: '#34C759' }
 ];
 
@@ -26,9 +25,7 @@ export struct ProfilePage {
   @Param navStack: NavPathStack = new NavPathStack();
 
   private onItemTap(id: string): void {
-    if (id === 'history') {
-      this.navStack.pushPathByName('history', '');
-    } else if (id === 'import') {
+    if (id === 'import') {
       this.navStack.pushPathByName('import', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');

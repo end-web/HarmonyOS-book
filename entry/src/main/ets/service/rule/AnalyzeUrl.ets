@@ -43,6 +43,11 @@ interface UrlSplit {
   option: UrlOption;
 }
 
+export interface SplitUrlResult {
+  url: string;
+  config: UrlOption;
+}
+
 interface TemplateContext {
   key?: string;
   page?: number;
@@ -368,6 +373,74 @@ export class AnalyzeUrl {
     }
     const basePath = cleanBase.substring(0, cleanBase.lastIndexOf('/') + 1);
     return basePath + cleanRelative;
+  }
+
+  /**
+   * 静态版 splitConfig：拆分 Legado "URL,{配置JSON}" 语法
+   * 供 JavaBridge.ajax 等外部调用
+   */
+  static splitUrlConfig(urlWithConfig: string): SplitUrlResult {
+    const idx = AnalyzeUrl.findConfigIdx(urlWithConfig);
+    if (idx <= 0) {
+      const defaultConfig: UrlOption = { method: 'GET' };
+      const result: SplitUrlResult = { url: urlWithConfig.trim(), config: defaultConfig };
+      return result;
+    }
+    const baseUrl = urlWithConfig.substring(0, idx).trim();
+    const configStr = urlWithConfig.substring(idx + 1).trim();
+    try {
+      // 尝试标准 JSON 解析，失败则修复非标准格式（Legado 允许无引号 key + 中文引号）
+      let jsonStr = configStr;
+      // 先把中文引号 U+201C/U+201D 替换成英文引号
+      jsonStr = jsonStr.replace(/[“”]/g, '"');
+      // 中文单引号 U+2018/U+2019 也替换
+      jsonStr = jsonStr.replace(/[‘’]/g, "'");
+      try {
+        JSON.parse(jsonStr);
+      } catch {
+        // 给无引号的 key 加双引号: {webView:"true"} → {"webView":"true"}
+        jsonStr = jsonStr.replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":');
+      }
+      const parsed = JSON.parse(jsonStr) as Record<string, Object>;
+      const config: UrlOption = {
+        method: ((parsed['method'] as string) || 'GET').toUpperCase(),
+        charset: parsed['charset'] as string,
+        headers: parsed['headers'] as Record<string, string>,
+        body: typeof parsed['body'] === 'string' ? parsed['body'] as string
+          : parsed['body'] ? JSON.stringify(parsed['body']) : undefined,
+        webView: parsed['webView'] as boolean,
+        webJs: parsed['webJs'] as string,
+        retry: (parsed['retry'] as number) || 0,
+        type: parsed['type'] as string,
+        js: parsed['js'] as string,
+      };
+      const result: SplitUrlResult = { url: baseUrl, config };
+      return result;
+    } catch {
+      const fallbackConfig: UrlOption = { method: 'GET' };
+      const result: SplitUrlResult = { url: urlWithConfig.trim(), config: fallbackConfig };
+      return result;
+    }
+  }
+
+  /** 静态版 findConfigStart，找到不在引号内的 ,{ 位置 */
+  private static findConfigIdx(url: string): number {
+    let inStr: string | null = null;
+    for (let i = 0; i < url.length - 1; i++) {
+      const c = url[i];
+      if (inStr) {
+        if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        inStr = c;
+        continue;
+      }
+      if (c === ',' && url[i + 1] === '{') {
+        return i;
+      }
+    }
+    return -1;
   }
 
   static mergeHeaders(sourceHeader: string | undefined, extra?: Record<string, string>): Record<string, string> {

@@ -3,12 +3,14 @@ import { AppStorageV2, promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
-import { BookSource, TocItem } from '../model/BookSource';
-import { PlayerState, PLAYER_STATE_KEY, ReadingState, READING_STATE_KEY } from '../model/PlayerState';
+import { TocItem } from '../model/BookSource';
+import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
+import { SourceDataService } from '../service/SourceDataService';
 import { AudioService } from '../service/AudioService';
+import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
@@ -24,7 +26,6 @@ export struct BookDetailPage {
   @Local isFavorite: boolean = false;
   @Local loadingToc: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
-  @Local readingState: ReadingState = AppStorageV2.connect(ReadingState, READING_STATE_KEY, () => new ReadingState())!;
   @Local isStartingPlay: boolean = false;
   @Local lastHistory: PlayHistoryItem | null = null;
   @Local activeTab: number = 1;
@@ -32,6 +33,7 @@ export struct BookDetailPage {
   @Local bgColorDark: string = '#1A1A1A';
   @Local hasThemeColor: boolean = false;
   @Local debugInfo: string = '';
+  private chapterListScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
@@ -75,6 +77,8 @@ export struct BookDetailPage {
       // 章节懒加载
       if (b.chapters.length === 0 && b.bookUrl && b.sourceUrl) {
         this.loadTocFromSource(b);
+      } else {
+        this.scrollToCurrentChapter();
       }
     }
   }
@@ -108,8 +112,7 @@ export struct BookDetailPage {
     this.loadingToc = true;
     this.debugInfo = `bookUrl=${book.bookUrl}\nsourceUrl=${book.sourceUrl}`;
     try {
-      const sourcesJson = await PreferenceService.getBookSources();
-      const sources = JSON.parse(sourcesJson) as BookSource[];
+      const sources = await SourceDataService.getSources();
       const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
       this.debugInfo += `\nsource=${source ? source.bookSourceName : 'NOT FOUND'}`;
       if (source && book.bookUrl) {
@@ -144,7 +147,8 @@ export struct BookDetailPage {
           index: idx + 1,
           title: item.name,
           duration: 0,
-          source: { type: 'url', value: item.url }
+          source: { type: 'url', value: item.url },
+          originSourceValue: item.url
         }));
         book.chapterCount = book.chapters.length;
         const cloned: Book = {
@@ -174,6 +178,7 @@ export struct BookDetailPage {
       this.debugInfo += `\nERROR: ${e}`;
     }
     this.loadingToc = false;
+    this.scrollToCurrentChapter();
   }
 
   private async extractCoverColor(cover: string): Promise<void> {
@@ -192,6 +197,18 @@ export struct BookDetailPage {
     if (!rgb) return;
     // 一次性更新，避免 3 次独立赋值触发 3 次重绘
     this.applyCoverColor(rgb);
+  }
+
+  private scrollToCurrentChapter(): void {
+    if (!this.book || !this.playerState.currentBook || !this.playerState.currentChapter) return;
+    if (this.playerState.currentBook.id !== this.bookId) return;
+    const idx = this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
+    if (idx > 0) {
+      setTimeout(() => {
+        this.chapterListScroller.scrollToIndex(idx, true, ScrollAlign.CENTER);
+        this.activeTab = 1;
+      }, 100);
+    }
   }
 
   private async toggleFavorite(): Promise<void> {
@@ -219,12 +236,6 @@ export struct BookDetailPage {
     }
   }
 
-  private isLocalNovel(chapter: Chapter): boolean {
-    if (chapter.source.type !== 'file') return false;
-    const v = chapter.source.value.toLowerCase();
-    return v.endsWith('.txt') || v.endsWith('.epub');
-  }
-
   private async startPlay(chapter?: Chapter): Promise<void> {
     if (!this.book || this.isStartingPlay) return;
     this.isStartingPlay = true;
@@ -233,7 +244,9 @@ export struct BookDetailPage {
     let target: Chapter | undefined = chapter;
     let resumeProgressMs = 0;
     if (!target && this.lastHistory) {
-      target = this.book.chapters.find((c) => c.id === this.lastHistory!.chapterId);
+      // 标题优先定位:连载更新/TOC 重排后旧 chapterId 会指向错误章节
+      const hi = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+      target = hi >= 0 ? this.book.chapters[hi] : undefined;
       resumeProgressMs = this.lastHistory.progressMs;
     }
     if (!target) {
@@ -243,68 +256,30 @@ export struct BookDetailPage {
       this.isStartingPlay = false;
       return;
     }
+    // ★ 用户当前正在播这本书且同章节:用 live state.progressMs(更新)替代 lastHistory.progressMs(可能旧 5s),
+    //   避免从详情页继续播放反而回退进度
+    if (PlaybackStore.getInstance().isCurrentChapter(this.book.id, target.id)) {
+      resumeProgressMs = this.playerState.progressMs;
+      hilog.info(DOMAIN, TAG, 'startPlay use live progressMs=%{public}d (was history=%{public}d)',
+        resumeProgressMs, this.lastHistory?.progressMs ?? 0);
+    }
     hilog.info(DOMAIN, TAG, 'startPlay chapter=%{public}s', target.title);
 
-    // 本地小说：直接跳阅读器
-    if (this.isLocalNovel(target)) {
-      const chapterIndex = this.book.chapters.findIndex(c => c.id === target!.id);
-      const bookIdObj: Object = this.bookId as Object;
-      const indexObj: Object = (chapterIndex >= 0 ? chapterIndex : 0) as Object;
-      const params: Record<string, Object> = { 'bookId': bookIdObj, 'chapterIndex': indexObj };
-      this.navStack.pushPathByName('TextReaderPage', params);
+    SearchCache.put(this.book);
+    // ★ 当前在播的就是同书:直接 push player 不带 chapter 参数,PlayerPage 复用 live state,
+    //   避免 tryResumePlay 触发 playChapterAndSeek 重置
+    if (PlaybackStore.getInstance().isCurrentBook(this.book.id)) {
+      this.navStack.pushPathByName('player', this.bookId);
       this.isStartingPlay = false;
       return;
     }
-
-    // 检测文本书源，跳转到阅读页
-    if (this.book.sourceUrl) {
-      try {
-        const sourcesJson = await PreferenceService.getBookSources();
-        const sources = JSON.parse(sourcesJson) as BookSource[];
-        const source = sources.find(s => s.bookSourceUrl === this.book!.sourceUrl);
-
-        if (source && source.bookSourceType !== 1) {
-          const chapterIndex = this.book.chapters.findIndex(c => c.id === target!.id);
-          const bookIdObj: Object = this.bookId as Object;
-          const indexObj: Object = (chapterIndex >= 0 ? chapterIndex : 0) as Object;
-          const params: Record<string, Object> = {
-            'bookId': bookIdObj,
-            'chapterIndex': indexObj
-          };
-          this.navStack.pushPathByName('TextReaderPage', params);
-          this.isStartingPlay = false;
-          return;
-        }
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, 'check source type failed');
-      }
-    }
-
-    // 有声书源，跳转到播放页（传 bookId + chapterId + progressMs）
-    SearchCache.put(this.book);
     const playerParams: Record<string, Object> = {
       'bookId': this.bookId as Object,
       'chapterId': target.id as Object,
       'progressMs': resumeProgressMs as Object
     };
     this.navStack.pushPathByName('player', playerParams);
-    try {
-      if (target.source.type === 'url' && this.book.sourceUrl) {
-        try {
-          const sourcesJson = await PreferenceService.getBookSources();
-          const sources = JSON.parse(sourcesJson) as BookSource[];
-          const source = sources.find(s => s.bookSourceUrl === this.book!.sourceUrl);
-          if (source) {
-            const audioUrl = await BookSourceService.getAudioUrl(source, target.source.value);
-            target.source = { type: 'url', value: audioUrl };
-          }
-        } catch (_e) { /* ignore */ }
-      }
-      AudioService.getInstance().bind(this.playerState, this.getUIContext().getHostContext() as common.UIAbilityContext);
-      await AudioService.getInstance().playChapterAndSeek(this.book, target, resumeProgressMs);
-    } finally {
-      this.isStartingPlay = false;
-    }
+    this.isStartingPlay = false;
   }
 
   private formatDuration(seconds: number): string {
@@ -332,9 +307,6 @@ export struct BookDetailPage {
   }
 
   private isPlayingChapter(ch: Chapter): boolean {
-    if (this.book?.category === 'novel') {
-      return this.readingState.currentBookId === this.bookId && this.readingState.currentChapterId === ch.id;
-    }
     if (!this.playerState.currentBook || !this.playerState.currentChapter) return false;
     return this.playerState.currentBook.id === this.bookId && this.playerState.currentChapter.id === ch.id;
   }
@@ -446,10 +418,12 @@ export struct BookDetailPage {
           .fontWeight(FontWeight.Bold)
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.book!.narrator || this.book!.author)
-          .fontSize(AppFont.Body)
-          .fontColor('#FFFFFFCC')
-          .maxLines(1)
+        if (this.book!.author) {
+          Text(this.book!.author)
+            .fontSize(AppFont.Body)
+            .fontColor('#FFFFFFCC')
+            .maxLines(1)
+        }
         if (this.book!.tags && this.book!.tags.length > 0) {
           Row({ space: AppSpace.Xs }) {
             ForEach(this.book!.tags.slice(0, 2), (tag: string) => {
@@ -499,11 +473,11 @@ export struct BookDetailPage {
 
       // 章节数
       Column({ space: 2 }) {
-        Text(this.book!.chapterCount > 0 ? this.book!.chapterCount.toString() + (this.book!.category === 'novel' ? ' 章' : ' 集') : '--')
+        Text(this.book!.chapterCount > 0 ? this.book!.chapterCount.toString() + ' 集' : '--')
           .fontSize(AppFont.Title)
           .fontColor('#FFFFFF')
           .fontWeight(FontWeight.Bold)
-        Text(this.book!.category === 'novel' ? '总章数' : '总集数')
+        Text('总集数')
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF99')
       }
@@ -528,7 +502,7 @@ export struct BookDetailPage {
           : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
         .onClick(() => { this.activeTab = 0; })
 
-      Text(this.book!.category === 'novel' ? '章节' : '节目')
+      Text('节目')
         .fontSize(AppFont.BodyL)
         .fontColor(this.activeTab === 1 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
         .fontWeight(this.activeTab === 1 ? FontWeight.Bold : FontWeight.Normal)
@@ -548,20 +522,21 @@ export struct BookDetailPage {
   /** 获取历史章节标题，供 Builder 使用 */
   private historyChapterTitle(): string {
     if (!this.lastHistory || !this.book) return '';
-    const ch = this.book.chapters.find((c) => c.id === this.lastHistory!.chapterId);
-    return ch ? ch.title : '';
+    const idx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+    return idx >= 0 ? this.book.chapters[idx].title : (this.lastHistory.chapterTitle ?? '');
   }
 
   /** 根据是否有历史记录返回按钮文案 */
   private resumeButtonText(): string {
     if (!this.lastHistory || !this.book) {
-      return this.book?.category === 'novel' ? '开始阅读' : '开始播放';
+      return '开始播放';
     }
-    const ch = this.book.chapters.find((c) => c.id === this.lastHistory!.chapterId);
-    if (ch) {
-      return this.book.category === 'novel' ? `继续阅读 ${ch.title}` : `继续播放 ${ch.title}`;
+    const idx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+    if (idx >= 0) {
+      const title = this.book.chapters[idx].title;
+      return `继续播放 ${title}`;
     }
-    return this.book.category === 'novel' ? '继续阅读' : '继续播放';
+    return '继续播放';
   }
 
   @Builder
@@ -583,7 +558,7 @@ export struct BookDetailPage {
 
         // 播放/阅读按钮
         Row() {
-          SymbolGlyph(this.book!.category === 'novel' ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
+          SymbolGlyph($r('sys.symbol.play_fill'))
             .fontSize(18).fontColor(['#FFFFFF'])
           Text(this.resumeButtonText())
             .fontSize(AppFont.BodyL)
@@ -611,7 +586,7 @@ export struct BookDetailPage {
     Column() {
       // 章节头部
       Row() {
-        Text(`共 ${this.book!.chapters.length} ${this.book!.category === 'novel' ? '章' : '集'}`)
+        Text(`共 ${this.book!.chapters.length} 集`)
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
         if (this.loadingToc) {
@@ -644,7 +619,7 @@ export struct BookDetailPage {
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
-        List({ space: 0 }) {
+        List({ space: 0, scroller: this.chapterListScroller }) {
           ForEach(this.book!.chapters, (ch: Chapter) => {
             ListItem() {
               this.buildChapterItem(ch)
@@ -689,7 +664,7 @@ export struct BookDetailPage {
       .alignItems(HorizontalAlign.Start)
 
       if (this.isPlayingChapter(ch)) {
-        SymbolGlyph(this.book?.category === 'novel' ? $r('sys.symbol.book') : $r('sys.symbol.speaker_wave_2_fill'))
+        SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
           .fontSize(18).fontColor(['#D4380D'])
       }
     }
@@ -701,12 +676,10 @@ export struct BookDetailPage {
   @Builder
   buildBottomPlayer() {
     Row({ space: AppSpace.Md }) {
-      // 播放/阅读 按钮
+      // 播放按钮
       Row() {
-        SymbolGlyph(this.book!.category === 'novel'
-          ? $r('sys.symbol.book')
-          : (this.playerState.isPlaying && this.playerState.currentBook?.id === this.bookId
-              ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill')))
+        SymbolGlyph(this.playerState.isPlaying && this.playerState.currentBook?.id === this.bookId
+          ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
           .fontSize(20).fontColor(['#FFFFFF'])
       }
       .width(40).height(40)
@@ -714,10 +687,6 @@ export struct BookDetailPage {
       .backgroundColor(AppColor.Brand)
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
-        if (this.book!.category === 'novel') {
-          this.startPlay();
-          return;
-        }
         if (this.playerState.currentBook?.id === this.bookId && this.playerState.currentChapter) {
           AudioService.getInstance().toggle();
         } else {
@@ -727,8 +696,7 @@ export struct BookDetailPage {
 
       // 当前播放信息 / 默认提示
       Column({ space: 2 }) {
-        if (this.book!.category !== 'novel'
-            && this.playerState.currentBook?.id === this.bookId
+        if (this.playerState.currentBook?.id === this.bookId
             && this.playerState.currentChapter) {
           Text(this.playerState.currentChapter.title)
             .fontSize(AppFont.Body)

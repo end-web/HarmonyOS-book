@@ -65,6 +65,19 @@
             "resource": "$profile:backup_config"
           }
         ],
+      },
+      {
+        "name": "PlayerFormAbility",
+        "srcEntry": "./ets/widget/PlayerFormAbility.ets",
+        "label": "$string:PlayerFormAbility_label",
+        "description": "$string:PlayerFormAbility_desc",
+        "type": "form",
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:player_form_config"
+          }
+        ]
       }
     ]
   }

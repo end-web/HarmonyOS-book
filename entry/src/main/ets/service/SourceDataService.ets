@@ -1,35 +1,79 @@
 /**
  * 书源数据服务
+ *
+ * 内置源（builtin://...）由 BuiltInSourceRegistry 注入，与用户订阅源同列。
+ * 内置源不会被持久化到 Preferences，每次启动通过 registry 现拼。
  */
 
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookSource, SourceSubscription } from '../model/BookSource';
 import { PreferenceService } from './PreferenceService';
+import { BuiltInSourceRegistry } from './builtin/BuiltInSourceRegistry';
 
 export class SourceDataService {
   private static cache: BookSource[] | null = null;
+  private static disabledLoaded: boolean = false;
 
   /**
-   * 获取所有书源
+   * 获取所有书源（用户订阅 + 内置）
    */
   static async getSources(): Promise<BookSource[]> {
     if (SourceDataService.cache) return SourceDataService.cache;
 
+    // 启动后第一次读，先把内置源的禁用状态注入到 Registry
+    if (!SourceDataService.disabledLoaded) {
+      try {
+        const ids = await PreferenceService.getBuiltinDisabledIds();
+        BuiltInSourceRegistry.setDisabledIds(ids);
+      } catch { /* ignore */ }
+      SourceDataService.disabledLoaded = true;
+    }
+
+    let userSources: BookSource[] = [];
     try {
       const json = await PreferenceService.getBookSources();
       const data: Object = JSON.parse(json) as Object;
-      SourceDataService.cache = Array.isArray(data) ? data as BookSource[] : [];
-      return SourceDataService.cache;
+      userSources = Array.isArray(data) ? data as BookSource[] : [];
     } catch {
-      return [];
+      userSources = [];
     }
+    // 过滤掉历史可能写入的 builtin 条目，避免重复；同时丢掉 bookSourceUrl 为空的脏数据
+    const filtered: BookSource[] = [];
+    for (const s of userSources) {
+      if (!s || typeof s.bookSourceUrl !== 'string' || s.bookSourceUrl.length === 0) continue;
+      if (BuiltInSourceRegistry.isBuiltIn(s.bookSourceUrl)) continue;
+      filtered.push(s);
+    }
+    const builtIn = BuiltInSourceRegistry.materialize();
+    SourceDataService.cache = filtered.concat(builtIn);
+    hilog.info(0, 'SourceDataSvc', 'getSources: user=%{public}d, builtin=%{public}d, total=%{public}d',
+      filtered.length, builtIn.length, SourceDataService.cache.length);
+    return SourceDataService.cache;
   }
 
   /**
-   * 保存书源列表
+   * 保存书源列表（仅持久化非内置源；内置源的 enabled 状态写入单独的 disabledIds）
    */
   static async saveSources(sources: BookSource[]): Promise<void> {
-    await PreferenceService.saveBookSources(JSON.stringify(sources));
-    SourceDataService.cache = sources;
+    const userOnly: BookSource[] = [];
+    const builtinDisabled: string[] = [];
+    for (const s of sources) {
+      if (!s || typeof s.bookSourceUrl !== 'string') continue;
+      if (BuiltInSourceRegistry.isBuiltIn(s.bookSourceUrl)) {
+        if (s.enabled === false) {
+          const id = s.bookSourceUrl.substring('builtin://eprendre/'.length);
+          builtinDisabled.push(id);
+        }
+      } else {
+        userOnly.push(s);
+      }
+    }
+    await PreferenceService.saveBookSources(JSON.stringify(userOnly));
+    await PreferenceService.saveBuiltinDisabledIds(builtinDisabled);
+    BuiltInSourceRegistry.setDisabledIds(builtinDisabled);
+    // 重新拼缓存（用最新的 disabled 状态）
+    const builtIn = BuiltInSourceRegistry.materialize();
+    SourceDataService.cache = userOnly.concat(builtIn);
   }
 
   /**

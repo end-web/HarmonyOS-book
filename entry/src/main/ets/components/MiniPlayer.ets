@@ -107,23 +107,37 @@ export struct MiniPlayer {
           Stack() {
             this.coverImageBuilder()
           }
-          .width(40)
-          .height(40)
+          .width(44)
+          .height(44)
           .geometryTransition('mini-cover-' + this.bookId(), { follow: true })
           .onClick(() => this.onTapBody())
 
           Column({ space: 2 }) {
             Text(this.playerState.currentBook.title)
               .fontSize(AppFont.Body)
-              .fontColor('#1F1F1F')
+              .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Medium)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : '--')
-              .fontSize(AppFont.Caption)
-              .fontColor('#8F8F8F')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+            Row({ space: AppSpace.Xs }) {
+              Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : '--')
+                .fontSize(AppFont.Caption)
+                .fontColor($r('sys.color.font_secondary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+              if (this.playerState.currentBook.author) {
+                Text(this.playerState.currentBook.author)
+                  .fontSize(AppFont.Caption - 1)
+                  .fontColor($r('sys.color.font_tertiary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .flexShrink(0)
+              }
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
@@ -132,21 +146,21 @@ export struct MiniPlayer {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
             .fontSize(24)
-            .fontColor(['#1F1F1F'])
+            .fontColor([$r('sys.color.font_primary')])
             .hitTestBehavior(HitTestMode.Block)
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
             .onClick(() => this.onToggle())
 
           SymbolGlyph($r('sys.symbol.forward_end_fill'))
             .fontSize(22)
-            .fontColor(['#1F1F1F'])
+            .fontColor([$r('sys.color.font_primary')])
             .hitTestBehavior(HitTestMode.Block)
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
             .onClick(() => this.onNext())
         }
         .width('100%')
         .height('100%')
-        .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+        .padding({ left: 0, right: AppSpace.Md })
       }
     }
   }

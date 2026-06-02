@@ -125,3 +125,16 @@ export interface BookInfo {
   tocUrl: string;
   variables?: Record<string, string>;
 }
+
+/**
+ * 首页推荐板块（用于内置源在 HomePage 上展示"精品多人/最新作品/热播..."这类区块）
+ * layout: 'grid'（带简介的大卡片）/ 'horizontal'（横向滚动小封面）
+ */
+export interface HomeBlockSection {
+  title: string;
+  books: SearchResult[];
+  moreUrl: string;
+  layout: string;
+  sourceName: string;
+  sourceUrl: string;
+}

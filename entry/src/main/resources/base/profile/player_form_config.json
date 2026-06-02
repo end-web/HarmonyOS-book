@@ -1,0 +1,25 @@
+{
+  "forms": [
+    {
+      "name": "PlayerCard",
+      "displayName": "$string:player_card_label",
+      "description": "$string:player_card_desc",
+      "src": "./ets/widget/pages/PlayerCard.ets",
+      "uiSyntax": "arkts",
+      "window": {
+        "designWidth": 720,
+        "autoDesignWidth": true
+      },
+      "colorMode": "auto",
+      "isDefault": true,
+      "isDynamic": true,
+      "updateEnabled": true,
+      "scheduledUpdateTime": "10:30",
+      "updateDuration": 0,
+      "defaultDimension": "2*2",
+      "supportDimensions": [
+        "2*2"
+      ]
+    }
+  ]
+}

@@ -180,9 +180,10 @@ export class JSExecutor {
    * 返回 undefined 表示无法本地处理
    */
   private tryLocalEval(code: string, ctx: Record<string, Object>): Object | undefined {
-    // 纯字符串字面量
-    if (/^['"].*['"]$/.test(code)) {
-      return code.substring(1, code.length - 1);
+    // 纯字符串字面量：必须首尾同引号，且中间无未转义同引号
+    // 否则像 "http://..." + result.split('/')[2]+'/true/1/200' 会被误判为字面量
+    if (/^"(?:[^"\\]|\\.)*"$/.test(code) || /^'(?:[^'\\]|\\.)*'$/.test(code)) {
+      return code.substring(1, code.length - 1).replace(/\\(.)/g, '$1');
     }
 
     // 纯数字
@@ -648,21 +649,23 @@ export class JSExecutor {
 
   private tryEvalConcat(code: string, ctx: Record<string, Object>): Object | undefined {
     // 简单字符串拼接：'a' + b + 'c' + obj.prop
+    // 用 splitTopLevelPlus 切分，忽略字符串/括号内的 +，避免把 result.split('/')[2] 之类切坏
     if (!code.includes('+')) return undefined;
 
-    const parts = code.split('+').map((p) => p.trim());
+    const parts = this.splitTopLevelPlus(code).map((p) => p.trim());
+    if (parts.length < 2) return undefined;
     let result = '';
     for (const part of parts) {
-      if ((part.startsWith("'") && part.endsWith("'")) ||
-          (part.startsWith('"') && part.endsWith('"'))) {
-        result += part.substring(1, part.length - 1);
+      // 字符串字面量：必须首尾同引号且中间无未转义同引号
+      if (/^"(?:[^"\\]|\\.)*"$/.test(part) || /^'(?:[^'\\]|\\.)*'$/.test(part)) {
+        result += part.substring(1, part.length - 1).replace(/\\(.)/g, '$1');
       } else if (/^[a-zA-Z_]\w*$/.test(part)) {
         const val = ctx[part];
         if (val === undefined) return undefined;
         result += String(val);
-      } else if (/^\d+$/.test(part)) {
+      } else if (/^-?\d+(?:\.\d+)?$/.test(part)) {
         result += part;
-      } else if (part.includes('.')) {
+      } else if (part.includes('.') || part.includes('[')) {
         const chainVal = this.tryEvalPropertyChain(part, ctx);
         if (chainVal === undefined) return undefined;
         result += String(chainVal);

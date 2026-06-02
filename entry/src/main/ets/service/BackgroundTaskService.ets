@@ -17,7 +17,7 @@ export class BackgroundTaskService {
           bundleName: context.abilityInfo.bundleName,
           abilityName: context.abilityInfo.name
         }],
-        actionType: wantAgent.OperationType.START_ABILITY,
+        operationType: wantAgent.OperationType.START_ABILITY,
         requestCode: 0,
         wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
       };

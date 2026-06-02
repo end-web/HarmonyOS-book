@@ -9,6 +9,11 @@ export interface RgbColor {
   b: number;
 }
 
+export interface BlurColor {
+  rgb: RgbColor;
+  rgba: string; // 'rgba(r,g,b,0)' 格式，用于 backgroundEffect.color
+}
+
 export class ColorPickerUtils {
   private static cache: Map<string, RgbColor> = new Map();
 
@@ -23,6 +28,11 @@ export class ColorPickerUtils {
   static darken(c: RgbColor, ratio: number): RgbColor {
     const k = Math.max(0, Math.min(1, 1 - ratio));
     return { r: Math.round(c.r * k), g: Math.round(c.g * k), b: Math.round(c.b * k) };
+  }
+
+  /** 生成 backgroundEffect.color 所需的 rgba 字符串（alpha=0 让系统只取色不叠实色） */
+  static toBlurColor(c: RgbColor): string {
+    return `rgba(${c.r},${c.g},${c.b},0)`;
   }
 
   /** 同步读取已缓存的封面色（http URL / rawfile path / 沙箱绝对路径）。命中时可避免首帧默认色闪烁。 */

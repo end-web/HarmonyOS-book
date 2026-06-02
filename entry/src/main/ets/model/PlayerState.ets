@@ -21,8 +21,16 @@ export class PlayerState {
   @Trace currentBook: Book | null = null;
   @Trace currentChapter: Chapter | null = null;
   @Trace isPlaying: boolean = false;
+  /** 正在解析音频 URL / 装载音源 / 等待 prepared 的过渡状态。UI 在此期间显示 loading 图标。 */
+  @Trace isLoading: boolean = false;
   @Trace progressMs: number = 0;
   @Trace durationMs: number = 0;
+  /**
+   * prepared 之前的兜底时长(从 PlayProgress / chapter.duration 读到的值)。
+   * 切书后 durationMs 在 prepared 前为 0,Slider max=1 会让进度条停在最左,
+   * 视觉上像"从头加载"。用 savedDurationMs 撑住,prepared 后被真实 durationMs 覆盖。
+   */
+  @Trace savedDurationMs: number = 0;
   @Trace speed: number = 1.0;
   @Trace accentColor: string = '#2A7C8C';
   @Trace sleepMinutes: number = 0;
@@ -33,26 +41,11 @@ export class PlayerState {
     this.currentBook = null;
     this.currentChapter = null;
     this.isPlaying = false;
+    this.isLoading = false;
     this.progressMs = 0;
     this.durationMs = 0;
+    this.savedDurationMs = 0;
   }
 }
 
 export const PLAYER_STATE_KEY = 'global_player_state';
-
-/**
- * 全局阅读状态（V2）
- * 文本阅读器写入当前正在阅读的书 / 章节，详情页据此高亮
- */
-@ObservedV2
-export class ReadingState {
-  @Trace currentBookId: string = '';
-  @Trace currentChapterId: string = '';
-
-  set(bookId: string, chapterId: string): void {
-    this.currentBookId = bookId;
-    this.currentChapterId = chapterId;
-  }
-}
-
-export const READING_STATE_KEY = 'global_reading_state';

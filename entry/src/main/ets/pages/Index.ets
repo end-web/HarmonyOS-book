@@ -1,13 +1,19 @@
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage } from './PlayerPage';
-import { TextReaderPage } from './TextReaderPage';
-import { HistoryPage } from './HistoryPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
 import { PrivacyPage } from './PrivacyPage';
-import { RuleEngineTestPage } from './RuleEngineTestPage';
+import { BlockMorePage } from './BlockMorePage';
+import { emitter } from '@kit.BasicServicesKit';
+import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
+
+interface WidgetRouteEvent {
+  target: string;
+  bookId: string;
+  ts?: number;
+}
 
 @Entry
 @ComponentV2
@@ -15,6 +21,64 @@ struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local playerTranslateY: string = '0';
   @Local playerBorderRadius: number = 0;
+  private widgetSubscribed: boolean = false;
+  /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
+  private lastConsumedRouteTs: number = 0;
+
+  aboutToAppear(): void {
+    this.consumePendingWidgetRoute();
+    if (!this.widgetSubscribed) {
+      emitter.on(EVT_WIDGET_ROUTE, (data) => {
+        const ev = data.data as WidgetRouteEvent | undefined;
+        if (!ev) return;
+        // 同一次卡片点击会走 AppStorage（冷启动） + emitter（热启动）两条路径，
+        // 用 ts 去重，避免同一份 want 被压栈两次产生空白页 / 重叠 PlayerPage。
+        const ts = ev.ts ?? 0;
+        if (ts > 0 && ts === this.lastConsumedRouteTs) return;
+        this.lastConsumedRouteTs = ts;
+        this.handleWidgetRoute(ev.target, ev.bookId);
+      });
+      this.widgetSubscribed = true;
+    }
+  }
+
+  aboutToDisappear(): void {
+    if (this.widgetSubscribed) {
+      try {
+        emitter.off(EVT_WIDGET_ROUTE);
+      } catch (_e) { /* ignore */ }
+      this.widgetSubscribed = false;
+    }
+  }
+
+  /** EntryAbility.onCreate 写入路由后,Index 首次挂载时消费一次 */
+  private consumePendingWidgetRoute(): void {
+    const r = AppStorage.get<WidgetRoute>(KEY_WIDGET_ROUTE);
+    if (!r) return;
+    AppStorage.setOrCreate<WidgetRoute | undefined>(KEY_WIDGET_ROUTE, undefined);
+    this.lastConsumedRouteTs = r.ts ?? 0;
+    this.handleWidgetRoute(r.target, r.bookId ?? '');
+  }
+
+  private handleWidgetRoute(target: string, bookId: string): void {
+    if (target === 'resume') {
+      // 软拉起:对齐控制中心交互——只把应用拉到前台,
+      // 用户停留在哪个页就保留哪个页,不强制跳到 PlayerPage。
+      return;
+    }
+    if (target === 'player') {
+      if (bookId && bookId.length > 0) {
+        // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
+        const cur = this.navStack.getAllPathName();
+        if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
+        this.navStack.pushPathByName('player', bookId, false);
+      }
+      // 无 bookId 时停在主页,避免黑屏
+    } else if (target === 'detail') {
+      if (bookId) this.navStack.pushPathByName('detail', bookId, false);
+    }
+    // target === 'home' 默认停在 Tab,不需要跳转
+  }
 
   @Builder
   routerMap(name: string, param: object) {
@@ -61,20 +125,6 @@ struct Index {
         }
         return undefined;
       })
-    } else if (name === 'TextReaderPage') {
-      NavDestination() {
-        TextReaderPageWrapper({ navStack: this.navStack, param: param as Object as Record<string, Object> })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'history') {
-      NavDestination() {
-        HistoryPage({ navStack: this.navStack })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })
@@ -103,9 +153,9 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'RuleEngineTestPage') {
+    } else if (name === 'blockMore') {
       NavDestination() {
-        RuleEngineTestPageWrapper({ navStack: this.navStack })
+        BlockMorePageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
@@ -122,15 +172,6 @@ struct Index {
     .mode(NavigationMode.Stack)
     .width('100%')
     .height('100%')
-  }
-}
-
-@ComponentV2
-struct RuleEngineTestPageWrapper {
-  @Param navStack: NavPathStack = new NavPathStack();
-
-  build() {
-    RuleEngineTestPage({ navStack: this.navStack })
   }
 }
 
@@ -179,15 +220,24 @@ struct PlayerPageWrapper {
 }
 
 @ComponentV2
-struct TextReaderPageWrapper {
+struct BlockMorePageWrapper {
   @Param navStack: NavPathStack = new NavPathStack();
-  @Param param: Record<string, Object> = {};
+  @Param param: Object = '';
+
+  private str(key: string): string {
+    if (typeof this.param === 'string') return '';
+    const r = this.param as Record<string, Object>;
+    const v = r[key];
+    return typeof v === 'string' ? v : '';
+  }
 
   build() {
-    TextReaderPage({
+    BlockMorePage({
       navStack: this.navStack,
-      bookId: this.param['bookId'] as string,
-      chapterIndex: this.param['chapterIndex'] as number
+      sourceUrl: this.str('sourceUrl'),
+      sourceName: this.str('sourceName'),
+      title: this.str('title'),
+      moreUrl: this.str('moreUrl')
     })
   }
 }

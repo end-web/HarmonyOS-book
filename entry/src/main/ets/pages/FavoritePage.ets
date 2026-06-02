@@ -2,13 +2,16 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { promptAction } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
+import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
-import { BookSource, TocItem } from '../model/BookSource';
+import { TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
+import { SourceDataService } from '../service/SourceDataService';
 import { EVT_HISTORY_UPDATED } from '../service/AudioService';
+import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 
@@ -23,6 +26,7 @@ export struct FavoritePage {
   @Local draggingBookId: string = '';
   @Local isRefreshing: boolean = false;
   @Local resolvingTocId: string = '';
+  @Local refreshProgress: string = '';
   @Param visible: boolean = false;
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
@@ -62,7 +66,7 @@ export struct FavoritePage {
     for (const b of this.favoriteBooks) {
       const h = map[b.id];
       if (!h || !b.chapters || b.chapters.length === 0) continue;
-      const idx = b.chapters.findIndex((c) => c.id === h.chapterId);
+      const idx = DataService.resolveChapterIndex(b, h.chapterId, h.chapterTitle);
       if (idx >= 0) idxMap[b.id] = idx;
     }
     this.historyMap = map;
@@ -86,7 +90,7 @@ export struct FavoritePage {
     for (const b of books) {
       const h = map[b.id];
       if (!h || !b.chapters || b.chapters.length === 0) continue;
-      const idx = b.chapters.findIndex(c => c.id === h.chapterId);
+      const idx = DataService.resolveChapterIndex(b, h.chapterId, h.chapterTitle);
       if (idx >= 0) idxMap[b.id] = idx;
     }
     this.favoriteBooks = books;
@@ -95,18 +99,113 @@ export struct FavoritePage {
     this.loading = false;
   }
 
+  /** 下拉刷新:从书源重新加载在线书籍的最新数据 */
+  private async refreshOnlineBooks(): Promise<void> {
+    if (!this.context) return;
+    // 筛选出在线书源的书(非本地导入)
+    const onlineBooks = this.favoriteBooks.filter(b =>
+      !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
+    if (onlineBooks.length === 0) {
+      promptAction.showToast({ message: '书架中没有在线书籍' });
+      return;
+    }
+    this.refreshProgress = `正在刷新 0/${onlineBooks.length}`;
+    const sources = await SourceDataService.getSources();
+    let updated = 0;
+    let failed = 0;
+    // 并行刷新所有在线书
+    const tasks = onlineBooks.map(async (book, idx) => {
+      try {
+        const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
+        if (!source) {
+          failed++;
+          return;
+        }
+        // 1. 获取最新书籍信息
+        const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+        let hasChange = false;
+        if (bookInfo) {
+          // 更新封面/简介/作者等元数据
+          if (bookInfo.coverUrl && bookInfo.coverUrl !== book.cover) {
+            book.cover = bookInfo.coverUrl;
+            hasChange = true;
+          }
+          if (bookInfo.intro && bookInfo.intro !== book.intro) {
+            book.intro = bookInfo.intro;
+            hasChange = true;
+          }
+          if (bookInfo.author && bookInfo.author !== book.author) {
+            book.author = bookInfo.author;
+            hasChange = true;
+          }
+          // 合并变量
+          if (bookInfo.variables) {
+            if (!book.variables) book.variables = {};
+            for (const k of Object.keys(bookInfo.variables)) {
+              book.variables[k] = bookInfo.variables[k];
+            }
+          }
+        }
+        // 2. 获取最新章节列表
+        const mergedVars: Record<string, string> = {};
+        if (book.variables) {
+          for (const k of Object.keys(book.variables)) mergedVars[k] = book.variables[k];
+        }
+        if (bookInfo?.variables) {
+          for (const k of Object.keys(bookInfo.variables)) mergedVars[k] = bookInfo.variables[k];
+        }
+        const tocUrl = bookInfo?.tocUrl || book.bookUrl;
+        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
+        if (tocItems.length > 0) {
+          const oldCount = book.chapterCount || 0;
+          book.chapters = tocItems.map((item: TocItem, i: number): Chapter => ({
+            id: `${book.id}-c${i}`,
+            index: i + 1,
+            title: item.name,
+            duration: 0,
+            source: { type: 'url', value: item.url }
+          }));
+          book.chapterCount = book.chapters.length;
+          if (book.chapterCount !== oldCount) {
+            hasChange = true;
+          }
+        }
+        if (hasChange) {
+          await DataService.upsertCachedBook(book);
+          SearchCache.put(book);
+          updated++;
+        }
+      } catch (_e) {
+        failed++;
+      } finally {
+        this.refreshProgress = `正在刷新 ${idx + 1}/${onlineBooks.length}`;
+      }
+    });
+    await Promise.all(tasks);
+    // 刷新完成后重新加载
+    await this.loadFavorites();
+    this.refreshProgress = '';
+    if (updated > 0 || failed > 0) {
+      const msg = updated > 0
+        ? `已更新 ${updated} 本书${failed > 0 ? `，${failed} 本失败` : ''}`
+        : `刷新完成，${failed} 本失败`;
+      promptAction.showToast({ message: msg });
+    } else {
+      promptAction.showToast({ message: '所有书籍已是最新' });
+    }
+  }
+
   private getProgressText(book: Book): string {
-    const unit = book.category === 'novel' ? '章' : '集';
     const h = this.historyMap[book.id];
     if (h && book.chapterCount > 0) {
       const idx = this.chapterIdxMap[book.id];
       if (idx !== undefined && idx >= 0) {
-        return `${idx + 1}${unit}/${book.chapterCount}${unit}`;
+        return `${idx + 1}集/${book.chapterCount}集`;
       }
-      return `共${book.chapterCount}${unit}`;
+      return `共${book.chapterCount}集`;
     }
     if (book.chapterCount > 0) {
-      return `共${book.chapterCount}${unit}`;
+      return `共${book.chapterCount}集`;
     }
     return book.author || '';
   }
@@ -114,6 +213,11 @@ export struct FavoritePage {
   private handleBookTap(book: Book): void {
     const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
+    // ★ 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state
+    if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
+      this.navStack.pushPathByName('player', book.id, onPop);
+      return;
+    }
     // 直接用已缓存的 historyMap,避免每次点击都 IO
     const history = this.historyMap[book.id];
     // 没有进度 → 详情页让用户选章节
@@ -137,20 +241,15 @@ export struct FavoritePage {
       return;
     }
     SearchCache.put(book);
-    if (book.category === 'novel') {
-      const params: Record<string, Object> = {
-        'bookId': book.id as Object,
-        'chapterIndex': idx as Object
-      };
-      this.navStack.pushPathByName('TextReaderPage', params, onPop);
-    } else {
-      const params: Record<string, Object> = {
-        'bookId': book.id as Object,
-        'chapterId': history.chapterId as Object,
-        'progressMs': history.progressMs as Object
-      };
-      this.navStack.pushPathByName('player', params, onPop);
-    }
+    // 用校正后的章节 id(idx 可能因 TOC 重排已被标题校正过),
+    // 直接传 history.chapterId 会让播放器再按旧 id 找回错位置
+    const resolved = book.chapters[idx];
+    const params: Record<string, Object> = {
+      'bookId': book.id as Object,
+      'chapterId': resolved.id as Object,
+      'progressMs': history.progressMs as Object
+    };
+    this.navStack.pushPathByName('player', params, onPop);
   }
 
   /** 老收藏的在线书没缓存章节时,先拉 toc 再恢复进度;期间禁用重复点击 */
@@ -159,8 +258,7 @@ export struct FavoritePage {
     this.resolvingTocId = book.id;
     promptAction.showToast({ message: '加载章节中...' });
     try {
-      const sourcesJson = await PreferenceService.getBookSources();
-      const sources = JSON.parse(sourcesJson) as BookSource[];
+      const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
       if (!source) {
         promptAction.showToast({ message: '书源已删除,请到详情页重新选择' });
@@ -194,16 +292,19 @@ export struct FavoritePage {
       // 持久化新 toc,下次点击不用再拉
       await DataService.upsertCachedBook(book);
       SearchCache.put(book);
-      const idx = book.chapters.findIndex((c) => c.id === history.chapterId);
+      const idx = DataService.resolveChapterIndex(book, history.chapterId, history.chapterTitle);
       if (idx < 0) {
-        // 章节顺序变了,定位不回去 → 交给详情页让用户选
+        // 标题和 id 都定位不回去(章节可能已下架) → 交给详情页让用户选
         this.navStack.pushPathByName('detail', book.id, onPop);
         return;
       }
       this.chapterIdxMap[book.id] = idx;
+      // 传校正后章节的 id:连载在头部插新章后,旧 -c{idx} 已指向别的章节,
+      // 标题校正拿到正确 idx,再取它的当前 id 给播放器
+      const resolved = book.chapters[idx];
       const params: Record<string, Object> = {
         'bookId': book.id as Object,
-        'chapterId': history.chapterId as Object,
+        'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
       this.navStack.pushPathByName('player', params, onPop);
@@ -253,20 +354,21 @@ export struct FavoritePage {
   private async doRemove(bookId: string, deleteFiles: boolean): Promise<void> {
     if (!this.context) return;
     if (deleteFiles) {
-      const novelDir = this.context.filesDir + '/novel/' + bookId;
       const audioDir = this.context.filesDir + '/audio/' + bookId;
-      try { await fileIo.rmdir(novelDir); } catch (_e) { /* not exists */ }
       try { await fileIo.rmdir(audioDir); } catch (_e) { /* not exists */ }
       await DataService.removeImportedBook(bookId);
     }
-    await PreferenceService.toggleFavorite(bookId);
+    await PreferenceService.removeFavorite(bookId);
+    if (!bookId.startsWith('import_')) {
+      await DataService.removeCachedBook(bookId);
+    }
     await this.loadFavorites();
   }
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // 内容层
-      Refresh({ refreshing: $$this.isRefreshing }) {
+      Refresh({ refreshing: $$this.isRefreshing, offset: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL }) {
         Grid() {
           ForEach(this.favoriteBooks, (book: Book) => {
             GridItem() {
@@ -291,15 +393,24 @@ export struct FavoritePage {
         .scrollBar(BarState.Off)
       }
       .onRefreshing(() => {
-        this.loadFavorites().finally(() => { this.isRefreshing = false; });
+        this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
       })
 
       // 浮顶标题（去掉 backgroundBlurStyle,改用纯色背景,转场时省 GPU）
       Column() {
-        Text('书架')
-          .fontSize(AppFont.TitleL)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
+        Row() {
+          Text('书架')
+            .fontSize(AppFont.TitleL)
+            .fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Bold)
+          if (this.refreshProgress) {
+            Text(this.refreshProgress)
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+              .margin({ left: AppSpace.Sm })
+          }
+        }
+        .width('100%')
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -342,7 +453,16 @@ export struct FavoritePage {
     .opacity(this.dragging ? 1 : 0)
     .animation({ duration: 250, curve: Curve.FastOutSlowIn })
     .allowDrop([])
-    .onDragEnter(() => { this.trashHover = true; })
+    .onDragEnter(() => {
+      this.trashHover = true;
+      // 进入删除区:轻震一下,让用户知道"放手就会删"
+      try {
+        vibrator.startVibration(
+          { type: 'time', duration: 30 },
+          { id: 0, usage: 'touch' }
+        ).catch((_e: object) => { /* 无震动器或权限被关 */ });
+      } catch (_e) { /* 同步异常忽略 */ }
+    })
     .onDragLeave(() => { this.trashHover = false; })
     .onDrop(() => {
       const id = this.draggingBookId;
@@ -350,6 +470,13 @@ export struct FavoritePage {
       this.dragging = false;
       this.draggingBookId = '';
       if (id) {
+        // 松手震一下,作为"删除即将触发"的确认
+        try {
+          vibrator.startVibration(
+            { type: 'time', duration: 60 },
+            { id: 0, usage: 'touch' }
+          ).catch((_e: object) => { /* 无震动器或权限被关 */ });
+        } catch (_e) { /* 同步异常忽略 */ }
         const book = this.favoriteBooks.find(b => b.id === id);
         if (book) this.confirmDelete(book);
       }
@@ -402,7 +529,7 @@ export struct FavoritePage {
           .borderRadius(AppRadius.Md)
           .clip(true)
         }
-        this.buildTypeBadge(book, false)
+        this.buildTypeBadge(false)
       }
       .width('100%')
       .borderRadius(AppRadius.Md)
@@ -462,12 +589,12 @@ export struct FavoritePage {
   }
 
   @Builder
-  buildTypeBadge(book: Book, small: boolean) {
+  buildTypeBadge(small: boolean) {
     Row({ space: small ? 2 : 3 }) {
-      SymbolGlyph(book.category === 'novel' ? $r('sys.symbol.book') : $r('sys.symbol.speaker_wave_2_fill'))
+      SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
         .fontSize(small ? 10 : 12)
         .fontColor([Color.White])
-      Text(book.category === 'novel' ? '电子书' : '有声书')
+      Text('有声书')
         .fontSize(small ? 9 : 10)
         .fontColor(Color.White)
         .fontWeight(FontWeight.Medium)
@@ -478,7 +605,7 @@ export struct FavoritePage {
       top: small ? 2 : 3,
       bottom: small ? 2 : 3
     })
-    .backgroundColor(book.category === 'novel' ? '#CC0A59F7' : '#CCFF8800')
+    .backgroundColor('#CCFF8800')
     .borderRadius(AppRadius.Sm)
     .margin({ top: small ? 5 : 6, left: small ? 5 : 6 })
   }
@@ -489,7 +616,7 @@ export struct FavoritePage {
       Column() {
         SymbolGlyph($r('sys.symbol.plus_circle'))
           .fontSize(32)
-          .fontColor(['#CCCCCC'])
+          .fontColor([$r('sys.color.font_tertiary')])
         Text('去书城寻好书')
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
@@ -499,8 +626,8 @@ export struct FavoritePage {
       .aspectRatio(0.72)
       .borderRadius(AppRadius.Md)
       .justifyContent(FlexAlign.Center)
-      .backgroundColor('#F5F5F5')
-      .border({ width: 1, color: '#E0E0E0', style: BorderStyle.Dashed })
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .border({ width: 1, color: $r('sys.color.comp_divider'), style: BorderStyle.Dashed })
 
       Text(' ')
         .fontSize(AppFont.Body)

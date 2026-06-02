@@ -12,57 +12,101 @@ const KEY_COLOR_MODE = 'color_mode';
 const KEY_IMPORTED_BOOKS = 'imported_books';
 const KEY_SOURCE_SUBSCRIPTIONS = 'source_subscriptions';
 const KEY_BOOK_SOURCES = 'book_sources';
+const KEY_BUILTIN_DISABLED = 'builtin_sources_disabled_v1';
 const KEY_DEFAULT_TAB = 'default_tab';
-const KEY_READER_FONT_SIZE = 'reader_font_size';
-const KEY_READER_LINE_SPACING = 'reader_line_spacing';
-const KEY_READER_BG_MODE = 'reader_bg_mode';
-const KEY_READER_FONT_FAMILY = 'reader_font_family';
-const KEY_READER_BRIGHTNESS = 'reader_brightness';
-const KEY_READER_SCROLL_POS = 'reader_scroll_pos_v2';
-const KEY_READER_BOOKMARKS = 'reader_bookmarks';
-const KEY_READER_FLIP_MODE = 'reader_flip_mode';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
+const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
+/** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
+const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
+/** 已添加的卡片 formId 集合(按卡片名分桶) */
+const KEY_WIDGET_FORM_IDS = 'widget_form_ids_v1';
+/** 每本书独立的最新播放进度,key = `${KEY_PROGRESS_PREFIX}${bookId}` */
+const KEY_PROGRESS_PREFIX = 'progress_v1_';
 
 export interface PlayHistoryItem {
   bookId: string;
   chapterId: string;
   progressMs: number;
   updatedAt: number;
+  // 章节标题:TOC 刷新/连载更新导致位置索引漂移时,用标题重新定位章节(id 兜底)
+  chapterTitle?: string;
+  // 章节真实时长(ms):有声书 TOC 不带时长,prepared 时回写,用于冷启动滑块/百分比
+  durationMs?: number;
 }
 
 export interface LastPlayedItem {
   bookId: string;
   chapterId: string;
   progressMs: number;
+  chapterTitle?: string;
+  durationMs?: number;
 }
 
-export interface ReaderBookmark {
+/**
+ * 单本书的最新播放进度。
+ * 与 PlayHistoryItem 的差异:per-book 一书一槽,永不溢出 50 条上限,
+ * 切书前 reset AVPlayer 之前必须先把这条落盘,确保切回时拿到的是最新进度。
+ */
+export interface PlayProgress {
+  bookId: string;
   chapterId: string;
   chapterTitle: string;
-  paraIndex: number;
-  preview: string;
-  addedAt: number;
+  /** 章节在 book.chapters 中的索引(便于快速渲染"X集/总集数") */
+  chapterIndex: number;
+  positionMs: number;
+  durationMs: number;
+  updatedAt: number;
 }
 
-interface ScrollPosEntry {
-  key: string;
-  paraIndex: number;
-}
-
-interface BookmarkBucket {
+/** 卡片侧需要的最小快照,主进程写,FormExtensionAbility 读后渲染 */
+export interface WidgetPlayerSnapshot {
   bookId: string;
-  list: ReaderBookmark[];
+  bookTitle: string;
+  author: string;
+  cover: string;
+  chapterId: string;
+  chapterTitle: string;
+  progressMs: number;
+  durationMs: number;
+  isPlaying: boolean;
+  updatedAt: number;
+  bgColor?: string;
+}
+
+/** 卡片名 -> formId 列表 */
+interface FormIdBucket {
+  name: string;
+  ids: string[];
 }
 
 export class PreferenceService {
   private static store: preferences.Preferences | null = null;
   private static initPromise: Promise<void> | null = null;
+  private static favoriteListener: (() => void) | null = null;
+  private static historyListener: (() => void) | null = null;
 
-  static async init(context: common.UIAbilityContext): Promise<void> {
+  /** 由 EntryAbility 启动时注入,用于触发卡片刷新(避免与 WidgetUpdater 形成循环 import) */
+  static onFavoriteChanged(cb: () => void): void {
+    PreferenceService.favoriteListener = cb;
+  }
+
+  static onHistoryChanged(cb: () => void): void {
+    PreferenceService.historyListener = cb;
+  }
+
+  private static notifyFavoriteChanged(): void {
+    PreferenceService.favoriteListener?.();
+  }
+
+  private static notifyHistoryChanged(): void {
+    PreferenceService.historyListener?.();
+  }
+
+  static async init(context: common.BaseContext): Promise<void> {
     if (PreferenceService.store) {
       return;
     }
@@ -75,7 +119,7 @@ export class PreferenceService {
     await PreferenceService.initPromise;
   }
 
-  static async ensureReady(context: common.UIAbilityContext): Promise<void> {
+  static async ensureReady(context: common.BaseContext): Promise<void> {
     if (PreferenceService.store) return;
     await PreferenceService.init(context);
   }
@@ -112,7 +156,20 @@ export class PreferenceService {
     }
     await s.put(KEY_FAVORITES, JSON.stringify(list));
     await s.flush();
+    PreferenceService.notifyFavoriteChanged();
     return added;
+  }
+
+  static async removeFavorite(bookId: string): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    const list = await PreferenceService.getFavorites();
+    const idx = list.indexOf(bookId);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      await s.put(KEY_FAVORITES, JSON.stringify(list));
+      await s.flush();
+      PreferenceService.notifyFavoriteChanged();
+    }
   }
 
   static async isFavorite(bookId: string): Promise<boolean> {
@@ -139,6 +196,7 @@ export class PreferenceService {
     }
     await s.put(KEY_HISTORY, JSON.stringify(list));
     await s.flush();
+    PreferenceService.notifyHistoryChanged();
   }
 
   static async removeHistory(bookId: string): Promise<void> {
@@ -147,11 +205,13 @@ export class PreferenceService {
     const filtered = list.filter((it) => it.bookId !== bookId);
     await s.put(KEY_HISTORY, JSON.stringify(filtered));
     await s.flush();
+    PreferenceService.notifyHistoryChanged();
   }
 
-  static async setLastPlayed(bookId: string, chapterId: string, progressMs: number = 0): Promise<void> {
+  static async setLastPlayed(bookId: string, chapterId: string, progressMs: number = 0,
+    chapterTitle?: string, durationMs?: number): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    const item: LastPlayedItem = { bookId, chapterId, progressMs };
+    const item: LastPlayedItem = { bookId, chapterId, progressMs, chapterTitle, durationMs };
     await s.put(KEY_LAST_PLAYED, JSON.stringify(item));
     await s.flush();
   }
@@ -165,6 +225,49 @@ export class PreferenceService {
     } catch (e) {
       return null;
     }
+  }
+
+  /**
+   * 单本书最新进度。
+   * 内存缓存命中时同步返回(快路径,supports 切书前后的快速读写);否则去 store 读。
+   */
+  private static progressMemo: Map<string, PlayProgress> = new Map();
+
+  static async getProgress(bookId: string): Promise<PlayProgress | null> {
+    if (!bookId) return null;
+    const memo = PreferenceService.progressMemo.get(bookId);
+    if (memo) return memo;
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_PROGRESS_PREFIX + bookId, '') as string;
+    if (!raw) return null;
+    try {
+      const p = JSON.parse(raw) as PlayProgress;
+      PreferenceService.progressMemo.set(bookId, p);
+      return p;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  static getProgressSync(bookId: string): PlayProgress | null {
+    if (!bookId) return null;
+    return PreferenceService.progressMemo.get(bookId) ?? null;
+  }
+
+  static async saveProgress(p: PlayProgress): Promise<void> {
+    if (!p || !p.bookId) return;
+    PreferenceService.progressMemo.set(p.bookId, p);
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_PROGRESS_PREFIX + p.bookId, JSON.stringify(p));
+    await s.flush();
+  }
+
+  static async removeProgress(bookId: string): Promise<void> {
+    if (!bookId) return;
+    PreferenceService.progressMemo.delete(bookId);
+    const s = await PreferenceService.ensureStore();
+    await s.delete(KEY_PROGRESS_PREFIX + bookId);
+    await s.flush();
   }
 
   static async getColorMode(): Promise<number> {
@@ -211,6 +314,24 @@ export class PreferenceService {
     await s.flush();
   }
 
+  /** 内置源禁用列表（保存被用户关掉的内置源 ID） */
+  static async getBuiltinDisabledIds(): Promise<string[]> {
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_BUILTIN_DISABLED, '[]') as string;
+    try {
+      const arr = JSON.parse(raw) as string[];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static async saveBuiltinDisabledIds(ids: string[]): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_BUILTIN_DISABLED, JSON.stringify(ids));
+    await s.flush();
+  }
+
   static async getDefaultTab(): Promise<number> {
     const s = await PreferenceService.ensureStore();
     return await s.get(KEY_DEFAULT_TAB, 0) as number;
@@ -222,50 +343,6 @@ export class PreferenceService {
     await s.flush();
   }
 
-  static async getReaderFontSize(): Promise<number> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_READER_FONT_SIZE, 18) as number;
-  }
-
-  static async setReaderFontSize(size: number): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_FONT_SIZE, size);
-    await s.flush();
-  }
-
-  static async getReaderLineSpacing(): Promise<number> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_READER_LINE_SPACING, 1.8) as number;
-  }
-
-  static async setReaderLineSpacing(v: number): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_LINE_SPACING, v);
-    await s.flush();
-  }
-
-  static async getReaderBgMode(): Promise<number> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_READER_BG_MODE, -1) as number;
-  }
-
-  static async setReaderBgMode(mode: number): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_BG_MODE, mode);
-    await s.flush();
-  }
-
-  static async getReaderFontFamily(): Promise<string> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_READER_FONT_FAMILY, 'HarmonyOS Sans') as string;
-  }
-
-  static async setReaderFontFamily(family: string): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_FONT_FAMILY, family);
-    await s.flush();
-  }
-
   static async getPrivacyAgreedVersion(): Promise<string> {
     const s = await PreferenceService.ensureStore();
     return await s.get(KEY_PRIVACY_AGREED_VERSION, '') as string;
@@ -274,17 +351,6 @@ export class PreferenceService {
   static async setPrivacyAgreedVersion(version: string): Promise<void> {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_PRIVACY_AGREED_VERSION, version);
-    await s.flush();
-  }
-
-  static async getReaderBrightness(): Promise<number> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_READER_BRIGHTNESS, -1) as number;
-  }
-
-  static async setReaderBrightness(v: number): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_BRIGHTNESS, v);
     await s.flush();
   }
 
@@ -309,17 +375,6 @@ export class PreferenceService {
   static async setAudioAutoResume(enabled: boolean): Promise<void> {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_AUDIO_AUTO_RESUME, enabled);
-    await s.flush();
-  }
-
-  static async getReaderFlipMode(): Promise<number> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_READER_FLIP_MODE, 0) as number;
-  }
-
-  static async setReaderFlipMode(v: number): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_FLIP_MODE, v);
     await s.flush();
   }
 
@@ -351,70 +406,68 @@ export class PreferenceService {
     await s.flush();
   }
 
-  static async getReaderScrollPos(bookId: string, chapterId: string): Promise<number> {
+  /** 卡片快照:主进程写,FormExtensionAbility 在 onAddForm/onUpdateForm 里读 */
+  static async getWidgetPlayerSnapshot(): Promise<WidgetPlayerSnapshot | null> {
     const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_READER_SCROLL_POS, '[]') as string;
-    const arr = JSON.parse(raw) as ScrollPosEntry[];
-    const key = `${bookId}:${chapterId}`;
-    const hit = arr.find((e) => e.key === key);
-    return hit ? hit.paraIndex : 0;
+    const raw = await s.get(KEY_WIDGET_PLAYER_SNAPSHOT, '') as string;
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as WidgetPlayerSnapshot;
+    } catch (_e) {
+      return null;
+    }
   }
 
-  static async setReaderScrollPos(bookId: string, chapterId: string, paraIndex: number): Promise<void> {
+  static async setWidgetPlayerSnapshot(snap: WidgetPlayerSnapshot): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_READER_SCROLL_POS, '[]') as string;
-    const arr = JSON.parse(raw) as ScrollPosEntry[];
-    const key = `${bookId}:${chapterId}`;
-    const idx = arr.findIndex((e) => e.key === key);
-    if (paraIndex <= 0) {
-      if (idx >= 0) arr.splice(idx, 1);
-    } else if (idx >= 0) {
-      arr[idx].paraIndex = paraIndex;
-    } else {
-      arr.push({ key, paraIndex });
-    }
-    if (arr.length > 200) {
-      arr.splice(0, arr.length - 200);
-    }
-    await s.put(KEY_READER_SCROLL_POS, JSON.stringify(arr));
+    await s.put(KEY_WIDGET_PLAYER_SNAPSHOT, JSON.stringify(snap));
     await s.flush();
   }
 
-  static async getBookmarks(bookId: string): Promise<ReaderBookmark[]> {
+  /** 已添加到桌面的卡片 formId 列表(按卡片名 name 分桶) */
+  static async getWidgetFormIds(name: string): Promise<string[]> {
     const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_READER_BOOKMARKS, '[]') as string;
-    const arr = JSON.parse(raw) as BookmarkBucket[];
-    const hit = arr.find((b) => b.bookId === bookId);
-    return hit ? hit.list : [];
+    const raw = await s.get(KEY_WIDGET_FORM_IDS, '[]') as string;
+    const arr = JSON.parse(raw) as FormIdBucket[];
+    const bucket = arr.find((b) => b.name === name);
+    return bucket ? bucket.ids.slice() : [];
   }
 
-  static async addBookmark(bookId: string, mark: ReaderBookmark): Promise<void> {
+  static async addWidgetFormId(name: string, formId: string): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_READER_BOOKMARKS, '[]') as string;
-    const arr = JSON.parse(raw) as BookmarkBucket[];
-    let bucket = arr.find((b) => b.bookId === bookId);
+    const raw = await s.get(KEY_WIDGET_FORM_IDS, '[]') as string;
+    const arr = JSON.parse(raw) as FormIdBucket[];
+    let bucket = arr.find((b) => b.name === name);
     if (!bucket) {
-      bucket = { bookId, list: [] };
+      bucket = { name, ids: [] };
       arr.push(bucket);
     }
-    const dup = bucket.list.findIndex((m) => m.chapterId === mark.chapterId && m.paraIndex === mark.paraIndex);
-    if (dup >= 0) bucket.list.splice(dup, 1);
-    bucket.list.unshift(mark);
-    if (bucket.list.length > 100) {
-      bucket.list.length = 100;
+    if (!bucket.ids.includes(formId)) {
+      bucket.ids.push(formId);
     }
-    await s.put(KEY_READER_BOOKMARKS, JSON.stringify(arr));
+    await s.put(KEY_WIDGET_FORM_IDS, JSON.stringify(arr));
     await s.flush();
   }
 
-  static async removeBookmark(bookId: string, chapterId: string, paraIndex: number): Promise<void> {
+  static async removeWidgetFormId(name: string, formId: string): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_READER_BOOKMARKS, '[]') as string;
-    const arr = JSON.parse(raw) as BookmarkBucket[];
-    const bucket = arr.find((b) => b.bookId === bookId);
+    const raw = await s.get(KEY_WIDGET_FORM_IDS, '[]') as string;
+    const arr = JSON.parse(raw) as FormIdBucket[];
+    const bucket = arr.find((b) => b.name === name);
     if (!bucket) return;
-    bucket.list = bucket.list.filter((m) => !(m.chapterId === chapterId && m.paraIndex === paraIndex));
-    await s.put(KEY_READER_BOOKMARKS, JSON.stringify(arr));
+    bucket.ids = bucket.ids.filter((id) => id !== formId);
+    await s.put(KEY_WIDGET_FORM_IDS, JSON.stringify(arr));
+    await s.flush();
+  }
+
+  static async getPreloadChapters(): Promise<number> {
+    const s = await PreferenceService.ensureStore();
+    return await s.get(KEY_PRELOAD_CHAPTERS, 3) as number;
+  }
+
+  static async setPreloadChapters(count: number): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_PRELOAD_CHAPTERS, count);
     await s.flush();
   }
 }

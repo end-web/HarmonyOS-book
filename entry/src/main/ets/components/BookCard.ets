@@ -24,8 +24,13 @@ export struct BookCard {
       return;
     }
     BookCard.shownIds.add(this.book.id);
-    const delay = Math.min(this.indexHint, 8) * 35;
-    setTimeout(() => { this.appeared = true; }, delay);
+    // 仅前几个卡片有交错入场动画，后续直接显示，避免滑动时大量动画叠加掉帧
+    if (this.indexHint < 6) {
+      const delay = this.indexHint * 40;
+      setTimeout(() => { this.appeared = true; }, delay);
+    } else {
+      this.appeared = true;
+    }
   }
 
   static resetAnimations(): void {

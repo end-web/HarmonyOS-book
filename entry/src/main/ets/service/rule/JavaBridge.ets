@@ -10,6 +10,7 @@
  */
 
 import { HttpClient } from '../http/HttpClient';
+import { AnalyzeUrl } from './AnalyzeUrl';
 
 interface AjaxOptions {
   method?: string;
@@ -43,13 +44,34 @@ export class JavaBridgeImpl {
 
   async ajax(url: string, options?: AjaxOptions): Promise<string> {
     try {
-      const method = options?.method?.toUpperCase() || 'GET';
+      // 解析 Legado "URL,{配置JSON}" 语法
+      let actualUrl = url;
+      let method = options?.method?.toUpperCase() || 'GET';
+      let body = options?.body || '';
+      let headers: Record<string, string> = options?.headers || {};
+
+      if (url.indexOf(',{') > 0) {
+        const split = AnalyzeUrl.splitUrlConfig(url);
+        actualUrl = split.url;
+        const cfg = split.config;
+        if (cfg.method && cfg.method !== 'GET') method = cfg.method;
+        if (cfg.body && !body) body = cfg.body;
+        if (cfg.headers) {
+          const keys = Object.keys(cfg.headers);
+          for (const k of keys) {
+            if (!headers[k]) headers[k] = cfg.headers[k];
+          }
+        }
+      }
+
       let response: string;
       if (method === 'POST') {
-        const headers = options?.headers || { 'Content-Type': 'application/x-www-form-urlencoded' };
-        response = await HttpClient.post(url, options?.body || '', headers);
+        if (!headers['Content-Type']) {
+          headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
+        response = await HttpClient.post(actualUrl, body, headers);
       } else {
-        response = await HttpClient.get(url);
+        response = await HttpClient.get(actualUrl);
       }
       this.lastResponse = response;
       return response;

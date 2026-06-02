@@ -13,3 +13,16 @@
 /.specstory
 /.tmp_shots
 /screenshot
+
+# Build logs
+*.log
+.build_log*
+.tmp/
+
+# Dump files
+simple_dump_*.txt
+小说json.txt
+
+# Jadx decompiled
+*.jadx
+*.jar

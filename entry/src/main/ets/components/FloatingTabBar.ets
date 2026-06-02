@@ -1,4 +1,4 @@
-import { AppColor, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
+import { AppFont, AppMotion, AppCurve } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface TabItem {
@@ -25,7 +25,7 @@ export struct FloatingTabBar {
         Column({ space: 8 }) {
           SymbolGlyph(this.selectedIndex === tab.id ? tab.symbolFill : tab.symbol)
             .fontSize(24)
-            .fontColor([this.selectedIndex === tab.id ? AppColor.Brand : '#999999'])
+            .fontColor([$r('sys.color.font_primary')])
             .renderingStrategy(SymbolRenderingStrategy.SINGLE)
             .scale({
               x: this.selectedIndex === tab.id ? 1.12 : 1,
@@ -35,8 +35,7 @@ export struct FloatingTabBar {
 
           Text(tab.label)
             .fontSize(AppFont.Caption)
-            .fontColor(this.selectedIndex === tab.id ? AppColor.Brand : '#999999')
-            .opacity(this.selectedIndex === tab.id ? 1 : 0.8)
+            .fontColor($r('sys.color.font_primary'))
             .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
         }
         .layoutWeight(1)
@@ -48,9 +47,9 @@ export struct FloatingTabBar {
     }
     .width('100%')
     .height(64)
-    .backgroundColor('#CCFFFFFF')
-    .backdropBlur(25)
-    .border({ width: { top: 0.5 }, color: '#1A000000' })
+    .backgroundColor($r('sys.color.background_primary'))
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .border({ width: { top: 0.5 }, color: $r('sys.color.comp_divider') })
     .padding({ bottom: WindowUtils.getBottomSafeVp() })
   }
 }

@@ -19,6 +19,22 @@
     {
       "name": "read_pasteboard_reason",
       "value": "用于粘贴书源链接"
+    },
+    {
+      "name": "PlayerFormAbility_desc",
+      "value": "听书卡片提供方"
+    },
+    {
+      "name": "PlayerFormAbility_label",
+      "value": "听书"
+    },
+    {
+      "name": "player_card_label",
+      "value": "听书"
+    },
+    {
+      "name": "player_card_desc",
+      "value": "桌面快速控制听书播放"
     }
   ]
 }

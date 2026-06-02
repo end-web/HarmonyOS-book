@@ -313,7 +313,22 @@ export class AnalyzeRule {
         ? this.content : JSON.stringify(this.content);
       const root = SimpleCSSSelector.parseHTML(html);
       const cleanRule = this.stripModePrefix(actualRule);
-      const elements = SimpleCSSSelector.querySelectorAll(root, cleanRule);
+      // Legado 对齐：单段内用 @ 拆分多级 select（如 #list@li 表示 #list 下面再 select li）
+      // 没有 @ 时退化为整段 querySelectorAll
+      const segments = AnalyzeRule.splitTopLevelAt(cleanRule);
+      let elements: HTMLElement[] = [root];
+      for (const seg of segments) {
+        const segTrim = seg.trim();
+        if (!segTrim) continue;
+        const next: HTMLElement[] = [];
+        for (const el of elements) {
+          const found = SimpleCSSSelector.querySelectorAll(el, segTrim);
+          for (const f of found) next.push(f);
+        }
+        elements = next;
+        if (elements.length === 0) break;
+      }
+      // 保留原始节点引用（outerHTML 序列化），方便子级 AnalyzeRule 重新解析
       result = elements.map((el) => SimpleCSSSelector.outerHTML(el));
     } else if (this.mode === RuleMode.XPath) {
       const html = typeof this.content === 'string'
@@ -340,6 +355,37 @@ export class AnalyzeRule {
 
     if (reverse) result.reverse();
     return result;
+  }
+
+  /**
+   * 按顶层 @ 切分（忽略 [..] / (..) 内的 @），用于 CSS 模式的多级 select。
+   * 例：#list@li / div.item@a@text 切成 ['#list','li'] / ['div.item','a','text']
+   */
+  private static splitTopLevelAt(rule: string): string[] {
+    const out: string[] = [];
+    let buf = '';
+    let depth = 0;
+    let inStr: string | null = null;
+    for (let i = 0; i < rule.length; i++) {
+      const c = rule[i];
+      if (inStr) {
+        buf += c;
+        if (c === '\\' && i + 1 < rule.length) { buf += rule[i + 1]; i++; continue; }
+        if (c === inStr) inStr = null;
+        continue;
+      }
+      if (c === '"' || c === "'") { inStr = c; buf += c; continue; }
+      if (c === '(' || c === '[') { depth++; buf += c; continue; }
+      if (c === ')' || c === ']') { depth--; buf += c; continue; }
+      if (c === '@' && depth === 0) {
+        out.push(buf);
+        buf = '';
+        continue;
+      }
+      buf += c;
+    }
+    out.push(buf);
+    return out;
   }
 
   private stripModePrefix(rule: string): string {
@@ -764,14 +810,19 @@ export class AnalyzeRule {
     if (cleanRule.toLowerCase().startsWith('@css:')) cleanRule = cleanRule.substring(5);
     if (cleanRule.startsWith('@@')) cleanRule = cleanRule.substring(2);
 
-    const analyzer = new RuleAnalyzer(cleanRule);
-    const parts = analyzer.splitRule('@');
+    // Legado 对齐：用 @ 切分多级 select / 末尾 attr name
+    const parts = AnalyzeRule.splitTopLevelAt(cleanRule).map((s) => s.trim()).filter((s) => s.length > 0);
+
+    if (parts.length === 0) return null;
 
     if (parts.length === 1) {
       const elements = SimpleCSSSelector.querySelectorAll(root, parts[0]);
       if (elements.length === 0) return null;
+      // 单段：先取 text，没有时 fallback 到把规则末尾段当 attr name。
+      // 例：'a' 规则若没文本，尝试当 a 标签直接取（保持现状行为）
       const texts = elements.map((el) => SimpleCSSSelector.getText(el)).filter((t) => t.length > 0);
-      return texts.length === 1 ? texts[0] : texts;
+      if (texts.length > 0) return texts.length === 1 ? texts[0] : texts;
+      return null;
     }
 
     let elements = SimpleCSSSelector.querySelectorAll(root, parts[0]);
@@ -788,6 +839,23 @@ export class AnalyzeRule {
     const lastPart = parts[parts.length - 1];
     const results: string[] = [];
 
+    // Legado: 末段若不是 text/html/attr 关键字，则尝试当 CSS 子选择器再 select 一层
+    // 否则直接当 attr name 提取
+    const isAttrKeyword = AnalyzeRule.isAttrKeyword(lastPart);
+    if (!isAttrKeyword) {
+      const sub: HTMLElement[] = [];
+      for (const el of elements) {
+        const found = SimpleCSSSelector.querySelectorAll(el, lastPart);
+        for (const f of found) sub.push(f);
+      }
+      if (sub.length > 0) {
+        // 末段是子选择器：取 text
+        const texts = sub.map((el) => SimpleCSSSelector.getText(el)).filter((t) => t.length > 0);
+        if (texts.length > 0) return texts.length === 1 ? texts[0] : texts;
+      }
+      // fallback：当 attr name 处理
+    }
+
     for (const el of elements) {
       const value = this.extractByAttr(el, lastPart);
       if (value !== null && value.length > 0) results.push(value);
@@ -795,6 +863,15 @@ export class AnalyzeRule {
 
     if (results.length === 0) return null;
     return results.length === 1 ? results[0] : results;
+  }
+
+  /** 末段是否是 Legado 内置 attr 关键字（text/textNodes/html/outerHtml/ownText/all/src/href/...） */
+  private static isAttrKeyword(s: string): boolean {
+    const lower = s.toLowerCase().trim();
+    if (/^attr\(.+\)$/i.test(lower)) return true;
+    // 单一标识符（无空格、无 . # [ : >）当作 attr name 候选
+    // text/html/owntext 等命中关键字；普通 attribute 名（href/src/data-xxx）也命中
+    return /^[a-zA-Z][\w-]*$/.test(lower);
   }
 
   private extractByAttr(el: HTMLElement, attr: string): string | null {

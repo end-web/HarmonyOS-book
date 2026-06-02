@@ -104,4 +104,21 @@ export class DataService {
     await PreferenceService.putCachedBookJson(JSON.stringify(filtered));
     DataService.cachedBooksMem = filtered;
   }
+
+  /**
+   * 在 book.chapters 中定位历史记录对应的章节索引。
+   * 章节 id 是位置型(`${book.id}-c${idx}`),连载更新/TOC 重排后会漂移,
+   * 因此优先用 chapterTitle 匹配(标题对同一集是稳定的),id 仅作兜底。
+   * 返回 -1 表示定位失败(章节已不存在)。
+   */
+  static resolveChapterIndex(book: Book, chapterId: string, chapterTitle?: string): number {
+    if (!book || !book.chapters || book.chapters.length === 0) return -1;
+    // 标题优先:连载在头部插新章后,旧 id 会指向错误位置,标题能纠正
+    if (chapterTitle) {
+      const byTitle = book.chapters.findIndex((c) => c.title === chapterTitle);
+      if (byTitle >= 0) return byTitle;
+    }
+    // 兜底:老记录没存标题时回退到 id
+    return book.chapters.findIndex((c) => c.id === chapterId);
+  }
 }

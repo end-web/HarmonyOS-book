@@ -15,6 +15,10 @@ export interface Chapter {
   title: string;
   duration: number;
   source: AudioSource;
+  /** 章节页 URL（用于解析音频时调 BookSourceService.getAudioUrl）。
+   *  source.value 在播放期间会被解析后的真实音频 URL 覆盖，
+   *  此字段保留原始章节页 URL，重启/续播时可以重新解析（避免临时签名链接过期）。 */
+  originSourceValue?: string;
 }
 
 export interface Book {
@@ -33,4 +37,8 @@ export interface Book {
   bookUrl: string;
   sourceUrl: string;
   variables?: Record<string, string>;
+  /** 跳过片头秒数（每本书独立设置） */
+  skipIntro?: number;
+  /** 跳过片尾秒数（每本书独立设置） */
+  skipOutro?: number;
 }

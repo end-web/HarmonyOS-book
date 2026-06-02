@@ -55,6 +55,9 @@ export struct SourcePage {
 
   private readonly COLLAPSE_HEIGHT: number = 56;
   private readonly TAB_HEIGHT: number = 40;
+  // 浮动批量操作栏要抬到 MiniPlayer 之上,与 MainPage 的浮层布局对齐:
+  // bottomSafe + barBottomMargin(12) + floatingTab(60) + gap(12) + miniPlayer(60) + gap(12) = bottomSafe + 156
+  private readonly BATCH_BAR_BOTTOM_VP: number = 156;
   private subScroller: Scroller = new Scroller();
   private srcScroller: Scroller = new Scroller();
   private context: common.UIAbilityContext | null = null;
@@ -74,6 +77,60 @@ export struct SourcePage {
       this.allSources = [];
       this.applySourceFilter();
     }
+  }
+
+  /**
+   * 下拉刷新:批量重拉所有订阅源 → 替换 allSources。
+   * 顺序遍历(避免一次性发 N 个并发请求把对方服务打瘫),失败的订阅保持旧数据。
+   */
+  private async refreshAllSubscriptions(): Promise<void> {
+    if (this.subscriptions.length === 0) {
+      // 没订阅源时下拉刷新等同 loadData(从本地重读)
+      await this.loadData();
+      return;
+    }
+    let okCount = 0;
+    let failCount = 0;
+    // 先拿当前所有书源,等会拿"非订阅源"那部分留住(本地导入的不要被刷掉)
+    const currentAll = await SourceDataService.getSources();
+    const subUrlSet = new Set(this.subscriptions.map((s: SourceSubscription): string => s.url));
+    const nonSubscribed = currentAll.filter((s: BookSource): boolean =>
+      !s.subscriptionUrl || !subUrlSet.has(s.subscriptionUrl));
+
+    const refreshed: BookSource[] = [];
+    for (let i = 0; i < this.subscriptions.length; i++) {
+      const sub = this.subscriptions[i];
+      try {
+        const sources = await BookSourceService.fetchSourcesFromUrl(sub.url);
+        for (const src of sources) {
+          src.subscriptionUrl = sub.url;
+        }
+        refreshed.push(...sources);
+        // 更新订阅元数据(count / lastUpdate)
+        const customName = sub.name;
+        this.subscriptions[i] = BookSourceService.buildSubscription(sub.url, sources);
+        if (customName && customName !== '加载失败') {
+          this.subscriptions[i].name = customName;
+        }
+        okCount++;
+      } catch (_e) {
+        // 失败:保留这条订阅源原有的书源(从 currentAll 里挑出来)
+        const old = currentAll.filter((s: BookSource): boolean => s.subscriptionUrl === sub.url);
+        refreshed.push(...old);
+        failCount++;
+      }
+    }
+    const merged = nonSubscribed.concat(refreshed);
+    await SourceDataService.saveSources(merged);
+    await this.saveSubscriptions();
+    this.allSources = await SourceDataService.getSources();
+    this.applySourceFilter();
+    emitSourcesChanged();
+    promptAction.showToast({
+      message: failCount === 0
+        ? `已刷新 ${okCount} 个订阅源`
+        : `刷新完成:${okCount} 成功,${failCount} 失败`
+    });
   }
 
   private applySourceFilter(): void {
@@ -334,7 +391,8 @@ export struct SourcePage {
   }
 
   private async toggleSourceEnabled(source: BookSource): Promise<void> {
-    source.enabled = !source.enabled;
+    // 注意：调用方（onToggleEnabled / Switch.onChange）已经把 source.enabled 设成最新值，
+    // 这里只负责落盘 + 刷新 UI，不要再翻一次。
     await SourceDataService.saveSources(this.allSources);
     this.allSources = [...this.allSources];
     this.applySourceFilter();
@@ -456,42 +514,9 @@ export struct SourcePage {
     return this.headerOffset / this.COLLAPSE_HEIGHT;
   }
 
-  private contentTopPadding(): number {
-    return WindowUtils.getStatusBarHeightVp() + this.COLLAPSE_HEIGHT + this.TAB_HEIGHT;
-  }
-
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Tabs({ index: this.activeTab, barPosition: BarPosition.Start }) {
-        TabContent() {
-          this.buildSubscriptionList()
-        }
-
-        TabContent() {
-          this.buildSourceList()
-        }
-      }
-      .barHeight(0)
-      .scrollable(true)
-      .animationDuration(220)
-      .onChange((index: number) => {
-        this.activeTab = index;
-        if (this.isSelectMode && index !== 1) {
-          this.exitSelectMode();
-        }
-        const hasContent = index === 0
-          ? this.subscriptions.length > 0
-          : this.allSources.length > 0;
-        if (!hasContent) {
-          this.headerOffset = 0;
-          return;
-        }
-        const s = index === 0 ? this.subScroller : this.srcScroller;
-        this.updateHeaderOffset(s);
-      })
-      .width('100%')
-      .height('100%')
-
+    Column() {
+      // 顶部固定区域(标题 + Tab 切换)
       Column() {
         Column() {
           Row() {
@@ -554,14 +579,49 @@ export struct SourcePage {
       }
       .width('100%')
 
-      if (this.isSelectMode) {
-        Column() {
-          this.buildBatchActionBar()
+      // 内容区域(占满剩余空间,Refresh 自然在 header 下方)
+      Stack({ alignContent: Alignment.TopStart }) {
+        Tabs({ index: this.activeTab, barPosition: BarPosition.Start }) {
+          TabContent() {
+            this.buildSubscriptionList()
+          }
+
+          TabContent() {
+            this.buildSourceList()
+          }
         }
+        .barHeight(0)
+        .scrollable(true)
+        .animationDuration(220)
+        .onChange((index: number) => {
+          this.activeTab = index;
+          if (this.isSelectMode && index !== 1) {
+            this.exitSelectMode();
+          }
+          const hasContent = index === 0
+            ? this.subscriptions.length > 0
+            : this.allSources.length > 0;
+          if (!hasContent) {
+            this.headerOffset = 0;
+            return;
+          }
+          const s = index === 0 ? this.subScroller : this.srcScroller;
+          this.updateHeaderOffset(s);
+        })
         .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .position({ bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Sm })
+        .height('100%')
+
+        if (this.isSelectMode) {
+          Column() {
+            this.buildBatchActionBar()
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Center)
+          .position({ bottom: WindowUtils.getBottomSafeVp() + this.BATCH_BAR_BOTTOM_VP })
+        }
       }
+      .width('100%')
+      .layoutWeight(1)
     }
     .width('100%')
     .height('100%')
@@ -710,7 +770,6 @@ export struct SourcePage {
       }
       .width('100%')
       .height('100%')
-      .padding({ top: this.contentTopPadding() })
       .justifyContent(FlexAlign.Center)
     } else {
       Refresh({ refreshing: $$this.isRefreshing }) {
@@ -766,7 +825,7 @@ export struct SourcePage {
           }
           .width('100%')
           .alignItems(HorizontalAlign.Start)
-          .padding({ top: this.contentTopPadding() + AppSpace.Sm, bottom: WindowUtils.getFloatingTabBottomVp() })
+          .padding({ top: AppSpace.Sm, bottom: WindowUtils.getFloatingTabBottomVp() })
         }
         .width('100%')
         .height('100%')
@@ -778,7 +837,7 @@ export struct SourcePage {
         })
       }
       .onRefreshing(() => {
-        this.loadData().finally(() => { this.isRefreshing = false; });
+        this.refreshAllSubscriptions().finally(() => { this.isRefreshing = false; });
       })
     }
   }
@@ -795,13 +854,12 @@ export struct SourcePage {
       }
       .width('100%')
       .height('100%')
-      .padding({ top: this.contentTopPadding() })
       .justifyContent(FlexAlign.Center)
     } else {
       Refresh({ refreshing: $$this.isRefreshing }) {
         List({ scroller: this.srcScroller }) {
           ListItem() {
-            Column().height(this.contentTopPadding() + AppSpace.Sm)
+            Column().height(AppSpace.Sm)
           }
 
           LazyForEach(this.sourceDataSource, (source: BookSource) => {
@@ -827,7 +885,7 @@ export struct SourcePage {
 
           ListItem() {
             Column().height(this.isSelectMode
-              ? WindowUtils.getFloatingTabBottomVp() + 72
+              ? WindowUtils.getBottomSafeVp() + this.BATCH_BAR_BOTTOM_VP + 88
               : WindowUtils.getFloatingTabBottomVp())
           }
         }
@@ -847,7 +905,7 @@ export struct SourcePage {
         })
       }
       .onRefreshing(() => {
-        this.loadData().finally(() => { this.isRefreshing = false; });
+        this.refreshAllSubscriptions().finally(() => { this.isRefreshing = false; });
       })
     }
   }
