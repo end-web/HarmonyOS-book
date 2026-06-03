@@ -67,3 +67,18 @@ export class AppCurve {
   static readonly Spring = curves.springMotion(0.4, 0.85);
   static readonly SpringSoft = curves.springMotion(0.6, 0.9);
 }
+
+/**
+ * 首页改版颜色聚合（仅 HomePage / ResumeCard 使用）
+ * 走 base/dark element/color.json 双份资源，自动深浅切换。
+ */
+export class HomeTheme {
+  static readonly BgWarmTop: Resource = $r('app.color.home_bg_warm_top');
+  static readonly BgWarmMid: Resource = $r('app.color.home_bg_warm_mid');
+  static readonly BgNeutral: Resource = $r('app.color.home_bg_neutral');
+  static readonly Accent: Resource = $r('app.color.home_accent');
+  static readonly AccentSoft: Resource = $r('app.color.home_accent_soft');
+  static readonly CardSurface: Resource = $r('app.color.home_card_surface');
+  static readonly CardShadow: Resource = $r('app.color.home_card_shadow');
+  static readonly ProgressTrack: Resource = $r('app.color.home_progress_track');
+}
