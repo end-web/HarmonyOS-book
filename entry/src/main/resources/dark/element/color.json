@@ -16,6 +16,15 @@
     { "name": "home_accent_soft", "value": "#33FF8A5A" },
     { "name": "home_card_surface", "value": "#2C2C2C" },
     { "name": "home_card_shadow", "value": "#33000000" },
-    { "name": "home_progress_track", "value": "#1FFFFFFF" }
+    { "name": "home_progress_track", "value": "#1FFFFFFF" },
+    { "name": "app_brand", "value": "#FF8A5A" },
+    { "name": "app_brand_hover", "value": "#FFA078" },
+    { "name": "app_brand_pressed", "value": "#E0764A" },
+    { "name": "app_brand_disabled", "value": "#5C3F2F" },
+    { "name": "app_brand_soft", "value": "#33FF8A5A" },
+    { "name": "app_brand_dark", "value": "#E07042" },
+    { "name": "app_on_brand", "value": "#FFFFFF" },
+    { "name": "app_divider", "value": "#1FFFFFFF" },
+    { "name": "app_shadow", "value": "#33000000" }
   ]
 }
