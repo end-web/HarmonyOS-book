@@ -26,15 +26,111 @@ export struct ResumeCard {
 
   @Builder
   cardBuilder() {
-    Row({ space: AppSpace.Sm }) {
-      Text('card placeholder')
-        .fontColor($r('sys.color.font_primary'))
-        .fontSize(AppFont.Body)
+    Row({ space: AppSpace.Md }) {
+      this.coverBuilder()
+
+      Column({ space: 4 }) {
+        Text(this.modeLabel())
+          .fontSize(AppFont.Caption)
+          .fontColor(HomeTheme.Accent)
+          .fontWeight(FontWeight.Bold)
+          .letterSpacing(1)
+
+        Text(this.book?.title ?? '')
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Bold)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+
+        Text(this.subtitle())
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+
+        if (this.mode === ResumeCardMode.Resume) {
+          Stack({ alignContent: Alignment.Start }) {
+            Column()
+              .width('100%')
+              .height(3)
+              .borderRadius(2)
+              .backgroundColor(HomeTheme.ProgressTrack)
+            Column()
+              .width(`${Math.max(0, Math.min(1, this.progress)) * 100}%`)
+              .height(3)
+              .borderRadius(2)
+              .backgroundColor(HomeTheme.Accent)
+          }
+          .width('100%')
+          .margin({ top: 6 })
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Center)
+
+      Stack() {
+        SymbolGlyph($r('sys.symbol.play_fill'))
+          .fontSize(14)
+          .fontColor([Color.White])
+      }
+      .width(32)
+      .height(32)
+      .borderRadius(16)
+      .backgroundColor(HomeTheme.Accent)
+      .shadow({ radius: 8, color: HomeTheme.CardShadow, offsetY: 2 })
+      .onClick(() => this.onTapPlay())
     }
     .width('100%')
     .padding(AppSpace.Sm)
     .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs })
     .backgroundColor(HomeTheme.CardSurface)
     .borderRadius(AppRadius.Lg)
+    .shadow({ radius: 14, color: HomeTheme.CardShadow, offsetY: 4 })
+    .onClick(() => this.onTapBody())
+  }
+
+  @Builder
+  coverBuilder() {
+    if (this.book?.cover && this.book.cover.startsWith('http')) {
+      Image(this.book.cover)
+        .width(44)
+        .height(60)
+        .borderRadius(6)
+        .objectFit(ImageFit.Cover)
+    } else {
+      Stack() {
+        Column().width('100%').height('100%').backgroundColor(HomeTheme.Accent)
+        Text(this.book?.title ? this.book.title.substring(0, 1) : '?')
+          .fontSize(18)
+          .fontColor(Color.White)
+          .fontWeight(FontWeight.Bold)
+      }
+      .width(44)
+      .height(60)
+      .borderRadius(6)
+      .clip(true)
+    }
+  }
+
+  private modeLabel(): string {
+    if (this.mode === ResumeCardMode.Resume) return '继续收听';
+    if (this.mode === ResumeCardMode.Suggest) return '今日推荐';
+    return '';
+  }
+
+  private subtitle(): string {
+    if (this.mode === ResumeCardMode.Resume) {
+      return this.chapterTitle || '继续上次播放';
+    }
+    if (this.mode === ResumeCardMode.Suggest && this.book) {
+      const author: string = this.book.author || '未知';
+      const narrator: string | undefined = this.book.narrator;
+      return narrator ? `${author} · ${narrator}` : author;
+    }
+    return '';
   }
 }
