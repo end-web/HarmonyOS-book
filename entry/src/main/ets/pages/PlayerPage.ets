@@ -4,14 +4,11 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { AppColor, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
-import { BookSource } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
 import { AudioService } from '../service/AudioService';
-import { BookSourceService } from '../service/BookSourceService';
 import { PreferenceService } from '../service/PreferenceService';
 import { PlaybackStore } from '../service/PlaybackStore';
-import { SourceDataService } from '../service/SourceDataService';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
@@ -46,7 +43,7 @@ export struct PlayerPage {
   /** 章节列表滚动位置 vs 当前播放章节的偏离（vp）；用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
 
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private context: common.UIAbilityContext | null = null;
   private speeds: number[] = [0.75, 1.0, 1.25, 1.75, 2.0];
   private lastCoverKey: string = '';
   private chapterListScroller: Scroller = new Scroller();
@@ -56,6 +53,7 @@ export struct PlayerPage {
   };
 
   aboutToAppear(): void {
+    this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(true);
@@ -93,7 +91,7 @@ export struct PlayerPage {
     await AudioService.getInstance().whenReady();
     let b = SearchCache.get(this.bookId);
     if (!b) {
-      b = await DataService.getBookById(this.context, this.bookId) || null;
+      b = await DataService.getBookById(this.context!, this.bookId) || null;
     }
     if (!b && this.playerState.currentBook) {
       // 不强制 id 匹配:卡片语义就是"打开正在播放的书",不同会话间 id 可能因
@@ -113,7 +111,7 @@ export struct PlayerPage {
     this.extractCoverColor(b.cover);
 
     // 绑定全局状态/上下文
-    AudioService.getInstance().bind(this.playerState, this.context);
+    AudioService.getInstance().bind(this.playerState, this.context!);
 
     // 历史记录入口：若指定了恢复章节，且当前 AudioService 没有在播放该章节，则主动起播 + seek
     if (this.resumeChapterId) {
@@ -377,7 +375,7 @@ export struct PlayerPage {
         } else if (cover.startsWith('/')) {
           rgb = await ColorPickerUtils.pickFromFile(cover);
         } else {
-          rgb = await ColorPickerUtils.pickFromRawfile(this.context, cover);
+          rgb = await ColorPickerUtils.pickFromRawfile(this.context!, cover);
         }
       } catch (e) {
         console.error('[PlayerPage] extractCoverColor failed: ' + JSON.stringify(e));
@@ -829,7 +827,7 @@ export struct PlayerPage {
           Text(this.getSegmentLabel(segIdx))
             .fontSize(AppFont.Body)
             .fontColor(this.chapterSegmentIndex === segIdx ? '#FFFFFF' : $r('sys.color.font_secondary'))
-            .backgroundColor(this.chapterSegmentIndex === segIdx ? AppColor.Brand : '#0D000000')
+            .backgroundColor(this.chapterSegmentIndex === segIdx ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
             .borderRadius(16)
             .padding({ left: 16, right: 16, top: 8, bottom: 8 })
             .onClick(() => {

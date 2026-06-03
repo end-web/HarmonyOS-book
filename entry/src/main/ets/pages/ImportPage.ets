@@ -4,7 +4,6 @@ import { picker } from '@kit.CoreFileKit';
 import { zlib, emitter } from '@kit.BasicServicesKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { media } from '@kit.MediaKit';
-import { promptAction } from '@kit.ArkUI';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { DataService } from '../service/DataService';
@@ -33,7 +32,7 @@ export struct ImportPage {
   @Local importDone: boolean = false;
   @Local progressText: string = '';
 
-  private context!: common.UIAbilityContext;
+  private context: common.UIAbilityContext | null = null;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -44,7 +43,7 @@ export struct ImportPage {
       const opt = new picker.DocumentSelectOptions();
       opt.maxSelectNumber = 50;
       opt.fileSuffixFilters = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.zip'];
-      const dp = new picker.DocumentViewPicker(this.context);
+      const dp = new picker.DocumentViewPicker(this.context!);
       const uris = await dp.select(opt);
       if (!uris || uris.length === 0) return;
       const files: PickedFile[] = [];
@@ -72,7 +71,7 @@ export struct ImportPage {
       if (!result || !result.photoUris || result.photoUris.length === 0) return;
       const srcUri = result.photoUris[0];
       const ext = this.extractExt(srcUri) || '.jpg';
-      const dir = this.context.filesDir + '/covers';
+      const dir = this.context!.filesDir + '/covers';
       try { await fileIo.mkdir(dir, true); } catch (_e) { /* exists */ }
       const dest = `${dir}/cover_${Date.now()}${ext}`;
       const src = await fileIo.open(srcUri, fileIo.OpenMode.READ_ONLY);
@@ -87,15 +86,23 @@ export struct ImportPage {
   }
 
   private extractFileName(uri: string): string {
-    const fullName = new fileUri.FileUri(uri).name;
-    const dotIdx = fullName.lastIndexOf('.');
-    return dotIdx > 0 ? fullName.substring(0, dotIdx) : fullName;
+    try {
+      const fullName = new fileUri.FileUri(uri).name;
+      const dotIdx = fullName.lastIndexOf('.');
+      return dotIdx > 0 ? fullName.substring(0, dotIdx) : fullName;
+    } catch (_e) {
+      return '';
+    }
   }
 
   private extractExt(uri: string): string {
-    const fullName = new fileUri.FileUri(uri).name;
-    const dotIdx = fullName.lastIndexOf('.');
-    return dotIdx > 0 ? fullName.substring(dotIdx).toLowerCase() : '';
+    try {
+      const fullName = new fileUri.FileUri(uri).name;
+      const dotIdx = fullName.lastIndexOf('.');
+      return dotIdx > 0 ? fullName.substring(dotIdx).toLowerCase() : '';
+    } catch (_e) {
+      return '';
+    }
   }
 
   private isAudioExt(ext: string): boolean {
@@ -145,13 +152,21 @@ export struct ImportPage {
     const stamp = Date.now().toString() + '_' + Math.floor(Math.random() * 1000);
     const cachedZip = `${extractRoot}/_src_${stamp}.zip`;
     const outDir = `${extractRoot}/${pf.name}_${stamp}`;
-    await fileIo.mkdir(outDir, true);
 
-    const sf = await fileIo.open(pf.uri, fileIo.OpenMode.READ_ONLY);
-    const df = await fileIo.open(cachedZip, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
-    await fileIo.copyFile(sf.fd, df.fd);
-    await fileIo.close(sf);
-    await fileIo.close(df);
+    // 把 content uri 的 zip 复制到沙箱；try/finally 确保异常时也关闭 fd，避免泄漏
+    let sf: fileIo.File | null = null;
+    let df: fileIo.File | null = null;
+    try {
+      await fileIo.mkdir(outDir, true);
+      sf = await fileIo.open(pf.uri, fileIo.OpenMode.READ_ONLY);
+      df = await fileIo.open(cachedZip, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
+      await fileIo.copyFile(sf.fd, df.fd);
+    } catch (e) {
+      throw new Error('准备解压失败: ' + (e as Error).message);
+    } finally {
+      if (sf) { try { await fileIo.close(sf); } catch (_e) { /* ignore */ } }
+      if (df) { try { await fileIo.close(df); } catch (_e) { /* ignore */ } }
+    }
 
     this.progressText = `解压 ${pf.name}.zip`;
     await new Promise<void>((resolve, reject) => {
@@ -204,7 +219,7 @@ export struct ImportPage {
     this.importing = true;
     this.progressText = '准备中...';
     const bookId = 'import_' + Date.now().toString();
-    const extractRoot = `${this.context.cacheDir}/import_extract_${bookId}`;
+    const extractRoot = `${this.context!.cacheDir}/import_extract_${bookId}`;
     let needCleanup = false;
 
     try {
@@ -247,7 +262,7 @@ export struct ImportPage {
         return;
       }
 
-      const dir = this.context.filesDir + '/audio/' + bookId;
+      const dir = this.context!.filesDir + '/audio/' + bookId;
       await fileIo.mkdir(dir, true);
       const book = await this.importAudioBook(bookId, dir, audioFiles);
       await DataService.addImportedBook(book);
@@ -257,7 +272,7 @@ export struct ImportPage {
       this.progressText = '';
       this.importDone = true;
       try {
-        promptAction.showToast({ message: '导入成功，已加入书架', duration: 1800 });
+        this.getUIContext().getPromptAction().showToast({ message: '导入成功，已加入书架', duration: 1800 });
       } catch (_e) { /* ignore */ }
       emitter.emit(EVT_SWITCH_TAB, { data: { index: TAB_INDEX_FAVORITE } });
       this.navStack.pop();
@@ -417,7 +432,7 @@ export struct ImportPage {
               }
               .width('100%')
               .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
-            }, (pf: PickedFile, idx: number) => idx.toString())
+            }, (pf: PickedFile) => pf.uri)
 
             Row({ space: AppSpace.Sm }) {
               Text('重新选择')
@@ -549,7 +564,7 @@ export struct ImportPage {
       Button(this.importing ? '导入中...' : '开始导入')
         .width('100%')
         .height(48)
-        .backgroundColor(this.canImport() ? AppColor.Brand : '#CCCCCC')
+        .backgroundColor(this.canImport() ? AppColor.Brand : AppColor.BrandDisabled)
         .fontColor(Color.White)
         .fontSize(AppFont.BodyL)
         .borderRadius(AppRadius.Md)

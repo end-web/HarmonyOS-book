@@ -1,18 +1,21 @@
 import { curves } from '@kit.ArkUI';
 
 export class AppColor {
-  static readonly Brand: string = '#0A59F7';
-  static readonly BrandSoft: string = '#3B7BF9';
-  static readonly BrandDark: string = '#084CD6';
+  static readonly Brand: Resource = $r('app.color.app_brand');
+  static readonly BrandHover: Resource = $r('app.color.app_brand_hover');
+  static readonly BrandPressed: Resource = $r('app.color.app_brand_pressed');
+  static readonly BrandDisabled: Resource = $r('app.color.app_brand_disabled');
+  static readonly BrandSoft: Resource = $r('app.color.app_brand_soft');
+  static readonly BrandDark: Resource = $r('app.color.app_brand_dark');
+  static readonly OnBrand: Resource = $r('app.color.app_on_brand');
 
-  static readonly OnBrand: string = '#FFFFFF';
+  static readonly Divider: Resource = $r('app.color.app_divider');
+  static readonly Shadow: Resource = $r('app.color.app_shadow');
 
+  // 半透明蒙层保留字面 hex（玻璃态、覆盖层），不深浅适配
   static readonly GlassBg: string = '#33FFFFFF';
   static readonly GlassBgDark: string = '#33000000';
   static readonly GlassStroke: string = '#1FFFFFFF';
-
-  static readonly Shadow: string = '#1A000000';
-  static readonly Divider: string = '#1F000000';
 }
 
 export class AppRadius {
