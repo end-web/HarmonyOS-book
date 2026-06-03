@@ -56,8 +56,9 @@ export default class EntryAbility extends UIAbility {
       // 提前把 PlayerState 还原到全局 AppStorage,这样卡片 call 进来时
       // AudioService 已经有 currentBook/Chapter,play() 才能正常工作
       await this.bootstrapAudioService();
-      // 启动时把 lastPlayed 推一份到卡片,避免冷启动卡片显示空态
-      const snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
+      // 启动时把 lastPlayed 推一份到卡片,避免冷启动卡片显示空态。
+      // 这里(主进程)允许写回 preferences,FormExt 那边的 seed 路径只在内存里用,不写盘
+      const snap = await WidgetUpdater.seedAndPersistFromLastPlayed();
       if (snap) {
         await WidgetUpdater.pushSnapshotToCards();
       }

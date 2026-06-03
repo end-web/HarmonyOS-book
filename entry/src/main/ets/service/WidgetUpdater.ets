@@ -211,7 +211,12 @@ export class WidgetUpdater {
     // no-op
   }
 
-  /** 没有快照时,从 lastPlayed + cachedBooks 拼一份兜底快照(冷启动卡片首次添加用) */
+  /** 没有快照时,从 lastPlayed + cachedBooks 拼一份兜底快照(冷启动卡片首次添加用)。
+   *  注意:这里 isPlaying 必须保持 false —— 兜底是给"主进程从未推过快照"的场景用的,
+   *  此时主进程那边肯定不在播。
+   *  ★ 不再写回 preferences:FormExt 与主进程的 preferences 缓存不互通,
+   *  如果 FormExt 因缓存陈旧错读出 null 走到这里,写回会用 false 覆盖
+   *  主进程刚 put 的真值(磁盘也被污染),卡片就会卡在"暂停"。 */
   static async seedSnapshotFromLastPlayed(): Promise<WidgetPlayerSnapshot | null> {
     const last = await PreferenceService.getLastPlayed();
     if (!last) return null;
@@ -236,7 +241,16 @@ export class WidgetUpdater {
       isPlaying: false,
       updatedAt: Date.now(),
     };
-    await PreferenceService.setWidgetPlayerSnapshot(snap);
+    return snap;
+  }
+
+  /** EntryAbility 启动时调:把兜底快照写回 preferences 给桌面卡片使用。
+   *  和 seedSnapshotFromLastPlayed 分开,确保只有主进程会写盘。 */
+  static async seedAndPersistFromLastPlayed(): Promise<WidgetPlayerSnapshot | null> {
+    const snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
+    if (snap) {
+      await PreferenceService.setWidgetPlayerSnapshot(snap);
+    }
     return snap;
   }
 

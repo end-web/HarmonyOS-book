@@ -124,6 +124,20 @@ export class PreferenceService {
     await PreferenceService.init(context);
   }
 
+  /**
+   * 抛弃当前进程内的 preferences 缓存,强制下次 init 重新从文件读。
+   * preferences 不支持多进程并发,FormExtensionAbility 进程的内存缓存
+   * 不会感知主进程后续 put 的值;每次进入 onUpdateForm 前调一次,
+   * 才能拿到主进程最新写入的卡片快照(避免卡片显示暂停但实际还在播)。
+   */
+  static async invalidateCache(context: common.BaseContext): Promise<void> {
+    try {
+      await preferences.removePreferencesFromCache(context, { name: STORE_NAME });
+    } catch (_e) { /* ignore */ }
+    PreferenceService.store = null;
+    PreferenceService.initPromise = null;
+  }
+
   private static async ensureStore(): Promise<preferences.Preferences> {
     if (!PreferenceService.store) {
       if (PreferenceService.initPromise) {

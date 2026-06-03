@@ -39,6 +39,9 @@ export default class PlayerFormAbility extends FormExtensionAbility {
 
   private async persistAndPushAsync(formId: string): Promise<void> {
     if (!formId) return;
+    // FormExt 与主进程隔离,preferences 缓存不会跨进程同步,
+    // 每次回调先抛掉本进程缓存重新打开,才能读到主进程最新写入的快照
+    await PreferenceService.invalidateCache(this.context);
     await PreferenceService.init(this.context);
     WidgetUpdater.setContext(this.context);
     await PreferenceService.addWidgetFormId(WIDGET_PLAYER, formId);
@@ -57,7 +60,9 @@ export default class PlayerFormAbility extends FormExtensionAbility {
 
   onRemoveForm(formId: string): void {
     hilog.info(DOMAIN, TAG, 'onRemoveForm formId=%{public}s', formId);
-    PreferenceService.init(this.context).then(() => {
+    PreferenceService.invalidateCache(this.context).then(() => {
+      return PreferenceService.init(this.context);
+    }).then(() => {
       return PreferenceService.removeWidgetFormId(WIDGET_PLAYER, formId);
     }).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'onRemoveForm failed: %{public}s',
@@ -66,7 +71,11 @@ export default class PlayerFormAbility extends FormExtensionAbility {
   }
 
   onUpdateForm(formId: string, _wantParams?: Record<string, Object>): void {
-    PreferenceService.init(this.context).then(async () => {
+    // 同 onAddForm:每次系统触发刷新前先抛掉本进程 preferences 缓存,
+    // 否则 FormExt 复用 10s 内会一直读到陈旧的 isPlaying,卡片显示与主进程播放状态错位
+    PreferenceService.invalidateCache(this.context).then(() => {
+      return PreferenceService.init(this.context);
+    }).then(async () => {
       WidgetUpdater.setContext(this.context);
       let snap = await PreferenceService.getWidgetPlayerSnapshot();
       if (!snap) {

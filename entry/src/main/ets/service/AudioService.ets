@@ -407,6 +407,10 @@ export class AudioService {
     this.stopTick();
     this.timer = setInterval(() => {
       this.persistHistory();
+      // 同步给 widget:稳态播放期间 stateChange 不再翻转,卡片那边的 FormExt 进程
+      // 缓存又跟主进程隔离,系统触发 onUpdateForm 时容易读到陈旧的 isPlaying。
+      // 主进程每 5s 强推一次最新状态,卡片至多滞后 5s 即可纠正。
+      this.syncPlaybackState();
     }, 5000);
   }
 

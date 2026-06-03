@@ -637,7 +637,7 @@ export struct PlayerPage {
 
       Blank()
 
-      Stack() {
+      Stack({ alignContent: Alignment.Center }) {
         Column()
           .width(64)
           .height(64)
