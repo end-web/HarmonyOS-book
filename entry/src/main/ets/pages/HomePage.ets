@@ -1,15 +1,20 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType, hdsMaterial } from '@kit.UIDesignKit';
-import { LengthMetrics } from '@kit.ArkUI';
-import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
+import { AppStorageV2, LengthMetrics } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
+import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
 import { SearchResult, HomeBlockSection } from '../model/BookSource';
+import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
+import { PreferenceService } from '../service/PreferenceService';
+import { DataService } from '../service/DataService';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
+import { ResumeCard, ResumeCardMode } from '../components/ResumeCard';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { EVT_SOURCES_CHANGED } from './SourcePage';
@@ -30,10 +35,15 @@ export struct HomePage {
   @Local viewMode: number = 0; // 0=grid, 1=list
   @Local pendingCount: number = 0;
   @Local audioCount: number = 0;
-  @Local isRefreshingAudio: boolean = false;
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local loadingHome: boolean = false;
-  @Local isRefreshingHome: boolean = false;
+  /** 续听卡状态（由 loadResumeState 维护） */
+  @Local resumeMode: ResumeCardMode = ResumeCardMode.Empty;
+  @Local resumeBook: Book | null = null;
+  @Local resumeChapterTitle: string = '';
+  @Local resumeProgress: number = 0;
+  /** 全局播放状态（监听 currentBook 变化触发续听卡刷新） */
+  @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
 
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
@@ -60,6 +70,7 @@ export struct HomePage {
     emitter.on(EVT_SOURCES_CHANGED, this.sourcesChangedHandler);
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.contentScroller);
+    this.loadResumeState();
   }
 
   aboutToDisappear(): void {
@@ -91,6 +102,10 @@ export struct HomePage {
         this.loadingHome = false;
         hilog.info(DOMAIN, TAG, 'loadHomeBlocks: +%{public}d from %{public}s, total=%{public}d',
           blocks.length, source.bookSourceName, this.homeBlocks.length);
+        // 首板块到货 → 若续听卡仍是 Empty,触发 Suggest 兜底
+        if (this.resumeMode === ResumeCardMode.Empty) {
+          this.loadResumeState();
+        }
       });
       if (gen !== this.homeGen) return;
       hilog.info(DOMAIN, TAG, 'loadHomeBlocks: done total=%{public}d', this.homeBlocks.length);
@@ -99,7 +114,6 @@ export struct HomePage {
     } finally {
       if (gen === this.homeGen) {
         this.loadingHome = false;
-        this.isRefreshingHome = false;
       }
     }
   }
@@ -113,7 +127,6 @@ export struct HomePage {
     this.audioCount = 0;
     this.audioDataSource.clear();
     this.pendingCount = 0;
-    this.isRefreshingAudio = false;
   }
 
   private homeBookFromResult(r: SearchResult): Book {
@@ -189,7 +202,6 @@ export struct HomePage {
             if (this.pendingCount <= 0) {
               this.searching = false;
               this.searchingSource = '';
-              this.isRefreshingAudio = false;
               hilog.info(DOMAIN, TAG, 'search done: audio=%{public}d', this.audioCount);
             }
           });
@@ -236,8 +248,23 @@ export struct HomePage {
   }
 
   build() {
-    HdsNavigation() {
-      List({ scroller: this.contentScroller }) {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // L0 暖色渐变背景层（满屏，覆盖到状态栏）
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [HomeTheme.BgWarmTop, 0.0],
+            [HomeTheme.BgWarmMid, 0.35],
+            [HomeTheme.BgNeutral, 1.0]
+          ]
+        })
+
+      // L1 原 HdsNavigation
+      HdsNavigation() {
+        List({ scroller: this.contentScroller }) {
         // 第1项：搜索框 + (条件) 工具栏 —— 跟随滚动，滚到标题"首页"后方产生沉浸光感
         ListItem() {
           Column() {
@@ -288,6 +315,20 @@ export struct HomePage {
             }
           }
           .width('100%')
+        }
+
+        // 第1.5项：续听卡 / 今日推荐（仅推荐态，且非 Empty）
+        if (!this.hasSearched && this.resumeMode !== ResumeCardMode.Empty) {
+          ListItem() {
+            ResumeCard({
+              mode: this.resumeMode,
+              book: this.resumeBook,
+              chapterTitle: this.resumeChapterTitle,
+              progress: this.resumeProgress,
+              onTapBody: () => this.onResumeBodyTap(),
+              onTapPlay: () => this.onResumePlayTap()
+            })
+          }
         }
 
         // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
@@ -414,10 +455,11 @@ export struct HomePage {
       })
       .cachedCount(5)
       .clip(false) // 允许内容穿透到标题栏下方产生光感效果
+      .backgroundColor(Color.Transparent) // 让 L0 暖色渐变透出
     }
     .titleBar({
       content: {
-        title: { mainTitle: '' }
+        title: { mainTitle: '首页' }
       },
       style: {
         scrollEffectOpts: {
@@ -436,6 +478,8 @@ export struct HomePage {
     .bindToScrollable([this.contentScroller])
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
+    }
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
   }
 
   @Builder
@@ -671,5 +715,72 @@ export struct HomePage {
     .width('100%')
     .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
     .onClick(() => this.onBookTap(book.id))
+  }
+
+  @Monitor('playerState.currentBook')
+  onCurrentBookChange(): void {
+    this.loadResumeState();
+  }
+
+  private async loadResumeState(): Promise<void> {
+    // 1) 优先：lastPlayed 还原
+    try {
+      const last = await PreferenceService.getLastPlayed();
+      if (last && last.bookId) {
+        const book = await this.restoreBookById(last.bookId);
+        if (book) {
+          this.resumeBook = book;
+          this.resumeChapterTitle = last.chapterTitle ?? '';
+          const dur = last.durationMs ?? 0;
+          this.resumeProgress = dur > 0 ? Math.max(0, Math.min(1, last.progressMs / dur)) : 0;
+          this.resumeMode = ResumeCardMode.Resume;
+          return;
+        }
+      }
+    } catch (_e) {
+      // 还原失败兜底走 Suggest
+    }
+
+    // 2) 兜底：homeBlocks[0].books[0] → Suggest
+    if (this.homeBlocks.length > 0 && this.homeBlocks[0].books.length > 0) {
+      const r = this.homeBlocks[0].books[0];
+      this.resumeBook = this.homeBookFromResult(r);
+      this.resumeChapterTitle = '';
+      this.resumeProgress = 0;
+      this.resumeMode = ResumeCardMode.Suggest;
+      return;
+    }
+
+    // 3) 都没有：Empty
+    this.resumeMode = ResumeCardMode.Empty;
+    this.resumeBook = null;
+  }
+
+  private async restoreBookById(bookId: string): Promise<Book | null> {
+    // 优先内存 SearchCache（同步，最快）
+    const cached = SearchCache.get(bookId);
+    if (cached) return cached;
+    // 兜底走 DataService（覆盖收藏 / 历史 / cachedBooks）
+    try {
+      const ctx = this.getUIContext()?.getHostContext() as common.UIAbilityContext | undefined;
+      if (!ctx) return null;
+      const found = await DataService.getBookById(ctx, bookId);
+      return found ?? null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  private onResumeBodyTap(): void {
+    if (!this.resumeBook) return;
+    this.onBookTap(this.resumeBook.id);
+  }
+
+  private onResumePlayTap(): void {
+    if (!this.resumeBook) return;
+    // Resume 模式带 progress 续播；Suggest 模式仅路由（详情页负责后续）
+    // 路由仍走 onBookTap 回调，progressMs 由 PlaybackStore + 详情页恢复，
+    // 与现有"返回首页继续播"路径一致，避免引入新事件协议。
+    this.onBookTap(this.resumeBook.id);
   }
 }
