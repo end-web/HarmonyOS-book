@@ -329,6 +329,8 @@ export struct HomePage {
               onTapPlay: () => this.onResumePlayTap()
             })
           }
+          .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs })
+          .margin({ bottom: AppSpace.Md })
         }
 
         // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
@@ -459,7 +461,7 @@ export struct HomePage {
     }
     .titleBar({
       content: {
-        title: { mainTitle: '首页' }
+        title: { mainTitle: '' }
       },
       style: {
         scrollEffectOpts: {

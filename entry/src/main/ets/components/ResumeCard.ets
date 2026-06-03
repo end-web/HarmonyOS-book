@@ -86,7 +86,6 @@ export struct ResumeCard {
     }
     .width('100%')
     .padding(AppSpace.Sm)
-    .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs })
     .backgroundColor(HomeTheme.CardSurface)
     .borderRadius(AppRadius.Lg)
     .shadow({ radius: 14, color: HomeTheme.CardShadow, offsetY: 4 })
