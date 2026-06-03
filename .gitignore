@@ -26,3 +26,6 @@ simple_dump_*.txt
 # Jadx decompiled
 *.jadx
 *.jar
+
+# Superpowers brainstorming workdir
+.superpowers/
