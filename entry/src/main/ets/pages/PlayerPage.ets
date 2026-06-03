@@ -31,6 +31,8 @@ export struct PlayerPage {
   @Local skipIntroValue: number = 0;
   @Local skipOutroValue: number = 0;
   @Local blurColor: string = 'rgba(42,42,42,0)';
+  @Local themeColorHex: string = '';
+  @Local themeColorDarkHex: string = '';
   @Local hasThemeColor: boolean = false;
   @Local renderBlur: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;;
@@ -72,11 +74,24 @@ export struct PlayerPage {
     if (!b) return;
     this.book = b;
     if (!b.cover) return;
+
     const rgb = ColorPickerUtils.getCached(b.cover);
-    if (!rgb) return;
-    this.blurColor = ColorPickerUtils.toBlurColor(rgb);
-    this.hasThemeColor = true;
-    this.lastCoverKey = b.cover;
+    if (!rgb) {
+      // 取色缓存未命中:先不设置背景,让封面先渲染
+      this.lastCoverKey = b.cover;
+      return;
+    }
+
+    // ★ 延迟 200ms 设置背景色,给封面 Image 组件留解码时间
+    setTimeout(() => {
+      const cachedRgb = ColorPickerUtils.getCached(b!.cover);
+      if (!cachedRgb) return;
+      this.blurColor = ColorPickerUtils.toBlurColor(cachedRgb);
+      this.themeColorHex = ColorPickerUtils.toHex(cachedRgb);
+      this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(cachedRgb, 0.4));
+      this.hasThemeColor = true;
+      this.lastCoverKey = b!.cover;
+    }, 200);
   }
 
   aboutToDisappear(): void {
@@ -244,6 +259,8 @@ export struct PlayerPage {
     this.showChapterList = true;
     this.listOffsetFromCurrent = 0;
     if (!this.book) return;
+    // 日志：验证实际章节数（排查"显示 2000 章"问题）
+    hilog.info(DOMAIN, TAG, `打开章节列表：共 ${this.book.chapters.length} 章`);
     if (this.book.chapters.length <= this.SEGMENT_SIZE) {
       this.chapterSegmentIndex = 0;
       this.scrollToCurrentChapter(0);
@@ -253,6 +270,7 @@ export struct PlayerPage {
         const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
         if (idx >= 0) {
           this.chapterSegmentIndex = Math.floor(idx / this.SEGMENT_SIZE);
+          hilog.info(DOMAIN, TAG, `当前章节索引 ${idx}，定位到第 ${this.chapterSegmentIndex + 1} 段`);
           this.scrollToCurrentChapter(this.chapterSegmentIndex * this.SEGMENT_SIZE);
           return;
         }
@@ -276,20 +294,49 @@ export struct PlayerPage {
 
   private getSegmentCount(): number {
     if (!this.book) return 0;
-    return Math.ceil(this.book.chapters.length / this.SEGMENT_SIZE);
+    const total = this.book.chapters.length;
+    if (total <= this.SEGMENT_SIZE) return 1;
+
+    const rawCount = Math.ceil(total / this.SEGMENT_SIZE);
+    const lastSegSize = total - (rawCount - 1) * this.SEGMENT_SIZE;
+
+    // 最后一段 < 500 章 → 合并到倒数第二段
+    if (lastSegSize < 500) {
+      return rawCount - 1;
+    }
+    return rawCount;
   }
 
   private getSegmentChapters(): Chapter[] {
     if (!this.book || this.chapterSegmentIndex < 0) return [];
+    const total = this.book.chapters.length;
+    const segCount = this.getSegmentCount();
     const start = this.chapterSegmentIndex * this.SEGMENT_SIZE;
-    const end = Math.min(start + this.SEGMENT_SIZE, this.book.chapters.length);
+
+    // 最后一段：吸收所有剩余章节（包括合并的小段）
+    if (this.chapterSegmentIndex === segCount - 1) {
+      return this.book.chapters.slice(start, total);
+    }
+
+    // 非最后一段：标准 1000 章
+    const end = Math.min(start + this.SEGMENT_SIZE, total);
     return this.book.chapters.slice(start, end);
   }
 
   private getSegmentLabel(segIdx: number): string {
+    if (!this.book) return '';
+    const total = this.book.chapters.length;
+    const segCount = this.getSegmentCount();
     const start = segIdx * this.SEGMENT_SIZE;
-    const end = Math.min(start + this.SEGMENT_SIZE, this.book!.chapters.length) - 1;
-    return `${start + 1}-${end + 1}`;
+
+    // 最后一段：显示到总章节数
+    if (segIdx === segCount - 1) {
+      return `${start + 1}-${total}`;
+    }
+
+    // 非最后一段：标准 1000 章分段
+    const end = Math.min(start + this.SEGMENT_SIZE, total);
+    return `${start + 1}-${end}`;
   }
 
   /** "回到当前章节"按钮:切回当前章节所在分段并居中滚到 */
@@ -385,44 +432,58 @@ export struct PlayerPage {
       if (cover !== this.lastCoverKey) return;
 
       this.blurColor = ColorPickerUtils.toBlurColor(rgb);
+      this.themeColorHex = ColorPickerUtils.toHex(rgb);
+      this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.4));
       this.hasThemeColor = true;
     }, 100);
   }
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 背景层：封面图 + backgroundEffect 色调融合材质模糊
+      // 背景层：取色成功用主色渐变，失败/未完成时封面模糊兜底
       Stack() {
-        if (this.book && this.book.cover) {
-          if (this.book.cover.startsWith('http')) {
-            Image(this.book.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          } else if (this.book.cover.startsWith('/')) {
-            Image('file://' + this.book.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          } else {
-            Image($rawfile(this.book.cover))
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
+        if (this.hasThemeColor) {
+          // 取色成功：主色→深主色渐变，不渲染封面图
+          Column()
+            .width('100%')
+            .height('100%')
+            .linearGradient({
+              angle: 160,
+              colors: [[this.themeColorHex, 0], [this.themeColorDarkHex, 1]]
+            })
+            .animation({ duration: 600, curve: Curve.EaseOut })
+        } else {
+          // 取色未完成/失败：封面模糊兜底
+          if (this.book && this.book.cover) {
+            if (this.book.cover.startsWith('http')) {
+              Image(this.book.cover)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Cover)
+            } else if (this.book.cover.startsWith('/')) {
+              Image('file://' + this.book.cover)
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Cover)
+            } else {
+              Image($rawfile(this.book.cover))
+                .width('100%')
+                .height('100%')
+                .objectFit(ImageFit.Cover)
+            }
           }
+          // 封面模糊层
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundEffect({
+              radius: this.renderBlur ? 80 : 0,
+              saturation: 0.7,
+              brightness: 0.85,
+              color: this.blurColor
+            })
+            .animation({ duration: 600, curve: Curve.EaseOut })
         }
-
-        // 色调融合材质模糊层
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundEffect({
-            radius: this.renderBlur ? 80 : 0,
-            saturation: 0.8,
-            brightness: 0.6,
-            color: this.blurColor
-          })
-          .animation({ duration: 600, curve: Curve.EaseOut })
       }
       .width('100%')
       .height('100%')
@@ -499,6 +560,7 @@ export struct PlayerPage {
             .borderRadius(16)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+            .renderMode(ImageRenderMode.Original)
             .alt($r('app.media.startIcon'))
             .onError(() => {
               console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
@@ -513,6 +575,7 @@ export struct PlayerPage {
             .borderRadius(16)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+            .renderMode(ImageRenderMode.Original)
         } else if (this.book!.cover) {
           Image($rawfile(this.book!.cover))
             .width('100%')
@@ -520,6 +583,7 @@ export struct PlayerPage {
             .borderRadius(16)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+            .renderMode(ImageRenderMode.Original)
         } else {
           Column() {
             SymbolGlyph($r('sys.symbol.music'))
@@ -651,7 +715,7 @@ export struct PlayerPage {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
             .fontSize(30)
-            .fontColor(['#2A4A45'])
+            .fontColor([$r('sys.color.font_primary')])
         }
       }
       .width(64)
@@ -705,10 +769,10 @@ export struct PlayerPage {
       Column({ space: 4 }) {
         SymbolGlyph($r('sys.symbol.clock'))
           .fontSize(22)
-          .fontColor([this.playerState.sleepMinutes > 0 ? '#FF6B8A' : '#FFFFFF'])
+          .fontColor([this.playerState.sleepMinutes > 0 ? AppColor.Brand : '#FFFFFF'])
         Text(this.playerState.sleepMinutes > 0 ? this.formatSleepRemaining() : '定时')
           .fontSize(AppFont.Caption)
-          .fontColor(this.playerState.sleepMinutes > 0 ? '#FF6B8A' : '#FFFFFF')
+          .fontColor(this.playerState.sleepMinutes > 0 ? AppColor.Brand : '#FFFFFF')
       }
       .layoutWeight(1)
       .onClick(() => { this.showSleepSheet = true; })

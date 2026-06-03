@@ -78,20 +78,18 @@ export class WindowUtils {
 
   // 与 MainPage 中常量保持一致
   private static readonly FLOATING_TAB_HEIGHT: number = 60;
-  private static readonly MINI_PLAYER_HEIGHT: number = 60;
   private static readonly FLOATING_GAP: number = 12;
   private static readonly FLOATING_BOTTOM: number = 4;
 
   /**
-   * TabContent 底部需要为浮动 Tab 栏和 MiniPlayer 让出的高度(vp)。
-   * 计算公式: FLOATING_BOTTOM + FLOATING_TAB_HEIGHT + FLOATING_GAP + MINI_PLAYER_HEIGHT + 额外间距
-   * 始终预留固定高度,避免播放状态切换导致页面重排。
+   * TabContent 底部需要为浮动 Tab 栏让出的高度(vp)。
+   * 计算公式: FLOATING_BOTTOM + FLOATING_TAB_HEIGHT + FLOATING_GAP
+   * 说明: 现在 MiniPlayer 折叠后与 Tab 栏同处一行(不再单独占一行),
+   *       故不再为 MiniPlayer 预留高度。
    */
   static getFloatingTabBottomVp(): number {
     return WindowUtils.FLOATING_BOTTOM +
            WindowUtils.FLOATING_TAB_HEIGHT +
-           WindowUtils.FLOATING_GAP +
-           WindowUtils.MINI_PLAYER_HEIGHT +
            WindowUtils.FLOATING_GAP;
   }
 }

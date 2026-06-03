@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, promptAction } from '@kit.ArkUI';
+import { AppStorageV2 } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
@@ -206,7 +206,6 @@ export struct BookDetailPage {
     if (idx > 0) {
       setTimeout(() => {
         this.chapterListScroller.scrollToIndex(idx, true, ScrollAlign.CENTER);
-        this.activeTab = 1;
       }, 100);
     }
   }
@@ -214,7 +213,9 @@ export struct BookDetailPage {
   private async toggleFavorite(): Promise<void> {
     if (!this.book) return;
     if (this.bookId.startsWith('import_') && this.isFavorite) {
-      promptAction.showToast({ message: '导入的书需在书架长按删除' });
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '导入的书需在书架长按删除' });
+      } catch (_e) { /* ignore */ }
       return;
     }
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
@@ -512,7 +513,10 @@ export struct BookDetailPage {
         .border(this.activeTab === 1
           ? { width: { bottom: 2 }, color: { bottom: AppColor.Brand } }
           : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
-        .onClick(() => { this.activeTab = 1; })
+        .onClick(() => {
+          this.activeTab = 1;
+          this.scrollToCurrentChapter();
+        })
     }
     .width('100%')
     .border({ width: { bottom: 0.5 }, color: { bottom: AppColor.Divider } })
@@ -733,7 +737,10 @@ export struct BookDetailPage {
       // 章节列表入口
       SymbolGlyph($r('sys.symbol.list_bullet'))
         .fontSize(22).fontColor([$r('sys.color.font_secondary')])
-        .onClick(() => { this.activeTab = 1; })
+        .onClick(() => {
+          this.activeTab = 1;
+          this.scrollToCurrentChapter();
+        })
     }
     .width('100%')
     .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm + WindowUtils.getBottomSafeVp() })

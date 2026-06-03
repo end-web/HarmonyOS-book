@@ -51,6 +51,7 @@ struct PlayerCard {
   build() {
     Stack() {
       // 背景层：有染色时用融合色渐变，否则封面铺底或默认渐变
+      // 不加 borderRadius，由最外层 Stack 统一 clip，避免多层裁剪产生毛边
       if (this.bgColor.length > 0) {
         Column()
           .width('100%')
@@ -87,7 +88,7 @@ struct PlayerCard {
               Image(this.coverSrc())
                 .width('100%')
                 .height('100%')
-                .borderRadius(5)
+                .borderRadius(12)
                 .objectFit(ImageFit.Cover)
                 .syncLoad(true)
             } else {
@@ -99,14 +100,16 @@ struct PlayerCard {
               }
               .width('100%')
               .height('100%')
-              .borderRadius(5)
+              .borderRadius(12)
               .backgroundColor('#33FFFFFF')
               .justifyContent(FlexAlign.Center)
             }
           }
-          .width(44)
+          .width(60)
           .height(60)
-          .shadow({ radius: 5, color: '#66000000', offsetY: 1 })
+          .backgroundColor(Color.Transparent)
+          .borderRadius(12)
+          .clip(true)
 
           Column() {
             // 书名:最多 2 行,超过才省略
@@ -187,8 +190,6 @@ struct PlayerCard {
     }
     .width('100%')
     .height('100%')
-    .borderRadius(20)
-    .clip(true)
   }
 
   /** 左右按钮:无背景圆圈,纯图标 */

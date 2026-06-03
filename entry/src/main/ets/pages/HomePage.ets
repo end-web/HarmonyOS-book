@@ -317,17 +317,24 @@ export struct HomePage {
           .width('100%')
         }
 
-        // 第1.5项：续听卡 / 今日推荐（仅推荐态，且非 Empty）
-        if (!this.hasSearched && this.resumeMode !== ResumeCardMode.Empty) {
+        // 第1.5项：精品推荐走马灯（仅推荐态，取第一个板块前5本书）
+        if (!this.hasSearched && this.homeBlocks.length > 0 && this.homeBlocks[0].books.length >= 3) {
           ListItem() {
-            ResumeCard({
-              mode: this.resumeMode,
-              book: this.resumeBook,
-              chapterTitle: this.resumeChapterTitle,
-              progress: this.resumeProgress,
-              onTapBody: () => this.onResumeBodyTap(),
-              onTapPlay: () => this.onResumePlayTap()
-            })
+            Swiper() {
+              ForEach(this.homeBlocks[0].books.slice(0, 5), (r: SearchResult) => {
+                this.buildSwiperCard(r)
+              }, (r: SearchResult) => `${r.sourceUrl}#${r.bookUrl}`)
+            }
+            .autoPlay(true)
+            .loop(true)
+            .interval(5000)
+            .indicator(
+              new DotIndicator()
+                .color($r('sys.color.comp_background_tertiary'))
+                .selectedColor(HomeTheme.Accent)
+            )
+            .width('100%')
+            .height(180)
           }
           .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs })
           .margin({ bottom: AppSpace.Md })
@@ -643,6 +650,33 @@ export struct HomePage {
     }
     .width('100%')
     .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
+    .onClick(() => {
+      const book = this.homeBookFromResult(r);
+      this.onBookTap(book.id);
+    })
+  }
+
+  @Builder
+  buildSwiperCard(r: SearchResult) {
+    Stack() {
+      if (r.coverUrl && r.coverUrl.startsWith('http')) {
+        Image(r.coverUrl)
+          .width('100%')
+          .height('100%')
+          .borderRadius(AppRadius.Lg)
+          .objectFit(ImageFit.Cover)
+      } else {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor($r('sys.color.brand'))
+          .borderRadius(AppRadius.Lg)
+      }
+    }
+    .width('100%')
+    .height(200)
+    .borderRadius(AppRadius.Lg)
+    .shadow({ radius: 8, color: HomeTheme.CardShadow, offsetX: 0, offsetY: 2 })
     .onClick(() => {
       const book = this.homeBookFromResult(r);
       this.onBookTap(book.id);

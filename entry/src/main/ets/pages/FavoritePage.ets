@@ -1,9 +1,8 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { promptAction } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
-import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
@@ -14,6 +13,12 @@ import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
+
+interface BookUpdateInfo {
+  title: string;
+  oldCount: number;
+  newCount: number;
+}
 
 @ComponentV2
 export struct FavoritePage {
@@ -106,13 +111,16 @@ export struct FavoritePage {
     const onlineBooks = this.favoriteBooks.filter(b =>
       !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
     if (onlineBooks.length === 0) {
-      promptAction.showToast({ message: '书架中没有在线书籍' });
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '书架中没有在线书籍' });
+      } catch (_e) { /* ignore */ }
       return;
     }
     this.refreshProgress = `正在刷新 0/${onlineBooks.length}`;
     const sources = await SourceDataService.getSources();
     let updated = 0;
     let failed = 0;
+    const updatedBooks: BookUpdateInfo[] = [];
     // 并行刷新所有在线书
     const tasks = onlineBooks.map(async (book, idx) => {
       try {
@@ -124,6 +132,9 @@ export struct FavoritePage {
         // 1. 获取最新书籍信息
         const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
         let hasChange = false;
+        let chapterChanged = false;
+        const oldCount = book.chapterCount || 0;
+        let newCount = oldCount;
         if (bookInfo) {
           // 更新封面/简介/作者等元数据
           if (bookInfo.coverUrl && bookInfo.coverUrl !== book.cover) {
@@ -157,7 +168,6 @@ export struct FavoritePage {
         const tocUrl = bookInfo?.tocUrl || book.bookUrl;
         const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
         if (tocItems.length > 0) {
-          const oldCount = book.chapterCount || 0;
           book.chapters = tocItems.map((item: TocItem, i: number): Chapter => ({
             id: `${book.id}-c${i}`,
             index: i + 1,
@@ -166,14 +176,19 @@ export struct FavoritePage {
             source: { type: 'url', value: item.url }
           }));
           book.chapterCount = book.chapters.length;
-          if (book.chapterCount !== oldCount) {
+          newCount = book.chapterCount;
+          if (newCount !== oldCount) {
             hasChange = true;
+            chapterChanged = newCount > oldCount;
           }
         }
         if (hasChange) {
           await DataService.upsertCachedBook(book);
           SearchCache.put(book);
           updated++;
+          if (chapterChanged) {
+            updatedBooks.push({ title: book.title, oldCount, newCount });
+          }
         }
       } catch (_e) {
         failed++;
@@ -185,14 +200,37 @@ export struct FavoritePage {
     // 刷新完成后重新加载
     await this.loadFavorites();
     this.refreshProgress = '';
-    if (updated > 0 || failed > 0) {
-      const msg = updated > 0
-        ? `已更新 ${updated} 本书${failed > 0 ? `，${failed} 本失败` : ''}`
-        : `刷新完成，${failed} 本失败`;
-      promptAction.showToast({ message: msg });
-    } else {
-      promptAction.showToast({ message: '所有书籍已是最新' });
+    this.showRefreshResult(updatedBooks, updated, failed);
+  }
+
+  /** 把刷新结果以对话框形式呈现:有新集的书逐本列出,无新集只 toast */
+  private showRefreshResult(updatedBooks: BookUpdateInfo[], updated: number, failed: number): void {
+    const prompt = this.getUIContext().getPromptAction();
+    if (updatedBooks.length > 0) {
+      // 按新增集数从多到少排,用户最关心更新最多的那本
+      updatedBooks.sort((a, b) => (b.newCount - b.oldCount) - (a.newCount - a.oldCount));
+      const lines = updatedBooks.map(u => {
+        const delta = u.newCount - u.oldCount;
+        return `《${u.title}》  ${u.oldCount} → ${u.newCount} 集（+${delta}）`;
+      });
+      const tail = failed > 0 ? `\n\n${failed} 本刷新失败` : '';
+      prompt.showDialog({
+        title: `${updatedBooks.length} 本书有更新`,
+        message: lines.join('\n') + tail,
+        buttons: [{ text: '知道了', color: '#333333' }]
+      }).catch(() => { /* ignore */ });
+      return;
     }
+    let msg = '所有书籍已是最新';
+    if (updated > 0) {
+      // 元数据(封面/简介/作者)有改但集数没变
+      msg = `已更新 ${updated} 本书的资料${failed > 0 ? `，${failed} 本失败` : ''}`;
+    } else if (failed > 0) {
+      msg = `刷新完成，${failed} 本失败`;
+    }
+    try {
+      prompt.showToast({ message: msg });
+    } catch (_e) { /* ignore */ }
   }
 
   private getProgressText(book: Book): string {
@@ -256,12 +294,14 @@ export struct FavoritePage {
   private async resumeOnlineWithToc(book: Book, history: PlayHistoryItem, onPop: () => void): Promise<void> {
     if (this.resolvingTocId) return;
     this.resolvingTocId = book.id;
-    promptAction.showToast({ message: '加载章节中...' });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: '加载章节中...' });
+    } catch (_e) { /* ignore */ }
     try {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
       if (!source) {
-        promptAction.showToast({ message: '书源已删除,请到详情页重新选择' });
+        this.getUIContext().getPromptAction().showToast({ message: '书源已删除,请到详情页重新选择' });
         this.navStack.pushPathByName('detail', book.id, onPop);
         return;
       }
@@ -277,7 +317,7 @@ export struct FavoritePage {
       if (bookInfo?.tocUrl) tocUrl = bookInfo.tocUrl;
       const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
       if (tocItems.length === 0) {
-        promptAction.showToast({ message: '章节加载失败' });
+        this.getUIContext().getPromptAction().showToast({ message: '章节加载失败' });
         this.navStack.pushPathByName('detail', book.id, onPop);
         return;
       }
@@ -309,7 +349,9 @@ export struct FavoritePage {
       };
       this.navStack.pushPathByName('player', params, onPop);
     } catch (_e) {
-      promptAction.showToast({ message: '章节加载失败' });
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '章节加载失败' });
+      } catch (_e2) { /* ignore */ }
       this.navStack.pushPathByName('detail', book.id, onPop);
     } finally {
       this.resolvingTocId = '';
@@ -367,6 +409,19 @@ export struct FavoritePage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
+      // L0 暖色渐变背景（满屏，与首页一致）
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [HomeTheme.BgWarmTop, 0.0],
+            [HomeTheme.BgWarmMid, 0.35],
+            [HomeTheme.BgNeutral, 1.0]
+          ]
+        })
+
       // 内容层
       Refresh({ refreshing: $$this.isRefreshing, offset: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL }) {
         Grid() {
@@ -391,12 +446,14 @@ export struct FavoritePage {
           bottom: WindowUtils.getFloatingTabBottomVp()
         })
         .scrollBar(BarState.Off)
+        .backgroundColor(Color.Transparent)
       }
       .onRefreshing(() => {
         this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
       })
+      .backgroundColor(Color.Transparent)
 
-      // 浮顶标题（去掉 backgroundBlurStyle,改用纯色背景,转场时省 GPU）
+      // 浮顶标题（透明底，让暖色透出）
       Column() {
         Row() {
           Text('书架')
@@ -419,7 +476,6 @@ export struct FavoritePage {
         top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
         bottom: AppSpace.Sm
       })
-      .backgroundColor($r('sys.color.background_primary'))
 
       // 拖动删除浮层（自己居中）
       Column() {

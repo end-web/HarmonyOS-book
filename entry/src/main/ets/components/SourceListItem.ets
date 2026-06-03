@@ -7,6 +7,7 @@ export struct SourceListItem {
   @Require @Param source: BookSource;
   @Param isSelectMode: boolean = false;
   @Param isSelected: boolean = false;
+  @Param isUnreachable: boolean = false;
   @Event onTap: () => void = () => {};
   @Event onLongPress: () => void = () => {};
   @Event onToggleEnabled: (enabled: boolean) => void = (_e: boolean) => {};
@@ -22,11 +23,22 @@ export struct SourceListItem {
       }
 
       Column({ space: 2 }) {
-        Text(this.source.bookSourceName)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Row({ space: AppSpace.Xs }) {
+          Text(this.source.bookSourceName)
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+          if (this.isUnreachable) {
+            SymbolGlyph($r('sys.symbol.nosign'))
+              .fontSize(16)
+              .fontColor(['#FF3B30'])
+          }
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+
         Row({ space: AppSpace.Xs }) {
           Text(this.source.bookSourceGroup || '未分组')
             .fontSize(AppFont.Caption)

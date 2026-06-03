@@ -21,7 +21,6 @@ const ROW_INDENT: number = AppSpace.Md;
 
 @ComponentV2
 export struct ProfilePage {
-  @Local nickname: string = '网听';
   @Param navStack: NavPathStack = new NavPathStack();
 
   private onItemTap(id: string): void {
@@ -37,7 +36,7 @@ export struct ProfilePage {
   build() {
     Scroll() {
       Column({ space: AppSpace.Lg }) {
-        this.buildHeader()
+        this.buildTopSpacer()
         this.buildGroup('我的内容', CONTENT_ITEMS)
         this.buildGroup('系统', SYSTEM_ITEMS)
       }
@@ -58,32 +57,10 @@ export struct ProfilePage {
   }
 
   @Builder
-  buildHeader() {
-    Row({ space: AppSpace.Md }) {
-      Image($r('app.media.avatar'))
-        .width(56)
-        .height(56)
-        .borderRadius(28)
-        .objectFit(ImageFit.Cover)
-
-      Column({ space: 4 }) {
-        Text(this.nickname)
-          .fontSize(AppFont.TitleL)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
-        Text('本地模式')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-    }
-    .width('100%')
-    .padding({
-      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl,
-      bottom: AppSpace.Sm,
-      left: AppSpace.Sm
-    })
+  buildTopSpacer() {
+    Column()
+      .width('100%')
+      .height(WindowUtils.getStatusBarHeightVp() + AppSpace.Xl)
   }
 
   @Builder

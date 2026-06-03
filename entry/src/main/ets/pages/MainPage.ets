@@ -2,7 +2,6 @@ import { common } from '@kit.AbilityKit';
 import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
-import { AppRadius, AppSpace } from '../theme/Theme';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { HomePage } from './HomePage';
 import { HomeBlockSection } from '../model/BookSource';
@@ -42,10 +41,11 @@ export struct MainPage {
   @Local miniBarCollapsed: boolean = false;
 
   private tabController: HdsTabsController = new HdsTabsController();
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private context: common.UIAbilityContext | null = null;
   private switchTabHandler: (e: emitter.EventData) => void = (e) => this.onSwitchTabEvent(e);
 
   aboutToAppear(): void {
+    this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     AudioService.getInstance().bind(this.playerState, this.context);
     this.restoreLastPlayed();
     WindowUtils.setStatusBarLight(false);
@@ -119,7 +119,7 @@ export struct MainPage {
     if (this.playerState.currentBook) return;
     const last = await PreferenceService.getLastPlayed();
     if (!last) return;
-    const book = await DataService.getBookById(this.context, last.bookId);
+    const book = await DataService.getBookById(this.context!, last.bookId);
     if (!book) return;
     const idx = DataService.resolveChapterIndex(book, last.chapterId, last.chapterTitle);
     if (idx < 0) return;
@@ -209,7 +209,7 @@ export struct MainPage {
             onGotoStore: () => this.tabController.changeIndex(0)
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.heart'), $r('sys.symbol.heart_fill'), '书架'))
+        .tabBar(this.buildTabBar($r('sys.symbol.archivebox'), $r('sys.symbol.archivebox_fill'), '书架'))
 
         TabContent() {
           SourcePage()
@@ -248,7 +248,13 @@ export struct MainPage {
       .onChange((index: number) => { this.currentTab = index; })
       .width('100%')
       .height('100%')
-      .backgroundColor($r('sys.color.background_primary'))
+      .linearGradient({
+        angle: 180,
+        colors: [
+          ['#FFF8F3F1', 0.0],
+          ['#FFFAF6F3', 1.0]
+        ]
+      })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       WebViewJSEngineHost()

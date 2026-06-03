@@ -1,4 +1,4 @@
-import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
 import { BookSource, SourceSubscription } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
@@ -571,7 +571,22 @@ export struct SourcePage {
   }
 
   build() {
-    Column() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // L0 暖色渐变背景（与首页/书架一致）
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [HomeTheme.BgWarmTop, 0.0],
+            [HomeTheme.BgWarmMid, 0.35],
+            [HomeTheme.BgNeutral, 1.0]
+          ]
+        })
+
+      // L1 原内容列
+      Column() {
       // 顶部固定区域(标题 + Tab 切换)
       Column() {
         Column() {
@@ -681,20 +696,22 @@ export struct SourcePage {
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showAddSheet, this.importSheetContent(), {
-      height: SheetSize.LARGE,
-      dragBar: true,
-      onDisappear: () => {
-        this.statusMessage = '';
-        this.inputUrl = '';
-        this.inputName = '';
-        this.showPreview = false;
-        this.previewSources = [];
-        this.selectedPreviewIds = new Set();
-      }
-    })
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .backgroundColor(Color.Transparent)
   }
+  .bindSheet($$this.showAddSheet, this.importSheetContent(), {
+    height: SheetSize.LARGE,
+    dragBar: true,
+    onDisappear: () => {
+      this.statusMessage = '';
+      this.inputUrl = '';
+      this.inputName = '';
+      this.showPreview = false;
+      this.previewSources = [];
+      this.selectedPreviewIds = new Set();
+    }
+  })
+  .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+}
   @Builder
   buildTabItem(title: string, idx: number) {
     Text(title)
@@ -829,7 +846,7 @@ export struct SourcePage {
               }
             }, (sub: SourceSubscription, _idx: number) => sub.url)
           }
-          .backgroundColor($r('sys.color.comp_background_primary'))
+          .backgroundColor(HomeTheme.CardSurface)
           .borderRadius(AppRadius.Lg)
           .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
         }

@@ -1,6 +1,5 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
-import { promptAction } from '@kit.ArkUI';
 import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { PreferenceService } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
@@ -100,7 +99,9 @@ export struct SettingsPage {
 
   private clearCache(): void {
     ChapterCacheService.getInstance().clearAllCache();
-    promptAction.showToast({ message: '缓存已清除' });
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: '缓存已清除' });
+    } catch (_e) { /* ignore */ }
   }
 
   private async setColorMode(mode: number): Promise<void> {

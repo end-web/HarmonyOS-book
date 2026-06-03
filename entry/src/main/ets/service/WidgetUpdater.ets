@@ -286,7 +286,7 @@ export class WidgetUpdater {
     if (book?.cover) {
       const rgb = ColorPickerUtils.getCached(book.cover);
       if (rgb) {
-        bgColor = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.3));
+        bgColor = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.05));
       }
     }
     return {
@@ -318,7 +318,7 @@ export class WidgetUpdater {
         }
       }
       if (rgb) {
-        snap.bgColor = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.3));
+        snap.bgColor = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.05));
       }
     } catch (_e) { /* ignore */ }
   }
