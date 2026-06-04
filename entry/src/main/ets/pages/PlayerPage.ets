@@ -49,6 +49,8 @@ export struct PlayerPage {
   private context: common.UIAbilityContext | null = null;
   private speeds: number[] = [0.75, 1.0, 1.25, 1.75, 2.0];
   private lastCoverKey: string = '';
+  /** 正在取色的封面 key,防止异步取色并发重复触发(取色成功才写 lastCoverKey,失败可重试) */
+  private pickingCover: string = '';
   private chapterListScroller: Scroller = new Scroller();
   private segmentTabsScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
@@ -416,8 +418,9 @@ export struct PlayerPage {
   }
 
   private async extractCoverColor(cover: string): Promise<void> {
-    if (!cover || cover === this.lastCoverKey) return;
-    this.lastCoverKey = cover;
+    // 已成功取过色 / 正在取这张图 → 跳过
+    if (!cover || cover === this.lastCoverKey || cover === this.pickingCover) return;
+    this.pickingCover = cover;
 
     setTimeout(async () => {
       let rgb: RgbColor | null = null;
@@ -433,13 +436,20 @@ export struct PlayerPage {
         console.error('[PlayerPage] extractCoverColor failed: ' + JSON.stringify(e));
       }
 
-      if (!rgb) return;
-      if (cover !== this.lastCoverKey) return;
+      // 取色失败:释放占位,允许后续重试(不写 lastCoverKey)
+      if (!rgb) {
+        if (this.pickingCover === cover) this.pickingCover = '';
+        return;
+      }
+      // 取色期间封面已切换 → 丢弃旧结果
+      if (cover !== this.pickingCover) return;
 
       this.blurColor = ColorPickerUtils.toBlurColor(rgb);
       this.themeColorHex = ColorPickerUtils.toHex(rgb);
       this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.4));
       this.hasThemeColor = true;
+      this.lastCoverKey = cover;   // ★ 成功后才标记,失败可重试
+      this.pickingCover = '';
     }, 100);
   }
 
