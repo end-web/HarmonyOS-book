@@ -13,6 +13,7 @@ import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
+import { BookDataSource } from '../utils/BookDataSource';
 
 interface BookUpdateInfo {
   title: string;
@@ -40,6 +41,7 @@ export struct FavoritePage {
 
   private context: common.UIAbilityContext | null = null;
   private listScroller: Scroller = new Scroller();
+  private bookDataSource: BookDataSource = new BookDataSource();
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
 
   aboutToAppear(): void {
@@ -102,6 +104,7 @@ export struct FavoritePage {
       if (idx >= 0) idxMap[b.id] = idx;
     }
     this.favoriteBooks = books;
+    this.bookDataSource.setBooks(books);
     this.historyMap = map;
     this.chapterIdxMap = idxMap;
     this.loading = false;
@@ -428,7 +431,7 @@ export struct FavoritePage {
       // 内容层
       Refresh({ refreshing: $$this.isRefreshing, offset: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL }) {
         Grid(this.listScroller) {
-          ForEach(this.favoriteBooks, (book: Book) => {
+          LazyForEach(this.bookDataSource, (book: Book) => {
             GridItem() {
               this.buildBookTile(book)
             }
@@ -440,6 +443,7 @@ export struct FavoritePage {
         .columnsTemplate('1fr 1fr 1fr')
         .columnsGap(AppSpace.Sm)
         .rowsGap(AppSpace.Md)
+        .cachedCount(6)
         .width('100%')
         .height('100%')
         .padding({

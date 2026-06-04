@@ -70,6 +70,10 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    // 清理登录事件监听
+    try {
+      emitter.off(EVT_OPEN_LOGIN);
+    } catch (_e) { /* ignore */ }
     if (this.widgetSubscribed) {
       try {
         emitter.off(EVT_WIDGET_ROUTE);

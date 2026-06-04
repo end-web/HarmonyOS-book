@@ -53,6 +53,16 @@ interface IfStmtMatch {
   elseStmt?: string;
 }
 
+interface BlockResult {
+  bodyLines: string[];
+  endIndex: number;
+}
+
+interface IfBlockResult {
+  result: ScriptStmtResult;
+  endIndex: number;
+}
+
 export class JSExecutor {
   private baseUrl: string;
   private timeout: number;
@@ -412,6 +422,45 @@ export class JSExecutor {
       return '';
     }
 
+    // cookie.replaceCookie(url, value) - 合并 Cookie
+    const cookieReplaceMatch = code.match(/^cookie\.replaceCookie\(['"](.+?)['"]\s*,\s*['"](.+?)['"]\)$/);
+    if (cookieReplaceMatch) {
+      const cookieManager = getCookieManager();
+      cookieManager.replaceCookie(cookieReplaceMatch[1], cookieReplaceMatch[2]);
+      return '';
+    }
+
+    // cookie.cookieToMap(cookie) - Cookie 字符串转 Map 对象
+    const cookieToMapMatch = code.match(/^cookie\.cookieToMap\((.+)\)$/);
+    if (cookieToMapMatch) {
+      const inner = this.tryLocalEval(cookieToMapMatch[1], ctx);
+      if (inner === undefined) return undefined;
+      const map: Record<string, string> = {};
+      const parts = String(inner).split(';');
+      for (const part of parts) {
+        const eq = part.indexOf('=');
+        if (eq > 0) map[part.substring(0, eq).trim()] = part.substring(eq + 1).trim();
+      }
+      return map as Object;
+    }
+
+    // cookie.mapToCookie(map) - Map 对象转 Cookie 字符串
+    const mapToCookieMatch = code.match(/^cookie\.mapToCookie\((.+)\)$/);
+    if (mapToCookieMatch) {
+      const inner = this.tryLocalEval(mapToCookieMatch[1], ctx);
+      if (inner === undefined) return undefined;
+      if (typeof inner === 'object' && inner !== null) {
+        const map = inner as Record<string, string>;
+        return Object.keys(map).map((k) => `${k}=${map[k]}`).join('; ');
+      }
+      return String(inner);
+    }
+
+    // java.getStrResponse() - 获取最后一次请求的响应
+    if (code === 'java.getStrResponse()') {
+      return getJavaBridge().getStrResponse();
+    }
+
     // java.toast(msg) / java.longToast(msg)
     const toastMatch = code.match(/^java\.(toast|longToast)\((.+)\)$/);
     if (toastMatch) {
@@ -448,6 +497,45 @@ export class JSExecutor {
     // java.getAppVariant()
     if (code === 'java.getAppVariant()') {
       return getJavaBridge().getAppVariant();
+    }
+
+    // java.md5(arg) / java.md5Encode(arg) / java.md5Encode16(arg)
+    const md5Match = code.match(/^java\.(md5|md5Encode|md5Encode16)\((.+)\)$/);
+    if (md5Match) {
+      const inner = this.tryLocalEval(md5Match[2], ctx);
+      if (inner === undefined) return undefined;
+      const jb = getJavaBridge();
+      return md5Match[1] === 'md5Encode16' ? jb.md5Encode16(String(inner)) : jb.md5(String(inner));
+    }
+
+    // java.encodeURI(arg)
+    const encodeURIMatch = code.match(/^java\.encodeURI\((.+)\)$/);
+    if (encodeURIMatch) {
+      const inner = this.tryLocalEval(encodeURIMatch[1], ctx);
+      if (inner === undefined) return undefined;
+      return getJavaBridge().encodeURI(String(inner));
+    }
+
+    // java.HMacHex(data, algo, key)
+    const hmacMatch = code.match(/^java\.(HMacHex|HMacBase64)\((.+)\)$/);
+    if (hmacMatch) {
+      const args = this.parseArgs(hmacMatch[2]);
+      if (args.length < 3) return undefined;
+      const jb = getJavaBridge();
+      return hmacMatch[1] === 'HMacHex'
+        ? jb.HMacHex(String(args[0]), String(args[1]), String(args[2]))
+        : jb.HMacBase64(String(args[0]), String(args[1]), String(args[2]));
+    }
+
+    // java.digestHex(data, algo)
+    const digestMatch = code.match(/^java\.(digestHex|digestBase64Str)\((.+)\)$/);
+    if (digestMatch) {
+      const args = this.parseArgs(digestMatch[2]);
+      if (args.length < 2) return undefined;
+      const jb = getJavaBridge();
+      return digestMatch[1] === 'digestHex'
+        ? jb.digestHex(String(args[0]), String(args[1]))
+        : jb.digestBase64Str(String(args[0]), String(args[1]));
     }
 
     // java.startBrowser(url, title) / java.startBrowserDp(url, title)
@@ -535,20 +623,112 @@ export class JSExecutor {
     lines: string[], localVars: Record<string, Object>
   ): Promise<ScriptStmtResult> {
     let lastValue: Object | undefined = undefined;
-    for (let i = 0; i < lines.length; i++) {
+    let i = 0;
+    while (i < lines.length) {
       const line = lines[i];
       // 显式 return
       if (/^return\b/.test(line)) {
         const expr = line.replace(/^return\s*/, '').trim() || '""';
         const v = await this.evalExprAsync(expr, localVars);
-        if (v === undefined) {
-          const r1: ScriptStmtResult = { value: undefined, returned: true };
-          return r1;
-        }
-        const r2: ScriptStmtResult = { value: v, returned: true };
-        return r2;
+        const r: ScriptStmtResult = { value: v, returned: true };
+        return r;
       }
-      // if (cond) stmt
+      // for (init; cond; update) { body }
+      const forMatch = line.match(/^for\s*\((.+);(.+);(.+)\)\s*\{?$/);
+      if (forMatch) {
+        // 执行 init
+        const initStmt = forMatch[1].trim();
+        if (initStmt) await this.runStatements([initStmt], localVars);
+        // 循环
+        const condExpr = forMatch[2].trim();
+        const updateExpr = forMatch[3].trim();
+        // 收集循环体
+        const body = this.collectBlock(lines, i);
+        const bodyLines = body.bodyLines;
+        i = body.endIndex;
+        // 执行循环
+        let maxIter = 10000; // 防死循环
+        while (maxIter-- > 0) {
+          const condVal = await this.evalExprAsync(condExpr, localVars);
+          if (!condVal || condVal === '0' || condVal === 'false') break;
+          const sub = await this.runStatements(bodyLines, localVars);
+          if (sub.returned) return sub;
+          if (sub.value !== undefined) lastValue = sub.value;
+          // 执行 update
+          await this.runStatements([updateExpr], localVars);
+        }
+        continue;
+      }
+      // while (cond) { body }
+      const whileMatch = line.match(/^while\s*\((.+)\)\s*\{?$/);
+      if (whileMatch) {
+        const condExpr = whileMatch[1].trim();
+        const body = this.collectBlock(lines, i);
+        const bodyLines = body.bodyLines;
+        i = body.endIndex;
+        let maxIter = 10000;
+        while (maxIter-- > 0) {
+          const condVal = await this.evalExprAsync(condExpr, localVars);
+          if (!condVal || condVal === '0' || condVal === 'false') break;
+          const sub = await this.runStatements(bodyLines, localVars);
+          if (sub.returned) return sub;
+          if (sub.value !== undefined) lastValue = sub.value;
+        }
+        continue;
+      }
+      // try { body } catch (e) { handler } [finally { cleanup }]
+      if (/^try\s*\{?$/.test(line)) {
+        const tryBody = this.collectBlock(lines, i);
+        i = tryBody.endIndex;
+        let catchBody: string[] | null = null;
+        let catchVar = 'e';
+        let finallyBody: string[] | null = null;
+        // catch
+        if (i < lines.length && /^catch/.test(lines[i])) {
+          const catchMatch = lines[i].match(/^catch\s*(?:\((\w+)\))?\s*\{?$/);
+          if (catchMatch) catchVar = catchMatch[1] || 'e';
+          const cb = this.collectBlock(lines, i);
+          catchBody = cb.bodyLines;
+          i = cb.endIndex;
+        }
+        // finally
+        if (i < lines.length && /^finally\s*\{?$/.test(lines[i])) {
+          const fb = this.collectBlock(lines, i);
+          finallyBody = fb.bodyLines;
+          i = fb.endIndex;
+        }
+        // 执行
+        try {
+          const sub = await this.runStatements(tryBody.bodyLines, localVars);
+          if (sub.returned) return sub;
+          if (sub.value !== undefined) lastValue = sub.value;
+        } catch (err) {
+          if (catchBody) {
+            localVars[catchVar] = err instanceof Error ? err.message : String(err);
+            const sub = await this.runStatements(catchBody, localVars);
+            if (sub.returned) return sub;
+            if (sub.value !== undefined) lastValue = sub.value;
+          }
+        } finally {
+          if (finallyBody) {
+            const sub = await this.runStatements(finallyBody, localVars);
+            if (sub.returned) return sub;
+            if (sub.value !== undefined) lastValue = sub.value;
+          }
+        }
+        continue;
+      }
+      // if (cond) { ... } else { ... } — 多语句块版本
+      if (/^if\s*\(/.test(line)) {
+        const ifResult = await this.runIfBlock(line, lines, i, localVars);
+        if (ifResult.result.returned) return ifResult.result;
+        if (ifResult.result.value !== undefined) lastValue = ifResult.result.value;
+        i = ifResult.endIndex;
+        continue;
+      }
+      // 跳过孤立的 } （块结束标记）
+      if (line === '}') { i++; continue; }
+      // if (cond) stmt — 单行版本
       const ifMatch = this.matchIfStatement(line);
       if (ifMatch) {
         const condVal = await this.evalExprAsync(ifMatch.cond, localVars);
@@ -559,42 +739,151 @@ export class JSExecutor {
           if (sub.returned) return sub;
           if (sub.value !== undefined) lastValue = sub.value;
         }
+        i++;
         continue;
       }
       // var/let/const X = expr
       const declMatch = line.match(/^(?:var|let|const)\s+(\w+)\s*=\s*(.+)$/);
       if (declMatch) {
         const v = await this.evalExprAsync(declMatch[2], localVars);
-        if (v === undefined) {
-          const r: ScriptStmtResult = { value: undefined, returned: false };
-          return r;
+        if (v !== undefined) {
+          localVars[declMatch[1]] = v;
+          lastValue = v;
         }
-        localVars[declMatch[1]] = v;
-        lastValue = v;
+        i++;
         continue;
       }
-      // X = expr
-      const assignMatch = line.match(/^(\w+)\s*=\s*(.+)$/);
+      // X = expr (含 obj.prop = val)
+      const assignMatch = line.match(/^(\w+(?:\.\w+)*)\s*=\s*(.+)$/);
       if (assignMatch) {
         const v = await this.evalExprAsync(assignMatch[2], localVars);
-        if (v === undefined) {
-          const r: ScriptStmtResult = { value: undefined, returned: false };
-          return r;
+        if (v !== undefined) {
+          const target = assignMatch[1];
+          if (target.includes('.')) {
+            // obj.prop = val — 暂不支持深层赋值，存到根变量
+            const dotIdx = target.indexOf('.');
+            const root = target.substring(0, dotIdx);
+            if (localVars[root] !== undefined) {
+              (localVars[root] as Record<string, Object>)[target.substring(dotIdx + 1)] = v;
+            }
+          } else {
+            localVars[target] = v;
+          }
+          lastValue = v;
         }
-        localVars[assignMatch[1]] = v;
-        lastValue = v;
+        i++;
         continue;
       }
       // 单纯表达式
       const v = await this.evalExprAsync(line, localVars);
-      if (v === undefined) {
-        const r: ScriptStmtResult = { value: undefined, returned: false };
-        return r;
-      }
-      lastValue = v;
+      if (v !== undefined) lastValue = v;
+      i++;
     }
     const r: ScriptStmtResult = { value: lastValue, returned: false };
     return r;
+  }
+
+  /** 收集块语句体（从当前行的 { 开始到匹配的 } 结束） */
+  private collectBlock(lines: string[], startIdx: number): BlockResult {
+    // 找到开始的 {
+    let i = startIdx;
+    let line = lines[i];
+    // 如果当前行以 { 结尾，从下一行开始
+    if (line.endsWith('{')) {
+      i++;
+    } else if (line.includes('{')) {
+      // { 在行中间（如 for (...) {）
+      const afterBrace = line.substring(line.indexOf('{') + 1).trim();
+      i++;
+      // 如果 } 在同一行
+      if (afterBrace.includes('}')) {
+        const body = afterBrace.substring(0, afterBrace.indexOf('}')).trim();
+        const r: BlockResult = { bodyLines: body ? [body] : [], endIndex: i };
+        return r;
+      }
+    } else {
+      // 没有 { — 单语句体
+      i++;
+      if (i < lines.length) {
+        const r: BlockResult = { bodyLines: [lines[i]], endIndex: i + 1 };
+        return r;
+      }
+      const r: BlockResult = { bodyLines: [], endIndex: i };
+      return r;
+    }
+    // 收集直到匹配的 }
+    const body: string[] = [];
+    let depth = 1;
+    while (i < lines.length && depth > 0) {
+      const l = lines[i];
+      // 计算 { 和 } 的深度（忽略字符串内的）
+      let inStr: string | null = null;
+      for (let j = 0; j < l.length; j++) {
+        const c = l[j];
+        if (inStr) {
+          if (c === '\\' && j + 1 < l.length) { j++; continue; }
+          if (c === inStr) inStr = null;
+          continue;
+        }
+        if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+        if (c === '{') depth++;
+        else if (c === '}') { depth--; if (depth === 0) break; }
+      }
+      if (depth === 0) {
+        // 最后一行可能包含 } 之前的代码
+        const beforeBrace = l.substring(0, l.lastIndexOf('}')).trim();
+        if (beforeBrace) body.push(beforeBrace);
+      } else {
+        body.push(l);
+      }
+      i++;
+    }
+    const result: BlockResult = { bodyLines: body, endIndex: i };
+    return result;
+  }
+
+  /** 执行 if 块（支持多语句 { } else { }） */
+  private async runIfBlock(
+    line: string, lines: string[], startIdx: number, localVars: Record<string, Object>
+  ): Promise<IfBlockResult> {
+    // 提取条件
+    const condMatch = line.match(/^if\s*\((.+)\)\s*\{?$/);
+    if (!condMatch) {
+      // 降级到单行 if
+      const ifMatch = this.matchIfStatement(line);
+      if (ifMatch) {
+        const condVal = await this.evalExprAsync(ifMatch.cond, localVars);
+        const truthy = !!condVal && condVal !== '0' && condVal !== 'false';
+        const branch = truthy ? ifMatch.thenStmt : ifMatch.elseStmt;
+        if (branch) {
+          const sub = await this.runStatements([branch], localVars);
+          const r1: IfBlockResult = { result: sub, endIndex: startIdx + 1 };
+          return r1;
+        }
+      }
+      const defaultResult: ScriptStmtResult = { value: undefined, returned: false };
+      const r2: IfBlockResult = { result: defaultResult, endIndex: startIdx + 1 };
+      return r2;
+    }
+    const condVal = await this.evalExprAsync(condMatch[1], localVars);
+    const truthy = !!condVal && condVal !== '0' && condVal !== 'false';
+    // 收集 then 块
+    const thenBlock = this.collectBlock(lines, startIdx);
+    let endIndex = thenBlock.endIndex;
+    let stmtResult: ScriptStmtResult = { value: undefined, returned: false };
+    if (truthy) {
+      stmtResult = await this.runStatements(thenBlock.bodyLines, localVars);
+    }
+    // 检查 else
+    if (endIndex < lines.length && /^else\s*\{?$/.test(lines[endIndex])) {
+      const elseBlock = this.collectBlock(lines, endIndex);
+      endIndex = elseBlock.endIndex;
+      if (!truthy) {
+        stmtResult = await this.runStatements(elseBlock.bodyLines, localVars);
+      }
+    }
+    const r3: IfBlockResult = { result: stmtResult, endIndex };
+    return r3;
   }
 
   /** 匹配 if (cond) thenStmt; else elseStmt; 单行/单语句版本 */
@@ -651,11 +940,15 @@ export class JSExecutor {
     return -1;
   }
 
-  /** 把脚本切成顶层语句（按 ;/\n，但忽略字符串/正则中的分号） */
+  /** 把脚本切成顶层语句（按 ;/\n，但忽略字符串/正则/括号内的分号，正确处理 for/while/try 块） */
   private splitStatements(code: string): string[] {
     const out: string[] = [];
     let buf = '';
     let inStr: string | null = null;
+    let parenDepth = 0; // for (init;cond;update) 中的括号深度
+    let braceDepth = 0; // { } 块深度
+    let isForHeader = false; // 是否在 for (...) 头部
+
     for (let i = 0; i < code.length; i++) {
       const c = code[i];
       if (inStr) {
@@ -665,7 +958,41 @@ export class JSExecutor {
         continue;
       }
       if (c === "'" || c === '"' || c === '`') { inStr = c; buf += c; continue; }
-      if (c === ';' || c === '\n') {
+      if (c === '(') {
+        parenDepth++;
+        buf += c;
+        // 检测是否是 for ( 开始
+        const trimmed = buf.trimStart();
+        if (trimmed.startsWith('for') || trimmed.startsWith('while')) isForHeader = true;
+        continue;
+      }
+      if (c === ')') {
+        parenDepth--;
+        buf += c;
+        if (parenDepth === 0) isForHeader = false;
+        continue;
+      }
+      if (c === '{') { braceDepth++; buf += c; continue; }
+      if (c === '}') {
+        braceDepth--;
+        buf += c;
+        // 块结束时输出整个块
+        if (braceDepth === 0) {
+          const t = buf.trim();
+          if (t) out.push(t);
+          buf = '';
+        }
+        continue;
+      }
+      // 分号：在 for 头部或括号内时不切分
+      if (c === ';' && parenDepth === 0 && braceDepth === 0) {
+        const t = buf.trim();
+        if (t) out.push(t);
+        buf = '';
+        continue;
+      }
+      // 换行：在块内或 for 头部时不切分
+      if (c === '\n' && braceDepth === 0 && parenDepth === 0) {
         const t = buf.trim();
         if (t) out.push(t);
         buf = '';
@@ -759,6 +1086,90 @@ export class JSExecutor {
       const javaBridge = getJavaBridge();
       javaBridge.startBrowser(String(args[0] || ''), args.length > 1 ? String(args[1]) : '');
       return '';
+    }
+
+    // java.md5(arg) / java.md5Encode(arg) / java.md5Encode16(arg)
+    const md5Match = e.match(/^java\.(md5|md5Encode|md5Encode16)\((.+)\)$/);
+    if (md5Match) {
+      const v = await this.evalExprAsync(md5Match[2], vars);
+      if (v === undefined) return undefined;
+      const javaBridge = getJavaBridge();
+      if (md5Match[1] === 'md5Encode16') return javaBridge.md5Encode16(String(v));
+      return javaBridge.md5(String(v));
+    }
+
+    // java.encodeURI(arg)
+    const encodeURIMatch = e.match(/^java\.encodeURI\((.+)\)$/);
+    if (encodeURIMatch) {
+      const v = await this.evalExprAsync(encodeURIMatch[1], vars);
+      if (v === undefined) return undefined;
+      return getJavaBridge().encodeURI(String(v));
+    }
+
+    // java.base64Encode(arg) / java.base64Decode(arg)
+    const b64Match = e.match(/^java\.(base64Encode|base64Decode)\((.+)\)$/);
+    if (b64Match) {
+      const v = await this.evalExprAsync(b64Match[2], vars);
+      if (v === undefined) return undefined;
+      const jb = getJavaBridge();
+      return b64Match[1] === 'base64Encode' ? jb.base64Encode(String(v)) : jb.base64Decode(String(v));
+    }
+
+    // java.HMacHex(data, algorithm, key) / java.HMacBase64(data, algorithm, key)
+    const hmacMatch = e.match(/^java\.(HMacHex|HMacBase64)\((.+)\)$/);
+    if (hmacMatch) {
+      const args = this.parseArgs(hmacMatch[2]);
+      if (args.length < 3) return undefined;
+      const jb = getJavaBridge();
+      const data = String(await this.evalExprAsync(String(args[0]), vars) ?? args[0]);
+      const algo = String(await this.evalExprAsync(String(args[1]), vars) ?? args[1]);
+      const key = String(await this.evalExprAsync(String(args[2]), vars) ?? args[2]);
+      return hmacMatch[1] === 'HMacHex' ? jb.HMacHex(data, algo, key) : jb.HMacBase64(data, algo, key);
+    }
+
+    // java.digestHex(data, algorithm) / java.digestBase64Str(data, algorithm)
+    const digestMatch = e.match(/^java\.(digestHex|digestBase64Str)\((.+)\)$/);
+    if (digestMatch) {
+      const args = this.parseArgs(digestMatch[2]);
+      if (args.length < 2) return undefined;
+      const jb = getJavaBridge();
+      const data = String(await this.evalExprAsync(String(args[0]), vars) ?? args[0]);
+      const algo = String(await this.evalExprAsync(String(args[1]), vars) ?? args[1]);
+      return digestMatch[1] === 'digestHex' ? jb.digestHex(data, algo) : jb.digestBase64Str(data, algo);
+    }
+
+    // java.strToBytes(arg) / java.bytesToStr(arg)
+    const bytesMatch = e.match(/^java\.(strToBytes|bytesToStr)\((.+)\)$/);
+    if (bytesMatch) {
+      const v = await this.evalExprAsync(bytesMatch[2], vars);
+      if (v === undefined) return undefined;
+      const jb = getJavaBridge();
+      if (bytesMatch[1] === 'strToBytes') {
+        return jb.strToBytes(String(v)) as Object;
+      } else {
+        // bytesToStr expects number[]
+        if (Array.isArray(v)) return jb.bytesToStr(v as number[]);
+        return String(v);
+      }
+    }
+
+    // java.hexEncodeToString(arg)
+    const hexEncMatch = e.match(/^java\.hexEncodeToString\((.+)\)$/);
+    if (hexEncMatch) {
+      const v = await this.evalExprAsync(hexEncMatch[1], vars);
+      if (v === undefined) return undefined;
+      return getJavaBridge().hexEncodeToString(String(v));
+    }
+
+    // java.createSymmetricCrypto(transformation, key, iv)
+    const cryptoMatch = e.match(/^java\.createSymmetricCrypto\((.+)\)$/);
+    if (cryptoMatch) {
+      const args = this.parseArgs(cryptoMatch[2]);
+      if (args.length < 2) return undefined;
+      const transformation = String(await this.evalExprAsync(String(args[0]), vars) ?? args[0]);
+      const key = String(await this.evalExprAsync(String(args[1]), vars) ?? args[1]);
+      const iv = args.length > 2 ? String(await this.evalExprAsync(String(args[2]), vars) ?? args[2]) : undefined;
+      return getJavaBridge().createSymmetricCrypto(transformation, key, iv);
     }
 
     // a + b + c 拼接：先尝试 async 处理，因为单段可能也是 java.ajax 调用

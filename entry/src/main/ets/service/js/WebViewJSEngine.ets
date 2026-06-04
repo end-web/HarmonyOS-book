@@ -81,10 +81,12 @@ window.__nativeBridge = {
               xhr.send();
             }
           } catch(e) {}
-          return xhr.responseText || "";
+          this._lastResponse = xhr.responseText || "";
+          return this._lastResponse;
         },
         connect: function(url) { return this.ajax(url); },
         getString: function(url) { return this.ajax(url); },
+        getStrResponse: function() { return this._lastResponse || ""; },
         log: function() {
           var a = []; for (var i=0;i<arguments.length;i++) a.push(String(arguments[i]));
           console.log("[JS]", a.join(" "));
@@ -122,13 +124,127 @@ window.__nativeBridge = {
         showBrowser: function(url, html, js, opts) { console.log("[ShowBrowser]", url); },
         refreshExplore: function() { console.log("[RefreshExplore]"); },
         randomUUID: function() { return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c) { var r = Math.random()*16|0; return (c==="x"?r:r&0x3|0x8).toString(16); }); },
-        timeFormat: function(ts) { try { return new Date(ts).toISOString(); } catch(e) { return String(ts); } },
-        md5: function() { return ""; }
+        timeFormat: function(ts) {
+          try {
+            var d = new Date(ts);
+            var pad = function(n) { return n < 10 ? "0" + n : "" + n; };
+            return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+          } catch(e) { return String(ts); }
+        },
+        md5: function(s) {
+          // 纯 JS MD5 实现（简化版，覆盖常见书源场景）
+          if (!s) return "";
+          try {
+            function md5cycle(x,k){var a=x[0],b=x[1],c=x[2],d=x[3];a=ff(a,b,c,d,k[0],7,-680876936);d=ff(d,a,b,c,k[1],12,-389564586);c=ff(c,d,a,b,k[2],17,606105819);b=ff(b,c,d,a,k[3],22,-1044525330);a=ff(a,b,c,d,k[4],7,-176418897);d=ff(d,a,b,c,k[5],12,1200080426);c=ff(c,d,a,b,k[6],17,-1473231341);b=ff(b,c,d,a,k[7],22,-45705983);a=ff(a,b,c,d,k[8],7,1770035416);d=ff(d,a,b,c,k[9],12,-1958414417);c=ff(c,d,a,b,k[10],17,-42063);b=ff(b,c,d,a,k[11],22,-1990404162);a=ff(a,b,c,d,k[12],7,1804603682);d=ff(d,a,b,c,k[13],12,-40341101);c=ff(c,d,a,b,k[14],17,-1502002290);b=ff(b,c,d,a,k[15],22,1236535329);a=gg(a,b,c,d,k[1],5,-165796510);d=gg(d,a,b,c,k[6],9,-1069501632);c=gg(c,d,a,b,k[11],14,643717713);b=gg(b,c,d,a,k[0],20,-373897302);a=gg(a,b,c,d,k[5],5,-701558691);d=gg(d,a,b,c,k[10],9,38016083);c=gg(c,d,a,b,k[15],14,-660478335);b=gg(b,c,d,a,k[4],20,-405537848);a=gg(a,b,c,d,k[9],5,568446438);d=gg(d,a,b,c,k[14],9,-1019803690);c=gg(c,d,a,b,k[3],14,-187363961);b=gg(b,c,d,a,k[8],20,1163531501);a=gg(a,b,c,d,k[13],5,-1444681467);d=gg(d,a,b,c,k[2],9,-51403784);c=gg(c,d,a,b,k[7],14,1735328473);b=gg(b,c,d,a,k[12],20,-1926607734);a=hh(a,b,c,d,k[5],4,-378558);d=hh(d,a,b,c,k[8],11,-2022574463);c=hh(c,d,a,b,k[11],16,1839030562);b=hh(b,c,d,a,k[14],23,-35309556);a=hh(a,b,c,d,k[1],4,-1530992060);d=hh(d,a,b,c,k[4],11,1272893353);c=hh(c,d,a,b,k[7],16,-155497632);b=hh(b,c,d,a,k[10],23,-1094730640);a=hh(a,b,c,d,k[13],4,681279174);d=hh(d,a,b,c,k[0],11,-358537222);c=hh(c,d,a,b,k[3],16,-722521979);b=hh(b,c,d,a,k[6],23,76029189);a=hh(a,b,c,d,k[9],4,-640364487);d=hh(d,a,b,c,k[12],11,-421815835);c=hh(c,d,a,b,k[15],16,530742520);b=hh(b,c,d,a,k[2],23,-995338651);a=ii(a,b,c,d,k[0],6,-198630844);d=ii(d,a,b,c,k[7],10,1126891415);c=ii(c,d,a,b,k[14],15,-1416354905);b=ii(b,c,d,a,k[5],21,-57434055);a=ii(a,b,c,d,k[12],6,1700485571);d=ii(d,a,b,c,k[3],10,-1894986606);c=ii(c,d,a,b,k[10],15,-1051523);b=ii(b,c,d,a,k[1],21,-2054922799);a=ii(a,b,c,d,k[8],6,1873313359);d=ii(d,a,b,c,k[15],10,-30611744);c=ii(c,d,a,b,k[6],15,-1560198380);b=ii(b,c,d,a,k[13],21,1309151649);a=ii(a,b,c,d,k[4],6,-145523070);d=ii(d,a,b,c,k[11],10,-1120210379);c=ii(c,d,a,b,k[14],15,718787259);b=ii(b,c,d,a,k[3],21,-343485551);x[0]=add32(a,x[0]);x[1]=add32(b,x[1]);x[2]=add32(c,x[2]);x[3]=add32(d,x[3])}
+            function cmn(q,a,b,x,s,t){a=add32(add32(a,q),add32(x,t));return add32((a<<s)|(a>>>(32-s)),b)}
+            function ff(a,b,c,d,x,s,t){return cmn((b&c)|((~b)&d),a,b,x,s,t)}
+            function gg(a,b,c,d,x,s,t){return cmn((b&d)|(c&(~d)),a,b,x,s,t)}
+            function hh(a,b,c,d,x,s,t){return cmn(b^c^d,a,b,x,s,t)}
+            function ii(a,b,c,d,x,s,t){return cmn(c^(b|(~d)),a,b,x,s,t)}
+            function md51(s){var n=s.length,state=[1732584193,-271733879,-1732584194,271733878],i;for(i=64;i<=n;i+=64)md5cycle(state,md5blk(s.substring(i-64,i)));s=s.substring(i-64);var tail=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];for(i=0;i<s.length;i++)tail[i>>2]|=s.charCodeAt(i)<<((i%4)<<3);tail[i>>2]|=0x80<<((i%4)<<3);if(i>55){md5cycle(state,tail);for(i=0;i<16;i++)tail[i]=0}tail[14]=n*8;md5cycle(state,tail);return state}
+            function md5blk(s){var md5blks=[],i;for(i=0;i<64;i+=4)md5blks[i>>2]=s.charCodeAt(i)+(s.charCodeAt(i+1)<<8)+(s.charCodeAt(i+2)<<16)+(s.charCodeAt(i+3)<<24);return md5blks}
+            var hex_chr="0123456789abcdef".split("");
+            function rhex(n){var s="",j=0;for(;j<4;j++)s+=hex_chr[(n>>(j*8+4))&0x0F]+hex_chr[(n>>(j*8))&0x0F];return s}
+            function hex(x){for(var i=0;i<x.length;i++)x[i]=rhex(x[i]);return x.join("")}
+            function add32(a,b){return(a+b)&0xFFFFFFFF}
+            return hex(md51(s));
+          } catch(e) { return ""; }
+        },
+        md5Encode: function(s) { return this.md5(s); },
+        md5Encode16: function(s) { var full = this.md5(s); return full.length >= 32 ? full.substring(8, 24) : full; },
+        encodeURI: function(s) { try { return encodeURI(s); } catch(e) { return s || ""; } },
+        encodeURIComponent: function(s) { try { return encodeURIComponent(s); } catch(e) { return s || ""; } },
+        strToBytes: function(str) {
+          if (!str) return [];
+          var bytes = [];
+          for (var i = 0; i < str.length; i++) {
+            var cp = str.charCodeAt(i);
+            if (cp < 0x80) bytes.push(cp);
+            else if (cp < 0x800) { bytes.push(0xC0 | (cp >> 6)); bytes.push(0x80 | (cp & 0x3F)); }
+            else { bytes.push(0xE0 | (cp >> 12)); bytes.push(0x80 | ((cp >> 6) & 0x3F)); bytes.push(0x80 | (cp & 0x3F)); }
+          }
+          return bytes;
+        },
+        hexEncodeToString: function(utf8) {
+          if (!utf8) return "";
+          var hex = "";
+          for (var i = 0; i < utf8.length; i++) {
+            var h = utf8.charCodeAt(i).toString(16);
+            hex += (h.length < 2 ? "0" : "") + h;
+          }
+          return hex;
+        },
+        digestHex: function(data, algorithm) { return this.md5(data); },
+        digestBase64Str: function(data, algorithm) {
+          var hex = this.md5(data);
+          if (!hex) return "";
+          var bytes = [];
+          for (var i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substring(i, i + 2), 16));
+          return this.base64Encode(String.fromCharCode.apply(null, bytes));
+        },
+        HMacHex: function(data, algorithm, key) { return this.md5(key + data); },
+        HMacBase64: function(data, algorithm, key) {
+          var hex = this.HMacHex(data, algorithm, key);
+          if (!hex) return "";
+          var bytes = [];
+          for (var i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substring(i, i + 2), 16));
+          return this.base64Encode(String.fromCharCode.apply(null, bytes));
+        },
+        ajaxAll: function(urlList) {
+          if (!urlList || !urlList.length) return [];
+          var results = [];
+          for (var i = 0; i < urlList.length; i++) {
+            results.push(this.ajax(urlList[i]));
+          }
+          return results;
+        },
+        createSymmetricCrypto: function(transformation, key, iv) {
+          // 简化实现：返回一个 doFinal 方法
+          return {
+            doFinal: function(data, mode) {
+              console.log("[Crypto]", transformation, mode, data ? data.substring(0, 20) : "");
+              return "";
+            }
+          };
+        },
+        cacheFile: function(url) { return this.ajax(url); },
+        downloadFile: function(url) { return this.ajax(url); },
+        readTxtFile: function(path) { return this.ajax(path); },
+        importScript: function(path) { return this.ajax(path); },
+        evalJS: function(js) {
+          try { return eval(js); } catch(e) { return ""; }
+        }
       };
       var cookie = {
         setCookie: function(url, value) { ctx["_cookie_" + url] = value; },
         getCookie: function(url) { return ctx["_cookie_" + url] || ""; },
-        removeCookie: function(url) { delete ctx["_cookie_" + url]; }
+        removeCookie: function(url) { delete ctx["_cookie_" + url]; },
+        replaceCookie: function(url, value) {
+          var existing = ctx["_cookie_" + url] || "";
+          var map = {};
+          if (existing) { existing.split(";").forEach(function(p) { var eq = p.indexOf("="); if (eq > 0) map[p.substring(0,eq).trim()] = p.substring(eq+1).trim(); }); }
+          value.split(";").forEach(function(p) { var eq = p.indexOf("="); if (eq > 0) map[p.substring(0,eq).trim()] = p.substring(eq+1).trim(); });
+          ctx["_cookie_" + url] = Object.keys(map).map(function(k) { return k + "=" + map[k]; }).join("; ");
+        },
+        getKey: function(url, key) {
+          var raw = ctx["_cookie_" + url] || "";
+          var parts = raw.split(";");
+          for (var i = 0; i < parts.length; i++) {
+            var eq = parts[i].indexOf("=");
+            if (eq > 0 && parts[i].substring(0, eq).trim() === key) return parts[i].substring(eq + 1).trim();
+          }
+          return "";
+        },
+        cookieToMap: function(cookieStr) {
+          var map = {};
+          if (!cookieStr) return map;
+          cookieStr.split(";").forEach(function(p) { var eq = p.indexOf("="); if (eq > 0) map[p.substring(0,eq).trim()] = p.substring(eq+1).trim(); });
+          return map;
+        },
+        mapToCookie: function(map) {
+          if (!map || typeof map !== "object") return "";
+          return Object.keys(map).map(function(k) { return k + "=" + map[k]; }).join("; ");
+        }
       };
       var cacheStore = ctx._cacheStore || {};
       var cache = {
@@ -141,9 +257,23 @@ window.__nativeBridge = {
       var source = ctx.source || {};
       if (!source.getVariable) source.getVariable = function() { return ctx._sourceVar || ""; };
       if (!source.setVariable) source.setVariable = function(v) { ctx._sourceVar = v; };
+      if (!source.login) source.login = function() { return false; };
+      if (!source.getLoginHeader) source.getLoginHeader = function() { return ctx._loginHeader || "{}"; };
+      if (!source.putLoginHeader) source.putLoginHeader = function(h) { ctx._loginHeader = h; };
+      if (!source.removeLoginHeader) source.removeLoginHeader = function() { delete ctx._loginHeader; };
+      if (!source.getLoginInfo) source.getLoginInfo = function() { return ctx._loginInfo || "{}"; };
+      if (!source.putLoginInfo) source.putLoginInfo = function(info) { ctx._loginInfo = info; };
+      if (!source.removeLoginInfo) source.removeLoginInfo = function() { delete ctx._loginInfo; };
+      if (!source.getHeaderMap) source.getHeaderMap = function(hasLogin) { return {}; };
+      if (!source.put) source.put = function(k, v) { ctx["_source_" + k] = v; };
+      if (!source.get) source.get = function(k) { return ctx["_source_" + k] || ""; };
+      if (!source.evalJS) source.evalJS = function(js) { try { return eval(js); } catch(e) { return ""; } };
       var book = ctx.book || {};
-      if (book && !book.getVariable) book.getVariable = function(key) { return ctx["_bookVar_" + key] || ""; };
-      if (book && !book.setVariable) book.setVariable = function(key, v) { ctx["_bookVar_" + key] = v; };
+      if (!book.getVariable) book.getVariable = function(key) { return ctx["_bookVar_" + key] || ""; };
+      if (!book.setVariable) book.setVariable = function(key, v) { ctx["_bookVar_" + key] = v; };
+      var chapter = ctx.chapter || {};
+      if (!chapter.getVariable) chapter.getVariable = function(key) { return ctx["_chapterVar_" + key] || ""; };
+      if (!chapter.setVariable) chapter.setVariable = function(key, v) { ctx["_chapterVar_" + key] = v; };
       // 构建 this 上下文，供 jsLib 中的 this.source / this.java 等使用
       var thisCtx = {
         source: source,

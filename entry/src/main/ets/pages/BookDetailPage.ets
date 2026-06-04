@@ -14,6 +14,7 @@ import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
+import { ChapterDataSource } from '../utils/ChapterDataSource';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Detail';
@@ -34,6 +35,7 @@ export struct BookDetailPage {
   @Local hasThemeColor: boolean = false;
   @Local debugInfo: string = '';
   private chapterListScroller: Scroller = new Scroller();
+  private chapterDataSource: ChapterDataSource = new ChapterDataSource();
 
   aboutToAppear(): void {
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
@@ -48,6 +50,7 @@ export struct BookDetailPage {
     const cached = SearchCache.get(this.bookId);
     if (cached) {
       this.book = cached;
+      this.chapterDataSource.setChapters(cached.chapters);
       const cachedRgb = ColorPickerUtils.getCached(cached.cover);
       if (cachedRgb) {
         this.applyCoverColor(cachedRgb);
@@ -64,6 +67,7 @@ export struct BookDetailPage {
     if (b) {
       // 先快速渲染基础信息
       this.book = b;
+      this.chapterDataSource.setChapters(b.chapters);
       this.isFavorite = await PreferenceService.isFavorite(b.id);
       // 加载播放/阅读历史，用于"继续播放"入口
       this.loadHistory(b.id);
@@ -168,6 +172,7 @@ export struct BookDetailPage {
           sourceUrl: book.sourceUrl
         };
         this.book = cloned;
+        this.chapterDataSource.setChapters(cloned.chapters);
         SearchCache.put(cloned);
         // 已收藏的在线书：同步把最新 toc 写回 cachedBooks,保证书架直接进播放器有完整章节
         if (this.isFavorite) {
@@ -624,7 +629,7 @@ export struct BookDetailPage {
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
         List({ space: 0, scroller: this.chapterListScroller }) {
-          ForEach(this.book!.chapters, (ch: Chapter) => {
+          LazyForEach(this.chapterDataSource, (ch: Chapter) => {
             ListItem() {
               this.buildChapterItem(ch)
             }
@@ -632,6 +637,7 @@ export struct BookDetailPage {
         }
         .width('100%')
         .layoutWeight(1)
+        .cachedCount(5)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
         .divider({ strokeWidth: 0.5, color: AppColor.Divider, startMargin: AppSpace.Lg, endMargin: AppSpace.Lg })

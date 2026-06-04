@@ -9,6 +9,7 @@ export interface SearchRule {
   lastChapter: string;
   wordCount?: string;
   checkKeyWord?: string;
+  updateTime?: string;
 }
 
 export interface TocRule {
@@ -20,10 +21,13 @@ export interface TocRule {
   isPay?: string;
   isVolume?: string;
   updateTime?: string;
+  preUpdateJs?: string;
+  formatJs?: string;
 }
 
 export interface ContentRule {
   content: string;
+  title?: string;
   audioUrl?: string;
   nextContentUrl?: string;
   replaceRegex?: string;
@@ -40,6 +44,7 @@ export interface BookInfoRule {
   kind?: string;
   wordCount?: string;
   lastChapter?: string;
+  updateTime?: string;
   tocUrl: string;
   canReName?: string;
   downloadUrls?: string;
@@ -54,6 +59,8 @@ export interface ExploreRule {
   intro: string;
   kind: string;
   lastChapter: string;
+  updateTime?: string;
+  wordCount?: string;
 }
 
 export interface BookSource {

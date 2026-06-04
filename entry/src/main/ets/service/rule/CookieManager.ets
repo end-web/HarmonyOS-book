@@ -4,7 +4,16 @@
  * 双重职责：
  *  1) 书源 JS 规则中 cookie.xxx 方法（按 url 整段保存）
  *  2) HttpClient 自动 cookie jar：按 (host, path) 维度持久化每个 cookie
+ *
+ * 持久化：使用 @ohos.data.preferences 写入磁盘，重启不丢失
  */
+
+import dataPreferences from '@ohos.data.preferences';
+import { common } from '@kit.AbilityKit';
+
+const COOKIE_PREFS_NAME = 'cookie_store';
+const COOKIE_JAR_KEY = 'cookie_jar';
+const COOKIE_RAW_KEY = 'cookie_raw';
 
 interface CookieEntry {
   name: string;
@@ -26,12 +35,105 @@ class CookieManagerImpl {
   // 新接口：按 host → cookie name → entry
   private jar: Map<string, Map<string, CookieEntry>> = new Map();
 
+  // 持久化状态
+  private prefs: dataPreferences.Preferences | null = null;
+  private initialized: boolean = false;
+  private saveTimer: number = -1;
+
+  /**
+   * 初始化：从磁盘加载 cookies
+   */
+  async init(context: common.BaseContext): Promise<void> {
+    if (this.initialized) return;
+    try {
+      this.prefs = await dataPreferences.getPreferences(context, COOKIE_PREFS_NAME);
+      await this.loadFromDisk();
+      this.initialized = true;
+    } catch (e) {
+      console.warn(`[CookieManager] init failed: ${e}`);
+    }
+  }
+
+  private async loadFromDisk(): Promise<void> {
+    if (!this.prefs) return;
+    try {
+      // 加载 raw cookies
+      const rawJson = await this.prefs.get(COOKIE_RAW_KEY, '{}') as string;
+      if (rawJson && rawJson !== '{}') {
+        const rawObj = JSON.parse(rawJson) as Record<string, string>;
+        for (const k of Object.keys(rawObj)) this.rawCookies.set(k, rawObj[k]);
+      }
+      // 加载 jar cookies
+      const jarJson = await this.prefs.get(COOKIE_JAR_KEY, '{}') as string;
+      if (jarJson && jarJson !== '{}') {
+        const jarObj = JSON.parse(jarJson) as Record<string, Record<string, CookieEntry>>;
+        for (const host of Object.keys(jarObj)) {
+          const map = new Map<string, CookieEntry>();
+          const entries = jarObj[host];
+          for (const name of Object.keys(entries)) map.set(name, entries[name]);
+          this.jar.set(host, map);
+        }
+      }
+    } catch (e) {
+      console.warn(`[CookieManager] loadFromDisk failed: ${e}`);
+    }
+  }
+
+  /**
+   * 延迟保存到磁盘（防抖 500ms，避免高频写入）
+   */
+  private scheduleSave(): void {
+    if (this.saveTimer >= 0) {
+      clearTimeout(this.saveTimer);
+    }
+    const timerId = setTimeout(() => {
+      this.saveToDisk();
+      this.saveTimer = -1;
+    }, 500);
+    this.saveTimer = timerId as number;
+  }
+
+  private async saveToDisk(): Promise<void> {
+    if (!this.prefs) return;
+    try {
+      // 序列化 raw cookies
+      const rawObj: Record<string, string> = {};
+      const rawKeys = this.rawCookies.keys();
+      for (const k of rawKeys) {
+        rawObj[k] = this.rawCookies.get(k) || '';
+      }
+      await this.prefs.put(COOKIE_RAW_KEY, JSON.stringify(rawObj));
+      // 序列化 jar cookies（清理过期）
+      const now = Date.now();
+      const jarObj: Record<string, Record<string, CookieEntry>> = {};
+      const jarKeys = this.jar.keys();
+      for (const host of jarKeys) {
+        const map = this.jar.get(host);
+        if (!map) continue;
+        const entries: Record<string, CookieEntry> = {};
+        const entryKeys = map.keys();
+        for (const name of entryKeys) {
+          const entry = map.get(name);
+          if (!entry) continue;
+          if (entry.expiresAt > 0 && entry.expiresAt < now) continue;
+          entries[name] = entry;
+        }
+        if (Object.keys(entries).length > 0) jarObj[host] = entries;
+      }
+      await this.prefs.put(COOKIE_JAR_KEY, JSON.stringify(jarObj));
+      await this.prefs.flush();
+    } catch (e) {
+      console.warn(`[CookieManager] saveToDisk failed: ${e}`);
+    }
+  }
+
   // ---------------- 旧接口（书源 JS） ----------------
 
   removeCookie(url: string): void {
     const domain = this.extractDomain(url);
     this.rawCookies.delete(domain);
     this.jar.delete(domain);
+    this.scheduleSave();
   }
 
   getCookie(url: string): string {
@@ -44,6 +146,7 @@ class CookieManagerImpl {
   setCookie(url: string, cookie: string): void {
     const domain = this.extractDomain(url);
     this.rawCookies.set(domain, cookie);
+    this.scheduleSave();
   }
 
   // ---------------- HttpClient cookie jar ----------------
@@ -95,6 +198,7 @@ class CookieManagerImpl {
       }
       map.set(parsed.entry.name, parsed.entry);
     }
+    this.scheduleSave();
   }
 
   // ---------------- 工具 ----------------
@@ -187,6 +291,63 @@ class CookieManagerImpl {
   clear(): void {
     this.rawCookies.clear();
     this.jar.clear();
+    this.scheduleSave();
+  }
+
+  /**
+   * 获取指定域名下某个 cookie 的值（Legado cookie.getKey 兼容）
+   */
+  getKey(url: string, key: string): string {
+    const domain = this.extractDomain(url);
+    // 先从 raw cookies 查
+    const raw = this.rawCookies.get(domain);
+    if (raw) {
+      const parts = raw.split(';');
+      for (const part of parts) {
+        const eq = part.indexOf('=');
+        if (eq > 0 && part.substring(0, eq).trim() === key) {
+          return part.substring(eq + 1).trim();
+        }
+      }
+    }
+    // 再从 jar 查
+    for (const host of this.jar.keys()) {
+      if (!this.hostMatches(domain, host)) continue;
+      const map = this.jar.get(host);
+      if (map && map.has(key)) {
+        return map.get(key)!.value;
+      }
+    }
+    return '';
+  }
+
+  /**
+   * 合并并保存 cookie（Legado cookie.replaceCookie 兼容）
+   * 如果已有同名 cookie，更新其值；否则新增
+   */
+  replaceCookie(url: string, cookie: string): void {
+    const domain = this.extractDomain(url);
+    const existing = this.rawCookies.get(domain) || '';
+    const existingMap = new Map<string, string>();
+    if (existing) {
+      for (const part of existing.split(';')) {
+        const eq = part.indexOf('=');
+        if (eq > 0) existingMap.set(part.substring(0, eq).trim(), part.substring(eq + 1).trim());
+      }
+    }
+    // 合并新 cookie
+    for (const part of cookie.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq > 0) existingMap.set(part.substring(0, eq).trim(), part.substring(eq + 1).trim());
+    }
+    const mergedParts: string[] = [];
+    const mergeKeys = existingMap.keys();
+    for (const mk of mergeKeys) {
+      mergedParts.push(mk + '=' + (existingMap.get(mk) || ''));
+    }
+    const merged = mergedParts.join('; ');
+    this.rawCookies.set(domain, merged);
+    this.scheduleSave();
   }
 }
 

@@ -86,6 +86,16 @@ export class SourceVariableStore {
     SourceVariableStore.scheduleFlush();
   }
 
+  static removeSourceVariable(sourceUrl: string, key: string): void {
+    const vars = SourceVariableStore.getSourceVariables(sourceUrl);
+    if (vars[key] !== undefined) {
+      vars[key] = '' as Object;
+      SourceVariableStore.sourceCache.set(sourceUrl, vars);
+      SourceVariableStore.dirtySources.add(sourceUrl);
+      SourceVariableStore.scheduleFlush();
+    }
+  }
+
   // ──────────── 书级变量 ────────────
 
   static getBookVariables(bookId: string): Record<string, Object> {
@@ -120,6 +130,16 @@ export class SourceVariableStore {
     SourceVariableStore.bookCache.set(bookId, vars);
     SourceVariableStore.dirtyBooks.add(bookId);
     SourceVariableStore.scheduleFlush();
+  }
+
+  static removeBookVariable(bookId: string, key: string): void {
+    const vars = SourceVariableStore.getBookVariables(bookId);
+    if (vars[key] !== undefined) {
+      vars[key] = '' as Object;
+      SourceVariableStore.bookCache.set(bookId, vars);
+      SourceVariableStore.dirtyBooks.add(bookId);
+      SourceVariableStore.scheduleFlush();
+    }
   }
 
   // ──────────── 刷盘 ────────────

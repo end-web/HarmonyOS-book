@@ -99,7 +99,7 @@ export struct LoginPage {
    */
   private startCookieCheck(): void {
     let checkCount = 0;
-    const maxChecks = 120; // 最多检查 60 秒（每 500ms 一次）
+    const maxChecks = 30; // 最多检查 60 秒（每 2000ms 一次）
 
     this.cookieCheckTimer = setInterval(() => {
       checkCount++;
@@ -130,7 +130,7 @@ export struct LoginPage {
         .catch(() => {
           // ignore JS errors (page might be navigating)
         });
-    }, 500);
+    }, 2000);
   }
 
   /**

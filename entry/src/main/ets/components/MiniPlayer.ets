@@ -12,8 +12,9 @@ export struct MiniPlayer {
 
   @Local coverAngle: number = 0;
   @Local rotating: boolean = false;
-  private animationTimer: number = -1;
+  private rotateTimer: number = -1;
   private startTime: number = 0;
+  private baseAngle: number = 0;
 
   aboutToAppear(): void {
     this.syncRotate();
@@ -39,23 +40,25 @@ export struct MiniPlayer {
   private startRotate(): void {
     if (this.rotating) return;
     this.rotating = true;
+    // 经过时间驱动角度（不依赖 animateTo 对 @Local 的动画化）：
+    // 从上次暂停的角度 baseAngle 继续，12 秒一圈，33ms 一刷 ≈ 30fps
     this.startTime = Date.now();
-    const animate = () => {
+    this.rotateTimer = setInterval(() => {
       if (!this.rotating) return;
       const elapsed = Date.now() - this.startTime;
-      this.coverAngle = (elapsed / 12000) * 360;
-    };
-    this.animationTimer = setInterval(animate, 16);
+      this.coverAngle = (this.baseAngle + (elapsed / 12000) * 360) % 360;
+    }, 33);
   }
 
   private stopRotate(): void {
     if (!this.rotating) return;
     this.rotating = false;
-    if (this.animationTimer >= 0) {
-      clearInterval(this.animationTimer);
-      this.animationTimer = -1;
+    if (this.rotateTimer !== -1) {
+      clearInterval(this.rotateTimer);
+      this.rotateTimer = -1;
     }
-    this.coverAngle = this.coverAngle % 360;
+    // 记住当前角度，下次从此处继续，避免回弹到 0
+    this.baseAngle = this.coverAngle % 360;
   }
 
   private bookId(): string {

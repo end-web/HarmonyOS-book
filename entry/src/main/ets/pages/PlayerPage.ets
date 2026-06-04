@@ -13,6 +13,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { ChapterCacheService, EVT_CHAPTER_DURATION_UPDATED } from '../service/ChapterCacheService';
+import { ChapterDataSource } from '../utils/ChapterDataSource';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
@@ -50,6 +51,7 @@ export struct PlayerPage {
   private lastCoverKey: string = '';
   private chapterListScroller: Scroller = new Scroller();
   private segmentTabsScroller: Scroller = new Scroller();
+  private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
   };
@@ -77,8 +79,7 @@ export struct PlayerPage {
 
     const rgb = ColorPickerUtils.getCached(b.cover);
     if (!rgb) {
-      // 取色缓存未命中:先不设置背景,让封面先渲染
-      this.lastCoverKey = b.cover;
+      // 取色缓存未命中:不设置 lastCoverKey，让后续 extractCoverColor 正常执行
       return;
     }
 
@@ -263,6 +264,7 @@ export struct PlayerPage {
     hilog.info(DOMAIN, TAG, `打开章节列表：共 ${this.book.chapters.length} 章`);
     if (this.book.chapters.length <= this.SEGMENT_SIZE) {
       this.chapterSegmentIndex = 0;
+      this.chapterDataSource.setChapters(this.book.chapters);
       this.scrollToCurrentChapter(0);
     } else {
       // 多于 1000 章时，自动定位到当前章节所在分段
@@ -270,12 +272,14 @@ export struct PlayerPage {
         const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
         if (idx >= 0) {
           this.chapterSegmentIndex = Math.floor(idx / this.SEGMENT_SIZE);
+          this.chapterDataSource.setChapters(this.getSegmentChapters());
           hilog.info(DOMAIN, TAG, `当前章节索引 ${idx}，定位到第 ${this.chapterSegmentIndex + 1} 段`);
           this.scrollToCurrentChapter(this.chapterSegmentIndex * this.SEGMENT_SIZE);
           return;
         }
       }
       this.chapterSegmentIndex = 0;
+      this.chapterDataSource.setChapters(this.getSegmentChapters());
     }
   }
 
@@ -347,6 +351,7 @@ export struct PlayerPage {
     const targetSeg = Math.floor(globalIdx / this.SEGMENT_SIZE);
     if (targetSeg !== this.chapterSegmentIndex) {
       this.chapterSegmentIndex = targetSeg;
+      this.chapterDataSource.setChapters(this.getSegmentChapters());
     }
     this.scrollToCurrentChapter(targetSeg * this.SEGMENT_SIZE);
     this.listOffsetFromCurrent = 0;
@@ -560,7 +565,6 @@ export struct PlayerPage {
             .borderRadius(16)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-            .renderMode(ImageRenderMode.Original)
             .alt($r('app.media.startIcon'))
             .onError(() => {
               console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
@@ -575,7 +579,6 @@ export struct PlayerPage {
             .borderRadius(16)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-            .renderMode(ImageRenderMode.Original)
         } else if (this.book!.cover) {
           Image($rawfile(this.book!.cover))
             .width('100%')
@@ -583,7 +586,6 @@ export struct PlayerPage {
             .borderRadius(16)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-            .renderMode(ImageRenderMode.Original)
         } else {
           Column() {
             SymbolGlyph($r('sys.symbol.music'))
@@ -896,6 +898,7 @@ export struct PlayerPage {
             .padding({ left: 16, right: 16, top: 8, bottom: 8 })
             .onClick(() => {
               this.chapterSegmentIndex = segIdx;
+              this.chapterDataSource.setChapters(this.getSegmentChapters());
               this.scrollToCurrentChapter(segIdx * this.SEGMENT_SIZE);
             })
         }, (segIdx: number) => segIdx.toString())
@@ -910,7 +913,7 @@ export struct PlayerPage {
   @Builder
   buildChapterItems() {
     List({ space: 0, scroller: this.chapterListScroller }) {
-      ForEach(this.getSegmentChapters(), (ch: Chapter) => {
+      LazyForEach(this.chapterDataSource, (ch: Chapter) => {
         ListItem() {
           Row() {
             Column({ space: 2 }) {
@@ -951,6 +954,7 @@ export struct PlayerPage {
     }
     .width('100%')
     .layoutWeight(1)
+    .cachedCount(5)
     .onScrollIndex((firstIndex: number, lastIndex: number) => {
       // 用首尾可见 index 与当前章节 localIndex 计算偏离
       // 行高约 64vp(BodyL+Caption+padding),用 (firstIndex - localIdx) * 64 估算
