@@ -68,8 +68,23 @@ export class JSExecutor {
   async eval(code: string, context: Record<string, Object> = {}): Promise<Object | null> {
     if (!code || !code.trim()) return null;
 
-    // 解开 IIFE 包装：(function(){...})()  →  函数体
-    code = this.unwrapIIFE(code);
+    // jsLib 注入：光遇聚合等重度书源的 jsLib 函数通过 this.source / this.java 互相调用，
+    // 必须用 .call() 绑定 this 到共享上下文对象
+    const jsLib = context['_jsLib'] as string;
+    const hasJsLib = !!(jsLib && jsLib.trim());
+
+    if (hasJsLib) {
+      // 不使用 IIFE 包装！
+      // 原因：patchJsLibThis 将 function getVariable() {} 转为 this.getVariable = function() {}
+      //       并注入 var getVariable = this.getVariable; 局部别名
+      //       如果用 IIFE 包装，这些局部别名无法被 IIFE 内部的其他函数访问
+      // 策略：直接拼接 jsLib + code，让 jsLib 函数作为局部变量可用
+      const patchedJsLib = JSExecutor.patchJsLibThis(jsLib);
+      code = patchedJsLib + '\n' + code;
+    } else {
+      // 解开 IIFE 包装：(function(){...})()  →  函数体
+      code = this.unwrapIIFE(code);
+    }
 
     // 检测是否需要 java 桥（书源 JS 规则常用 java.connect/ajax/log）
     const needsJava = code.includes('java.connect') ||
@@ -89,6 +104,19 @@ export class JSExecutor {
     if (needsDOM) {
       const shimResult = this.tryDOMShim(code, context);
       if (shimResult !== undefined) return shimResult;
+    }
+
+    // jsLib 代码（含箭头函数、解构赋值、复杂函数声明等）无法被本地求值器正确处理，
+    // 直接使用 WebView JS 引擎（完整 ES6+ 支持）
+    if (hasJsLib) {
+      try {
+        const webViewEngine = getWebViewJSEngine();
+        const result = await webViewEngine.eval(code, context);
+        return result;
+      } catch (e) {
+        console.error(`[JSExecutor] jsLib WebView eval failed: ${e}`);
+        return null;
+      }
     }
 
     // 优先：本地脚本求值（async，原生支持 await java.ajax / java.connect 与多行赋值）
@@ -151,6 +179,59 @@ export class JSExecutor {
    * 解开 IIFE 包装：(function(){...})() 或 (()=>{...})()
    * 返回函数体（内部的多行语句），或原 code（如果不是 IIFE）
    */
+  /**
+   * 修正 jsLib 中的函数声明和 this 引用
+   *
+   * 光遇聚合等书源的 jsLib 有两个关键问题：
+   * 1. 函数互相调用用 this.BaseUrl() / this.getVariable()，但函数是局部声明不是 this 的属性
+   * 2. 函数内部用 const { source } = this 访问上下文
+   *
+   * 修复策略：
+   * - 将 function xxx() {} 声明转为 this.xxx = function() {}（成为 this 的属性）
+   * - 将 const { x } = this; 转为局部变量引用
+   * - this.source/java/cookie/cache 引用保持不变（由 .call(__this) 绑定）
+   */
+  static patchJsLibThis(jsLib: string): string {
+    let patched = jsLib;
+
+    // 1. 将顶层函数声明转为 this 属性赋值
+    //    function getVariable(k) {  →  this.getVariable = function(k) {
+    //    function BaseUrl() {  →  this.BaseUrl = function() {
+    //    function request(url, method, ...) {  →  this.request = function(url, method, ...) {
+    // 同时收集所有被转换的函数名，后续注入局部变量别名
+    const patchedNames: string[] = [];
+    patched = patched.replace(
+      /^function\s+(\w+)\s*\(/gm,
+      (_match: string, name: string): string => {
+        patchedNames.push(name);
+        return 'this.' + name + ' = function(';
+      }
+    );
+
+    // 2. 将 const { source } = this; / const { source, java } = this; 转为局部变量
+    //    因为 this.source 已经由 .call(__this) 提供
+    patched = patched.replace(
+      /const\s*\{([^}]+)\}\s*=\s*this\s*;/g,
+      (_match: string, names: string): string => {
+        const parts = names.split(',').map((n: string) => n.trim()).filter((n: string) => n.length > 0);
+        return parts.map((name: string) => `var ${name} = this.${name};`).join('\n');
+      }
+    );
+
+    // 3. 在 jsLib 开头注入局部变量别名
+    //    问题：function getVariable(k) {} 被转为 this.getVariable = function(k) {}
+    //    但代码中用 getVariable(...)（不带 this.）调用，需要局部变量引用
+    //    解决：在 jsLib 开头注入 var getVariable = this.getVariable;
+    if (patchedNames.length > 0) {
+      const aliases = patchedNames.map((name: string) =>
+        `var ${name} = this.${name};`
+      ).join('\n');
+      patched = aliases + '\n' + patched;
+    }
+
+    return patched;
+  }
+
   private unwrapIIFE(code: string): string {
     const trimmed = code.trim();
     // (function(){ ... })()  / (function () { ... })()
@@ -310,6 +391,74 @@ export class JSExecutor {
       return '';
     }
 
+    // cookie.getCookie(url) - 获取 Cookie
+    const cookieGetMatch = code.match(/^cookie\.getCookie\(['"](.+)['"]\)$/);
+    if (cookieGetMatch) {
+      const cookieManager = getCookieManager();
+      return cookieManager.getCookie(cookieGetMatch[1]);
+    }
+
+    // java.getCookie(url) - 获取 Cookie（jsLib 兼容）
+    const javaCookieGetMatch = code.match(/^java\.getCookie\(['"](.+)['"]\)$/);
+    if (javaCookieGetMatch) {
+      return getJavaBridge().getCookie(javaCookieGetMatch[1]);
+    }
+
+    // cookie.setCookie(url, value) - 设置 Cookie
+    const cookieSetMatch = code.match(/^cookie\.setCookie\(['"](.+?)['"]\s*,\s*['"](.+?)['"]\)$/);
+    if (cookieSetMatch) {
+      const cookieManager = getCookieManager();
+      cookieManager.setCookie(cookieSetMatch[1], cookieSetMatch[2]);
+      return '';
+    }
+
+    // java.toast(msg) / java.longToast(msg)
+    const toastMatch = code.match(/^java\.(toast|longToast)\((.+)\)$/);
+    if (toastMatch) {
+      const inner = this.tryLocalEval(toastMatch[2], ctx);
+      if (inner !== undefined) {
+        const javaBridge = getJavaBridge();
+        if (toastMatch[1] === 'longToast') {
+          javaBridge.longToast(String(inner));
+        } else {
+          javaBridge.toast(String(inner));
+        }
+      }
+      return '';
+    }
+
+    // java.hexDecodeToString(hex) — 兼容 base64 输入
+    const hexDecodeMatch = code.match(/^java\.hexDecodeToString\((.+)\)$/);
+    if (hexDecodeMatch) {
+      const inner = this.tryLocalEval(hexDecodeMatch[1], ctx);
+      if (inner === undefined) return undefined;
+      return getJavaBridge().hexDecodeToString(String(inner));
+    }
+
+    // java.androidId() / java.deviceID()
+    if (code === 'java.androidId()' || code === 'java.deviceID()') {
+      return getJavaBridge().androidId();
+    }
+
+    // java.getWebViewUA()
+    if (code === 'java.getWebViewUA()') {
+      return getJavaBridge().getWebViewUA();
+    }
+
+    // java.getAppVariant()
+    if (code === 'java.getAppVariant()') {
+      return getJavaBridge().getAppVariant();
+    }
+
+    // java.startBrowser(url, title) / java.startBrowserDp(url, title)
+    const startBrowserMatch = code.match(/^java\.startBrowser(?:Dp)?\((.+)\)$/);
+    if (startBrowserMatch) {
+      const args = this.parseArgs(startBrowserMatch[1]);
+      const javaBridge = getJavaBridge();
+      javaBridge.startBrowser(String(args[0] || ''), args.length > 1 ? String(args[1]) : '');
+      return '';
+    }
+
     // Jsoup.parse(var).select('selector').text/attr/html()  / org.jsoup.Jsoup.parse(...)
     const jsoupMatch = code.match(/^(?:org\.jsoup\.)?Jsoup\.parse\((\w+(?:\.body\(\))?)\)\.select\(['"](.+?)['"]\)\.(text|attr|html|outerHtml)\(([^)]*)\)$/);
     if (jsoupMatch) {
@@ -365,6 +514,11 @@ export class JSExecutor {
    *  - for/while、try/catch、对象/数组字面量、箭头函数、嵌套块
    */
   private async tryAsyncScript(code: string, ctx: Record<string, Object>): Promise<Object | undefined> {
+    // jsLib 包装的 IIFE 代码不能被语句拆分执行，跳过让上层降级到 proxy / WebView
+    // jsLib 中的函数声明、箭头函数、解构赋值等复杂语法无法被 splitStatements 正确拆分
+    if (code.includes('.call(') && code.includes('(function')) {
+      return undefined;
+    }
     const lines = this.splitStatements(code);
     if (lines.length === 0) return undefined;
 
@@ -575,6 +729,38 @@ export class JSExecutor {
       return '';
     }
 
+    // java.toast(arg) / java.longToast(arg)
+    const toastMatch = e.match(/^java\.(toast|longToast)\((.+)\)$/);
+    if (toastMatch) {
+      const v = await this.evalExprAsync(toastMatch[2], vars);
+      if (v !== undefined) {
+        const javaBridge = getJavaBridge();
+        if (toastMatch[1] === 'longToast') {
+          javaBridge.longToast(String(v));
+        } else {
+          javaBridge.toast(String(v));
+        }
+      }
+      return '';
+    }
+
+    // java.hexDecodeToString(arg)
+    const hexMatch = e.match(/^java\.hexDecodeToString\((.+)\)$/);
+    if (hexMatch) {
+      const v = await this.evalExprAsync(hexMatch[1], vars);
+      if (v === undefined) return undefined;
+      return getJavaBridge().hexDecodeToString(String(v));
+    }
+
+    // java.startBrowser(url, title) / java.startBrowserDp(url, title)
+    const startBrowserMatch = e.match(/^java\.startBrowser(?:Dp)?\((.+)\)$/);
+    if (startBrowserMatch) {
+      const args = this.parseArgs(startBrowserMatch[1]);
+      const javaBridge = getJavaBridge();
+      javaBridge.startBrowser(String(args[0] || ''), args.length > 1 ? String(args[1]) : '');
+      return '';
+    }
+
     // a + b + c 拼接：先尝试 async 处理，因为单段可能也是 java.ajax 调用
     if (e.includes('+') && !/^['"`]/.test(e)) {
       const parts = this.splitTopLevelPlus(e);
@@ -587,6 +773,12 @@ export class JSExecutor {
         }
         return acc;
       }
+    }
+
+    // jsLib 包装的 IIFE：(function(){...}).call(this)
+    // 不能被 splitStatements 拆分执行，需要通过完整 JS 引擎执行
+    if (e.startsWith('(function') && e.includes('.call(')) {
+      return undefined; // 返回 undefined 让上层降级到 proxy / WebView
     }
 
     // 普通同步表达式

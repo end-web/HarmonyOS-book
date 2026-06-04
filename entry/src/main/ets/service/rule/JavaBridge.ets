@@ -7,10 +7,20 @@
  *  - java.ajax(url, options) - HTTP 请求（支持 POST）
  *  - java.getStrResponse() - 获取最后一次请求的响应
  *  - java.log(msg) - 日志输出
+ *  - java.toast(msg) / java.longToast(msg) - Toast 提示
+ *  - java.base64Encode/Decode - Base64 编解码
+ *  - java.hexDecodeToString(hex) - Hex 解码
+ *  - java.androidId() / java.deviceID() - 设备标识
+ *  - java.getWebViewUA() - WebView User-Agent
+ *  - java.getAppVariant() - 应用变体
+ *  - java.startBrowser(url, title) - 打开外部浏览器
+ *  - java.showBrowser(url, html, js, options) - 内嵌浏览器弹窗
+ *  - java.refreshExplore() - 刷新发现页
  */
 
 import { HttpClient } from '../http/HttpClient';
 import { AnalyzeUrl } from './AnalyzeUrl';
+import { getCookieManager } from './CookieManager';
 
 interface AjaxOptions {
   method?: string;
@@ -18,9 +28,51 @@ interface AjaxOptions {
   headers?: Record<string, string>;
 }
 
+interface BrowserAwaitResult {
+  body: string;
+}
+
 export class JavaBridgeImpl {
   private variables: Record<string, string> = {};
   private lastResponse: string = '';
+
+  // 回调（由 UI 层注册）
+  private static toastCallback: ((msg: string, duration: number) => void) | null = null;
+  private static browserCallback: ((url: string, title: string) => void) | null = null;
+  private static browserAwaitCallback: ((url: string, title: string) => Promise<BrowserAwaitResult>) | null = null;
+  private static showBrowserCallback: ((url: string, html: string, js: string, options: string) => void) | null = null;
+  private static refreshExploreCallback: (() => void) | null = null;
+
+  // 设备标识缓存
+  private static deviceId: string = '';
+
+  // ──────────── 回调注册（UI 层调用） ────────────
+
+  static setToastCallback(cb: ((msg: string, duration: number) => void) | null): void {
+    JavaBridgeImpl.toastCallback = cb;
+  }
+
+  static setBrowserCallback(cb: ((url: string, title: string) => void) | null): void {
+    JavaBridgeImpl.browserCallback = cb;
+  }
+
+  static setBrowserAwaitCallback(cb: ((url: string, title: string) => Promise<BrowserAwaitResult>) | null): void {
+    JavaBridgeImpl.browserAwaitCallback = cb;
+  }
+
+  static setShowBrowserCallback(cb: ((url: string, html: string, js: string, options: string) => void) | null): void {
+    JavaBridgeImpl.showBrowserCallback = cb;
+  }
+
+  static setRefreshExploreCallback(cb: (() => void) | null): void {
+    JavaBridgeImpl.refreshExploreCallback = cb;
+  }
+
+  static setDeviceId(id: string): void {
+    JavaBridgeImpl.deviceId = id;
+  }
+
+  // ──────────── 核心 API ────────────
 
   get(key: string): string {
     return this.variables[key] || '';
@@ -44,7 +96,6 @@ export class JavaBridgeImpl {
 
   async ajax(url: string, options?: AjaxOptions): Promise<string> {
     try {
-      // 解析 Legado "URL,{配置JSON}" 语法
       let actualUrl = url;
       let method = options?.method?.toUpperCase() || 'GET';
       let body = options?.body || '';
@@ -90,17 +141,134 @@ export class JavaBridgeImpl {
     console.info(`[JavaBridge] ${message}`);
   }
 
-  /**
-   * java.webView(html, url, js) - Legado: 通过 webview 渲染并执行 js
-   * 当前实现：暂不渲染 webview，直接返回输入 html（书源依赖动态渲染时可能不工作）
-   */
+  // ──────────── Toast ────────────
+
+  toast(msg: string): void {
+    console.info(`[JavaBridge] toast: ${msg}`);
+    if (JavaBridgeImpl.toastCallback) {
+      JavaBridgeImpl.toastCallback(msg, 2000);
+    }
+  }
+
+  longToast(msg: string): void {
+    console.info(`[JavaBridge] longToast: ${msg}`);
+    if (JavaBridgeImpl.toastCallback) {
+      JavaBridgeImpl.toastCallback(msg, 5000);
+    }
+  }
+
+  // ──────────── 浏览器 ────────────
+
+  startBrowser(url: string, title?: string): void {
+    console.info(`[JavaBridge] startBrowser: ${url}`);
+    if (JavaBridgeImpl.browserCallback) {
+      JavaBridgeImpl.browserCallback(url, title || '');
+    }
+  }
+
+  startBrowserDp(url: string, title?: string): void {
+    this.startBrowser(url, title);
+  }
+
+  async startBrowserAwait(url: string, title?: string): Promise<Object> {
+    console.info(`[JavaBridge] startBrowserAwait: ${url}`);
+    if (JavaBridgeImpl.browserAwaitCallback) {
+      const result: BrowserAwaitResult = await JavaBridgeImpl.browserAwaitCallback(url, title || '');
+      return result as Object;
+    }
+    const fallback: BrowserAwaitResult = { body: '' };
+    return fallback as Object;
+  }
+
+  showBrowser(url: string, html: string, js?: string, options?: string): void {
+    console.info(`[JavaBridge] showBrowser: ${url}`);
+    if (JavaBridgeImpl.showBrowserCallback) {
+      JavaBridgeImpl.showBrowserCallback(url, html, js || '', options || '');
+    }
+  }
+
+  refreshExplore(): void {
+    console.info(`[JavaBridge] refreshExplore`);
+    if (JavaBridgeImpl.refreshExploreCallback) {
+      JavaBridgeImpl.refreshExploreCallback();
+    }
+  }
+
+  // ──────────── Cookie ────────────
+
+  getCookie(url: string): string {
+    try {
+      const cookieManager = getCookieManager();
+      return cookieManager.getCookie(url);
+    } catch {
+      return '';
+    }
+  }
+
+  // ──────────── 设备标识 ────────────
+
+  androidId(): string {
+    return JavaBridgeImpl.deviceId || '';
+  }
+
+  deviceID(): string {
+    return this.androidId();
+  }
+
+  getWebViewUA(): string {
+    return 'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+  }
+
+  getAppVariant(): string {
+    return '';
+  }
+
+  // ──────────── 编码工具 ────────────
+
+  hexDecodeToString(hex: string): string {
+    if (!hex) return '';
+    try {
+      // 检测是否为合法 hex 字符串（偶数长度，仅含 0-9a-fA-F）
+      const isHex = hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex);
+      if (isHex) {
+        const bytes: number[] = [];
+        for (let i = 0; i < hex.length; i += 2) {
+          bytes.push(parseInt(hex.substring(i, i + 2), 16));
+        }
+        let out = '';
+        let i = 0;
+        while (i < bytes.length) {
+          const b = bytes[i++];
+          if (b < 0x80) {
+            out += String.fromCharCode(b);
+          } else if (b < 0xC0) {
+            continue;
+          } else if (b < 0xE0) {
+            out += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i++] & 0x3F));
+          } else if (b < 0xF0) {
+            out += String.fromCharCode(((b & 0xF) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
+          } else {
+            const cp = ((b & 0x7) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F);
+            out += String.fromCodePoint(cp);
+          }
+        }
+        return out;
+      }
+      // 非 hex 字符串，尝试 base64 解码（兼容光遇聚合等书源误用 hexDecodeToString 解码 base64）
+      return this.base64Decode(hex);
+    } catch {
+      return '';
+    }
+  }
+
+  // ──────────── WebView 渲染 ────────────
+
   async webView(html: string, _url?: string, _js?: string): Promise<string> {
     return html || '';
   }
 
-  /**
-   * java.timeFormat(timestamp) - 时间戳格式化（当前简单返回 ISO）
-   */
+  // ──────────── 时间格式化 ────────────
+
   timeFormat(ts: number): string {
     try {
       return new Date(ts).toISOString();
@@ -109,11 +277,11 @@ export class JavaBridgeImpl {
     }
   }
 
-  /** java.base64Encode(str) - Base64 编码（UTF-8） */
+  // ──────────── Base64 编解码 ────────────
+
   base64Encode(s: string): string {
     if (!s) return '';
     try {
-      // ArkTS 全局有 util.Base64.encodeSync，但简单起见用 btoa-like 实现
       const bytes: number[] = [];
       for (let i = 0; i < s.length; i++) {
         const cp = s.charCodeAt(i);
@@ -127,7 +295,6 @@ export class JavaBridgeImpl {
           bytes.push(0x80 | ((cp >> 6) & 0x3F));
           bytes.push(0x80 | (cp & 0x3F));
         } else {
-          // surrogate pair
           i++;
           const cp2 = 0x10000 + (((cp & 0x3FF) << 10) | (s.charCodeAt(i) & 0x3FF));
           bytes.push(0xF0 | (cp2 >> 18));
@@ -153,7 +320,6 @@ export class JavaBridgeImpl {
     }
   }
 
-  /** java.base64Decode(str) - Base64 解码（UTF-8） */
   base64Decode(s: string): string {
     if (!s) return '';
     try {
@@ -171,13 +337,12 @@ export class JavaBridgeImpl {
         if (clean.charAt(i + 2) !== '=') bytes.push(((c2 << 4) | (c3 >> 2)) & 0xFF);
         if (clean.charAt(i + 3) !== '=') bytes.push(((c3 << 6) | c4) & 0xFF);
       }
-      // UTF-8 字节 → 字符串
       let out = '';
       let i = 0;
       while (i < bytes.length) {
         const b = bytes[i++];
         if (b < 0x80) out += String.fromCharCode(b);
-        else if (b < 0xC0) continue; // 非法
+        else if (b < 0xC0) continue;
         else if (b < 0xE0) {
           out += String.fromCharCode(((b & 0x1F) << 6) | (bytes[i++] & 0x3F));
         } else if (b < 0xF0) {
@@ -193,10 +358,10 @@ export class JavaBridgeImpl {
     }
   }
 
-  /** java.md5(str) - 摘要（不实现，返回空，避免硬塞算法。书源极少强依赖） */
+  // ──────────── 杂项 ────────────
+
   md5(_s: string): string { return ''; }
 
-  /** java.randomUUID() - 随机 UUID v4 */
   randomUUID(): string {
     const bytes: number[] = [];
     for (let i = 0; i < 16; i++) bytes.push(Math.floor(Math.random() * 256));

@@ -100,11 +100,12 @@ export struct BookCard {
           Text(this.sourceName())
             .fontSize(10)
             .fontColor(Color.White)
-            .maxLines(1)
+            .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
             .backgroundColor('#99000000')
             .borderRadius({ topRight: AppRadius.Sm, bottomLeft: AppRadius.Md })
+            .constraintSize({ maxWidth: '80%' })
         }
       }
       .width('100%')

@@ -64,6 +64,7 @@ export interface BookSource {
   bookSourceComment?: string;
   enabled: boolean;
   enabledExplore: boolean;
+  enabledCookieJar?: boolean; // 是否启用 cookie jar
   searchUrl: string;
   exploreUrl: string;
   header: string;
@@ -71,6 +72,7 @@ export interface BookSource {
   loginUi?: string;
   loginCheckJs?: string;
   bookUrlPattern?: string;
+  jsLib?: string; // jsLib 全局函数代码（注入到 JS 规则执行环境）
   respondTime: number;
   customOrder: number;
   weight: number;

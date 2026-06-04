@@ -43,6 +43,11 @@ export struct MainPage {
   private tabController: HdsTabsController = new HdsTabsController();
   private context: common.UIAbilityContext | null = null;
   private switchTabHandler: (e: emitter.EventData) => void = (e) => this.onSwitchTabEvent(e);
+  /** 各 Tab 页的滚动控制器,用于双击 Tab 回顶部 */
+  private scrollers: Map<number, Scroller> = new Map();
+  /** 上一次 Tab 点击时间,用于双击检测 */
+  private lastTabClickTime: number = 0;
+  private lastTabClickIndex: number = -1;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -191,6 +196,7 @@ export struct MainPage {
           HomePage({
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
             onBlockMore: (block: HomeBlockSection) => this.openBlockMore(block),
+            onScrollerReady: (scroller: Scroller) => { this.scrollers.set(0, scroller); },
             onScrollDirection: (down: boolean) => {
               // 向下滑动 → 折叠;向上/顶部 → 展开
               this.tabController.applyMiniBarStyle(
@@ -206,18 +212,24 @@ export struct MainPage {
             visible: this.currentTab === 1,
             navStack: this.navStack,
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
-            onGotoStore: () => this.tabController.changeIndex(0)
+            onGotoStore: () => this.tabController.changeIndex(0),
+            onScrollerReady: (scroller: Scroller) => { this.scrollers.set(1, scroller); }
           })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.archivebox'), $r('sys.symbol.archivebox_fill'), '书架'))
 
         TabContent() {
-          SourcePage()
+          SourcePage({
+            onScrollerReady: (scroller: Scroller) => { this.scrollers.set(2, scroller); }
+          })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.folder'), $r('sys.symbol.folder_fill'), '书源'))
 
         TabContent() {
-          ProfilePage({ navStack: this.navStack })
+          ProfilePage({
+            navStack: this.navStack,
+            onScrollerReady: (scroller: Scroller) => { this.scrollers.set(3, scroller); }
+          })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.person'), $r('sys.symbol.person_fill'), '我的'))
       }
@@ -244,6 +256,19 @@ export struct MainPage {
             this.miniBarCollapsed = miniStyle === HdsBarStyle.COLLAPSE;
           }
         } : undefined
+      })
+      .onTabBarClick((index: number) => {
+        const now = Date.now();
+        const DOUBLE_TAP_DELAY = 300;
+        if (index === this.lastTabClickIndex && (now - this.lastTabClickTime) < DOUBLE_TAP_DELAY) {
+          // 双击当前 Tab → 滚动回顶部
+          const scroller = this.scrollers.get(index);
+          if (scroller) {
+            try { scroller.scrollEdge(Edge.Top); } catch (_e) { /* ignore */ }
+          }
+        }
+        this.lastTabClickTime = now;
+        this.lastTabClickIndex = index;
       })
       .onChange((index: number) => { this.currentTab = index; })
       .width('100%')

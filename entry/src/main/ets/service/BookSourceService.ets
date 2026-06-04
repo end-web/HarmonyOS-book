@@ -1,4 +1,4 @@
-import { BookSource, SearchResult, TocItem, SourceSubscription, BookInfo, HomeBlockSection } from '../model/BookSource';
+import { BookSource, SearchResult, TocItem, SourceSubscription, BookInfo, HomeBlockSection, SearchRule, BookInfoRule, TocRule, ContentRule } from '../model/BookSource';
 import { AnalyzeRule, AnalyzeContext, BookContext } from './rule/AnalyzeRule';
 import { AnalyzeUrl, AnalyzedUrl } from './rule/AnalyzeUrl';
 import { HttpClient } from './http/HttpClient';
@@ -10,6 +10,11 @@ import { getJsoup } from './rule/JsoupBridge';
 import { BuiltInSourceRegistry } from './builtin/BuiltInSourceRegistry';
 import { BuiltInDispatcher } from './builtin/BuiltInDispatcher';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
+import { DataUrlHandler } from './DataUrlHandler';
+import { getJavaBridge } from './rule/JavaBridge';
+import { getCookieManager } from './rule/CookieManager';
+import { SourceVariableStore } from './SourceVariableStore';
+import { getCacheService } from './CacheService';
 
 const TAG = 'BookSourceService';
 
@@ -54,6 +59,56 @@ class HomeBlockImpl implements HomeBlockSection {
 }
 
 export class BookSourceService {
+  // ──────────────────── 辅助方法 ────────────────────
+
+  /**
+   * 构建 JS 执行上下文，注入 jsLib、源变量、cache 等
+   */
+  private static buildJsContext(source: BookSource, extra?: Record<string, Object>): Record<string, Object> {
+    const ctx: Record<string, Object> = {};
+    // 注入 jsLib
+    if (source.jsLib) {
+      ctx['_jsLib'] = source.jsLib;
+    }
+    // 注入源变量
+    try {
+      const sourceVars = SourceVariableStore.getSourceVariables(source.bookSourceUrl);
+      const javaVars: Record<string, string> = {};
+      for (const k of Object.keys(sourceVars)) {
+        javaVars[k] = String(sourceVars[k]);
+      }
+      ctx['_javaVars'] = javaVars;
+      // 注入完整的源变量 JSON（供 source.getVariable() 返回）
+      ctx['_sourceVar'] = JSON.stringify(sourceVars);
+    } catch {
+      // ignore
+    }
+    // 合并额外上下文
+    if (extra) {
+      for (const k of Object.keys(extra)) {
+        ctx[k] = extra[k];
+      }
+    }
+    return ctx;
+  }
+
+  /**
+   * 处理 data: URL — 解码 base64 数据并存入 JavaBridge 变量
+   * 返回 true 表示是 data: URL 并已处理，false 表示不是
+   */
+  private static handleDataUrl(url: string): boolean {
+    if (!DataUrlHandler.isDataUrl(url)) return false;
+    const parsed = DataUrlHandler.parse(url);
+    if (!parsed) return false;
+    // 将解码的数据存入 JavaBridge 变量
+    const javaBridge = getJavaBridge();
+    const dataKeys = Object.keys(parsed.data);
+    for (const k of dataKeys) {
+      javaBridge.put(k, String(parsed.data[k]));
+    }
+    return true;
+  }
+
   // ──────────────────── 书源管理 ────────────────────
 
   static async fetchSourcesFromUrl(subscriptionUrl: string): Promise<BookSource[]> {
@@ -74,6 +129,157 @@ export class BookSourceService {
     }
   }
 
+  /**
+   * 展开聚合源：为每个听书子源创建独立的书源条目
+   * 光遇聚合等聚合源内部集合了多个平台（番茄、七猫、喜马拉雅等），
+   * 每个子源共用同一台服务器和 jsLib，但各自只搜指定平台。
+   *
+   * @param sources 原始导入的书源列表
+   * @returns 展开后的书源列表（包含原始源 + 子源）
+   */
+  static async expandAggregateSources(sources: BookSource[]): Promise<BookSource[]> {
+    const result: BookSource[] = [];
+    for (const source of sources) {
+      result.push(source);
+      // 检测聚合源：bookSourceType=0 且有 jsLib（含 getCloudSettings/getVariable）
+      if (source.bookSourceType === 0 && source.jsLib && source.jsLib.includes('getCloudSettings')) {
+        try {
+          const subSources = await BookSourceService.fetchSubSources(source);
+          result.push(...subSources);
+          console.info(`[${TAG}] expandAggregate: ${source.bookSourceName} -> ${subSources.length} audio sub-sources`);
+        } catch (e) {
+          console.warn(`[${TAG}] expandAggregate failed for ${source.bookSourceName}: ${e}`);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 从聚合源服务器获取听书子源列表，为每个子源创建独立书源
+   */
+  private static async fetchSubSources(parentSource: BookSource): Promise<BookSource[]> {
+    // 从 jsLib 中提取默认 hosts 列表
+    const hostsMatch = parentSource.jsLib!.match(/let\s+hosts\s*=\s*\[([\s\S]*?)\]/);
+    let hosts: string[] = ['https://v1.gyks.cf'];
+    if (hostsMatch) {
+      const hostLines = hostsMatch[1].split('\n');
+      hosts = hostLines
+        .map((line: string) => {
+          const m = line.match(/'(https?:\/\/[^']+)'/);
+          return m ? m[1] : '';
+        })
+        .filter((h: string) => h.length > 0);
+    }
+
+    // 尝试从服务器获取云端配置（听书子源列表）
+    let audioSourceNames: string[] = [];
+    for (const host of hosts) {
+      try {
+        const configUrl = `${host}/static/source_config/config.json`;
+        const configBody = await HttpClient.get(configUrl);
+        const config: Record<string, Object> = JSON.parse(configBody) as Record<string, Object>;
+        const audioSources = config['听书'];
+        if (Array.isArray(audioSources) && audioSources.length > 0) {
+          audioSourceNames = audioSources as string[];
+          break;
+        }
+      } catch {
+        continue; // 尝试下一个 host
+      }
+    }
+
+    // 如果无法获取云端配置，使用硬编码的默认列表
+    if (audioSourceNames.length === 0) {
+      audioSourceNames = ['番茄', '七猫', '喜马拉雅', '酷我'];
+    }
+
+    // 预获取完整的云端配置（用于缓存到子源变量，避免 jsLib 发 HTTP 请求）
+    let cloudConfig: Record<string, Object> | null = null;
+    for (const host of hosts) {
+      try {
+        const configUrl = `${host}/static/source_config/config.json`;
+        const configBody = await HttpClient.get(configUrl);
+        cloudConfig = JSON.parse(configBody) as Record<string, Object>;
+        break;
+      } catch { continue; }
+    }
+
+    // 默认服务器地址
+    const defaultHost = hosts.length > 0 ? hosts[0] : 'https://v1.gyks.cf';
+
+    // 为每个听书子源创建独立书源
+    // 关键：使用直接 HTTP URL + 简单 JSONPath 规则，完全绕过 jsLib/WebView 执行
+    const subSources: BookSource[] = [];
+    for (const sourceName of audioSourceNames) {
+      const subUrl = `${parentSource.bookSourceUrl}#听书-${sourceName}`;
+      const encSrc = encodeURIComponent(sourceName);
+      // 直接构造搜索 URL，不需要 jsLib 执行
+      const directSearchUrl = `${defaultHost}/search?title={{key}}&tab=%E5%90%AC%E4%B9%A6&source=${encSrc}&page={{page}}&disabled_sources=0`;
+
+      // bookUrl 直接用服务器详情 URL（book_id 会被替换）
+      const detailUrlTemplate = `${defaultHost}/detail?book_id={{book_id}}&source=${encSrc}&tab=%E5%90%AC%E4%B9%A6`;
+      // tocUrl 用服务器目录 URL
+      const catalogUrlTemplate = `${defaultHost}/catalog?book_id={{book_id}}&source=${encSrc}&tab=%E5%90%AC%E4%B9%A6`;
+
+      const subSource: BookSource = {
+        bookSourceUrl: `聚合听书-${sourceName}-${defaultHost}`, // 唯一标识
+        bookSourceName: `${parentSource.bookSourceName}·${sourceName}`,
+        bookSourceType: 1, // 音频类型
+        bookSourceGroup: `聚合听书,${sourceName}`,
+        bookSourceComment: `从 ${parentSource.bookSourceName} 提取的听书子源`,
+        enabled: true,
+        enabledExplore: false,
+        enabledCookieJar: parentSource.enabledCookieJar,
+        searchUrl: directSearchUrl,
+        exploreUrl: '', // 子源不需要发现页
+        header: parentSource.header,
+        jsLib: '', // 不需要 jsLib，直接 HTTP 请求
+        respondTime: parentSource.respondTime,
+        customOrder: parentSource.customOrder + 1,
+        weight: parentSource.weight,
+        // 搜索规则：直接 JSONPath 解析
+        ruleSearch: {
+          bookList: '$.data[*]',
+          name: '$.book_name',
+          author: '$.author',
+          coverUrl: '$.thumb_url',
+          bookUrl: '$.book_id',
+          intro: '$.abstract',
+          kind: '{{$.status}},{{$.score}},{{$.tags}}',
+          lastChapter: '{{$.source}} {{$.last_chapter_title}}',
+          wordCount: '$.word_number',
+        } as SearchRule,
+        // 详情规则：从详情 API 提取字段
+        ruleBookInfo: {
+          name: '$.data.book_name',
+          author: '$.data.author',
+          coverUrl: '$.data.thumb_url',
+          intro: '$.data.abstract',
+          kind: '{{$.data.status}},{{$.data.score}},{{$.data.tags}}',
+          lastChapter: '$.data.last_chapter_title',
+          wordCount: '$.data.word_number',
+          tocUrl: '$.data.catalog_url',
+        } as BookInfoRule,
+        // 目录规则：从目录 API 提取章节列表
+        ruleToc: {
+          chapterList: '$.data[*]',
+          chapterName: '$.title',
+          chapterUrl: '$.content_url',
+        } as TocRule,
+        // 内容规则：从内容 API 提取音频 URL
+        ruleContent: {
+          content: '$.data.url',
+        } as ContentRule,
+        ruleExplore: { bookList: '', name: '', author: '', coverUrl: '', bookUrl: '', intro: '', kind: '', lastChapter: '' },
+        subscriptionUrl: parentSource.subscriptionUrl,
+      };
+      subSources.push(subSource);
+    }
+
+    return subSources;
+  }
+
   static buildSubscription(url: string, sources: BookSource[]): SourceSubscription {
     const firstName = sources.length > 0 ? sources[0].bookSourceGroup || '未命名' : '未命名';
     return { url, name: firstName, count: sources.length, lastUpdate: Date.now() };
@@ -85,6 +291,22 @@ export class BookSourceService {
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
       return BuiltInDispatcher.search(source, keyword, page);
     }
+
+    // 聚合源（bookSourceType=0）搜索时临时设置搜索模式为"听书"
+    // 这样服务端只搜听书后端（喜马拉雅、懒人听书等），不搜小说/漫画
+    // 搜索完成后恢复原设置，不影响用户配置
+    const isAggregate = source.bookSourceType === 0;
+    let savedSearchMode = '';
+    if (isAggregate) {
+      try {
+        const vars = SourceVariableStore.getSourceVariables(source.bookSourceUrl);
+        const moreSettings: Record<string, Object> = (vars['更多设置'] as Record<string, Object>) || {} as Record<string, Object>;
+        savedSearchMode = (moreSettings['搜索模式'] as string) || '';
+        moreSettings['搜索模式'] = '听书';
+        SourceVariableStore.setSourceVariable(source.bookSourceUrl, '更多设置', moreSettings);
+      } catch { /* ignore */ }
+    }
+
     try {
       if (!source.searchUrl) return [];
 
@@ -96,15 +318,69 @@ export class BookSourceService {
         bookSourceType: source.bookSourceType
       });
 
-      // 相对路径自动拼接 bookSourceUrl（如水山听书 searchUrl="/api/ajax/solist?..."）
-      const searchUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, source.searchUrl);
+      // 子源（无 jsLib 且 searchUrl 是完整 HTTP URL）：直接替换模板变量，跳过 AnalyzeUrl
+      // 避免并发时 SourceVariableStore / AnalyzeUrl 卡住
+      let analyzedUrl: string;
+      let analyzedMethod = 'GET';
+      let analyzedBody: string | undefined;
+      const analyzedHeaders: Record<string, string> = {};
+      if (!source.jsLib && source.searchUrl.startsWith('http')) {
+        analyzedUrl = source.searchUrl
+          .replace(/\{\{key\}\}/g, encodeURIComponent(keyword))
+          .replace(/\{\{keyword\}\}/g, encodeURIComponent(keyword))
+          .replace(/\{\{page\}\}/g, String(page));
+        // 子源：自动带上 qttoken cookie
+        try {
+          const cookieManager = getCookieManager();
+          const hostMatch = analyzedUrl.match(/^(https?:\/\/[^/]+)/);
+          if (hostMatch) {
+            const cookie = cookieManager.getCookie(hostMatch[1]);
+            if (cookie && cookie.includes('qttoken')) {
+              analyzedHeaders['Cookie'] = cookie;
+            }
+          }
+        } catch { /* ignore */ }
+      } else {
+        // 原始路径：通过 AnalyzeUrl 处理 jsLib/模板/JS 表达式
+        const searchUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, source.searchUrl);
+        let sourceVarJson = '';
+        try {
+          const sourceVars = SourceVariableStore.getSourceVariables(source.bookSourceUrl);
+          sourceVarJson = JSON.stringify(sourceVars);
+        } catch { /* ignore */ }
+        const analyzeUrl = new AnalyzeUrl(searchUrl, {
+          key: keyword, page, baseUrl: source.bookSourceUrl,
+          _jsLib: source.jsLib || '',
+          _sourceVar: sourceVarJson,
+        }, source.header);
+        const analyzed = await analyzeUrl.getUrl();
+        analyzedUrl = analyzed.url;
+        analyzedMethod = analyzed.method;
+        analyzedBody = analyzed.body;
+        const hdrKeys = Object.keys(analyzed.headers);
+        for (const hk of hdrKeys) analyzedHeaders[hk] = analyzed.headers[hk];
+      }
+      console.info(`[${TAG}] search: ${source.bookSourceName} -> ${analyzedUrl.substring(0, 150)}`);
 
-      const analyzeUrl = new AnalyzeUrl(searchUrl, {
-        key: keyword, page, baseUrl: source.bookSourceUrl,
-      }, source.header);
-      const analyzed = await analyzeUrl.getUrl();
-      console.info(`[${TAG}] search: ${source.bookSourceName} -> ${analyzed.url}`);
-      let body = await BookSourceService.fetch(analyzed);
+      // 处理 data: URL — 搜索 URL 返回 data: 编码的参数
+      // data: URL 的 base64 内容需要作为 result 传给 bookList 规则
+      let body: string;
+      if (DataUrlHandler.isDataUrl(analyzedUrl)) {
+        BookSourceService.handleDataUrl(analyzedUrl);
+        // 提取 base64 部分作为 result（bookList JS 规则需要）
+        const base64Idx = analyzedUrl.indexOf('base64,');
+        if (base64Idx >= 0) {
+          const afterBase64 = analyzedUrl.substring(base64Idx + 7);
+          // 去掉末尾的 ,{config} 部分，只保留 base64 数据
+          const lastComma = afterBase64.lastIndexOf(',{');
+          body = lastComma > 0 ? afterBase64.substring(0, lastComma) : afterBase64;
+        } else {
+          body = '';
+        }
+      } else {
+        const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, retry: 0 };
+        body = await BookSourceService.fetch(tmpAnalyzed);
+      }
 
       // 执行 loginCheckJs（搜索前验证）
       // 仅当响应看起来不是正常数据时才执行（如 HTML 跳转页、空数据等）
@@ -114,7 +390,8 @@ export class BookSourceService {
         // loginCheck 返回重试标记 → POST 已建立搜索会话，重新 GET 原始 URL
         if (body === '__RETRY_SEARCH__') {
           console.info(`[${TAG}] loginCheck: retrying search after session established`);
-          body = await BookSourceService.fetch(analyzed);
+          const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, retry: 0 };
+          body = await BookSourceService.fetch(tmpAnalyzed);
         }
       }
 
@@ -128,17 +405,24 @@ export class BookSourceService {
       }
 
       const rule = source.ruleSearch;
-      const ctx = new AnalyzeContext(analyzed.url);
+      // 子源：从搜索 URL 提取服务器地址（用于构造详情/目录 URL）
+      const serverHostMatch = analyzedUrl.match(/^(https?:\/\/[^/]+)/);
+      const serverHost = serverHostMatch ? serverHostMatch[1] : '';
+      const ctx = new AnalyzeContext(analyzedUrl);
+      ctx.jsLib = source.jsLib || '';
       const analyzer = new AnalyzeRule(body, ctx);
       console.info(`[${TAG}] search parse: bodyLen=${body.length}, first200=${body.substring(0, 200)}`);
       const items: Object[] = await analyzer.getElements(rule.bookList);
       console.info(`[${TAG}] search parse: bookList="${rule.bookList}" -> items=${items.length}`);
       if (items.length === 0) return [];
 
+      // 子源标识：bookSourceGroup 以 '聚合听书,' 开头
+      const isSubSource = (source.bookSourceGroup || '').startsWith('聚合听书,');
+
       const results: SearchResult[] = [];
       for (let idx = 0; idx < items.length; idx++) {
         const item: Object = items[idx];
-        const itemCtx = new AnalyzeContext(analyzed.url);
+        const itemCtx = new AnalyzeContext(analyzedUrl);
         const a = new AnalyzeRule(item, itemCtx);
         const name = await a.getString(rule.name) || '';
         if (!name) continue;
@@ -150,10 +434,22 @@ export class BookSourceService {
         const lastChapter = await a.getString(rule.lastChapter) || '';
         const wordCount = rule.wordCount ? await a.getString(rule.wordCount) || '' : '';
 
+        let finalBookUrl: string;
+        if (isSubSource && !source.jsLib && serverHost) {
+          // 子源：根据 item 字段构造完整的详情 URL
+          const itemRec = item as Record<string, Object>;
+          const bookId = String(itemRec['book_id'] || bookUrlRaw || '');
+          const srcName = String(itemRec['source'] || '');
+          const tab = String(itemRec['tab'] || '听书');
+          finalBookUrl = `${serverHost}/detail?book_id=${encodeURIComponent(bookId)}&source=${encodeURIComponent(srcName)}&tab=${encodeURIComponent(tab)}`;
+        } else {
+          finalBookUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, bookUrlRaw);
+        }
+
         results.push({
           name, author,
           coverUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, coverUrlRaw),
-          bookUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, bookUrlRaw),
+          bookUrl: finalBookUrl,
           intro, kind, lastChapter, wordCount,
           sourceName: source.bookSourceName,
           sourceUrl: source.bookSourceUrl,
@@ -165,6 +461,16 @@ export class BookSourceService {
       const msg = e instanceof Error ? e.message : JSON.stringify(e);
       console.error(`[${TAG}] searchBooks error: ${msg}`);
       return [];
+    } finally {
+      // 恢复聚合源的搜索模式设置
+      if (isAggregate && savedSearchMode) {
+        try {
+          const vars = SourceVariableStore.getSourceVariables(source.bookSourceUrl);
+          const moreSettings: Record<string, Object> = (vars['更多设置'] as Record<string, Object>) || {} as Record<string, Object>;
+          moreSettings['搜索模式'] = savedSearchMode;
+          SourceVariableStore.setSourceVariable(source.bookSourceUrl, '更多设置', moreSettings);
+        } catch { /* ignore */ }
+      }
     }
   }
 
@@ -183,17 +489,42 @@ export class BookSourceService {
         return `{{java.get('${key}')}}`;
       });
 
+      // 处理 data: URL（代理书源的中间路由机制）
+      if (DataUrlHandler.isDataUrl(processedUrl)) {
+        BookSourceService.handleDataUrl(processedUrl);
+        // data: URL 本身不需要 HTTP 请求，直接用空 body 继续解析规则
+        // 规则中的 JS 会通过 java.get() 获取已解码的数据
+      }
+
       // 使用 AnalyzeUrl 解析 URL 模板（支持 {{key}} / <js>...</js> / @js:）
       try {
-        const analyzeUrl = new AnalyzeUrl(processedUrl, { baseUrl: source.bookSourceUrl }, source.header, variables);
+        const analyzeUrl = new AnalyzeUrl(processedUrl, {
+          baseUrl: source.bookSourceUrl,
+          _jsLib: source.jsLib || '',
+        }, source.header, variables);
         const analyzed = await analyzeUrl.getUrl();
         processedUrl = analyzed.url;
       } catch (e) {
         console.error(`[${TAG}] getBookInfo AnalyzeUrl failed: ${e}, fallback to raw URL`);
       }
 
-      const body = await BookSourceService.fetchWithSource(processedUrl, source);
+      // data: URL 不需要 HTTP 请求，但要把 base64 内容作为 result 传给规则
+      let body: string;
+      if (DataUrlHandler.isDataUrl(processedUrl)) {
+        BookSourceService.handleDataUrl(processedUrl);
+        const base64Idx = processedUrl.indexOf('base64,');
+        if (base64Idx >= 0) {
+          const afterBase64 = processedUrl.substring(base64Idx + 7);
+          const lastComma = afterBase64.lastIndexOf(',{');
+          body = lastComma > 0 ? afterBase64.substring(0, lastComma) : afterBase64;
+        } else {
+          body = '';
+        }
+      } else {
+        body = await BookSourceService.fetchWithSource(processedUrl, source);
+      }
       const ctx = new AnalyzeContext(processedUrl);
+      ctx.jsLib = source.jsLib || '';
       ctx.book = { origin: source.bookSourceUrl, bookUrl: bookUrl, name: '' } as BookContext;
       const analyzer = new AnalyzeRule(body, ctx);
 
@@ -248,10 +579,18 @@ export class BookSourceService {
       return `{{java.get('${key}')}}`;
     });
 
+    // 处理 data: URL（代理书源的中间路由机制）
+    if (DataUrlHandler.isDataUrl(currentUrl)) {
+      BookSourceService.handleDataUrl(currentUrl);
+    }
+
     // Legado 对齐：使用 AnalyzeUrl 解析 URL 模板（支持 {{key}} / <js>...</js> / @js:）
     // 将 variables 注入到 JavaBridge，让 AnalyzeUrl 的 evalJS 能通过 java.get(key) 读取
     try {
-      const analyzeUrl = new AnalyzeUrl(currentUrl, { baseUrl: source.bookSourceUrl }, source.header, variables);
+      const analyzeUrl = new AnalyzeUrl(currentUrl, {
+        baseUrl: source.bookSourceUrl,
+        _jsLib: source.jsLib || '',
+      }, source.header, variables);
       const analyzed = await analyzeUrl.getUrl();
       currentUrl = analyzed.url;
     } catch (e) {
@@ -264,7 +603,21 @@ export class BookSourceService {
     while (hasMore && !visitedUrls.has(currentUrl) && visitedUrls.size < maxPages) {
       visitedUrls.add(currentUrl);
       try {
-        let body = await BookSourceService.fetchWithSource(currentUrl, source);
+        // data: URL 不需要 HTTP 请求，但要把 base64 内容作为 result 传给规则
+        let body: string;
+        if (DataUrlHandler.isDataUrl(currentUrl)) {
+          BookSourceService.handleDataUrl(currentUrl);
+          const base64Idx = currentUrl.indexOf('base64,');
+          if (base64Idx >= 0) {
+            const afterBase64 = currentUrl.substring(base64Idx + 7);
+            const lastComma = afterBase64.lastIndexOf(',{');
+            body = lastComma > 0 ? afterBase64.substring(0, lastComma) : afterBase64;
+          } else {
+            body = '';
+          }
+        } else {
+          body = await BookSourceService.fetchWithSource(currentUrl, source);
+        }
 
         // 检测 JS 反爬页面（如水山听书：base64 混淆重定向，bodyLen 很小且含 atob）
         // 用 WebView 渲染获取真实 HTML
@@ -279,6 +632,7 @@ export class BookSourceService {
         }
 
         const ctx = new AnalyzeContext(currentUrl);
+        ctx.jsLib = source.jsLib || '';
         ctx.book = { origin: source.bookSourceUrl, bookUrl: tocUrl, name: '' } as BookContext;
         const analyzer = new AnalyzeRule(body, ctx);
         const items: Object[] = await analyzer.getElements(rule.chapterList);
@@ -351,6 +705,11 @@ export class BookSourceService {
     try {
       const rule = source.ruleContent;
       const contentRule = rule.audioUrl || rule.content;
+
+      // 处理 data: URL（代理书源的中间路由机制）
+      if (DataUrlHandler.isDataUrl(chapterUrl)) {
+        BookSourceService.handleDataUrl(chapterUrl);
+      }
 
       // 拆分 Legado ",{...}" 配置语法（如 url,{webView:"true"}）
       const split = AnalyzeUrl.splitUrlConfig(chapterUrl);
@@ -431,6 +790,7 @@ export class BookSourceService {
 
       const body = await BookSourceService.fetchWithSource(realUrl, source);
       const ctx = new AnalyzeContext(realUrl);
+      ctx.jsLib = source.jsLib || '';
       ctx.book = { origin: source.bookSourceUrl, bookUrl: realUrl, name: '' } as BookContext;
       const analyzer = new AnalyzeRule(body, ctx);
       const audioUrl = await analyzer.getString(contentRule);
@@ -449,6 +809,11 @@ export class BookSourceService {
       const rule = source.ruleContent;
       const allContent: string[] = [];
       let currentUrl: string = chapterUrl;
+
+      // 处理 data: URL（代理书源的中间路由机制）
+      if (DataUrlHandler.isDataUrl(currentUrl)) {
+        BookSourceService.handleDataUrl(currentUrl);
+      }
       let hasMore: boolean = true;
       const visitedUrls = new Set<string>();
       const maxPages = 20;
@@ -459,8 +824,23 @@ export class BookSourceService {
         // 防止循环到下一章
         if (nextChapterUrl && currentUrl === nextChapterUrl) break;
 
-        const body = await BookSourceService.fetchWithSource(currentUrl, source);
+        // data: URL 不需要 HTTP 请求，但要把 base64 内容作为 result 传给规则
+        let body: string;
+        if (DataUrlHandler.isDataUrl(currentUrl)) {
+          BookSourceService.handleDataUrl(currentUrl);
+          const base64Idx = currentUrl.indexOf('base64,');
+          if (base64Idx >= 0) {
+            const afterBase64 = currentUrl.substring(base64Idx + 7);
+            const lastComma = afterBase64.lastIndexOf(',{');
+            body = lastComma > 0 ? afterBase64.substring(0, lastComma) : afterBase64;
+          } else {
+            body = '';
+          }
+        } else {
+          body = await BookSourceService.fetchWithSource(currentUrl, source);
+        }
         const ctx = new AnalyzeContext(currentUrl);
+        ctx.jsLib = source.jsLib || '';
         ctx.book = { origin: source.bookSourceUrl, bookUrl: currentUrl, name: '' } as BookContext;
         const analyzer = new AnalyzeRule(body, ctx);
         const content = await analyzer.getString(rule.content);
@@ -544,6 +924,7 @@ export class BookSourceService {
 
       const rule = source.ruleExplore;
       const ctx = new AnalyzeContext(analyzed.url);
+      ctx.jsLib = source.jsLib || '';
       const analyzer = new AnalyzeRule(body, ctx);
       const items: Object[] = await analyzer.getElements(rule.bookList);
       if (items.length === 0) return [];

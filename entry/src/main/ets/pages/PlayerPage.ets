@@ -715,7 +715,7 @@ export struct PlayerPage {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
             .fontSize(30)
-            .fontColor([$r('sys.color.font_primary')])
+            .fontColor(['#2A4A45'])
         }
       }
       .width(64)

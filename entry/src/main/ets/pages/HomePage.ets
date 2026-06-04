@@ -18,6 +18,10 @@ import { ResumeCard, ResumeCardMode } from '../components/ResumeCard';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { EVT_SOURCES_CHANGED } from './SourcePage';
+import { getCookieManager } from '../service/rule/CookieManager';
+
+/** 跳转聚合源登录页事件 */
+export const EVT_OPEN_LOGIN = 'app.login.open';
 
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
@@ -44,6 +48,8 @@ export struct HomePage {
   @Local resumeProgress: number = 0;
   /** 全局播放状态（监听 currentBook 变化触发续听卡刷新） */
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+  /** 搜索框是否已滚出可视区域,用于控制标题栏搜索图标显隐 */
+  @Local searchBoxHidden: boolean = false;
 
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
@@ -169,9 +175,12 @@ export struct HomePage {
     BookCard.resetAnimations();
     try {
       const sources = await SourceDataService.getSources();
+      // 包含音频源(bookSourceType=1)和聚合源(bookSourceType=0，如光遇聚合)
+      // 聚合源内部已配置搜索模式，默认返回听书结果
       const audioSources =
-        sources.filter(s => s.bookSourceType === 1 && s.enabled !== false);
+        sources.filter(s => s.enabled !== false && (s.bookSourceType === 1 || s.bookSourceType === 0));
       this.pendingCount = audioSources.length;
+      console.info(`[Search] dispatching to ${this.pendingCount} sources: ${audioSources.map(s => s.bookSourceName).join(', ')}`);
 
       if (this.pendingCount === 0) {
         this.searching = false;
@@ -179,6 +188,7 @@ export struct HomePage {
       }
 
       for (const source of audioSources) {
+        console.info(`[Search] starting: ${source.bookSourceName} (type=${source.bookSourceType}, url=${source.bookSourceUrl})`);
         BookSourceService.searchBooks(source, this.keyword.trim())
           .then((r: SearchResult[]) => {
             if (gen !== this.searchGen) return;
@@ -190,11 +200,15 @@ export struct HomePage {
               this.audioDataSource.appendBooks(books);
               hilog.info(DOMAIN, TAG, '[audio] +%{public}d from %{public}s, total=%{public}d',
                 books.length, source.bookSourceName, this.audioCount);
+            } else {
+              console.info(`[Search] ${source.bookSourceName}: 0 results`);
             }
           })
-          .catch((_e: Object) => {
+          .catch((e: Object) => {
             if (gen !== this.searchGen) return;
             this.searchingSource = source.bookSourceName;
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(`[Search] ${source.bookSourceName} error: ${msg}`);
           })
           .finally(() => {
             if (gen !== this.searchGen) return;
@@ -460,6 +474,8 @@ export struct HomePage {
             this.onScrollDirection(true);
           }
         }
+        // 搜索框是否滚出可视区域(搜索框高度约 50vp + 上下间距)
+        this.searchBoxHidden = offset > 60;
         this.lastScrollOffset = offset;
       })
       .cachedCount(5)
@@ -487,6 +503,25 @@ export struct HomePage {
     .bindToScrollable([this.contentScroller])
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
+
+      // 搜索框滚出可视区域时,右上角显示搜索图标
+      if (this.searchBoxHidden) {
+        Row() {
+          Blank()
+          SymbolGlyph($r('sys.symbol.magnifyingglass'))
+            .fontSize(20)
+            .fontColor([$r('sys.color.font_primary')])
+            .padding(10)
+            .borderRadius(20)
+            .backgroundColor($r('sys.color.comp_background_tertiary'))
+            .onClick(() => {
+              this.contentScroller.scrollEdge(Edge.Top);
+            })
+        }
+        .width('100%')
+        .padding({ top: WindowUtils.getStatusBarHeightVp() + 8, right: AppSpace.Md })
+        .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+      }
     }
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
   }
@@ -526,6 +561,17 @@ export struct HomePage {
         .fontSize(AppFont.Caption)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Xs })
+      // 聚合源登录按钮
+      Button('登录聚合源获取更多资源')
+        .fontSize(AppFont.Caption)
+        .fontColor('#FFFFFF')
+        .backgroundColor('#FF6B35')
+        .borderRadius(20)
+        .height(36)
+        .margin({ top: AppSpace.Lg })
+        .onClick(() => {
+          emitter.emit(EVT_OPEN_LOGIN);
+        })
     }
     .width('100%')
     .height(300)

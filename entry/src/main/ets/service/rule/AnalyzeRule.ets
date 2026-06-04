@@ -17,6 +17,10 @@
 import { RuleAnalyzer } from './RuleAnalyzer';
 import { jsonPath } from './JSONPath';
 import { getJSExecutor } from '../js/JSExecutor';
+import { getJavaBridge } from './JavaBridge';
+import { getSourceContext } from './SourceContext';
+import { getCookieManager } from './CookieManager';
+import { getCacheService } from '../CacheService';
 import { SimpleCSSSelector, HTMLElement } from './SimpleCSSSelector';
 import { SimpleXPath } from './SimpleXPath';
 import { AnalyzeByRegex } from './AnalyzeByRegex';
@@ -42,6 +46,8 @@ export class AnalyzeContext {
   redirectUrl: string = '';
   book: BookContext | null = null;
   chapter: Record<string, Object> | null = null;
+  jsLib: string = ''; // jsLib 全局函数代码
+  sourceVarJson: string = ''; // 源变量 JSON（供 source.getVariable() 返回）
 
   constructor(baseUrl: string = '', variables?: Record<string, string>) {
     this.baseUrl = baseUrl;
@@ -792,6 +798,21 @@ export class AnalyzeRule {
       const vars = this.context.variables;
       for (const k of Object.keys(vars)) ctx[k] = vars[k];
     }
+
+    // 注入 java/source/cookie/cache（Legado 书源 JS 规则需要）
+    ctx['java'] = getJavaBridge();
+    ctx['source'] = getSourceContext();
+    ctx['cookie'] = getCookieManager();
+    ctx['cache'] = getCacheService();
+    // 注入 jsLib（如果有）
+    if (this.context.jsLib) {
+      ctx['_jsLib'] = this.context.jsLib;
+    }
+    // 注入源变量 JSON（供 source.getVariable() 返回）
+    if (this.context.sourceVarJson) {
+      ctx['_sourceVar'] = this.context.sourceVarJson;
+    }
+
     try {
       return await executor.eval(code, ctx);
     } catch {

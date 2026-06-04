@@ -49,6 +49,7 @@ export struct SourcePage {
   @Local isSelectMode: boolean = false;
   @Local selectedSourceUrls: Set<string> = new Set();
   @Local isRefreshing: boolean = false;
+  @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   /** 上一次刷新检测连不通的书源 URL,用于在列表项展示红字 */
   @Local unreachableUrls: Set<string> = new Set();
 
@@ -70,6 +71,8 @@ export struct SourcePage {
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadData();
+    // 暴露主列表 Scroller 给 MainPage 用于双击 Tab 回顶部
+    this.onScrollerReady(this.srcScroller);
   }
 
   /** 统一的 toast 收口:用新版 getPromptAction API,异常吞掉(showToast 在异常上下文下可能抛) */
@@ -113,7 +116,9 @@ export struct SourcePage {
     for (let i = 0; i < this.subscriptions.length; i++) {
       const sub = this.subscriptions[i];
       try {
-        const sources = await BookSourceService.fetchSourcesFromUrl(sub.url);
+        let sources = await BookSourceService.fetchSourcesFromUrl(sub.url);
+        // 展开聚合源：为每个听书子源创建独立书源条目
+        sources = await BookSourceService.expandAggregateSources(sources);
         for (const src of sources) {
           src.subscriptionUrl = sub.url;
         }
@@ -225,7 +230,9 @@ export struct SourcePage {
     this.loadingUrl = url;
     this.statusMessage = '正在获取书源...';
     try {
-      const sources = await BookSourceService.fetchSourcesFromUrl(url);
+      let sources = await BookSourceService.fetchSourcesFromUrl(url);
+      // 展开聚合源：为每个听书子源创建独立书源条目
+      sources = await BookSourceService.expandAggregateSources(sources);
       const result = await this.importSources(sources, url);
       this.statusMessage = `导入成功！共 ${result.success} 个书源`;
       if (result.duplicate > 0) {
@@ -302,7 +309,9 @@ export struct SourcePage {
 
       const decoder = util.TextDecoder.create('utf-8');
       const content = decoder.decodeToString(new Uint8Array(buf));
-      const sources: BookSource[] = BookSourceService.parseSourcesFromJson(content);
+      let sources: BookSource[] = BookSourceService.parseSourcesFromJson(content);
+      // 展开聚合源：为每个听书子源创建独立书源条目
+      sources = await BookSourceService.expandAggregateSources(sources);
 
       if (sources.length === 0) {
         this.statusMessage = '书源格式错误，请确认文件内容是否正确';
@@ -846,7 +855,7 @@ export struct SourcePage {
               }
             }, (sub: SourceSubscription, _idx: number) => sub.url)
           }
-          .backgroundColor(HomeTheme.CardSurface)
+          .backgroundColor(Color.Transparent)
           .borderRadius(AppRadius.Lg)
           .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
         }

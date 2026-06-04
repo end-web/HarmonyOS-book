@@ -11,6 +11,10 @@ import { DataService } from '../service/DataService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
+import { SourceVariableStore } from '../service/SourceVariableStore';
+import { getCacheService } from '../service/CacheService';
+import { JavaBridgeImpl } from '../service/rule/JavaBridge';
+import { deviceInfo } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -51,6 +55,20 @@ export default class EntryAbility extends UIAbility {
     ChapterCacheService.getInstance().setContext(this.context);
     PreferenceService.init(this.context).then(async () => {
       this.restoreColorMode();
+      // 初始化源变量存储和缓存服务
+      try {
+        await SourceVariableStore.init(this.context);
+        const cacheService = getCacheService();
+        await cacheService.init(this.context);
+      } catch (e) {
+        hilog.error(DOMAIN, TAG, 'SourceVariableStore/CacheService init failed: %{public}s', JSON.stringify(e));
+      }
+      // 设置设备标识（用于 java.androidId()）
+      try {
+        JavaBridgeImpl.setDeviceId(deviceInfo.ODID || '');
+      } catch {
+        // ignore
+      }
       const preloadCount = await PreferenceService.getPreloadChapters();
       ChapterCacheService.getInstance().setPreloadCount(preloadCount);
       // 提前把 PlayerState 还原到全局 AppStorage,这样卡片 call 进来时

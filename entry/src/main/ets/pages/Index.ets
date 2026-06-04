@@ -6,8 +6,18 @@ import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
 import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
+import { BrowserPage } from './BrowserPage';
+import { LoginPage } from './LoginPage';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
+import { webview } from '@kit.ArkWeb';
+import { JavaBridgeImpl } from '../service/rule/JavaBridge';
+import { EVT_OPEN_LOGIN } from './HomePage';
+
+interface BrowserPageParams {
+  url: string;
+  title: string;
+}
 
 interface WidgetRouteEvent {
   target: string;
@@ -26,6 +36,23 @@ struct Index {
   private lastConsumedRouteTs: number = 0;
 
   aboutToAppear(): void {
+    // 注册 JavaBridge 回调（toast / 浏览器 / 刷新发现页）
+    this.registerJavaBridgeCallbacks();
+
+    // 监听聚合源登录事件
+    emitter.on(EVT_OPEN_LOGIN, () => {
+      try {
+        const params: Record<string, string> = {
+          'loginUrl': 'https://v1.gyks.cf/login',
+          'serverHost': 'https://v1.gyks.cf',
+          'title': '登录聚合源',
+        };
+        this.navStack.pushPathByName('login', params);
+      } catch (e) {
+        console.error(`[Index] login navigation error: ${e}`);
+      }
+    });
+
     this.consumePendingWidgetRoute();
     if (!this.widgetSubscribed) {
       emitter.on(EVT_WIDGET_ROUTE, (data) => {
@@ -49,6 +76,44 @@ struct Index {
       } catch (_e) { /* ignore */ }
       this.widgetSubscribed = false;
     }
+    // 清理 JavaBridge 回调
+    JavaBridgeImpl.setToastCallback(null);
+    JavaBridgeImpl.setBrowserCallback(null);
+    JavaBridgeImpl.setRefreshExploreCallback(null);
+  }
+
+  private registerJavaBridgeCallbacks(): void {
+    // Toast 回调
+    JavaBridgeImpl.setToastCallback((msg: string, duration: number) => {
+      try {
+        this.getUIContext().getPromptAction().showToast({
+          message: msg,
+          duration: duration,
+        });
+      } catch (e) {
+        console.error(`[Index] toast error: ${e}`);
+      }
+    });
+
+    // 浏览器回调
+    JavaBridgeImpl.setBrowserCallback((url: string, title: string) => {
+      try {
+        const params: BrowserPageParams = { url, title };
+        this.navStack.pushPathByName('browser', params);
+      } catch (e) {
+        console.error(`[Index] browser error: ${e}`);
+      }
+    });
+
+    // 刷新发现页回调
+    JavaBridgeImpl.setRefreshExploreCallback(() => {
+      // 通过 emitter 通知 MainPage 刷新发现页
+      try {
+        emitter.emit({ eventId: 1001 });
+      } catch {
+        // ignore
+      }
+    });
   }
 
   /** EntryAbility.onCreate 写入路由后,Index 首次挂载时消费一次 */
@@ -159,6 +224,24 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'browser') {
+      NavDestination() {
+        BrowserPage({ navStack: this.navStack, url: (param as BrowserPageParams)?.url || '', title: (param as BrowserPageParams)?.title || '' })
+      }
+      .hideTitleBar(true)
+      .backgroundColor('#FFFFFF')
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'login') {
+      NavDestination() {
+        LoginPage({
+          loginUrl: ((param as Record<string, string>)?.['loginUrl']) || 'https://v1.gyks.cf/login',
+          serverHost: ((param as Record<string, string>)?.['serverHost']) || 'https://v1.gyks.cf',
+          title: ((param as Record<string, string>)?.['title']) || '登录聚合源',
+        })
+      }
+      .hideTitleBar(true)
+      .backgroundColor('#FFFFFF')
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     }
   }

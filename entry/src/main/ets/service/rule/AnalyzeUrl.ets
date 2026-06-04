@@ -13,6 +13,7 @@
 
 import { getJSExecutor } from '../js/JSExecutor';
 import { getJavaBridge } from './JavaBridge';
+import { getSourceContext } from './SourceContext';
 import { CharsetCodec } from '../../utils/CharsetCodec';
 
 export interface UrlOption {
@@ -57,6 +58,8 @@ interface TemplateContext {
   chapter?: Object;
   baseUrl?: string;
   result?: Object;
+  _jsLib?: string;
+  _sourceVar?: string;
 }
 
 export class AnalyzeUrl {
@@ -248,6 +251,7 @@ export class AnalyzeUrl {
       const javaBridge = getJavaBridge();
       const ctx: Record<string, Object> = {};
       ctx['java'] = javaBridge;
+      ctx['source'] = getSourceContext();
       if (this.context.key !== undefined) ctx['key'] = this.context.key;
       if (this.context.page !== undefined) ctx['page'] = this.context.page;
       if (this.context.baseUrl !== undefined) ctx['baseUrl'] = this.context.baseUrl;
@@ -255,6 +259,10 @@ export class AnalyzeUrl {
       if (this.context.book !== undefined) ctx['book'] = this.context.book;
       if (this.context.chapter !== undefined) ctx['chapter'] = this.context.chapter;
       if (this.context.speakText !== undefined) ctx['speakText'] = this.context.speakText;
+      // 注入 jsLib（如果有）
+      if (this.context._jsLib !== undefined) ctx['_jsLib'] = this.context._jsLib;
+      // 注入源变量 JSON（供 source.getVariable() 返回）
+      if (this.context._sourceVar !== undefined) ctx['_sourceVar'] = this.context._sourceVar;
       const result = await executor.eval(code, ctx);
       return result !== null && result !== undefined ? String(result) : '';
     } catch {
@@ -360,6 +368,8 @@ export class AnalyzeUrl {
     if (!trimmed) return '';
     // Legado: javascript: 协议直接返回空（NetworkUtils.getAbsoluteURL）
     if (trimmed.toLowerCase().startsWith('javascript:')) return '';
+    // data: URL 直接透传（代理书源的中间路由机制）
+    if (trimmed.startsWith('data:')) return trimmed;
     const cleanRelative = AnalyzeUrl.stripSourceGroup(trimmed);
     if (cleanRelative.startsWith('http://') || cleanRelative.startsWith('https://') || cleanRelative.startsWith('//')) {
       return cleanRelative;

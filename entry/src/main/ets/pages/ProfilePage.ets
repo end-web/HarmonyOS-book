@@ -22,6 +22,13 @@ const ROW_INDENT: number = AppSpace.Md;
 @ComponentV2
 export struct ProfilePage {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Event onScrollerReady: (scroller: Scroller) => void = () => {};
+
+  private scrollScroller: Scroller = new Scroller();
+
+  aboutToAppear(): void {
+    this.onScrollerReady(this.scrollScroller);
+  }
 
   private onItemTap(id: string): void {
     if (id === 'import') {
@@ -34,7 +41,7 @@ export struct ProfilePage {
   }
 
   build() {
-    Scroll() {
+    Scroll(this.scrollScroller) {
       Column({ space: AppSpace.Lg }) {
         this.buildTopSpacer()
         this.buildGroup('我的内容', CONTENT_ITEMS)

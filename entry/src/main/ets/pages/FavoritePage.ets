@@ -36,14 +36,17 @@ export struct FavoritePage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
   @Event onGotoStore: () => void = () => {};
+  @Event onScrollerReady: (scroller: Scroller) => void = () => {};
 
   private context: common.UIAbilityContext | null = null;
+  private listScroller: Scroller = new Scroller();
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadFavorites();
     emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
+    this.onScrollerReady(this.listScroller);
   }
 
   aboutToDisappear(): void {
@@ -424,7 +427,7 @@ export struct FavoritePage {
 
       // 内容层
       Refresh({ refreshing: $$this.isRefreshing, offset: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL }) {
-        Grid() {
+        Grid(this.listScroller) {
           ForEach(this.favoriteBooks, (book: Book) => {
             GridItem() {
               this.buildBookTile(book)

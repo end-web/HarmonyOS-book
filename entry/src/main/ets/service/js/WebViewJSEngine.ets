@@ -11,6 +11,7 @@
 
 import web_webview from '@ohos.web.webview';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { JSExecutor } from './JSExecutor';
 
 // ──────────── 类型定义 ────────────
 
@@ -62,7 +63,24 @@ window.__nativeBridge = {
         ajax: function(url) {
           if (typeof XMLHttpRequest === "undefined") return "";
           var xhr = new XMLHttpRequest();
-          try { xhr.open("GET", url, false); xhr.send(); } catch(e) {}
+          try {
+            // 支持 Legado "URL,{config}" 语法
+            if (url.indexOf(",{") > 0) {
+              var idx = url.indexOf(",{");
+              var realUrl = url.substring(0, idx);
+              var cfg = JSON.parse(url.substring(idx + 1));
+              var method = (cfg.method || "GET").toUpperCase();
+              xhr.open(method, realUrl, false);
+              if (cfg.headers) { for (var h in cfg.headers) xhr.setRequestHeader(h, cfg.headers[h]); }
+              if (method === "POST" && cfg.body) {
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.send(cfg.body);
+              } else { xhr.send(); }
+            } else {
+              xhr.open("GET", url, false);
+              xhr.send();
+            }
+          } catch(e) {}
           return xhr.responseText || "";
         },
         connect: function(url) { return this.ajax(url); },
@@ -71,22 +89,82 @@ window.__nativeBridge = {
           var a = []; for (var i=0;i<arguments.length;i++) a.push(String(arguments[i]));
           console.log("[JS]", a.join(" "));
         },
-        get: function(k) { return ctx[k] !== undefined ? String(ctx[k]) : ""; },
+        toast: function(msg) { console.log("[Toast]", String(msg)); },
+        longToast: function(msg) { console.log("[LongToast]", String(msg)); },
+        get: function(k) {
+          // 优先从 _javaVars 中取（源变量），再从 ctx 中取
+          if (ctx._javaVars && ctx._javaVars[k] !== undefined) return String(ctx._javaVars[k]);
+          return ctx[k] !== undefined ? String(ctx[k]) : "";
+        },
         put: function(k, v) { ctx[k] = String(v); return String(v); },
-        webView: function() { return ""; }
+        webView: function() { return ""; },
+        hexDecodeToString: function(hex) {
+          if (!hex) return "";
+          // 检测是否为合法 hex 字符串
+          var isHex = hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex);
+          if (isHex) {
+            var bytes = [];
+            for (var i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substring(i, i + 2), 16));
+            try { return new TextDecoder().decode(new Uint8Array(bytes)); } catch(e) { return ""; }
+          }
+          // 非 hex，尝试 base64 解码（兼容光遇聚合等书源误用）
+          try { return decodeURIComponent(escape(atob(hex))); } catch(e) { return ""; }
+        },
+        base64Encode: function(s) { try { return btoa(unescape(encodeURIComponent(s))); } catch(e) { return ""; } },
+        base64Decode: function(s) { try { return decodeURIComponent(escape(atob(s))); } catch(e) { return ""; } },
+        androidId: function() { return ctx._deviceId || ""; },
+        deviceID: function() { return this.androidId(); },
+        getWebViewUA: function() { return "Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36"; },
+        getAppVariant: function() { return ""; },
+        getCookie: function(url) { return cookie.getCookie(url); },
+        startBrowser: function(url, title) { console.log("[Browser]", url); },
+        startBrowserDp: function(url, title) { this.startBrowser(url, title); },
+        showBrowser: function(url, html, js, opts) { console.log("[ShowBrowser]", url); },
+        refreshExplore: function() { console.log("[RefreshExplore]"); },
+        randomUUID: function() { return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c) { var r = Math.random()*16|0; return (c==="x"?r:r&0x3|0x8).toString(16); }); },
+        timeFormat: function(ts) { try { return new Date(ts).toISOString(); } catch(e) { return String(ts); } },
+        md5: function() { return ""; }
       };
-      var cookie = { setCookie:function(){}, getCookie:function(){return "";}, removeCookie:function(){} };
-      var cache = { get:function(){return "";}, put:function(){}, delete:function(){} };
+      var cookie = {
+        setCookie: function(url, value) { ctx["_cookie_" + url] = value; },
+        getCookie: function(url) { return ctx["_cookie_" + url] || ""; },
+        removeCookie: function(url) { delete ctx["_cookie_" + url]; }
+      };
+      var cacheStore = ctx._cacheStore || {};
+      var cache = {
+        get: function(key) { return cacheStore[key] || ""; },
+        put: function(key, value) { cacheStore[key] = value; },
+        delete: function(key) { delete cacheStore[key]; },
+        putMemory: function(key, value) { cacheStore["_mem_" + key] = value; },
+        getFromMemory: function(key) { return cacheStore["_mem_" + key] || 0; }
+      };
       var source = ctx.source || {};
+      if (!source.getVariable) source.getVariable = function() { return ctx._sourceVar || ""; };
+      if (!source.setVariable) source.setVariable = function(v) { ctx._sourceVar = v; };
+      var book = ctx.book || {};
+      if (book && !book.getVariable) book.getVariable = function(key) { return ctx["_bookVar_" + key] || ""; };
+      if (book && !book.setVariable) book.setVariable = function(key, v) { ctx["_bookVar_" + key] = v; };
+      // 构建 this 上下文，供 jsLib 中的 this.source / this.java 等使用
+      var thisCtx = {
+        source: source,
+        java: javaBridge,
+        cookie: cookie,
+        cache: cache
+      };
+      // 用 .call() 绑定 this 到 thisCtx，让 jsLib 函数能通过 this.source 等访问上下文
+      // 内层函数通过 .call(thisCtx) 绑定 this
+      var wrappedCode = '(function(){\\n' +
+        req.code + '\\n' +
+        '}).call(this);';
       var fn = new Function(
         "result","baseUrl","src","key","page","book","chapter",
         "cookie","cache","source","java",
-        '"use strict";\\n' + req.code
+        '"use strict";\\n' + wrappedCode
       );
-      var ret = fn(
+      var ret = fn.call(thisCtx,
         ctx.result || "", ctx.baseUrl || "", ctx.src || "",
         ctx.key || "", ctx.page || 1,
-        ctx.book || null, ctx.chapter || null,
+        book, ctx.chapter || null,
         cookie, cache, source, javaBridge
       );
       result.resultJson = (ret === undefined || ret === null) ? "null" : JSON.stringify(ret);
@@ -135,6 +213,14 @@ export class WebViewJSEngine {
    */
   async eval(code: string, context: Record<string, Object> = {}, timeout?: number): Promise<Object | null> {
     if (!code || !code.trim()) return null;
+
+    // 注入 jsLib 全局函数（如果有）
+    // 修正 jsLib 中的 this 引用，消除 this 绑定依赖
+    const jsLib = context['_jsLib'] as string;
+    if (jsLib && jsLib.trim()) {
+      const patchedJsLib = JSExecutor.patchJsLibThis(jsLib);
+      code = patchedJsLib + '\n' + code;
+    }
 
     await this.ensureReady();
     if (!this.controller) {

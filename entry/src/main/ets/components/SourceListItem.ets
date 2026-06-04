@@ -23,36 +23,37 @@ export struct SourceListItem {
       }
 
       Column({ space: 2 }) {
+        // 第 1 行：名称 + 连通图标（紧跟名称后面）
         Row({ space: AppSpace.Xs }) {
           Text(this.source.bookSourceName)
             .fontSize(AppFont.Body)
             .fontColor($r('sys.color.font_secondary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
           if (this.isUnreachable) {
             SymbolGlyph($r('sys.symbol.nosign'))
               .fontSize(16)
               .fontColor(['#FF3B30'])
           }
+          Blank()
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        Row({ space: AppSpace.Xs }) {
-          Text(this.source.bookSourceGroup || '未分组')
-            .fontSize(AppFont.Caption)
-            .fontColor(AppColor.Brand)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .borderRadius(4)
-            .backgroundColor('#1A0A59F7')
-          Text(this.source.bookSourceUrl)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-        }
+        // 第 2 行：标签（无灰色底）
+        Text(this.source.bookSourceGroup || '未分组')
+          .fontSize(AppFont.Caption)
+          .fontColor(AppColor.Brand)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+        // 第 3 行：地址（最多 2 行，超出省略）
+        Text(this.source.bookSourceUrl)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
