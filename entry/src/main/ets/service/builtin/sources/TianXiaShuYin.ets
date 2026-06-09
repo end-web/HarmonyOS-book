@@ -140,10 +140,8 @@ class TianXiaShuYinClass implements IBuiltInSource {
     opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
     try {
       const html = await fetchText(url, opts);
-      hilog.info(0, TAG, 'search %{public}s html len=%{public}d', keywords, html.length);
       const doc = JsoupUtil.parse(html, BASE);
       const books = parseList(doc);
-      hilog.info(0, TAG, 'search parsed %{public}d books', books.length);
       return new BuiltInSearchResult(books, 1);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -169,7 +167,6 @@ class TianXiaShuYinClass implements IBuiltInSource {
     if (books.length === 0) {
       books = parseListLi(doc);
     }
-    hilog.info(0, TAG, 'getCategoryList url=%{public}s books=%{public}d', fullUrl, books.length);
     const m = fullUrl.match(/-(\d+)\.html/);
     const cur = m ? parseInt(m[1], 10) : 1;
     let nextUrl = '';
@@ -182,7 +179,6 @@ class TianXiaShuYinClass implements IBuiltInSource {
   }
 
   async getBookDetail(bookUrl: string, loadEpisodes: boolean, _full: boolean): Promise<BuiltInBookDetail> {
-    hilog.info(0, TAG, 'getBookDetail bookUrl=%{public}s loadEpisodes=%{public}d', bookUrl, loadEpisodes ? 1 : 0);
 
     let doc: JElement;
     try {
@@ -199,7 +195,6 @@ class TianXiaShuYinClass implements IBuiltInSource {
 
     // 1) 先在当前页直接找 #playlist
     let items = doc.select('#playlist li a');
-    let from = 'detail#playlist';
 
     // 2) 没有 → 找"立即播放/开始播放/在线收听"的 a 跳转
     if (items.length === 0) {
@@ -228,11 +223,9 @@ class TianXiaShuYinClass implements IBuiltInSource {
         candidatePlayUrls.push(`${BASE}/play-${slug}-1-1.html`);
       }
       const tryUrls = playUrl ? [playUrl, ...candidatePlayUrls] : candidatePlayUrls;
-      hilog.info(0, TAG, 'detail no #playlist, try URLs (%{public}d)', tryUrls.length);
 
       for (const u of tryUrls) {
         try {
-          hilog.info(0, TAG, 'try playUrl=%{public}s', u);
           const playDoc = await fetchDoc(u, Opts.withHeaders(txHeaders()));
           items = playDoc.select('#playlist li a');
           if (items.length === 0) {
@@ -240,10 +233,7 @@ class TianXiaShuYinClass implements IBuiltInSource {
             items = playDoc.select('.playlist > li > a');
           }
           if (items.length > 0) {
-            from = `playPage:${u}`;
             break;
-          } else {
-            hilog.info(0, TAG, 'playUrl=%{public}s no #playlist (loaded len=%{public}d)', u, playDoc.outerHtml().length);
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -252,7 +242,6 @@ class TianXiaShuYinClass implements IBuiltInSource {
       }
     }
 
-    hilog.info(0, TAG, 'toc items=%{public}d from=%{public}s', items.length, from);
 
     const episodes: BuiltInEpisode[] = [];
     for (const a of items) {
@@ -265,17 +254,14 @@ class TianXiaShuYinClass implements IBuiltInSource {
       if (!/audio[\/\-]/i.test(u) && !/play[\/\-]/i.test(u)) continue;
       episodes.push(new BuiltInEpisode(t || `第${episodes.length + 1}集`, u));
     }
-    hilog.info(0, TAG, 'final episodes=%{public}d (after url filter)', episodes.length);
     return new BuiltInBookDetail(episodes, intro);
   }
 
   async getAudioUrl(chapterUrl: string): Promise<string> {
-    hilog.info(0, TAG, 'getAudioUrl chapter=%{public}s', chapterUrl);
     try {
       const expr = '(function(){var a=document.querySelector("audio[id*=audio], audio");return a?(a.src||a.getAttribute("src")||""):"";})()';
       const v = await getWebViewAudioExtractor().extract(chapterUrl, expr, 3000);
       const cleaned = v ? v.replace(/['"]/g, '') : '';
-      hilog.info(0, TAG, 'getAudioUrl result=%{public}s', cleaned || '(empty)');
       return cleaned || chapterUrl;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -296,7 +282,6 @@ class TianXiaShuYinClass implements IBuiltInSource {
       const doc = await fetchDoc(BASE + '/', Opts.withHeaders(txHeaders()));
       // 首页结构：div.list / div.module 各包一个 h2.module-title-h + ul.list-ul 或 ul.book-ol
       const containers = doc.select('div.list, div.module');
-      hilog.info(0, TAG, 'home containers=%{public}d', containers.length);
       const blocks: HomeBlock[] = [];
       for (const c of containers) {
         const titleEl = c.selectFirst('h2.module-title-h');
@@ -317,7 +302,6 @@ class TianXiaShuYinClass implements IBuiltInSource {
         if (books.length === 0) continue;
         blocks.push(new HomeBlock(title, books, moreUrl, layout));
       }
-      hilog.info(0, TAG, 'home blocks=%{public}d', blocks.length);
       return blocks;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -32,6 +32,7 @@ interface ImportResult {
 
 @ComponentV2
 export struct SourcePage {
+  @Param navStack: NavPathStack = new NavPathStack();
   @Local subscriptions: SourceSubscription[] = [];
   @Local allSources: BookSource[] = [];
   @Local showAddSheet: boolean = false;
@@ -68,11 +69,21 @@ export struct SourcePage {
   private context: common.UIAbilityContext | null = null;
   private sourceDataSource: SourceDataSource = new SourceDataSource();
 
+  private readonly sourcesChangedHandler = (): void => {
+    this.loadData();
+  };
+
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadData();
     // 暴露主列表 Scroller 给 MainPage 用于双击 Tab 回顶部
     this.onScrollerReady(this.srcScroller);
+    // 监听书源变更（编辑页保存后刷新列表）
+    emitter.on(EVT_SOURCES_CHANGED, this.sourcesChangedHandler);
+  }
+
+  aboutToDisappear(): void {
+    emitter.off(EVT_SOURCES_CHANGED, this.sourcesChangedHandler);
   }
 
   /** 统一的 toast 收口:用新版 getPromptAction API,异常吞掉(showToast 在异常上下文下可能抛) */
@@ -442,10 +453,10 @@ export struct SourcePage {
 
   private async toggleSourceEnabled(_source: BookSource): Promise<void> {
     // 注意：调用方（onToggleEnabled / Switch.onChange）已经把 source.enabled 设成最新值，
-    // 这里只负责落盘 + 刷新 UI，不要再翻一次。
+    // 这里只负责落盘 + 通知其它页面，不要再翻一次。
+    // 关键：不要调用 applySourceFilter()。它会 onDataReloaded() 全量重建 LazyForEach，
+    // 在滑动中切换开关会把列表"拽回去"造成乱跳；开关视图本身已绑定 source.enabled，无需重建。
     await SourceDataService.saveSources(this.allSources);
-    this.allSources = [...this.allSources];
-    this.applySourceFilter();
     emitSourcesChanged();
   }
 
@@ -622,6 +633,12 @@ export struct SourcePage {
                     .fontColor([AppColor.Brand])
                     .onClick(() => this.triggerRefreshAll())
                 }
+                SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                  .fontSize(22)
+                  .fontColor([$r('sys.color.font_tertiary')])
+                  .onClick(() => {
+                    this.navStack.pushPathByName('sourceDebug', undefined);
+                  })
                 SymbolGlyph($r('sys.symbol.questionmark_circle'))
                   .fontSize(22)
                   .fontColor([$r('sys.color.font_tertiary')])
@@ -848,16 +865,15 @@ export struct SourcePage {
                 }
               }
               .width('100%')
-              .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
+              .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm, bottom: AppSpace.Sm })
 
               if (idx < this.subscriptions.length - 1) {
-                Divider().color($r('sys.color.comp_divider')).margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+                Divider().color($r('sys.color.comp_divider')).margin({ left: AppSpace.Md, right: AppSpace.Md })
               }
             }, (sub: SourceSubscription, _idx: number) => sub.url)
           }
           .backgroundColor(Color.Transparent)
           .borderRadius(AppRadius.Lg)
-          .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
@@ -901,6 +917,9 @@ export struct SourcePage {
               onTap: () => {
                 if (this.isSelectMode) {
                   this.toggleSourceSelection(source.bookSourceUrl);
+                } else {
+                  // 内置源进只读详情，导入源进编辑页
+                  this.navStack.pushPathByName('sourceEdit', source.bookSourceUrl);
                 }
               },
               onLongPress: () => this.enterSelectMode(source.bookSourceUrl),
@@ -923,12 +942,12 @@ export struct SourcePage {
       .height('100%')
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
-      .cachedCount(10)
+      .cachedCount(20)
       .divider({
         strokeWidth: 0.5,
         color: $r('sys.color.comp_divider'),
-        startMargin: AppSpace.Lg,
-        endMargin: AppSpace.Lg
+        startMargin: AppSpace.Md,
+        endMargin: AppSpace.Md
       })
       .onDidScroll(() => this.applyScrollDirection(this.srcScroller, false))
     }

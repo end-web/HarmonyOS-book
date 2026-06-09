@@ -1,9 +1,5 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
-
-const DOMAIN = 0xFF00;
-const TAG = 'PrivacyPage';
 
 export const PRIVACY_POLICY_VERSION = '1.0.0';
 

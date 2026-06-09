@@ -61,7 +61,6 @@ export class AVSessionService {
       this.registerCommands();
       await this.session.activate();
       await this.setupLaunchAbility(context);
-      hilog.info(DOMAIN, TAG, 'AVSession created and activated');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'AVSession init failed: %{public}s',
@@ -92,7 +91,6 @@ export class AVSessionService {
       };
       const agent = await wantAgent.getWantAgent(wantAgentInfo);
       await this.session.setLaunchAbility(agent);
-      hilog.info(DOMAIN, TAG, 'setLaunchAbility ok');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'setLaunchAbility failed: %{public}s',
@@ -103,23 +101,18 @@ export class AVSessionService {
   private registerCommands(): void {
     if (!this.session) return;
     this.session.on('play', () => {
-      hilog.info(DOMAIN, TAG, 'Command: play');
       this.onPlay?.();
     });
     this.session.on('pause', () => {
-      hilog.info(DOMAIN, TAG, 'Command: pause');
       this.onPause?.();
     });
     this.session.on('playNext', () => {
-      hilog.info(DOMAIN, TAG, 'Command: playNext');
       this.onPlayNext?.();
     });
     this.session.on('playPrevious', () => {
-      hilog.info(DOMAIN, TAG, 'Command: playPrevious');
       this.onPlayPrevious?.();
     });
     this.session.on('seek', (timeMs: number) => {
-      hilog.info(DOMAIN, TAG, 'Command: seek %{public}d', timeMs);
       this.onSeek?.(timeMs);
     });
   }
@@ -130,14 +123,11 @@ export class AVSessionService {
     // 必须先 decode 成 PixelMap,否则会触发 "get metaData failed"。
     let mediaImage: string | image.PixelMap | undefined;
     if (book.cover) {
-      hilog.info(DOMAIN, TAG, 'updateMetadata loading cover=%{public}s', book.cover);
       const pixelMap = await this.loadCover(book.cover);
       if (pixelMap) {
         mediaImage = pixelMap;
-        hilog.info(DOMAIN, TAG, 'updateMetadata cover -> PixelMap');
       } else if (book.cover.startsWith('http://') || book.cover.startsWith('https://')) {
         mediaImage = book.cover;
-        hilog.info(DOMAIN, TAG, 'updateMetadata cover -> URL fallback');
       } else {
         hilog.warn(DOMAIN, TAG, 'updateMetadata cover decode failed, mediaImage=undefined');
       }
@@ -155,8 +145,6 @@ export class AVSessionService {
     };
     try {
       await this.session.setAVMetadata(metadata);
-      hilog.info(DOMAIN, TAG, 'setAVMetadata ok title=%{public}s duration=%{public}d hasImage=%{public}s',
-        chapter.title, metadata.duration ?? 0, mediaImage !== undefined ? 'yes' : 'no');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'setAVMetadata failed: %{public}s',
@@ -169,7 +157,6 @@ export class AVSessionService {
           artist: book.title
         };
         await this.session.setAVMetadata(fallback);
-        hilog.info(DOMAIN, TAG, 'setAVMetadata fallback ok');
       } catch (err2) {
         const e2 = err2 as Error;
         hilog.error(DOMAIN, TAG, 'setAVMetadata fallback also failed: %{public}s',
@@ -195,7 +182,6 @@ export class AVSessionService {
     };
     try {
       await this.session.setAVMetadata(metadata);
-      hilog.info(DOMAIN, TAG, 'updateMetadataDuration ok duration=%{public}d', durationMs);
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'updateMetadataDuration failed: %{public}s',
@@ -286,12 +272,10 @@ export class AVSessionService {
     if (!this.context) return null;
     // 沙箱绝对路径:走 fileIo 读字节再 decode,createImageSource 对沙箱路径不稳定
     if (path.startsWith('/')) {
-      hilog.info(DOMAIN, TAG, 'loadLocalCover sandbox path=%{public}s', path);
       try {
         const f = await fileIo.open(path, fileIo.OpenMode.READ_ONLY);
         try {
           const stat = await fileIo.stat(f.fd);
-          hilog.info(DOMAIN, TAG, 'loadLocalCover file size=%{public}d', stat.size);
           if (stat.size <= 0) {
             return null;
           }
@@ -303,7 +287,6 @@ export class AVSessionService {
           };
           const pixelMap = await source.createPixelMap(opts);
           source.release();
-          hilog.info(DOMAIN, TAG, 'loadLocalCover sandbox decode ok');
           return pixelMap;
         } finally {
           await fileIo.close(f);
@@ -317,7 +300,6 @@ export class AVSessionService {
     }
     // rawfile 路径
     try {
-      hilog.info(DOMAIN, TAG, 'loadLocalCover rawfile=%{public}s', path);
       const rawData = await this.context.resourceManager.getRawFileContent(path);
       const buf = rawData.buffer as ArrayBuffer;
       const source = image.createImageSource(buf);
@@ -326,7 +308,6 @@ export class AVSessionService {
       };
       const pixelMap = await source.createPixelMap(opts);
       source.release();
-      hilog.info(DOMAIN, TAG, 'loadLocalCover rawfile decode ok');
       return pixelMap;
     } catch (err) {
       const e = err as Error;
@@ -341,7 +322,6 @@ export class AVSessionService {
     if (!this.session) return;
     try {
       await this.session.deactivate();
-      hilog.info(DOMAIN, TAG, 'AVSession deactivated (idle timeout)');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'deactivate failed: %{public}s',
@@ -354,7 +334,6 @@ export class AVSessionService {
     if (!this.session) return;
     try {
       await this.session.activate();
-      hilog.info(DOMAIN, TAG, 'AVSession reactivated');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'reactivate failed: %{public}s',
@@ -374,6 +353,5 @@ export class AVSessionService {
       pm.release();
     });
     this.coverCache.clear();
-    hilog.info(DOMAIN, TAG, 'AVSession destroyed');
   }
 }

@@ -57,11 +57,8 @@ export class ExternalMediaWatcher {
         e?.message ?? JSON.stringify(err));
     }
     this.timeoutTimer = setTimeout(() => {
-      hilog.info(DOMAIN, TAG, 'arm timeout, give up');
       this.disarm();
     }, ExternalMediaWatcher.TIMEOUT_MS);
-    hilog.info(DOMAIN, TAG, 'armed, hadExternalMedia=%{public}d',
-      this.hadExternalMedia ? 1 : 0);
   }
 
   disarm(): void {
@@ -76,7 +73,6 @@ export class ExternalMediaWatcher {
     }
     this.callback = null;
     this.hadExternalMedia = false;
-    hilog.info(DOMAIN, TAG, 'disarmed');
   }
 
   isArmed(): boolean {
@@ -107,7 +103,6 @@ export class ExternalMediaWatcher {
       return;
     }
     if (this.hadExternalMedia) {
-      hilog.info(DOMAIN, TAG, 'external media gone, fire callback');
       const cb = this.callback;
       this.disarm();
       if (cb) cb();

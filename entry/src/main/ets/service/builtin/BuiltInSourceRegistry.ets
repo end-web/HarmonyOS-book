@@ -9,8 +9,6 @@
 import { BookSource, SearchRule, TocRule, ContentRule, BookInfoRule, ExploreRule } from '../../model/BookSource';
 import { IBuiltInSource, BuiltInBook } from './IBuiltInSource';
 
-const TAG = 'BuiltInSourceRegistry';
-
 /** 合成 BookSource 的 URL 前缀 */
 export const BUILTIN_SCHEME = 'builtin://eprendre/';
 

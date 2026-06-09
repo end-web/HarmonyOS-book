@@ -171,10 +171,6 @@ export class AudioService {
 
   private syncPlaybackState(): void {
     if (!this.state) return;
-    hilog.info(DOMAIN, TAG, 'syncPlaybackState isPlaying=%{public}d chapter=%{public}s progressMs=%{public}d',
-      this.state.isPlaying ? 1 : 0,
-      this.state.currentChapter?.title ?? '(none)',
-      this.state.progressMs);
     AVSessionService.getInstance().updatePlaybackState(
       this.state.isPlaying,
       this.state.progressMs,
@@ -193,7 +189,6 @@ export class AudioService {
     }
     const p = await media.createAVPlayer();
     p.on('stateChange', (newState: media.AVPlayerState) => {
-      hilog.info(DOMAIN, TAG, 'AVPlayer state -> %{public}s', newState);
       if (!this.state) return;
       if (newState === 'initialized') {
         p.prepare();
@@ -201,11 +196,16 @@ export class AudioService {
         // 此时 player 已进入合法状态,补一次焦点模式 setter(ensurePlayer 阶段不能设)
         this.applyInterruptMode(p);
         this.state.durationMs = p.duration;
-        hilog.info(DOMAIN, TAG, 'prepared, duration=%{public}d', p.duration);
         // TOC 不带时长,这里把 AVPlayer 解出的真实时长回写到章节,
         // 让冷启动滑块/详情页百分比/书架文案能拿到 duration(否则恒为 0)
         if (this.state.currentChapter && p.duration > 0) {
           this.state.currentChapter.duration = Math.round(p.duration / 1000);
+          // 立即持久化时长到数据库，确保冷启动后仍可用
+          if (this.state.currentBook) {
+            DataService.upsertCachedBook(this.state.currentBook).catch((err: Error) => {
+              hilog.error(DOMAIN, TAG, 'Failed to persist chapter duration: %{public}s', err.message);
+            });
+          }
         }
         // prepared 即上报一次 playbackState,让控制中心能立刻拿到 duration 渲染进度条
         AVSessionService.getInstance().updateMetadataDuration(p.duration);
@@ -298,8 +298,6 @@ export class AudioService {
   }
 
   private handleInterrupt(event: audio.InterruptEvent): void {
-    hilog.info(DOMAIN, TAG, 'audioInterrupt forceType=%{public}d hintType=%{public}d',
-      event.forceType, event.hintType);
     if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
       if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE) {
         // 临时暂停（语音、电话、闹铃等）：标记为焦点暂停，等待系统后续下发 RESUME
@@ -374,7 +372,6 @@ export class AudioService {
     this.pausedByExternalMedia = false;
     try {
       const p = await this.ensurePlayer();
-      hilog.info(DOMAIN, TAG, 'resumeAfterExternalMedia, player.state=%{public}s', p.state);
       if (p.state === 'paused') {
         if (this.state) {
           this.state.isPlaying = true;
@@ -487,13 +484,11 @@ export class AudioService {
     const s = p.state;
     if (s === 'released') {
       this.player = null;
-      hilog.info(DOMAIN, TAG, 'ensureHealthy: player released, drop reference');
       return;
     }
     if (s === 'error' || s === 'stopped') {
       try {
         await p.reset();
-        hilog.info(DOMAIN, TAG, 'ensureHealthy: reset from %{public}s', s);
       } catch (err) {
         const e = err as Error;
         hilog.warn(DOMAIN, TAG, 'ensureHealthy: reset failed: %{public}s',
@@ -515,7 +510,6 @@ export class AudioService {
     this.cancelExternalMediaWatch();
     // ★ 同书+同章节短路:不 reset,直接 seek(0) + play,避免重新嗅探 URL
     if (this.canReuseSameChapter(book, chapter)) {
-      hilog.info(DOMAIN, TAG, 'playChapter same-chapter shortcut, replay from 0');
       await this.replaySameChapterFromStart();
       return;
     }
@@ -647,7 +641,6 @@ export class AudioService {
       // 2) 解析音频 URL
       await this.resolveAudioUrl(book, chapter);
       if (myGen !== this.playGen) {
-        hilog.info(DOMAIN, TAG, 'doPlayChapter gen=%{public}d superseded, abort', myGen);
         return;
       }
 
@@ -688,14 +681,12 @@ export class AudioService {
     // 1) 优先看本地音频文件缓存（已下载到沙箱），最快路径，离线也能播
     const filePath = cache.getAudioFilePath(chapter.id, chapter.originSourceValue);
     if (filePath) {
-      hilog.info(DOMAIN, TAG, 'resolveAudioUrl file cache hit: %{public}s', chapter.title);
       chapter.source = { type: 'file', value: filePath };
       return;
     }
     // 2) URL 缓存命中
     const cachedUrl = cache.getAudioUrl(chapter.id);
     if (cachedUrl) {
-      hilog.info(DOMAIN, TAG, 'resolveAudioUrl url cache hit: %{public}s', chapter.title);
       chapter.source = { type: 'url', value: cachedUrl };
       // 顺手把这个章节的文件也缓到本地
       cache.ensureFileCached(book, chapter, cachedUrl);
@@ -710,8 +701,6 @@ export class AudioService {
       const audioUrl = await BookSourceService.getAudioUrl(source, pageUrl);
       if (audioUrl) {
         chapter.source = { type: 'url', value: audioUrl };
-        hilog.info(DOMAIN, TAG, 'resolveAudioUrl resolved %{public}s -> %{public}s',
-          chapter.title, audioUrl.substring(0, 100));
         // 把当前章节也下到本地
         cache.ensureFileCached(book, chapter, audioUrl);
       }
@@ -724,8 +713,6 @@ export class AudioService {
 
   private async applySource(p: media.AVPlayer, src: AudioSource): Promise<void> {
     if (!this.context) return;
-    hilog.info(DOMAIN, TAG, 'applySource type=%{public}s value=%{public}s',
-      src.type, src.value ? src.value.substring(0, 200) : '');
 
     this.closeCurrentFile();
 
@@ -903,6 +890,12 @@ export class AudioService {
     if (p.state === 'playing') {
       await p.pause();
     }
+    // 睡眠暂停后 stopTick 停了 5s 强推,卡片容易卡在"播放中"。
+    // 延迟 1.5s 再补推一次:给 FormExt 进程的 preferences 缓存足够的重载窗口,
+    // 确保卡片能读到最新的 isPlaying=false。
+    setTimeout(() => {
+      this.syncPlaybackState();
+    }, 1500);
   }
 
   async release(): Promise<void> {
@@ -931,7 +924,6 @@ export class AudioService {
     const outroStartMs = duration - skipOutro * 1000;
     if (outroStartMs <= 0) return;
     if (ms >= outroStartMs) {
-      hilog.info(DOMAIN, TAG, 'skipOutro triggered at %{public}dms, duration=%{public}dms', ms, duration);
       this.autoPlayNext();
     }
   }
@@ -971,7 +963,6 @@ export class AudioService {
     this.cancelExternalMediaWatch();
     // ★ 同书+同章节+合理状态: 直接 seek,不 reset
     if (this.canReuseSameChapter(book, chapter)) {
-      hilog.info(DOMAIN, TAG, 'playChapterAndSeek same-chapter shortcut, seek=%{public}d', seekMs);
       await this.seekAndPlaySameChapter(seekMs);
       return;
     }

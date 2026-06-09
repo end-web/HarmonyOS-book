@@ -83,12 +83,13 @@ export class WindowUtils {
 
   /**
    * TabContent 底部需要为浮动 Tab 栏让出的高度(vp)。
-   * 计算公式: FLOATING_BOTTOM + FLOATING_TAB_HEIGHT + FLOATING_GAP
-   * 说明: 现在 MiniPlayer 折叠后与 Tab 栏同处一行(不再单独占一行),
-   *       故不再为 MiniPlayer 预留高度。
+   * 计算公式: bottomSafe + FLOATING_BOTTOM + FLOATING_TAB_HEIGHT + FLOATING_GAP
+   * 说明: FloatingTabBar 内部用 padding-bottom = bottomSafe 把自身抬到导航条之上,
+   *       所以业务页留出的高度也要包含 bottomSafe,否则最后一行会被手势条遮住一截。
    */
   static getFloatingTabBottomVp(): number {
-    return WindowUtils.FLOATING_BOTTOM +
+    return WindowUtils.getBottomSafeVp() +
+           WindowUtils.FLOATING_BOTTOM +
            WindowUtils.FLOATING_TAB_HEIGHT +
            WindowUtils.FLOATING_GAP;
   }

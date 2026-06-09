@@ -57,7 +57,7 @@ export struct BookCard {
         if (this.book.cover && this.book.cover.startsWith('http') && !this.imageLoadFailed) {
           Image(this.book.cover)
             .width('100%')
-            .aspectRatio(0.7)
+            .aspectRatio(0.75)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .alt($r('app.media.startIcon'))
@@ -67,14 +67,14 @@ export struct BookCard {
         } else if (this.book.cover && this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
             .width('100%')
-            .aspectRatio(0.7)
+            .aspectRatio(0.75)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .onError(() => { this.imageLoadFailed = true; })
         } else if (this.book.cover && !this.book.cover.startsWith('http') && !this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image($rawfile(this.book.cover))
             .width('100%')
-            .aspectRatio(0.7)
+            .aspectRatio(0.75)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .onError(() => { this.imageLoadFailed = true; })

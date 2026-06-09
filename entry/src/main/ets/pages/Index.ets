@@ -1,6 +1,6 @@
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
-import { PlayerPage } from './PlayerPage';
+import { PlayerPage, PlayerBackInterceptor } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
@@ -8,6 +8,8 @@ import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
 import { BrowserPage } from './BrowserPage';
 import { LoginPage } from './LoginPage';
+import { SourceDebugPage } from './SourceDebugPage';
+import { SourceEditPage } from './SourceEditPage';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
 import { webview } from '@kit.ArkWeb';
@@ -163,6 +165,8 @@ struct Index {
         PlayerPageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
+      // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
+      .onBackPressed((): boolean => PlayerBackInterceptor.consume())
       .backgroundColor('#000000')
       .translate({ y: this.playerTranslateY })
       .borderRadius(this.playerBorderRadius)
@@ -246,6 +250,20 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor('#FFFFFF')
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'sourceDebug') {
+      NavDestination() {
+        SourceDebugPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'sourceEdit') {
+      NavDestination() {
+        SourceEditPage({ navStack: this.navStack, sourceUrl: (param as Object as string) || '' })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     }
   }

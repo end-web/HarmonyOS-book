@@ -2,7 +2,7 @@
  * 书源调试工具 - 用于诊断书源解析问题
  */
 
-import { BookSource, SearchResult } from '../model/BookSource';
+import { BookSource, SearchResult, TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { HttpClient } from '../service/http/HttpClient';
@@ -175,6 +175,198 @@ export class SourceDebugger {
     }
 
     return results;
+  }
+
+  /**
+   * 调试搜索 → 详情 → 目录 → 取第一章音频 URL 全链路。
+   * 用于诊断"安卓书源解到章节但播不出"这一类问题。
+   */
+  static async debugFullChain(source: BookSource, keyword: string): Promise<DebugStep[]> {
+    const steps: DebugStep[] = [];
+    const t0 = Date.now();
+
+    try {
+      // 1. 搜索
+      let firstResult: SearchResult | null = null;
+      try {
+        const list = await BookSourceService.searchBooks(source, keyword, 1);
+        firstResult = list.length > 0 ? list[0] : null;
+        steps.push({
+          step: '1. 搜索',
+          success: !!firstResult,
+          data: firstResult
+            ? `找到 ${list.length} 本，取第一本：\n  书名: ${firstResult.name}\n  作者: ${firstResult.author}\n  bookUrl: ${firstResult.bookUrl}`
+            : '搜索结果为空',
+          time: Date.now() - t0,
+        });
+      } catch (e) {
+        steps.push({ step: '1. 搜索', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t0 });
+        return steps;
+      }
+      if (!firstResult) return steps;
+
+      // 2. 详情（取 tocUrl）
+      const t1 = Date.now();
+      let tocUrl = firstResult.bookUrl;
+      try {
+        const info = await BookSourceService.getBookInfo(source, firstResult.bookUrl, firstResult.variables);
+        if (info && info.tocUrl) tocUrl = info.tocUrl;
+        steps.push({
+          step: '2. 详情',
+          success: !!info,
+          data: info
+            ? `name: ${info.name}\n  author: ${info.author}\n  tocUrl: ${info.tocUrl}\n  intro: ${(info.intro || '').substring(0, 100)}`
+            : '详情返回 null',
+          time: Date.now() - t1,
+        });
+      } catch (e) {
+        steps.push({ step: '2. 详情', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t1 });
+      }
+
+      // 3. 目录
+      const t2 = Date.now();
+      let firstChapter: TocItem | null = null;
+      try {
+        const toc = await BookSourceService.getBookToc(source, tocUrl, firstResult.variables, firstResult.name);
+        firstChapter = toc.length > 0 ? toc[0] : null;
+        steps.push({
+          step: '3. 目录',
+          success: toc.length > 0,
+          data: toc.length > 0
+            ? `共 ${toc.length} 章，前 3 章：\n  ${toc.slice(0, 3).map((c, i) => `${i + 1}. ${c.name} → ${c.url}`).join('\n  ')}`
+            : '目录为空',
+          time: Date.now() - t2,
+        });
+      } catch (e) {
+        steps.push({ step: '3. 目录', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t2 });
+        return steps;
+      }
+      if (!firstChapter) return steps;
+
+      // 4. 章节 → 音频 URL
+      const t3 = Date.now();
+      try {
+        const audioUrl = await BookSourceService.getAudioUrl(source, firstChapter.url);
+        // 剥掉 chapterUrl 的 ,{...} 配置后缀再比较，避免"去掉后缀≠原URL"的误判
+        const cleanChapterUrl = AnalyzeUrl.splitUrlConfig(firstChapter.url).url;
+        const isRealAudio = audioUrl.startsWith('http')
+          && audioUrl !== cleanChapterUrl
+          && !/text\/html/i.test(audioUrl)
+          && (audioUrl.match(/\.(mp3|m4a|ogg|aac|wav|flac|m3u8)/) !== null
+            || !audioUrl.includes(cleanChapterUrl.split('/').slice(0, 3).join('/')));
+        steps.push({
+          step: '4. 章节→音频URL',
+          success: isRealAudio,
+          data: `chapterUrl: ${firstChapter.url}\n  audioUrl: ${audioUrl}\n  ${isRealAudio
+            ? '（与 chapterUrl 不同，看起来是真实音频直链）'
+            : '⚠ 等于 chapterUrl 或为空，规则未提取出新 URL（若书源用 WebView 嗅探，调试时可能还未等到嗅探结果）'}`,
+          time: Date.now() - t3,
+        });
+
+        // 5. 音频可达性 HEAD
+        if (isRealAudio) {
+          const t4 = Date.now();
+          try {
+            const headers: Record<string, string> = {};
+            if (source.header) {
+              try {
+                const h = JSON.parse(source.header) as Record<string, string>;
+                for (const k of Object.keys(h)) headers[k] = String(h[k]);
+              } catch (_e) { /* ignore */ }
+            }
+            // 用 GET 但 Range: bytes=0-0 比 HEAD 更稳（部分 CDN 不支持 HEAD）
+            headers['Range'] = 'bytes=0-0';
+            const res = await HttpClient.request(audioUrl, { method: 'GET', headers });
+            const ok = res.statusCode >= 200 && res.statusCode < 400;
+            const ctype = (res.headers['content-type'] || res.headers['Content-Type'] || '') as string;
+            const clen = (res.headers['content-length'] || res.headers['Content-Length'] || '') as string;
+            const isAudioCt = ctype.startsWith('audio/') || /(mp3|m4a|aac|mpeg)/i.test(ctype);
+            steps.push({
+              step: '5. 音频URL可达性',
+              success: ok && isAudioCt,
+              data: `HTTP ${res.statusCode}\n  Content-Type: ${ctype}\n  Content-Length: ${clen}\n  ${ok
+                ? (isAudioCt ? '看起来是音频流，可播' : '⚠ 200 但 Content-Type 不是音频，可能被反爬转成 HTML')
+                : '⚠ 非 2xx/3xx，目标服务器拒绝（多半防盗链：缺 Referer/Cookie/UA）'}`,
+              time: Date.now() - t4,
+            });
+          } catch (e) {
+            steps.push({
+              step: '5. 音频URL可达性',
+              success: false,
+              error: SourceDebugger.errMsg(e),
+              time: Date.now() - t4,
+            });
+          }
+        }
+      } catch (e) {
+        steps.push({ step: '4. 章节→音频URL', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t3 });
+      }
+
+      return steps;
+    } catch (e) {
+      steps.push({ step: '未知错误', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t0 });
+      return steps;
+    }
+  }
+
+  /**
+   * 直接给定章节 URL 调试音频提取（跳过搜索/详情/目录）。
+   * 适用：用户已经在播放页看到具体章节但播不出。
+   */
+  static async debugAudio(source: BookSource, chapterUrl: string): Promise<DebugStep[]> {
+    const steps: DebugStep[] = [];
+    const t0 = Date.now();
+    steps.push({
+      step: '0. 输入',
+      success: true,
+      data: `书源: ${source.bookSourceName}\n  chapterUrl: ${chapterUrl}\n  contentRule.audioUrl: ${source.ruleContent?.audioUrl || '(空)'}\n  contentRule.content: ${source.ruleContent?.content || '(空)'}\n  contentRule.sourceRegex: ${source.ruleContent?.sourceRegex || '(空)'}\n  contentRule.webJs: ${source.ruleContent?.webJs ? '(存在)' : '(空)'}`,
+    });
+
+    try {
+      const audioUrl = await BookSourceService.getAudioUrl(source, chapterUrl);
+      const cleanInput = AnalyzeUrl.splitUrlConfig(chapterUrl).url;
+      const isRealAudio = audioUrl.startsWith('http') && audioUrl !== cleanInput;
+      steps.push({
+        step: '1. getAudioUrl',
+        success: isRealAudio,
+        data: `audioUrl: ${audioUrl}\n  ${isRealAudio ? '✓ 与输入不同' : '⚠ 等于输入（去配置后缀后）或非 http，WebView 嗅探可能尚未完成'}`,
+        time: Date.now() - t0,
+      });
+
+      if (isRealAudio) {
+        const t1 = Date.now();
+        const headers: Record<string, string> = {};
+        if (source.header) {
+          try {
+            const h = JSON.parse(source.header) as Record<string, string>;
+            for (const k of Object.keys(h)) headers[k] = String(h[k]);
+          } catch (_e) { /* ignore */ }
+        }
+        headers['Range'] = 'bytes=0-0';
+        try {
+          const res = await HttpClient.request(audioUrl, { method: 'GET', headers });
+          const ctype = (res.headers['content-type'] || res.headers['Content-Type'] || '') as string;
+          const ok = res.statusCode >= 200 && res.statusCode < 400;
+          steps.push({
+            step: '2. HTTP HEAD',
+            success: ok,
+            data: `HTTP ${res.statusCode}\n  Content-Type: ${ctype}\n  Headers: ${JSON.stringify(headers)}`,
+            time: Date.now() - t1,
+          });
+        } catch (e) {
+          steps.push({ step: '2. HTTP HEAD', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t1 });
+        }
+      }
+      return steps;
+    } catch (e) {
+      steps.push({ step: '调用 getAudioUrl 失败', success: false, error: SourceDebugger.errMsg(e), time: Date.now() - t0 });
+      return steps;
+    }
+  }
+
+  private static errMsg(e: Object | Error): string {
+    if (e instanceof Error) return e.message;
+    return String(e);
   }
 
   /**

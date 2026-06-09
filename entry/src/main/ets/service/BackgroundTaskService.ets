@@ -25,7 +25,6 @@ export class BackgroundTaskService {
       await backgroundTaskManager.startBackgroundRunning(context,
         backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK, agent);
       BackgroundTaskService.running = true;
-      hilog.info(DOMAIN, TAG, 'Background task started');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'startBackgroundRunning failed: %{public}s',
@@ -38,7 +37,6 @@ export class BackgroundTaskService {
     try {
       await backgroundTaskManager.stopBackgroundRunning(context);
       BackgroundTaskService.running = false;
-      hilog.info(DOMAIN, TAG, 'Background task stopped');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'stopBackgroundRunning failed: %{public}s',

@@ -180,7 +180,6 @@ export class BuiltInDispatcher {
     }
     try {
       const blocks = await plugin.getHomeBlocks();
-      console.info(`[${TAG}] getHomeBlocks ${plugin.name}: raw blocks=${blocks.length}`);
       const out: HomeBlockSection[] = [];
       for (const b of blocks) {
         const books: SearchResult[] = [];
@@ -190,7 +189,6 @@ export class BuiltInDispatcher {
         if (books.length === 0) continue;
         out.push(new HBS(b.title, books, b.moreUrl, b.layout, plugin.name, source.bookSourceUrl));
       }
-      console.info(`[${TAG}] getHomeBlocks ${plugin.name}: out sections=${out.length}`);
       return out;
     } catch (e) {
       const msg = e instanceof Error ? e.message : JSON.stringify(e);

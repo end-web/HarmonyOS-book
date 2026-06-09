@@ -248,12 +248,10 @@ export class ChapterCacheService {
       if (audioUrl && audioUrl !== pageUrl) {
         this.evictUrlCache();
         this.audioCache.set(chapter.id, { resolvedUrl: audioUrl, timestamp: Date.now() });
-        hilog.info(DOMAIN, TAG, 'preloaded audio URL: %{public}s', chapter.title);
         // URL 拿到后顺手把文件也下了
         this.enqueueFile(() => this.downloadFile(book, chapter, audioUrl));
       }
     } catch (_e) {
-      hilog.debug(DOMAIN, TAG, 'preload audio URL failed: %{public}s', chapter.title);
     } finally {
       this.pendingTasks.delete(taskKey);
     }
@@ -310,8 +308,6 @@ export class ChapterCacheService {
         timestamp: Date.now(),
       });
       this.evictFileCache();
-      hilog.info(DOMAIN, TAG, 'cached audio file: %{public}s (%{public}d KB)',
-        chapter.title, Math.round(buf.byteLength / 1024));
       this.extractDuration(chapter, filePath);
     } catch (err) {
       const e = err as Error;
@@ -335,10 +331,8 @@ export class ChapterCacheService {
       if (text) {
         this.evictIfNeeded(this.textCache);
         this.textCache.set(chapter.id, { content: text, timestamp: Date.now() });
-        hilog.info(DOMAIN, TAG, 'preloaded text: %{public}s', chapter.title);
       }
     } catch (_e) {
-      hilog.debug(DOMAIN, TAG, 'preload text failed: %{public}s', chapter.title);
     } finally {
       this.pendingTasks.delete(taskKey);
     }
@@ -399,8 +393,6 @@ export class ChapterCacheService {
         });
       }
     } catch (err) {
-      const e = err as Error;
-      hilog.debug(DOMAIN, TAG, 'extractDuration failed: %{public}s', e?.message ?? JSON.stringify(err));
     } finally {
       if (extractor) {
         try { await extractor.release(); } catch (_e) { /* ignore */ }

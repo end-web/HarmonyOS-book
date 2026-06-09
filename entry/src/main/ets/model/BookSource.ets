@@ -21,6 +21,7 @@ export interface TocRule {
   isPay?: string;
   isVolume?: string;
   updateTime?: string;
+  duration?: string; // 时长规则（如 "$.duration" 或 ".time::text"），单位秒
   preUpdateJs?: string;
   formatJs?: string;
 }
@@ -121,6 +122,7 @@ export interface TocItem {
   isPay?: boolean;
   isVolume?: boolean;
   updateTime?: string;
+  duration?: number; // 时长（秒）
 }
 
 export interface BookInfo {

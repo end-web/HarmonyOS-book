@@ -261,7 +261,6 @@ export class JavaBridgeImpl {
    * 在 WebView 中加载页面，监听网络请求，通过 sourceRegex 匹配媒体 URL
    */
   async webViewGetSource(html: string, url: string, js?: string, sourceRegex?: string): Promise<string> {
-    console.info(`[JavaBridge] webViewGetSource: ${url}, regex=${sourceRegex || 'none'}`);
     // 简化实现：使用 WebViewAudioExtractor
     try {
       const extractor = getWebViewAudioExtractor();
@@ -285,26 +284,22 @@ export class JavaBridgeImpl {
    * java.webViewGetOverrideUrl(html, url, js, overrideUrlRegex) — WebView URL 拦截（Legado 兼容）
    */
   async webViewGetOverrideUrl(html: string, url: string, js?: string, overrideUrlRegex?: string): Promise<string> {
-    console.info(`[JavaBridge] webViewGetOverrideUrl: ${url}`);
     // 简化实现：直接返回 URL
     return url || '';
   }
 
   log(message: string): void {
-    console.info(`[JavaBridge] ${message}`);
   }
 
   // ──────────── Toast ────────────
 
   toast(msg: string): void {
-    console.info(`[JavaBridge] toast: ${msg}`);
     if (JavaBridgeImpl.toastCallback) {
       JavaBridgeImpl.toastCallback(msg, 2000);
     }
   }
 
   longToast(msg: string): void {
-    console.info(`[JavaBridge] longToast: ${msg}`);
     if (JavaBridgeImpl.toastCallback) {
       JavaBridgeImpl.toastCallback(msg, 5000);
     }
@@ -313,7 +308,6 @@ export class JavaBridgeImpl {
   // ──────────── 浏览器 ────────────
 
   startBrowser(url: string, title?: string): void {
-    console.info(`[JavaBridge] startBrowser: ${url}`);
     if (JavaBridgeImpl.browserCallback) {
       JavaBridgeImpl.browserCallback(url, title || '');
     }
@@ -324,7 +318,6 @@ export class JavaBridgeImpl {
   }
 
   async startBrowserAwait(url: string, title?: string): Promise<Object> {
-    console.info(`[JavaBridge] startBrowserAwait: ${url}`);
     if (JavaBridgeImpl.browserAwaitCallback) {
       const result: BrowserAwaitResult = await JavaBridgeImpl.browserAwaitCallback(url, title || '');
       return result as Object;
@@ -334,14 +327,12 @@ export class JavaBridgeImpl {
   }
 
   showBrowser(url: string, html: string, js?: string, options?: string): void {
-    console.info(`[JavaBridge] showBrowser: ${url}`);
     if (JavaBridgeImpl.showBrowserCallback) {
       JavaBridgeImpl.showBrowserCallback(url, html, js || '', options || '');
     }
   }
 
   refreshExplore(): void {
-    console.info(`[JavaBridge] refreshExplore`);
     if (JavaBridgeImpl.refreshExploreCallback) {
       JavaBridgeImpl.refreshExploreCallback();
     }

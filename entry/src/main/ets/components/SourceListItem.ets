@@ -47,11 +47,11 @@ export struct SourceListItem {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        // 第 3 行：地址（最多 2 行，超出省略）
+        // 第 3 行：地址（单行省略，避免不定行高在 LazyForEach 中导致滑动跳动）
         Text(this.source.bookSourceUrl)
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
-          .maxLines(2)
+          .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
       }
@@ -61,11 +61,17 @@ export struct SourceListItem {
       if (!this.isSelectMode) {
         Toggle({ type: ToggleType.Switch, isOn: this.source.enabled !== false })
           .selectedColor(AppColor.Brand)
-          .onChange((isOn: boolean) => this.onToggleEnabled(isOn))
+          .onChange((isOn: boolean) => {
+            // @ReusableV2 复用列表项时,Toggle 重绑 isOn 会触发一次 onChange。
+            // 若新值与当前源状态一致,说明不是用户操作而是复用重绑,直接忽略,
+            // 否则会误改到正在显示的(其它)书源的 enabled,导致禁用错位/丢失。
+            if (isOn === (this.source.enabled !== false)) return;
+            this.onToggleEnabled(isOn);
+          })
       }
     }
     .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: 10, bottom: 10 })
+    .padding({ left: AppSpace.Md, right: AppSpace.Md, top: 10, bottom: 10 })
     .backgroundColor(this.isSelectMode && this.isSelected ? '#0D0A59F7' : Color.Transparent)
     .onClick(() => this.onTap())
     .gesture(

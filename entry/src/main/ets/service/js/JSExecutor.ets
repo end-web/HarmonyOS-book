@@ -23,6 +23,7 @@ import { getCookieManager } from '../rule/CookieManager';
 import { getSourceContext } from '../rule/SourceContext';
 import { getJsoup } from '../rule/JsoupBridge';
 import { getWebViewJSEngine } from './WebViewJSEngine';
+import { BuiltInSourceRegistry } from '../builtin/BuiltInSourceRegistry';
 
 export interface JSExecutorConfig {
   host?: string;
@@ -102,7 +103,8 @@ export class JSExecutor {
                       code.includes('java.log') ||
                       code.includes('java.get') ||
                       code.includes('java.put') ||
-                      code.includes('java.webView');
+                      code.includes('java.webView') ||
+                      code.includes('java.builtin');
 
     // 检测是否需要 DOM shim（书源 JS 规则常用 document.querySelector）
     const needsDOM = code.includes('document.querySelector') ||
@@ -131,7 +133,7 @@ export class JSExecutor {
 
     // 优先：本地脚本求值（async，原生支持 await java.ajax / java.connect 与多行赋值）
     // 这是 Legado 书源最常见的"拼 URL → ajax → 取新页面"模式
-    if (needsJava && (code.includes('java.ajax') || code.includes('java.connect'))) {
+    if (needsJava && (code.includes('java.ajax') || code.includes('java.connect') || code.includes('java.builtin'))) {
       const asyncResult = await this.tryAsyncScript(code.trim(), context);
       if (asyncResult !== undefined) return asyncResult;
     }
@@ -582,6 +584,16 @@ export class JSExecutor {
     // 简单赋值后返回：var x = expr; x
     const assignResult = this.tryEvalAssignment(code, ctx);
     if (assignResult !== undefined) return assignResult;
+
+    // 单行裸赋值：result = result.replace(...)（Legado <js> 改写 result 的常见写法，
+    // 赋值表达式求值为被赋的值）。排除 == / >= / <= / != 等比较。
+    if (!code.includes('\n') && !code.includes(';')) {
+      const bareAssign = code.match(/^(\w+)\s*=(?!=)\s*(.+)$/);
+      if (bareAssign && !/[<>!]$/.test(bareAssign[1])) {
+        const rhs = this.tryLocalEval(bareAssign[2].trim(), ctx);
+        if (rhs !== undefined) return rhs;
+      }
+    }
 
     return undefined;
   }
@@ -1172,6 +1184,40 @@ export class JSExecutor {
       return getJavaBridge().createSymmetricCrypto(transformation, key, iv);
     }
 
+    // java.builtin('id').method(args) — 调用内置源的方法
+    // 支持: getAudioUrl(url) / search(keyword, page) / getHomeBlocks()
+    const builtinMatch = e.match(/^java\.builtin\((['"]?)([^'"]+)\1\)\.([\w]+)\((.*)\)$/);
+    if (builtinMatch) {
+      const sourceId = builtinMatch[2].trim();
+      const methodName = builtinMatch[3].trim();
+      const argsExpr = builtinMatch[4].trim();
+      const plugin = BuiltInSourceRegistry.get(sourceId);
+      if (!plugin) return `[builtin '${sourceId}' not found]`;
+      try {
+        if (methodName === 'getAudioUrl') {
+          const urlVal = argsExpr ? await this.evalExprAsync(argsExpr, vars) : '';
+          return await plugin.getAudioUrl(String(urlVal || ''));
+        }
+        if (methodName === 'search') {
+          const argsList = this.parseArgs(argsExpr);
+          const a0 = argsList.length > 0 ? String(argsList[0]) : '';
+          const a1 = argsList.length > 1 ? String(argsList[1]) : '1';
+          const kw = a0 ? String(await this.evalExprAsync(a0, vars) ?? a0) : '';
+          const pgVal = await this.evalExprAsync(a1, vars);
+          const pg = pgVal !== undefined ? Number(pgVal) : 1;
+          const result = await plugin.search(kw, pg);
+          return JSON.stringify(result);
+        }
+        if (methodName === 'getHomeBlocks') {
+          const result = await plugin.getHomeBlocks();
+          return JSON.stringify(result);
+        }
+        return `[builtin method '${methodName}' not supported]`;
+      } catch (e2) {
+        return `[builtin error: ${e2 instanceof Error ? e2.message : String(e2)}]`;
+      }
+    }
+
     // a + b + c 拼接：先尝试 async 处理，因为单段可能也是 java.ajax 调用
     if (e.includes('+') && !/^['"`]/.test(e)) {
       const parts = this.splitTopLevelPlus(e);
@@ -1230,16 +1276,18 @@ export class JSExecutor {
     const lines = code.split(/[;\n]/).map((l) => l.trim()).filter((l) => l.length > 0);
     if (lines.length === 0) return null;
 
-    // 处理 var 声明
+    // 处理 var 声明 + 裸赋值（result = ... 改写）
     const localVars: Record<string, Object> = {};
     const ctxKeys = Object.keys(ctx);
     for (const ck of ctxKeys) localVars[ck] = ctx[ck];
     for (let i = 0; i < lines.length - 1; i++) {
-      const varMatch = lines[i].match(/^(?:var|let|const)\s+(\w+)\s*=\s*(.+)$/);
-      if (varMatch) {
-        const val = this.tryLocalEval(varMatch[2], localVars);
+      const declMatch = lines[i].match(/^(?:var|let|const)\s+(\w+)\s*=\s*(.+)$/);
+      const assignMatch = declMatch ? null : lines[i].match(/^(\w+)\s*=(?!=)\s*(.+)$/);
+      const m = declMatch ?? assignMatch;
+      if (m) {
+        const val = this.tryLocalEval(m[2], localVars);
         if (val !== undefined) {
-          localVars[varMatch[1]] = val;
+          localVars[m[1]] = val;
         }
       }
     }
@@ -1482,6 +1530,8 @@ export class JSExecutor {
 
   private tryEvalAssignment(code: string, ctx: Record<string, Object>): Object | undefined {
     // var url = baseUrl + '/path'; url
+    // 也支持对已有变量的裸赋值：result = "..." + result.replace(...) ; result
+    // （Legado 书源 chapterUrl/audioUrl 规则常用 result=... 改写后再返回 result）
     const lines = code.split(/[;\n]/).map((l) => l.trim()).filter((l) => l.length > 0);
     if (lines.length < 2) return undefined;
 
@@ -1489,11 +1539,14 @@ export class JSExecutor {
     const ctxKeys = Object.keys(ctx);
     for (const ck of ctxKeys) localVars[ck] = ctx[ck];
     for (let i = 0; i < lines.length - 1; i++) {
-      const varMatch = lines[i].match(/^(?:var|let|const)\s+(\w+)\s*=\s*(.+)$/);
-      if (varMatch) {
-        const val = this.tryLocalEval(varMatch[2], localVars);
+      // 优先匹配声明；否则匹配裸赋值 X = expr（用 (?!=) 排除 == 比较）
+      const declMatch = lines[i].match(/^(?:var|let|const)\s+(\w+)\s*=\s*(.+)$/);
+      const assignMatch = declMatch ? null : lines[i].match(/^(\w+)\s*=(?!=)\s*(.+)$/);
+      const m = declMatch ?? assignMatch;
+      if (m) {
+        const val = this.tryLocalEval(m[2], localVars);
         if (val !== undefined) {
-          localVars[varMatch[1]] = val;
+          localVars[m[1]] = val;
         }
       }
     }

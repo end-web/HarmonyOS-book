@@ -4,6 +4,7 @@ import { Book, Chapter } from '../model/Book';
 import { SearchResult } from '../model/BookSource';
 import { SourceDataService } from '../service/SourceDataService';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
+import { BookSourceService } from '../service/BookSourceService';
 import { SearchCache } from '../utils/SearchCache';
 import { BookDataSource } from '../utils/BookDataSource';
 import { BookCard } from '../components/BookCard';
@@ -29,10 +30,12 @@ export struct BlockMorePage {
 
   private dataSource: BookDataSource = new BookDataSource();
   private nextUrl: string = '';
+  private nextPage: number = 2;
   private scroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     this.nextUrl = this.moreUrl;
+    this.nextPage = 2;
     this.loading = true;
     this.loadFirstPage();
   }
@@ -47,6 +50,7 @@ export struct BlockMorePage {
     this.books = [];
     this.dataSource.clear();
     BookCard.resetAnimations();
+    this.nextPage = 2;
     await this.fetchPage(this.moreUrl, false);
     this.loading = false;
   }
@@ -67,25 +71,39 @@ export struct BlockMorePage {
         this.hasMore = false;
         return;
       }
-      const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
-      if (!plugin) {
-        this.errorMsg = '该分类暂不支持加载更多';
-        this.hasMore = false;
-        return;
-      }
-      const cat = await plugin.getCategoryList(url);
-      hilog.info(DOMAIN, TAG, 'fetchPage url=%{public}s books=%{public}d nextUrl=%{public}s',
-        url, cat.books.length, cat.nextUrl);
 
-      const newBooks: Book[] = [];
-      for (const b of cat.books) {
-        BuiltInSourceRegistry.cacheBookMeta(b);
-        const sr: SearchResult = {
-          name: b.title, author: b.author, coverUrl: b.coverUrl,
-          bookUrl: b.bookUrl, intro: b.intro, kind: b.status, lastChapter: '',
-          sourceName: plugin.name, sourceUrl: source.bookSourceUrl,
-        };
-        newBooks.push(this.searchResultToBook(sr));
+      const isBuiltin = BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl);
+      let newBooks: Book[] = [];
+      let nextUrl: string = '';
+
+      if (isBuiltin) {
+        const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+        if (!plugin) {
+          this.errorMsg = '该分类暂不支持加载更多';
+          this.hasMore = false;
+          return;
+        }
+        const cat = await plugin.getCategoryList(url);
+        for (const b of cat.books) {
+          BuiltInSourceRegistry.cacheBookMeta(b);
+          const sr: SearchResult = {
+            name: b.title, author: b.author, coverUrl: b.coverUrl,
+            bookUrl: b.bookUrl, intro: b.intro, kind: b.status, lastChapter: '',
+            sourceName: plugin.name, sourceUrl: source.bookSourceUrl,
+          };
+          newBooks.push(this.searchResultToBook(sr));
+        }
+        nextUrl = cat.nextUrl || '';
+      } else {
+        // 订阅源:用 ruleExplore 抓分类。url 中含 {{page}} 占位由 BookSourceService 替换
+        const page = append ? this.nextPage : 1;
+        const r = await BookSourceService.getExploreBooksByUrl(source, url, page);
+        for (const sr of r.books) {
+          newBooks.push(this.searchResultToBook(sr));
+        }
+        nextUrl = r.nextUrl || '';
+        if (append) this.nextPage = (r.nextPage ?? page + 1);
+        else this.nextPage = (r.nextPage ?? 2);
       }
 
       if (append) {
@@ -95,7 +113,7 @@ export struct BlockMorePage {
         this.books = newBooks;
         this.dataSource.setBooks(newBooks);
       }
-      this.nextUrl = cat.nextUrl || '';
+      this.nextUrl = nextUrl;
       this.hasMore = this.nextUrl.length > 0 && newBooks.length > 0;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

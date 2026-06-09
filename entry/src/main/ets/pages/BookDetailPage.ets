@@ -1,6 +1,5 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2 } from '@kit.ArkUI';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
@@ -15,9 +14,6 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
-
-const DOMAIN = 0xFF00;
-const TAG = 'ListenBook_Detail';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -141,16 +137,26 @@ export struct BookDetailPage {
         }
         this.debugInfo += `\ntocUrl=${tocUrl}`;
 
-        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
+        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
         this.debugInfo += `\ntocItems=${tocItems.length}`;
         if (tocItems.length > 0) {
           this.debugInfo += `\nfirst=${tocItems[0].name}`;
         }
-        book.chapters = tocItems.map((item: TocItem, idx: number): Chapter => ({
+        // 去重:按 URL 去重(保留首次出现的章节,丢弃重复 URL)
+        const seenUrls = new Set<string>();
+        const uniqueTocItems = tocItems.filter(item => {
+          if (seenUrls.has(item.url)) {
+            return false;
+          }
+          seenUrls.add(item.url);
+          return true;
+        });
+        this.debugInfo += `\nunique=${uniqueTocItems.length}`;
+        book.chapters = uniqueTocItems.map((item: TocItem, idx: number): Chapter => ({
           id: `${book.id}-c${idx}`,
           index: idx + 1,
           title: item.name,
-          duration: 0,
+          duration: item.duration || 0,
           source: { type: 'url', value: item.url },
           originSourceValue: item.url
         }));
@@ -208,11 +214,23 @@ export struct BookDetailPage {
     if (!this.book || !this.playerState.currentBook || !this.playerState.currentChapter) return;
     if (this.playerState.currentBook.id !== this.bookId) return;
     const idx = this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
-    if (idx > 0) {
+    this.scrollChapterListToIndex(idx);
+  }
+
+  /**
+   * 可靠定位章节列表到指定 index。
+   * 两段式延迟:首次等「节目」tab/列表挂载并完成首屏布局(规避 setTimeout(0) 的挂载竞态),
+   * 把目标项拉进 LazyForEach 渲染窗口;二次等目标项真实行高确定后再精确居中,
+   * 修正长列表按平均行高估算导致的 ScrollAlign.CENTER 偏差(原先单次定位时灵时不灵)。
+   */
+  private scrollChapterListToIndex(idx: number): void {
+    if (idx <= 0) return;
+    setTimeout(() => {
+      try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
       setTimeout(() => {
-        this.chapterListScroller.scrollToIndex(idx, true, ScrollAlign.CENTER);
-      }, 100);
-    }
+        try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
+      }, 150);
+    }, 50);
   }
 
   private async toggleFavorite(): Promise<void> {
@@ -266,10 +284,7 @@ export struct BookDetailPage {
     //   避免从详情页继续播放反而回退进度
     if (PlaybackStore.getInstance().isCurrentChapter(this.book.id, target.id)) {
       resumeProgressMs = this.playerState.progressMs;
-      hilog.info(DOMAIN, TAG, 'startPlay use live progressMs=%{public}d (was history=%{public}d)',
-        resumeProgressMs, this.lastHistory?.progressMs ?? 0);
     }
-    hilog.info(DOMAIN, TAG, 'startPlay chapter=%{public}s', target.title);
 
     SearchCache.put(this.book);
     // ★ 当前在播的就是同书:直接 push player 不带 chapter 参数,PlayerPage 复用 live state,
@@ -414,7 +429,6 @@ export struct BookDetailPage {
           .justifyContent(FlexAlign.Center)
         }
       }
-      .geometryTransition('book-cover-' + this.bookId, { follow: true })
 
       // 书名信息
       Column({ space: AppSpace.Xs }) {
@@ -638,7 +652,7 @@ export struct BookDetailPage {
         .width('100%')
         .layoutWeight(1)
         .cachedCount(5)
-        .scrollBar(BarState.Off)
+        .scrollBar(BarState.Auto)
         .edgeEffect(EdgeEffect.Spring)
         .divider({ strokeWidth: 0.5, color: AppColor.Divider, startMargin: AppSpace.Lg, endMargin: AppSpace.Lg })
       }

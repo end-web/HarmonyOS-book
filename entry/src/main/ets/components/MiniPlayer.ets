@@ -11,13 +11,12 @@ export struct MiniPlayer {
   @Event onExpand: () => void = () => {};
 
   @Local coverAngle: number = 0;
-  @Local rotating: boolean = false;
   private rotateTimer: number = -1;
-  private startTime: number = 0;
-  private baseAngle: number = 0;
 
   aboutToAppear(): void {
-    this.syncRotate();
+    if (this.playerState.isPlaying) {
+      this.startRotate();
+    }
   }
 
   aboutToDisappear(): void {
@@ -26,10 +25,6 @@ export struct MiniPlayer {
 
   @Monitor('playerState.isPlaying')
   onPlayingChange(): void {
-    this.syncRotate();
-  }
-
-  private syncRotate(): void {
     if (this.playerState.isPlaying) {
       this.startRotate();
     } else {
@@ -38,27 +33,19 @@ export struct MiniPlayer {
   }
 
   private startRotate(): void {
-    if (this.rotating) return;
-    this.rotating = true;
-    // 经过时间驱动角度（不依赖 animateTo 对 @Local 的动画化）：
-    // 从上次暂停的角度 baseAngle 继续，12 秒一圈，33ms 一刷 ≈ 30fps
-    this.startTime = Date.now();
+    if (this.rotateTimer >= 0) return;
+    // 20秒转360度 = 每帧(16.67ms@60fps)转0.3度
     this.rotateTimer = setInterval(() => {
-      if (!this.rotating) return;
-      const elapsed = Date.now() - this.startTime;
-      this.coverAngle = (this.baseAngle + (elapsed / 12000) * 360) % 360;
-    }, 33);
+      this.coverAngle = (this.coverAngle + 0.3) % 360;
+    }, 16);
   }
 
   private stopRotate(): void {
-    if (!this.rotating) return;
-    this.rotating = false;
-    if (this.rotateTimer !== -1) {
+    if (this.rotateTimer >= 0) {
       clearInterval(this.rotateTimer);
       this.rotateTimer = -1;
     }
-    // 记住当前角度，下次从此处继续，避免回弹到 0
-    this.baseAngle = this.coverAngle % 360;
+    // 保持当前角度,不回正
   }
 
   private bookId(): string {
@@ -82,16 +69,28 @@ export struct MiniPlayer {
           .height('100%')
           .borderRadius(this.collapsed ? 28 : 20)
           .objectFit(ImageFit.Cover)
-          .rotate({ angle: this.coverAngle })
-          .id('mini-cover-img')
+          .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
+          .animation({
+            duration: this.playerState.isPlaying ? 20000 : 300,
+            curve: this.playerState.isPlaying ? Curve.Linear : Curve.Friction,
+            iterations: this.playerState.isPlaying ? -1 : 1,
+            expectedFrameRateRange: { min: 30, max: 120, expected: 60 }
+          })
+          .id('mini-cover-img-file')
       } else if (this.playerState.currentBook.cover) {
         Image($rawfile(this.playerState.currentBook.cover))
           .width('100%')
           .height('100%')
           .borderRadius(this.collapsed ? 28 : 20)
           .objectFit(ImageFit.Cover)
-          .rotate({ angle: this.coverAngle })
-          .id('mini-cover-img')
+          .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
+          .animation({
+            duration: this.playerState.isPlaying ? 20000 : 300,
+            curve: this.playerState.isPlaying ? Curve.Linear : Curve.Friction,
+            iterations: this.playerState.isPlaying ? -1 : 1,
+            expectedFrameRateRange: { min: 30, max: 120, expected: 60 }
+          })
+          .id('mini-cover-img-raw')
       }
     }
   }
@@ -123,24 +122,12 @@ export struct MiniPlayer {
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-            Row({ space: AppSpace.Xs }) {
-              Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : '--')
-                .fontSize(AppFont.Caption)
-                .fontColor($r('sys.color.font_secondary'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-              if (this.playerState.currentBook.author) {
-                Text(this.playerState.currentBook.author)
-                  .fontSize(AppFont.Caption - 1)
-                  .fontColor($r('sys.color.font_tertiary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .flexShrink(0)
-              }
-            }
-            .width('100%')
-            .alignItems(VerticalAlign.Center)
+            Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : '--')
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)

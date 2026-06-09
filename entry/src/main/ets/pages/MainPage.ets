@@ -3,7 +3,7 @@ import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
-import { HomePage } from './HomePage';
+import { HomePage, EVT_REFRESH_HOME } from './HomePage';
 import { HomeBlockSection } from '../model/BookSource';
 import { FavoritePage } from './FavoritePage';
 import { SourcePage } from './SourcePage';
@@ -196,13 +196,9 @@ export struct MainPage {
           HomePage({
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
             onBlockMore: (block: HomeBlockSection) => this.openBlockMore(block),
-            onScrollerReady: (scroller: Scroller) => { this.scrollers.set(0, scroller); },
-            onScrollDirection: (down: boolean) => {
-              // 向下滑动 → 折叠;向上/顶部 → 展开
-              this.tabController.applyMiniBarStyle(
-                down ? HdsBarStyle.COLLAPSE : HdsBarStyle.EXPAND
-              );
-            }
+            onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) =>
+              this.openCategory(sourceUrl, sourceName, title, url),
+            onScrollerReady: (scroller: Scroller) => { this.scrollers.set(0, scroller); }
           })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.house'), $r('sys.symbol.house_fill'), '首页'))
@@ -220,6 +216,7 @@ export struct MainPage {
 
         TabContent() {
           SourcePage({
+            navStack: this.navStack,
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(2, scroller); }
           })
         }
@@ -261,10 +258,15 @@ export struct MainPage {
         const now = Date.now();
         const DOUBLE_TAP_DELAY = 300;
         if (index === this.lastTabClickIndex && (now - this.lastTabClickTime) < DOUBLE_TAP_DELAY) {
-          // 双击当前 Tab → 滚动回顶部
-          const scroller = this.scrollers.get(index);
-          if (scroller) {
-            try { scroller.scrollEdge(Edge.Top); } catch (_e) { /* ignore */ }
+          if (index === 0) {
+            // 双击首页 → 刷新首页数据(不再返回顶部)
+            emitter.emit(EVT_REFRESH_HOME);
+          } else {
+            // 双击其它 Tab → 滚动回顶部
+            const scroller = this.scrollers.get(index);
+            if (scroller) {
+              try { scroller.scrollEdge(Edge.Top); } catch (_e) { /* ignore */ }
+            }
           }
         }
         this.lastTabClickTime = now;
@@ -296,6 +298,18 @@ export struct MainPage {
       'sourceName': block.sourceName,
       'title': block.title,
       'moreUrl': block.moreUrl
+    };
+    this.navStack.pushPathByName('blockMore', params);
+  }
+
+  /** 分类入口:复用 blockMore 路由展示分类书单 */
+  private openCategory(sourceUrl: string, sourceName: string, title: string, url: string): void {
+    if (!sourceUrl || !url) return;
+    const params: Record<string, Object> = {
+      'sourceUrl': sourceUrl,
+      'sourceName': sourceName,
+      'title': title,
+      'moreUrl': url
     };
     this.navStack.pushPathByName('blockMore', params);
   }

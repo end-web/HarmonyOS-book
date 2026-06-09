@@ -1,3 +1,4 @@
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookSource, SearchResult, TocItem, SourceSubscription, BookInfo, HomeBlockSection, SearchRule, BookInfoRule, TocRule, ContentRule } from '../model/BookSource';
 import { AnalyzeRule, AnalyzeContext, BookContext } from './rule/AnalyzeRule';
 import { AnalyzeUrl, AnalyzedUrl } from './rule/AnalyzeUrl';
@@ -16,6 +17,8 @@ import { getCookieManager } from './rule/CookieManager';
 import { SourceVariableStore } from './SourceVariableStore';
 import { getCacheService } from './CacheService';
 import { getRateLimiter } from './ConcurrentRateLimiter';
+import { PreferenceService, type ExploreNavItem } from './PreferenceService';
+import { ChapterTitleFormatter } from '../utils/ChapterTitleFormatter';
 
 const TAG = 'BookSourceService';
 
@@ -38,6 +41,13 @@ interface TemplateContext {
 interface ExploreSection {
   source: BookSource;
   books: SearchResult[];
+}
+
+/** 订阅源单分类抓取结果（含分页信息） */
+export interface ExploreFetchResult {
+  books: SearchResult[];
+  nextUrl: string;
+  nextPage?: number;
 }
 
 class HomeBlockImpl implements HomeBlockSection {
@@ -110,6 +120,52 @@ export class BookSourceService {
     return true;
   }
 
+  /**
+   * 解析时长字符串为秒数
+   * 支持格式：
+   * - 纯数字秒数："1234"
+   * - 时分秒："01:23:45" -> 1*3600 + 23*60 + 45 = 5025
+   * - 分秒："23:45" -> 23*60 + 45 = 1425
+   * - 带中文："1小时23分45秒"
+   */
+  private static parseDuration(durationStr: string): number {
+    if (!durationStr) return 0;
+    const trimmed = durationStr.trim();
+
+    // 1. 尝试纯数字
+    const numMatch = /^(\d+)$/.exec(trimmed);
+    if (numMatch) {
+      return parseInt(numMatch[1], 10);
+    }
+
+    // 2. 尝试 HH:MM:SS 或 MM:SS
+    const colonMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(trimmed);
+    if (colonMatch) {
+      const part1 = parseInt(colonMatch[1], 10);
+      const part2 = parseInt(colonMatch[2], 10);
+      const part3 = colonMatch[3] ? parseInt(colonMatch[3], 10) : 0;
+      // 如果有第三部分，格式是 HH:MM:SS；否则是 MM:SS
+      if (colonMatch[3]) {
+        return part1 * 3600 + part2 * 60 + part3;
+      } else {
+        return part1 * 60 + part2;
+      }
+    }
+
+    // 3. 尝试中文格式："1小时23分45秒" 或 "23分45秒"
+    const zhMatch = /(?:(\d+)小时)?(?:(\d+)分)?(?:(\d+)秒)?/.exec(trimmed);
+    if (zhMatch) {
+      const hours = zhMatch[1] ? parseInt(zhMatch[1], 10) : 0;
+      const minutes = zhMatch[2] ? parseInt(zhMatch[2], 10) : 0;
+      const seconds = zhMatch[3] ? parseInt(zhMatch[3], 10) : 0;
+      if (hours > 0 || minutes > 0 || seconds > 0) {
+        return hours * 3600 + minutes * 60 + seconds;
+      }
+    }
+
+    return 0;
+  }
+
   // ──────────────────── 书源管理 ────────────────────
 
   static async fetchSourcesFromUrl(subscriptionUrl: string): Promise<BookSource[]> {
@@ -147,7 +203,6 @@ export class BookSourceService {
         try {
           const subSources = await BookSourceService.fetchSubSources(source);
           result.push(...subSources);
-          console.info(`[${TAG}] expandAggregate: ${source.bookSourceName} -> ${subSources.length} audio sub-sources`);
         } catch (e) {
           console.warn(`[${TAG}] expandAggregate failed for ${source.bookSourceName}: ${e}`);
         }
@@ -361,7 +416,6 @@ export class BookSourceService {
         const hdrKeys = Object.keys(analyzed.headers);
         for (const hk of hdrKeys) analyzedHeaders[hk] = analyzed.headers[hk];
       }
-      console.info(`[${TAG}] search: ${source.bookSourceName} -> ${analyzedUrl.substring(0, 150)}`);
 
       // 处理 data: URL — 搜索 URL 返回 data: 编码的参数
       // data: URL 的 base64 内容需要作为 result 传给 bookList 规则
@@ -390,7 +444,6 @@ export class BookSourceService {
         body = await BookSourceService.executeLoginCheck(source, body, keyword);
         // loginCheck 返回重试标记 → POST 已建立搜索会话，重新 GET 原始 URL
         if (body === '__RETRY_SEARCH__') {
-          console.info(`[${TAG}] loginCheck: retrying search after session established`);
           const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, retry: 0 };
           body = await BookSourceService.fetch(tmpAnalyzed);
         }
@@ -412,9 +465,7 @@ export class BookSourceService {
       const ctx = new AnalyzeContext(analyzedUrl);
       ctx.jsLib = source.jsLib || '';
       const analyzer = new AnalyzeRule(body, ctx);
-      console.info(`[${TAG}] search parse: bodyLen=${body.length}, first200=${body.substring(0, 200)}`);
       const items: Object[] = await analyzer.getElements(rule.bookList);
-      console.info(`[${TAG}] search parse: bookList="${rule.bookList}" -> items=${items.length}`);
       if (items.length === 0) return [];
 
       // 子源标识：bookSourceGroup 以 '聚合听书,' 开头
@@ -576,9 +627,22 @@ export class BookSourceService {
 
   // ──────────────────── 目录（支持分页） ────────────────────
 
-  static async getBookToc(source: BookSource, tocUrl: string, variables?: Record<string, string>): Promise<TocItem[]> {
+  static async getBookToc(source: BookSource, tocUrl: string, variables?: Record<string, string>, bookName?: string): Promise<TocItem[]> {
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      return BuiltInDispatcher.getBookToc(source, tocUrl);
+      const builtinItems = await BuiltInDispatcher.getBookToc(source, tocUrl);
+      // 内置源也去重(部分站点详情页+播放页会返回重复章节)
+      const seenBuiltin = new Set<string>();
+      const uniqueBuiltin: TocItem[] = [];
+      for (const item of builtinItems) {
+        if (seenBuiltin.has(item.url)) continue;
+        seenBuiltin.add(item.url);
+        // 内置源也统一剥书名前缀（书源把书名拼到章节名时）
+        if (bookName) {
+          item.name = ChapterTitleFormatter.stripBookPrefix(item.name, bookName);
+        }
+        uniqueBuiltin.push(item);
+      }
+      return uniqueBuiltin;
     }
     const rule = source.ruleToc;
     const allItems: TocItem[] = [];
@@ -601,7 +665,6 @@ export class BookSourceService {
         for (const k of jsCtxKeys) evalCtx[k] = jsCtx[k];
         const preResult = await executor.eval(rule.preUpdateJs, evalCtx);
         if (preResult && typeof preResult === 'string' && preResult.startsWith('http')) {
-          console.info(`[${TAG}] preUpdateJs returned new tocUrl: ${preResult.substring(0, 100)}`);
           currentUrl = preResult;
         }
       } catch (e) {
@@ -658,7 +721,6 @@ export class BookSourceService {
         // 检测 JS 反爬页面（如水山听书：base64 混淆重定向，bodyLen 很小且含 atob）
         // 用 WebView 渲染获取真实 HTML
         if (body.length < 3000 && (body.includes('atob') || body.includes('base64')) && body.includes('Loading')) {
-          console.info(`[${TAG}] getBookToc: detected JS anti-crawl page, using WebView to render`);
           try {
             const extractor = getWebViewAudioExtractor();
             body = await extractor.extract(currentUrl, 'document.documentElement.outerHTML', 3000);
@@ -684,7 +746,6 @@ export class BookSourceService {
         }
         const items: Object[] = await analyzer.getElements(chapterListRule);
         if (reverseList) items.reverse();
-        console.info(`[${TAG}] getBookToc: rule=${rule.chapterList}, items=${items.length}, reverse=${reverseList}, bodyLen=${body.length}`);
 
         for (let idx = 0; idx < items.length; idx++) {
           const item: Object = items[idx];
@@ -750,6 +811,21 @@ export class BookSourceService {
           if (rule.updateTime) {
             tocItem.updateTime = await a.getString(rule.updateTime) || undefined;
           }
+          if (rule.duration) {
+            try {
+              const durationStr = await a.getString(rule.duration) || '';
+              if (durationStr) {
+                // 尝试解析时长：支持秒数（如 "1234"）和时分秒格式（如 "01:23:45" 或 "23:45"）
+                const parsed = BookSourceService.parseDuration(durationStr);
+                if (parsed > 0) {
+                  tocItem.duration = parsed;
+                }
+              }
+            } catch (e) {
+              hilog.warn(0, TAG, 'getBookToc: parse duration failed for chapter=%{public}s, error=%{public}s',
+                name.substring(0, 30), String(e));
+            }
+          }
           allItems.push(tocItem);
         }
 
@@ -772,13 +848,24 @@ export class BookSourceService {
       }
     }
 
-    return allItems;
+    // 按 URL 去重(部分书源会返回重复章节,导致集数翻倍)
+    const seenUrls = new Set<string>();
+    const uniqueItems: TocItem[] = [];
+    for (const item of allItems) {
+      if (seenUrls.has(item.url)) continue;
+      seenUrls.add(item.url);
+      // 数据层统一剥书名前缀，让详情页/播放页/桌面卡片/媒体卡片都拿干净标题
+      if (bookName) {
+        item.name = ChapterTitleFormatter.stripBookPrefix(item.name, bookName);
+      }
+      uniqueItems.push(item);
+    }
+    return uniqueItems;
   }
 
   // ──────────────────── 音频 URL ────────────────────
 
   static async getAudioUrl(source: BookSource, chapterUrl: string): Promise<string> {
-    console.info(`[${TAG}] getAudioUrl called: ${chapterUrl.substring(0, 150)}`);
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
       return BuiltInDispatcher.getAudioUrl(source, chapterUrl);
     }
@@ -795,7 +882,12 @@ export class BookSourceService {
       const split = AnalyzeUrl.splitUrlConfig(chapterUrl);
       const realUrl = split.url;
       const webViewVal = split.config.webView;
-      const useWebView = webViewVal === true || String(webViewVal) === 'true';
+      // 触发 WebView 嗅探/取值的两个条件：
+      //  1. chapterUrl 显式带 ,{"webView":true} 配置
+      //  2. content 规则存在 sourceRegex 或 webJs（说明站点必须靠浏览器执行才能拿到音频 URL）
+      const useWebView = webViewVal === true || String(webViewVal) === 'true'
+        || !!(rule.sourceRegex && rule.sourceRegex.length > 0)
+        || !!(rule.webJs && rule.webJs.length > 0);
 
       if (!contentRule || contentRule.trim().length === 0) {
         return realUrl;
@@ -808,7 +900,6 @@ export class BookSourceService {
 
       // WebView 模式：用 WebView 加载页面，提取音频 URL
       if (useWebView) {
-        console.info(`[${TAG}] getAudioUrl: WebView mode for ${realUrl}`);
         try {
           const extractor = getWebViewAudioExtractor();
           // 优先使用书源自定义 webJs，否则用内置通用提取逻辑
@@ -853,11 +944,55 @@ export class BookSourceService {
             // 6. 返回页面标题和前 500 字符的 HTML 作为调试信息
             return 'DEBUG:title=' + document.title + ',bodyLen=' + html.length + ',html=' + html.substring(0, 500);
           })()`;
-          // 如果书源定义了 webJs，使用它；否则用内置默认提取逻辑
-          const jsExpr = rule.webJs ? rule.webJs : defaultJsExpr;
-          const audioUrl = await extractor.extract(realUrl, jsExpr, 8000);
-          console.info(`[${TAG}] getAudioUrl WebView result: ${audioUrl.substring(0, 200)}`);
-          if (audioUrl && !audioUrl.startsWith('DEBUG:')) return audioUrl;
+          // 如果书源定义了 webJs，使用它；否则用增强的默认提取逻辑（支持 iframe）
+          const jsExpr = rule.webJs ? rule.webJs : `(function(){
+            var result = '';
+            // 1. 尝试主页面的 audio 标签
+            var audios = document.querySelectorAll('audio');
+            for(var i=0;i<audios.length;i++){
+              if(audios[i].src) return audios[i].src;
+            }
+            // 2. 尝试 iframe 内的 audio 标签（跨域 iframe 无法访问，静默失败）
+            try {
+              var iframes = document.querySelectorAll('iframe');
+              for(var j=0;j<iframes.length;j++){
+                var iframeDoc = iframes[j].contentDocument || iframes[j].contentWindow.document;
+                if(iframeDoc){
+                  var iframeAudios = iframeDoc.querySelectorAll('audio');
+                  for(var k=0;k<iframeAudios.length;k++){
+                    if(iframeAudios[k].src) return iframeAudios[k].src;
+                  }
+                }
+              }
+            } catch(e) { /* 跨域 iframe 无法访问，忽略 */ }
+            // 3. 尝试 source 标签
+            var sources = document.querySelectorAll('source');
+            for(var i=0;i<sources.length;i++){
+              if(sources[i].src) return sources[i].src;
+            }
+            // 4. 从页面 HTML 中用正则提取音频 URL
+            var html = document.body.innerHTML;
+            var patterns = [
+              /https?:\\/\\/[^"'\\s<>]+\\.mp3[^"'\\s<>]*/gi,
+              /https?:\\/\\/[^"'\\s<>]+\\.m4a[^"'\\s<>]*/gi,
+              /"(https?:\\/\\/[^"]+\\.(?:mp3|m4a|wav|ogg|aac)[^"]*)"/gi,
+              /'(https?:\\/\\/[^']+\\.(?:mp3|m4a|wav|ogg|aac)[^']*)'/gi
+            ];
+            for(var p=0;p<patterns.length;p++){
+              var m = html.match(patterns[p]);
+              if(m && m[0]) return m[0].replace(/['"]/g,'');
+            }
+            return '';
+          })()`;
+          // 网络嗅探（onInterceptRequest）+ DOM 取值（runJavaScript）双路径并行：
+          // - sourceRegex 在 WebView 任一请求 URL 命中时立即返回
+          // - 两路均失败时才报错让上层处理
+          const audioUrl = await extractor.extract(realUrl, jsExpr, 15000, rule.sourceRegex || '');
+          if (audioUrl && !audioUrl.startsWith('DEBUG:')) {
+            // 嗅探/解析得到真实音频 URL 后，仍按 content 规则做一次后处理
+            // （如本源的 <js>result.replace(IP)</js> 换源 IP）
+            return await BookSourceService.applyContentPostProcess(source, realUrl, audioUrl);
+          }
           if (audioUrl.startsWith('DEBUG:')) {
             console.warn(`[${TAG}] getAudioUrl WebView debug: ${audioUrl}`);
           }
@@ -882,8 +1017,39 @@ export class BookSourceService {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[${TAG}] getAudioUrl error: ${msg}, url=${chapterUrl.substring(0, 100)}`);
-      return chapterUrl;
+      // 失败兜底：绝不返回带 ,{...} 配置后缀的原始 URL（AVPlayer 无法识别会直接报错），
+      // 剥掉配置后缀只留干净 URL
+      return AnalyzeUrl.splitUrlConfig(chapterUrl).url;
     }
+  }
+
+  /**
+   * 对嗅探/解析得到的真实音频 URL 再跑一遍 content 规则做后处理。
+   * 仅当 content 规则是 JS（<js>...</js> 或 @js:）时执行——典型如本源用
+   * `<js>result=result.replace(旧IP,新IP)</js>` 把音频域名换成可用节点。
+   * 非 JS 规则（CSS/JSONPath）针对页面 HTML 设计，不应作用在裸 URL 上，直接原样返回。
+   */
+  private static async applyContentPostProcess(
+    source: BookSource, baseUrl: string, audioUrl: string
+  ): Promise<string> {
+    const rule = source.ruleContent;
+    const contentRule = (rule.audioUrl || rule.content || '').trim();
+    const isJs = contentRule.startsWith('<js>') || contentRule.toLowerCase().startsWith('@js:')
+      || contentRule.toLowerCase().startsWith('js:');
+    if (!isJs) return audioUrl;
+    try {
+      const ctx = new AnalyzeContext(baseUrl);
+      ctx.jsLib = source.jsLib || '';
+      // content 为裸 URL 字符串，JS 里的 result 即这个 URL
+      const analyzer = new AnalyzeRule(audioUrl, ctx);
+      const processed = await analyzer.getString(contentRule);
+      if (processed && (processed.startsWith('http://') || processed.startsWith('https://'))) {
+        return processed;
+      }
+    } catch (e) {
+      console.warn(`[${TAG}] getAudioUrl postProcess failed: ${e}`);
+    }
+    return audioUrl;
   }
 
   // ──────────────────── 文本内容（支持多页） ────────────────────
@@ -979,7 +1145,6 @@ export class BookSourceService {
           const match = result.match(regex);
           if (match && match[0]) {
             result = match[0];
-            console.info(`[${TAG}] sourceRegex matched: ${result.substring(0, 100)}`);
           } else {
             console.warn(`[${TAG}] sourceRegex no match: ${rule.sourceRegex}`);
           }
@@ -1013,30 +1178,145 @@ export class BookSourceService {
 
   // ──────────────────── 发现/推荐 ────────────────────
 
-  static async getExploreBooks(source: BookSource): Promise<SearchResult[]> {
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      return BuiltInDispatcher.getExploreBooks(source);
-    }
-    try {
-      if (!source.exploreUrl || !source.ruleExplore) return [];
+  /**
+   * 解析订阅源的发现导航（Legado 风格 exploreUrl）
+   * 形态 1：纯 URL（含 @js:/<js> 模板，跑完是普通字符串）→ 包成 [{title:'发现', url}]
+   * 形态 2：JSON 数组 [{title, url, style?}, ...]（@js: 跑完返回 JSON 字符串）→ 直接采用
+   * 返回的每一项都满足：title 非空、url 非空（自动 trim {{page}} 占位保留）
+   */
+  private static async parseExploreNavigation(source: BookSource): Promise<ExploreNavItem[]> {
+    if (!source.exploreUrl || source.exploreUrl.length === 0) return [];
 
-      const analyzeUrl = new AnalyzeUrl(source.exploreUrl, {
-        page: 1, baseUrl: source.bookSourceUrl,
+    // 先查缓存（30 天 TTL，含版本戳）
+    const sourceVersion = source.lastUpdateTime || 0;
+    const cached = await PreferenceService.getExploreNavCache(source.bookSourceUrl, sourceVersion);
+    if (cached) {
+      return cached;
+    }
+
+    let raw = '';
+    const trimmedUrl = source.exploreUrl.trim();
+
+    // 快速路径：如果是 @js: 开头，直接用 JSExecutor 跑（绕过 AnalyzeUrl 的模板处理开销）
+    if (/^@?js:/i.test(trimmedUrl)) {
+      try {
+        const jsCode = trimmedUrl.replace(/^@?js:/i, '').trim();
+        const executor = getJSExecutor();
+        const ctx: Record<string, Object> = {};
+        ctx['java'] = getJavaBridge();
+        ctx['source'] = getSourceContext();
+        ctx['baseUrl'] = source.bookSourceUrl;
+        if (source.jsLib) ctx['_jsLib'] = source.jsLib;
+        // 8s 超时（首次解析慢可以接受，后续走缓存秒开）
+        const timeoutPromise = new Promise<string>((_, reject) => {
+          setTimeout(() => reject(new Error('JS execution timeout')), 8000);
+        });
+        const result = await Promise.race([
+          executor.eval(jsCode, ctx),
+          timeoutPromise
+        ]);
+        raw = result !== null && result !== undefined ? String(result) : '';
+      } catch (e) {
+        console.error(`[${TAG}] parseExploreNavigation: JS execution failed: ${e}`);
+        return [];
+      }
+    } else {
+      // 普通 URL：走原有 AnalyzeUrl 逻辑
+      try {
+        const placeholder = '__EXPLORE_PAGE_PLACEHOLDER__';
+        const exploreUrlSafe = source.exploreUrl.replace(/\{\{page\}\}/g, placeholder);
+        const analyzeUrl = new AnalyzeUrl(exploreUrlSafe, {
+          page: 1, baseUrl: source.bookSourceUrl,
+          _jsLib: source.jsLib || '',
+        }, source.header);
+        const analyzed = await analyzeUrl.getUrl();
+        raw = analyzed.url.replace(new RegExp(placeholder, 'g'), '{{page}}');
+      } catch (e) {
+        console.warn(`[${TAG}] parseExploreNavigation: AnalyzeUrl failed: ${e}`);
+        raw = source.exploreUrl;
+      }
+    }
+    const trimmed = raw.trim();
+    // 形态 2：JSON 数组
+    if (trimmed.startsWith('[')) {
+      try {
+        const arr: Object = JSON.parse(trimmed);
+        if (Array.isArray(arr)) {
+          const items: Object[] = arr as Object[];
+          const out: ExploreNavItem[] = [];
+          for (const it of items) {
+            const obj = it as Record<string, Object>;
+            const title = obj && typeof obj['title'] === 'string' ? (obj['title'] as string).trim() : '';
+            const url = obj && typeof obj['url'] === 'string' ? (obj['url'] as string).trim() : '';
+            if (!title || !url) continue;
+            // 过滤分组标题（url 为 null 或空）
+            out.push({ title, url });
+          }
+          // 写缓存
+          if (out.length > 0) {
+            PreferenceService.setExploreNavCache(source.bookSourceUrl, sourceVersion, out).catch((e: Object) => {
+              console.warn(`[${TAG}] parseExploreNavigation: cache write failed: ${e}`);
+            });
+          }
+          return out;
+        }
+      } catch (e) {
+        console.warn(`[${TAG}] parseExploreNavigation: JSON.parse failed: ${e}`);
+      }
+    }
+    // 形态 1：纯 URL，整体作为单个分类
+    if (trimmed.length > 0) {
+      const nav: ExploreNavItem[] = [{ title: '发现', url: trimmed }];
+      PreferenceService.setExploreNavCache(source.bookSourceUrl, sourceVersion, nav).catch((e: Object) => {
+        console.warn(`[${TAG}] parseExploreNavigation: cache write failed: ${e}`);
+      });
+      return nav;
+    }
+    return [];
+  }
+
+  /**
+   * 用 ruleExplore 解析指定分类 URL 的书列表（含下一页 URL，订阅源专用）
+   */
+  static async getExploreBooksByUrl(
+    source: BookSource, categoryUrl: string, page: number = 1
+  ): Promise<ExploreFetchResult> {
+    const empty: ExploreFetchResult = { books: [], nextUrl: '' };
+    try {
+      if (!source.ruleExplore || !categoryUrl) return empty;
+
+      const analyzeUrl = new AnalyzeUrl(categoryUrl, {
+        page, baseUrl: source.bookSourceUrl,
+        _jsLib: source.jsLib || '',
       }, source.header);
       const analyzed = await analyzeUrl.getUrl();
-      const body = await BookSourceService.fetch(analyzed);
+      let body = await BookSourceService.fetch(analyzed);
+
+      // JS 反爬兜底（与 getBookToc 保持一致）
+      if (body.length < 3000 && (body.includes('atob') || body.includes('base64')) && body.includes('Loading')) {
+        try {
+          const extractor = getWebViewAudioExtractor();
+          body = await extractor.extract(analyzed.url, 'document.documentElement.outerHTML', 3000);
+        } catch (e) {
+          console.warn(`[${TAG}] getExploreBooksByUrl: WebView render failed: ${e}`);
+        }
+      }
 
       const rule = source.ruleExplore;
       const ctx = new AnalyzeContext(analyzed.url);
       ctx.jsLib = source.jsLib || '';
       const analyzer = new AnalyzeRule(body, ctx);
       const items: Object[] = await analyzer.getElements(rule.bookList);
-      if (items.length === 0) return [];
+      if (items.length === 0) {
+        return empty;
+      }
 
       const results: SearchResult[] = [];
       for (let idx = 0; idx < items.length; idx++) {
         const item: Object = items[idx];
-        const a = new AnalyzeRule(item, ctx);
+        const itemCtx = new AnalyzeContext(analyzed.url);
+        itemCtx.jsLib = source.jsLib || '';
+        const a = new AnalyzeRule(item, itemCtx);
         const name = await a.getString(rule.name) || '';
         if (!name) continue;
         const author = await a.getString(rule.author) || '';
@@ -1045,7 +1325,6 @@ export class BookSourceService {
         const intro = await a.getString(rule.intro) || '';
         const kind = await a.getString(rule.kind) || '';
         const lastChapter = await a.getString(rule.lastChapter) || '';
-        const updateTime = rule.updateTime ? await a.getString(rule.updateTime) || '' : '';
         const wordCount = rule.wordCount ? await a.getString(rule.wordCount) || '' : '';
 
         results.push({
@@ -1055,13 +1334,36 @@ export class BookSourceService {
           intro, kind, lastChapter, wordCount,
           sourceName: source.bookSourceName,
           sourceUrl: source.bookSourceUrl,
+          variables: itemCtx.variables,
         });
       }
-      return results;
+
+      // 简单翻页：URL 中含 {{page}} 时直接 page+1；否则不分页
+      let nextUrl = '';
+      if (categoryUrl.includes('{{page}}') && results.length > 0) {
+        nextUrl = categoryUrl;
+      }
+      const ret: ExploreFetchResult = { books: results, nextUrl, nextPage: page + 1 };
+      return ret;
     } catch (e) {
-      console.error(`[${TAG}] getExploreBooks error: ${e}`);
-      return [];
+      console.error(`[${TAG}] getExploreBooksByUrl error: ${e}`);
+      return empty;
     }
+  }
+
+  /**
+   * 兼容旧接口：取首个分类的前 N 本书
+   */
+  static async getExploreBooks(source: BookSource): Promise<SearchResult[]> {
+    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
+      return BuiltInDispatcher.getExploreBooks(source);
+    }
+    if (!source.ruleExplore) return [];
+    const nav = await BookSourceService.parseExploreNavigation(source);
+    if (nav.length === 0) return [];
+    const first = nav[0];
+    const r = await BookSourceService.getExploreBooksByUrl(source, first.url, 1);
+    return r.books;
   }
 
   static async getAllExploreBooks(): Promise<ExploreSection[]> {
@@ -1113,8 +1415,7 @@ export class BookSourceService {
   static async streamAllHomeBlocks(onSource: (blocks: HomeBlockSection[], source: BookSource) => void): Promise<void> {
     const sources = await SourceDataService.getSources();
     const enabled = sources.filter((s: BookSource) => s.enabled !== false);
-    console.info(`[${TAG}] streamAllHomeBlocks: total=${sources.length} enabled=${enabled.length}`);
-    const PER_SOURCE_TIMEOUT_MS = 8000;
+    const PER_SOURCE_TIMEOUT_MS = 15000;
     const MAX_CONCURRENCY = 6;
 
     // 内置源优先（一定有 home blocks），订阅源在后（多数没 ruleExplore，会立刻返回空）
@@ -1131,24 +1432,52 @@ export class BookSourceService {
         const isBuiltin = BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl);
         if (isBuiltin) {
           const r = await BookSourceService.getHomeBlocks(source);
-          console.info(`[${TAG}] streamAllHomeBlocks: ${source.bookSourceName} -> ${r.length} sections`);
           return r;
         }
         if (!source.exploreUrl || source.exploreUrl.length === 0 || !source.ruleExplore) {
           return [] as HomeBlockSection[];
         }
-        const books = await BookSourceService.getExploreBooks(source);
-        if (books.length === 0) return [] as HomeBlockSection[];
-        const limit = Math.min(20, books.length);
-        const section = new HomeBlockImpl(
-          '发现',
-          books.slice(0, limit),
-          '',
-          'horizontal',
-          source.bookSourceName,
-          source.bookSourceUrl,
-        );
-        return [section];
+        // 订阅源：解析发现导航 → 取前 N 个分类并发抓书 → 每个分类一个板块
+        // 字段对齐内置源：title=「源名 · 分类名」、moreUrl=分类原始 URL（带 {{page}}）
+        const nav = await BookSourceService.parseExploreNavigation(source);
+        if (nav.length === 0) {
+          return [] as HomeBlockSection[];
+        }
+        const HOME_BLOCKS_PER_SOURCE = 5;
+        const HOME_BOOKS_PER_BLOCK = 10;
+        const NAV_FETCH_CONCURRENCY = 3;
+        const picked = nav.slice(0, HOME_BLOCKS_PER_SOURCE);
+        const results: (HomeBlockSection | null)[] = new Array(picked.length).fill(null);
+        let cur = 0;
+        const fetchers: Promise<void>[] = [];
+        for (let i = 0; i < Math.min(NAV_FETCH_CONCURRENCY, picked.length); i++) {
+          fetchers.push((async () => {
+            while (cur < picked.length) {
+              const idx = cur++;
+              const nv = picked[idx];
+              try {
+                const r = await BookSourceService.getExploreBooksByUrl(source, nv.url, 1);
+                if (r.books.length === 0) continue;
+                const limit = Math.min(HOME_BOOKS_PER_BLOCK, r.books.length);
+                const layout = idx === 0 ? 'horizontal' : 'horizontal';
+                results[idx] = new HomeBlockImpl(
+                  nv.title,
+                  r.books.slice(0, limit),
+                  nv.url,
+                  layout,
+                  source.bookSourceName,
+                  source.bookSourceUrl,
+                );
+              } catch (e) {
+                console.warn(`[${TAG}] streamAllHomeBlocks: ${source.bookSourceName} cat=${nv.title} error: ${e}`);
+              }
+            }
+          })());
+        }
+        await Promise.all(fetchers);
+        const sections: HomeBlockSection[] = [];
+        for (const s of results) if (s) sections.push(s);
+        return sections;
       })();
 
       const timeout = new Promise<HomeBlockSection[]>((resolve) => {
@@ -1179,7 +1508,6 @@ export class BookSourceService {
       })());
     }
     await Promise.all(workers);
-    console.info(`[${TAG}] streamAllHomeBlocks: all done`);
   }
 
   // ──────────────────── HTTP 工具 ────────────────────
@@ -1226,11 +1554,9 @@ export class BookSourceService {
   private static async executeLoginCheck(source: BookSource, body: string, keyword: string): Promise<string> {
     try {
       if (!source.loginCheckJs) return body;
-      console.info(`[${TAG}] executeLoginCheck: ${source.bookSourceName}`);
 
       // 模式 1：HTML 跳转页面（含"即将跳转"）
       if (body.includes('即将跳转')) {
-        console.info(`[${TAG}] loginCheck: detected redirect page, following link`);
         try {
           const hrefMatch = body.match(/class="notfoud-container"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"/);
           if (hrefMatch) {
@@ -1247,7 +1573,6 @@ export class BookSourceService {
       if (body.includes('"data":null')) {
         const postInfo = BookSourceService.extractPostFromLoginCheckJs(source.loginCheckJs, source.bookSourceUrl, keyword);
         if (postInfo) {
-          console.info(`[${TAG}] loginCheck: data is null, POST ${postInfo.url} to establish session`);
           try {
             const headers: Record<string, string> = {
               'Content-Type': 'application/x-www-form-urlencoded',
@@ -1315,7 +1640,6 @@ export class BookSourceService {
       const inferred = BookSourceService.inferCharset(source);
       if (inferred) analyzed.charset = inferred;
     }
-    console.info(`[${TAG}] fetchWithSource: ${analyzed.url} charset=${analyzed.charset || 'utf-8'}`);
     return BookSourceService.fetch(analyzed);
   }
 

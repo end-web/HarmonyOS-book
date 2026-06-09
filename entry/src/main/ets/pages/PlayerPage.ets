@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
+import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
@@ -17,6 +18,24 @@ import { ChapterDataSource } from '../utils/ChapterDataSource';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
+
+/**
+ * 播放页向其 NavDestination 暴露的返回拦截器。
+ * 抽屉(章节/定时/跳过)打开时,右滑/三键返回应先关抽屉而不是退出整页:
+ * PlayerPage 挂载时注册 handler,NavDestination.onBackPressed 委托到这里。
+ */
+export class PlayerBackInterceptor {
+  private static handler: (() => boolean) | null = null;
+
+  static set(h: (() => boolean) | null): void {
+    PlayerBackInterceptor.handler = h;
+  }
+
+  /** 返回 true 表示已消费(关抽屉),false 表示放行(正常退页) */
+  static consume(): boolean {
+    return PlayerBackInterceptor.handler ? PlayerBackInterceptor.handler() : false;
+  }
+}
 
 @ComponentV2
 export struct PlayerPage {
@@ -41,8 +60,6 @@ export struct PlayerPage {
   @Local seekValueMs: number = 0;
   /** 缓存版本号：每次有章节时长被解析出来就 +1，强制 V2 重渲染章节列表 */
   @Local chapterCacheTick: number = 0;
-  /** 章节分段索引，当前查看的分段 */
-  @Local chapterSegmentIndex: number = 0;
   /** 章节列表滚动位置 vs 当前播放章节的偏离（vp）；用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
 
@@ -52,7 +69,6 @@ export struct PlayerPage {
   /** 正在取色的封面 key,防止异步取色并发重复触发(取色成功才写 lastCoverKey,失败可重试) */
   private pickingCover: string = '';
   private chapterListScroller: Scroller = new Scroller();
-  private segmentTabsScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
@@ -60,6 +76,7 @@ export struct PlayerPage {
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(true);
@@ -98,13 +115,43 @@ export struct PlayerPage {
   }
 
   aboutToDisappear(): void {
+    PlayerBackInterceptor.set(null);
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
   }
 
+  /**
+   * 返回拦截:任一抽屉打开时先关抽屉并消费返回事件,否则放行让 NavDestination 正常退页。
+   * 实际同时只会有一个抽屉打开,逐个判断即可。
+   */
+  private handleBack(): boolean {
+    if (this.showChapterList) {
+      this.showChapterList = false;
+      return true;
+    }
+    if (this.showSleepSheet) {
+      this.showSleepSheet = false;
+      return true;
+    }
+    if (this.showSkipSheet) {
+      this.showSkipSheet = false;
+      return true;
+    }
+    return false;
+  }
+
+  /** 长按恢复默认值时的轻震反馈 */
+  private hapticTick(): void {
+    try {
+      vibrator.startVibration(
+        { type: 'time', duration: 30 },
+        { id: 0, usage: 'touch' }
+      ).catch((_e: object) => { /* 无震动器或权限被关 */ });
+    } catch (_e) { /* 同步异常忽略 */ }
+  }
+
   private async loadBook(): Promise<void> {
-    console.info('[PlayerPage] loadBook start, bookId=' + this.bookId);
     // 等待 EntryAbility.bootstrapAudioService 完成，确保冷启动时 playerState/DataService 已就绪
     await AudioService.getInstance().whenReady();
     let b = SearchCache.get(this.bookId);
@@ -115,15 +162,12 @@ export struct PlayerPage {
       // 不强制 id 匹配:卡片语义就是"打开正在播放的书",不同会话间 id 可能因
       // hash 算法差异而不一致(home_audio_xxx / search_audio_xxx),只要有 currentBook 就用
       b = this.playerState.currentBook;
-      console.info('[PlayerPage] loadBook fallback to playerState.currentBook, requested='
-        + this.bookId + ' actual=' + b.id);
     }
     if (!b) {
       console.error('[PlayerPage] loadBook failed, book not found');
       this.navStack.pop();
       return;
     }
-    console.info('[PlayerPage] loadBook success, title=' + b.title);
     this.book = b;
     this.isFavorite = await PreferenceService.isFavorite(b.id);
     this.extractCoverColor(b.cover);
@@ -135,7 +179,6 @@ export struct PlayerPage {
     if (this.resumeChapterId) {
       await this.tryResumePlay(b);
     }
-    console.info('[PlayerPage] loadBook complete');
   }
 
   private async tryResumePlay(book: Book): Promise<void> {
@@ -147,7 +190,6 @@ export struct PlayerPage {
     // ★ PlaybackStore 同书+同章节命中:直接复用 live state,不调 AudioService 任何方法,
     //   绝对不会触发 reset。即使 progressMs 与 resumeProgressMs 略有差异,以 live 为准
     if (PlaybackStore.getInstance().isCurrentChapter(book.id, target.id)) {
-      hilog.info(DOMAIN, TAG, 'resume: PlaybackStore current chapter, reuse live state');
       return;
     }
     // 切到不同章节(可能不同书) → AudioService 内部会 same-book/same-chapter 短路或 reset
@@ -216,6 +258,7 @@ export struct PlayerPage {
 
   private async resetSpeed(): Promise<void> {
     if (this.playerState.speed === 1.0) return;
+    this.hapticTick();
     await AudioService.getInstance().setSpeed(1.0);
   }
 
@@ -255,131 +298,51 @@ export struct PlayerPage {
     });
   }
 
-  private readonly SEGMENT_SIZE: number = 1000;
-
-  /** 打开章节列表时，根据章节数决定是否分段 */
+  /** 打开章节列表,加载全部章节 */
   private openChapterList(): void {
     this.showChapterList = true;
     this.listOffsetFromCurrent = 0;
     if (!this.book) return;
-    // 日志：验证实际章节数（排查"显示 2000 章"问题）
-    hilog.info(DOMAIN, TAG, `打开章节列表：共 ${this.book.chapters.length} 章`);
-    if (this.book.chapters.length <= this.SEGMENT_SIZE) {
-      this.chapterSegmentIndex = 0;
-      this.chapterDataSource.setChapters(this.book.chapters);
-      this.scrollToCurrentChapter(0);
-    } else {
-      // 多于 1000 章时，自动定位到当前章节所在分段
-      if (this.playerState.currentChapter) {
-        const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
-        if (idx >= 0) {
-          this.chapterSegmentIndex = Math.floor(idx / this.SEGMENT_SIZE);
-          this.chapterDataSource.setChapters(this.getSegmentChapters());
-          hilog.info(DOMAIN, TAG, `当前章节索引 ${idx}，定位到第 ${this.chapterSegmentIndex + 1} 段`);
-          this.scrollToCurrentChapter(this.chapterSegmentIndex * this.SEGMENT_SIZE);
-          return;
-        }
-      }
-      this.chapterSegmentIndex = 0;
-      this.chapterDataSource.setChapters(this.getSegmentChapters());
-    }
+    this.chapterDataSource.setChapters(this.book.chapters);
+    this.scrollToCurrentChapter();
   }
 
-  private scrollToCurrentChapter(segmentStart: number): void {
+  private scrollToCurrentChapter(): void {
     if (!this.book || !this.playerState.currentChapter) return;
-    const globalIdx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
-    if (globalIdx < 0) return;
-    const localIdx = globalIdx - segmentStart;
-    if (localIdx < 0) return;
+    const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
+    this.scrollChapterListToIndex(idx);
+  }
+
+  /**
+   * 可靠定位章节列表到指定 index。
+   * 两段式延迟:首次等抽屉/列表挂载并完成首屏布局(规避 setTimeout(0) 的挂载竞态),
+   * 把目标项拉进 LazyForEach 渲染窗口;二次等目标项真实行高确定后再精确居中,
+   * 修正长列表按平均行高估算导致的 ScrollAlign.CENTER 偏差(原先单次定位时灵时不灵)。
+   */
+  private scrollChapterListToIndex(idx: number): void {
+    if (idx < 0) return;
     setTimeout(() => {
-      try {
-        this.chapterListScroller.scrollToIndex(localIdx, true, ScrollAlign.CENTER);
-      } catch (_e) { /* ignore */ }
-    }, 240);
+      try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
+      setTimeout(() => {
+        try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
+      }, 150);
+    }, 50);
   }
 
-  private getSegmentCount(): number {
-    if (!this.book) return 0;
-    const total = this.book.chapters.length;
-    if (total <= this.SEGMENT_SIZE) return 1;
-
-    const rawCount = Math.ceil(total / this.SEGMENT_SIZE);
-    const lastSegSize = total - (rawCount - 1) * this.SEGMENT_SIZE;
-
-    // 最后一段 < 500 章 → 合并到倒数第二段
-    if (lastSegSize < 500) {
-      return rawCount - 1;
-    }
-    return rawCount;
-  }
-
-  private getSegmentChapters(): Chapter[] {
-    if (!this.book || this.chapterSegmentIndex < 0) return [];
-    const total = this.book.chapters.length;
-    const segCount = this.getSegmentCount();
-    const start = this.chapterSegmentIndex * this.SEGMENT_SIZE;
-
-    // 最后一段：吸收所有剩余章节（包括合并的小段）
-    if (this.chapterSegmentIndex === segCount - 1) {
-      return this.book.chapters.slice(start, total);
-    }
-
-    // 非最后一段：标准 1000 章
-    const end = Math.min(start + this.SEGMENT_SIZE, total);
-    return this.book.chapters.slice(start, end);
-  }
-
-  private getSegmentLabel(segIdx: number): string {
-    if (!this.book) return '';
-    const total = this.book.chapters.length;
-    const segCount = this.getSegmentCount();
-    const start = segIdx * this.SEGMENT_SIZE;
-
-    // 最后一段：显示到总章节数
-    if (segIdx === segCount - 1) {
-      return `${start + 1}-${total}`;
-    }
-
-    // 非最后一段：标准 1000 章分段
-    const end = Math.min(start + this.SEGMENT_SIZE, total);
-    return `${start + 1}-${end}`;
-  }
-
-  /** "回到当前章节"按钮:切回当前章节所在分段并居中滚到 */
+  /** "回到当前章节"按钮:居中滚到当前章节 */
   private jumpToCurrentChapter(): void {
-    if (!this.book || !this.playerState.currentChapter) return;
-    const globalIdx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
-    if (globalIdx < 0) return;
-    const targetSeg = Math.floor(globalIdx / this.SEGMENT_SIZE);
-    if (targetSeg !== this.chapterSegmentIndex) {
-      this.chapterSegmentIndex = targetSeg;
-      this.chapterDataSource.setChapters(this.getSegmentChapters());
-    }
-    this.scrollToCurrentChapter(targetSeg * this.SEGMENT_SIZE);
+    this.scrollToCurrentChapter();
     this.listOffsetFromCurrent = 0;
   }
 
-  /** 当前播放章节在当前分段内的局部索引,-1 表示不在本分段 */
-  private currentChapterLocalIndex(): number {
+  /** 当前播放章节在列表中的索引 */
+  private currentChapterIndex(): number {
     if (!this.book || !this.playerState.currentChapter) return -1;
-    const globalIdx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
-    if (globalIdx < 0) return -1;
-    const segStart = this.chapterSegmentIndex * this.SEGMENT_SIZE;
-    const localIdx = globalIdx - segStart;
-    if (localIdx < 0 || localIdx >= this.SEGMENT_SIZE) return -1;
-    return localIdx;
+    return this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
   }
 
-  /** 是否需要显示"回到当前章节"浮动按钮:列表滚动距离当前章节超过 200vp,或当前章节不在本分段 */
+  /** 是否需要显示"回到当前章节"浮动按钮:列表滚动距离当前章节超过 200vp */
   private shouldShowJumpButton(): boolean {
-    if (!this.book || !this.playerState.currentChapter) return false;
-    const globalIdx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
-    if (globalIdx < 0) return false;
-    const segStart = this.chapterSegmentIndex * this.SEGMENT_SIZE;
-    const localIdx = globalIdx - segStart;
-    // 当前章节不在本分段 → 一定显示
-    if (localIdx < 0 || localIdx >= this.SEGMENT_SIZE) return true;
-    // 在本分段:看滚动偏离
     return Math.abs(this.listOffsetFromCurrent) > 200;
   }
 
@@ -579,9 +542,6 @@ export struct PlayerPage {
             .onError(() => {
               console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
             })
-            .onComplete(() => {
-              console.info('[PlayerPage] cover image loaded: ' + this.book!.cover);
-            })
         } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
           Image('file://' + this.book!.cover)
             .width('100%')
@@ -611,7 +571,6 @@ export struct PlayerPage {
         }
       }
       .width('100%')
-      .geometryTransition('book-cover-' + this.bookId, { follow: true })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -790,11 +749,7 @@ export struct PlayerPage {
       .onClick(() => { this.showSleepSheet = true; })
       .gesture(LongPressGesture().onAction(() => {
         if (this.playerState.sleepMinutes > 0) {
-          this.setSleep(0);
-        }
-      }))
-      .gesture(LongPressGesture().onAction(() => {
-        if (this.playerState.sleepMinutes > 0) {
+          this.hapticTick();
           this.setSleep(0);
         }
       }))
@@ -815,6 +770,7 @@ export struct PlayerPage {
       })
       .gesture(LongPressGesture().onAction(() => {
         if (this.hasSkipConfig()) {
+          this.hapticTick();
           this.setSkipValue('intro', 0);
           this.setSkipValue('outro', 0);
           this.skipIntroValue = 0;
@@ -849,16 +805,12 @@ export struct PlayerPage {
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
 
-          if (this.book!.chapters.length > this.SEGMENT_SIZE) {
-            this.buildSegmentTabs()
-          }
-
           this.buildChapterItems()
         }
         .width('100%')
         .height('100%')
 
-        // "回到当前章节"浮动按钮:列表滚远了或当前章节不在本分段时显示
+        // "回到当前章节"浮动按钮:列表滚远时显示
         if (this.shouldShowJumpButton()) {
           Row({ space: AppSpace.Xs }) {
             SymbolGlyph($r('sys.symbol.scope'))
@@ -892,32 +844,6 @@ export struct PlayerPage {
     }
     .width('100%')
     .height('100%')
-  }
-
-  @Builder
-  buildSegmentTabs() {
-    Scroll(this.segmentTabsScroller) {
-      Row({ space: 8 }) {
-        ForEach(Array.from({ length: this.getSegmentCount() },
-          (_: undefined, i: number) => i), (segIdx: number) => {
-          Text(this.getSegmentLabel(segIdx))
-            .fontSize(AppFont.Body)
-            .fontColor(this.chapterSegmentIndex === segIdx ? '#FFFFFF' : $r('sys.color.font_secondary'))
-            .backgroundColor(this.chapterSegmentIndex === segIdx ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
-            .borderRadius(16)
-            .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-            .onClick(() => {
-              this.chapterSegmentIndex = segIdx;
-              this.chapterDataSource.setChapters(this.getSegmentChapters());
-              this.scrollToCurrentChapter(segIdx * this.SEGMENT_SIZE);
-            })
-        }, (segIdx: number) => segIdx.toString())
-      }
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-    }
-    .scrollable(ScrollDirection.Horizontal)
-    .scrollBar(BarState.Off)
-    .width('100%')
   }
 
   @Builder
@@ -964,14 +890,15 @@ export struct PlayerPage {
     }
     .width('100%')
     .layoutWeight(1)
+    .scrollBar(BarState.Auto)
     .cachedCount(5)
     .onScrollIndex((firstIndex: number, lastIndex: number) => {
-      // 用首尾可见 index 与当前章节 localIndex 计算偏离
-      // 行高约 64vp(BodyL+Caption+padding),用 (firstIndex - localIdx) * 64 估算
-      const localIdx = this.currentChapterLocalIndex();
-      if (localIdx < 0) return;
+      // 用首尾可见 index 与当前章节 index 计算偏离
+      // 行高约 64vp(BodyL+Caption+padding),用 (center - idx) * 64 估算
+      const idx = this.currentChapterIndex();
+      if (idx < 0) return;
       const center = (firstIndex + lastIndex) / 2;
-      this.listOffsetFromCurrent = (center - localIdx) * 64;
+      this.listOffsetFromCurrent = (center - idx) * 64;
     })
   }
 

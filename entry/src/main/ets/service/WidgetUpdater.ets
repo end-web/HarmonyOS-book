@@ -89,8 +89,6 @@ export class WidgetUpdater {
           await fileIo.close(f);
           WidgetUpdater.coverPathCache.set(url, filePath);
           WidgetUpdater.coverSizeCache.set(url, buf.byteLength);
-          hilog.info(DOMAIN, TAG, 'downloaded cover: %{public}d bytes -> %{public}s',
-            buf.byteLength, filePath);
           return filePath;
         }
         hilog.warn(DOMAIN, TAG, 'download cover bad status %{public}d for %{public}s',
@@ -144,8 +142,6 @@ export class WidgetUpdater {
           const imgMap: Record<string, number> = {};
           imgMap[imgName] = imgFile.fd;
           data['formImages'] = imgMap;
-          hilog.info(DOMAIN, TAG, 'binding cover via FD: name=%{public}s fd=%{public}d',
-            imgName, imgFile.fd);
         }
       } catch (err) {
         const e = err as Error;
@@ -167,18 +163,12 @@ export class WidgetUpdater {
     await WidgetUpdater.ensureBgColor(snap);
     await PreferenceService.setWidgetPlayerSnapshot(snap);
     const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
-    hilog.info(DOMAIN, TAG, 'updatePlayerCard ids=%{public}d chapter=%{public}s isPlaying=%{public}d cover=%{public}s',
-      ids.length,
-      snap.chapterTitle,
-      snap.isPlaying ? 1 : 0,
-      (snap.cover || '').substring(0, 80));
     if (ids.length === 0) return;
     const built = await WidgetUpdater.buildPlayerBinding(snap);
     try {
       for (const id of ids) {
         try {
           await formProvider.updateForm(id, built.binding);
-          hilog.info(DOMAIN, TAG, 'updateForm ok id=%{public}s', id);
         } catch (err) {
           const e = err as BusinessError;
           hilog.warn(DOMAIN, TAG, 'updatePlayerCard fail id=%{public}s code=%{public}d msg=%{public}s',

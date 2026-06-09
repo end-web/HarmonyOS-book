@@ -26,6 +26,8 @@ const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 const KEY_WIDGET_FORM_IDS = 'widget_form_ids_v1';
 /** 每本书独立的最新播放进度,key = `${KEY_PROGRESS_PREFIX}${bookId}` */
 const KEY_PROGRESS_PREFIX = 'progress_v1_';
+/** 订阅源发现导航缓存,key = `${KEY_EXPLORE_NAV_PREFIX}${sourceUrlHash}` */
+const KEY_EXPLORE_NAV_PREFIX = 'explore_nav_v1_';
 
 export interface PlayHistoryItem {
   bookId: string;
@@ -81,6 +83,23 @@ export interface WidgetPlayerSnapshot {
 interface FormIdBucket {
   name: string;
   ids: string[];
+}
+
+/** 订阅源发现导航缓存项 */
+export interface ExploreNavCache {
+  sourceUrl: string;
+  /** 源的 lastUpdateTime，用于版本戳 */
+  sourceVersion: number;
+  /** 缓存的导航 JSON 数组（已解析） */
+  navigation: ExploreNavItem[];
+  /** 缓存时间戳 */
+  cachedAt: number;
+}
+
+/** 导航项 */
+export interface ExploreNavItem {
+  title: string;
+  url: string;
 }
 
 export class PreferenceService {
@@ -366,6 +385,66 @@ export class PreferenceService {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_PRIVACY_AGREED_VERSION, version);
     await s.flush();
+  }
+
+  // ──────────────────── 订阅源发现导航缓存 ────────────────────
+
+  /**
+   * 获取订阅源发现导航缓存（30 天 TTL，含版本戳）
+   */
+  static async getExploreNavCache(sourceUrl: string, sourceVersion: number): Promise<ExploreNavItem[] | null> {
+    try {
+      const s = await PreferenceService.ensureStore();
+      const hash = PreferenceService.hashString(sourceUrl);
+      const key = `${KEY_EXPLORE_NAV_PREFIX}${hash}`;
+      const json = await s.get(key, '') as string;
+      if (!json) return null;
+      const cache: ExploreNavCache = JSON.parse(json) as ExploreNavCache;
+      // 检查版本戳（源更新后自动失效）
+      if (cache.sourceVersion !== sourceVersion) {
+        return null;
+      }
+      // 检查 TTL（30 天）
+      const age = Date.now() - cache.cachedAt;
+      const TTL_MS = 30 * 24 * 60 * 60 * 1000;
+      if (age > TTL_MS) {
+        return null;
+      }
+      return cache.navigation;
+    } catch (e) {
+      console.warn(`[PreferenceService] getExploreNavCache failed: ${e}`);
+      return null;
+    }
+  }
+
+  /**
+   * 保存订阅源发现导航缓存
+   */
+  static async setExploreNavCache(sourceUrl: string, sourceVersion: number, navigation: ExploreNavItem[]): Promise<void> {
+    try {
+      const s = await PreferenceService.ensureStore();
+      const hash = PreferenceService.hashString(sourceUrl);
+      const key = `${KEY_EXPLORE_NAV_PREFIX}${hash}`;
+      const cache: ExploreNavCache = {
+        sourceUrl,
+        sourceVersion,
+        navigation,
+        cachedAt: Date.now(),
+      };
+      await s.put(key, JSON.stringify(cache));
+      await s.flush();
+    } catch (e) {
+      console.warn(`[PreferenceService] setExploreNavCache failed: ${e}`);
+    }
+  }
+
+  /** 简单字符串 hash（用于缓存 key） */
+  private static hashString(str: string): string {
+    let h: number = 5381;
+    for (let i = 0; i < str.length; i++) {
+      h = (((h << 5) + h) + str.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(36);
   }
 
   /** 0=共享焦点（默认，听书与其他音乐互斥）, 1=独立焦点（不与本应用其他音频互斥） */

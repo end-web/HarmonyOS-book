@@ -136,14 +136,11 @@ export default class EntryAbility extends UIAbility {
     const route: WidgetRoute = { target, bookId, ts: Date.now() };
     AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
     emitter.emit(EVT_WIDGET_ROUTE, { data: { target, bookId: bookId ?? '', ts: route.ts } });
-    hilog.info(DOMAIN, TAG, 'widget route -> target=%{public}s bookId=%{public}s ts=%{public}d',
-      target, bookId ?? '', route.ts);
   }
 
   private registerCallee(): void {
     try {
       this.callee.on('play', (_data: rpc.MessageSequence) => {
-        hilog.info(DOMAIN, TAG, 'callee play');
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().play();
         }).catch((err: Error) => {
@@ -152,7 +149,6 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('pause', (_data: rpc.MessageSequence) => {
-        hilog.info(DOMAIN, TAG, 'callee pause');
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().pause();
         }).catch((err: Error) => {
@@ -161,7 +157,6 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('next', (_data: rpc.MessageSequence) => {
-        hilog.info(DOMAIN, TAG, 'callee next');
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().playNext();
         }).catch((err: Error) => {
@@ -170,7 +165,6 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('prev', (_data: rpc.MessageSequence) => {
-        hilog.info(DOMAIN, TAG, 'callee prev');
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().playPrevious();
         }).catch((err: Error) => {
@@ -239,7 +233,6 @@ export default class EntryAbility extends UIAbility {
   async onBackground(): Promise<void> {
     try {
       await AudioService.getInstance().flushHistory();
-      hilog.info(DOMAIN, TAG, 'onBackground flushHistory done');
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'onBackground flushHistory failed: %{public}s',
@@ -256,7 +249,6 @@ export default class EntryAbility extends UIAbility {
   async onForeground(): Promise<void> {
     try {
       await AudioService.getInstance().ensureHealthy();
-      hilog.info(DOMAIN, TAG, 'onForeground ensureHealthy done');
     } catch (err) {
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'onForeground ensureHealthy failed: %{public}s',

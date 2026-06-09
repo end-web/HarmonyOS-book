@@ -16,7 +16,6 @@ const TAG = 'ListenBook_PlayerForm';
 export default class PlayerFormAbility extends FormExtensionAbility {
   onAddForm(want: Want): formBindingData.FormBindingData {
     const formId = want.parameters?.[formInfo.FormParam.IDENTITY_KEY] as string ?? '';
-    hilog.info(DOMAIN, TAG, 'onAddForm formId=%{public}s', formId);
     // 异步把 formId 入库 + 推真实快照(不阻塞返回)
     this.persistAndPushAsync(formId).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'persistAndPushAsync failed: %{public}s',
@@ -59,7 +58,6 @@ export default class PlayerFormAbility extends FormExtensionAbility {
   }
 
   onRemoveForm(formId: string): void {
-    hilog.info(DOMAIN, TAG, 'onRemoveForm formId=%{public}s', formId);
     PreferenceService.invalidateCache(this.context).then(() => {
       return PreferenceService.init(this.context);
     }).then(() => {
@@ -90,7 +88,6 @@ export default class PlayerFormAbility extends FormExtensionAbility {
   }
 
   onFormEvent(formId: string, message: string): void {
-    hilog.info(DOMAIN, TAG, 'onFormEvent formId=%{public}s message=%{public}s', formId, message);
   }
 
   onAcquireFormState(_want: Want): formInfo.FormState {

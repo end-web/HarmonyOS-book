@@ -51,25 +51,19 @@ export class ColorPickerUtils {
     if (!url) return null;
     const cached = ColorPickerUtils.cache.get(url);
     if (cached) {
-      console.info('[ColorPicker] cache hit for ' + url);
       return cached;
     }
-    console.info('[ColorPicker] pickFromUrl start: ' + url);
     try {
       const buf = await ColorPickerUtils.downloadImage(url);
       if (!buf) {
         console.error('[ColorPicker] downloadImage returned null');
         return null;
       }
-      console.info('[ColorPicker] downloaded ' + buf.byteLength + ' bytes');
       const source = image.createImageSource(buf);
       const pixelMap = await source.createPixelMap();
-      console.info('[ColorPicker] created pixelMap');
       const picker = await effectKit.createColorPicker(pixelMap);
-      console.info('[ColorPicker] created picker');
       const color = picker.getMainColorSync();
       const rgb: RgbColor = { r: color.red, g: color.green, b: color.blue };
-      console.info('[ColorPicker] extracted color: r=' + rgb.r + ', g=' + rgb.g + ', b=' + rgb.b);
       ColorPickerUtils.cache.set(url, rgb);
       pixelMap.release();
       source.release();
@@ -82,25 +76,17 @@ export class ColorPickerUtils {
 
   static async pickFromRawfile(context: Context, path: string): Promise<RgbColor | null> {
     const key = 'raw:' + path;
-    console.info('[ColorPicker] pickFromRawfile start: ' + path);
     const cached = ColorPickerUtils.cache.get(key);
     if (cached) {
-      console.info('[ColorPicker] cache hit for ' + key);
       return cached;
     }
     try {
-      console.info('[ColorPicker] loading rawfile: ' + path);
       const buf = await context.resourceManager.getRawFileContent(path);
-      console.info('[ColorPicker] rawfile loaded, size=' + buf.byteLength);
       const source = image.createImageSource(buf.buffer.slice(0));
-      console.info('[ColorPicker] image source created');
       const pixelMap = await source.createPixelMap();
-      console.info('[ColorPicker] pixelMap created');
       const picker = await effectKit.createColorPicker(pixelMap);
-      console.info('[ColorPicker] color picker created');
       const color = picker.getMainColorSync();
       const rgb: RgbColor = { r: color.red, g: color.green, b: color.blue };
-      console.info('[ColorPicker] extracted color: r=' + rgb.r + ', g=' + rgb.g + ', b=' + rgb.b);
       ColorPickerUtils.cache.set(key, rgb);
       pixelMap.release();
       source.release();
@@ -150,14 +136,12 @@ export class ColorPickerUtils {
         readTimeout: 15000,
         expectDataType: http.HttpDataType.ARRAY_BUFFER
       });
-      console.info('[ColorPicker] downloadImage response code: ' + resp.responseCode);
       if (resp.responseCode !== 200) {
         console.error('[ColorPicker] downloadImage failed with code ' + resp.responseCode);
         return null;
       }
       const data = resp.result;
       if (data instanceof ArrayBuffer) {
-        console.info('[ColorPicker] downloadImage success, size=' + data.byteLength);
         return data;
       }
       console.error('[ColorPicker] downloadImage result is not ArrayBuffer');

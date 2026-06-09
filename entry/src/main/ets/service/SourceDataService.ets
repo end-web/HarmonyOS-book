@@ -5,7 +5,6 @@
  * 内置源不会被持久化到 Preferences，每次启动通过 registry 现拼。
  */
 
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BookSource, SourceSubscription } from '../model/BookSource';
 import { PreferenceService } from './PreferenceService';
 import { BuiltInSourceRegistry } from './builtin/BuiltInSourceRegistry';
@@ -46,8 +45,6 @@ export class SourceDataService {
     }
     const builtIn = BuiltInSourceRegistry.materialize();
     SourceDataService.cache = filtered.concat(builtIn);
-    hilog.info(0, 'SourceDataSvc', 'getSources: user=%{public}d, builtin=%{public}d, total=%{public}d',
-      filtered.length, builtIn.length, SourceDataService.cache.length);
     return SourceDataService.cache;
   }
 
@@ -92,6 +89,29 @@ export class SourceDataService {
     const existing = await SourceDataService.getSources();
     const filtered = existing.filter((s) => s.bookSourceUrl !== sourceUrl);
     await SourceDataService.saveSources(filtered);
+  }
+
+  /**
+   * 更新单个书源（按原 bookSourceUrl 定位；若 url 改了则先按 originUrl 找再替换）。
+   * 内置源不支持更新，传入会被忽略。
+   */
+  static async updateSource(originUrl: string, updated: BookSource): Promise<void> {
+    if (BuiltInSourceRegistry.isBuiltIn(originUrl) || BuiltInSourceRegistry.isBuiltIn(updated.bookSourceUrl)) {
+      return;
+    }
+    const existing = await SourceDataService.getSources();
+    let replaced = false;
+    const out: BookSource[] = [];
+    for (const s of existing) {
+      if (!replaced && s.bookSourceUrl === originUrl) {
+        out.push(updated);
+        replaced = true;
+      } else {
+        out.push(s);
+      }
+    }
+    if (!replaced) out.push(updated);
+    await SourceDataService.saveSources(out);
   }
 
   /**

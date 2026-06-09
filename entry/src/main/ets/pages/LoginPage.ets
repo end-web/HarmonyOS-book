@@ -115,7 +115,6 @@ export struct LoginPage {
           if (cookieStr && cookieStr.includes('qttoken')) {
             const token = this.extractQttoken(cookieStr);
             if (token && token.length > 5) {
-              console.info(`[${TAG}] Login success! qttoken captured`);
               this.loginSuccess = true;
               this.saveCookie(token);
               clearInterval(this.cookieCheckTimer);
@@ -155,7 +154,6 @@ export struct LoginPage {
       const cookieManager = getCookieManager();
       // 设置 cookie（格式：qttoken=xxx）
       cookieManager.setCookie(this.serverHost, `qttoken=${token}`);
-      console.info(`[${TAG}] Cookie saved for ${this.serverHost}`);
     } catch (e) {
       console.error(`[${TAG}] Failed to save cookie: ${e}`);
     }

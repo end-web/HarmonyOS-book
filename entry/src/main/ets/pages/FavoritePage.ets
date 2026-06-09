@@ -88,6 +88,27 @@ export struct FavoritePage {
     const ids = await PreferenceService.getFavorites();
     const allBooks = await DataService.getBooks(this.context);
     const books = allBooks.filter((b) => ids.includes(b.id));
+
+    // 修复历史缓存中的双倍章节:按 title + index 去重(title 稳定,不会被播放覆盖)
+    for (const b of books) {
+      if (b.chapters && b.chapters.length > 0) {
+        const seen = new Set<string>();
+        const unique: Chapter[] = [];
+        for (const ch of b.chapters) {
+          const key = ch.title;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          unique.push(ch);
+        }
+        if (unique.length !== b.chapters.length) {
+          b.chapters = unique;
+          b.chapterCount = unique.length;
+          // 持久化修正后的数据
+          await DataService.upsertCachedBook(b);
+        }
+      }
+    }
+
     const history = await PreferenceService.getHistory();
     const map: Record<string, PlayHistoryItem> = {};
     for (const item of history) {
@@ -172,13 +193,13 @@ export struct FavoritePage {
           for (const k of Object.keys(bookInfo.variables)) mergedVars[k] = bookInfo.variables[k];
         }
         const tocUrl = bookInfo?.tocUrl || book.bookUrl;
-        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
+        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
         if (tocItems.length > 0) {
           book.chapters = tocItems.map((item: TocItem, i: number): Chapter => ({
             id: `${book.id}-c${i}`,
             index: i + 1,
             title: item.name,
-            duration: 0,
+            duration: item.duration || 0,
             source: { type: 'url', value: item.url }
           }));
           book.chapterCount = book.chapters.length;
@@ -321,7 +342,7 @@ export struct FavoritePage {
         for (const k of Object.keys(bookInfo.variables)) mergedVars[k] = bookInfo.variables[k];
       }
       if (bookInfo?.tocUrl) tocUrl = bookInfo.tocUrl;
-      const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars);
+      const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
       if (tocItems.length === 0) {
         this.getUIContext().getPromptAction().showToast({ message: '章节加载失败' });
         this.navStack.pushPathByName('detail', book.id, onPop);
@@ -331,7 +352,7 @@ export struct FavoritePage {
         id: `${book.id}-c${idx}`,
         index: idx + 1,
         title: item.name,
-        duration: 0,
+        duration: item.duration || 0,
         source: { type: 'url', value: item.url }
       }));
       book.chapterCount = book.chapters.length;
@@ -671,6 +692,93 @@ export struct FavoritePage {
     .backgroundColor('#CCFF8800')
     .borderRadius(AppRadius.Sm)
     .margin({ top: small ? 5 : 6, left: small ? 5 : 6 })
+  }
+
+  @Builder
+  buildListItem(book: Book) {
+    Row({ space: AppSpace.Md }) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        if (book.cover && book.cover.startsWith('http')) {
+          Image(book.cover)
+            .width(72)
+            .height(100)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+            .draggable(false)
+            .hitTestBehavior(HitTestMode.Transparent)
+        } else if (book.cover && (book.cover.startsWith('/data/') || book.cover.startsWith('file://'))) {
+          Image('file://' + book.cover.replace(/^file:\/\//, ''))
+            .width(72)
+            .height(100)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+            .draggable(false)
+            .hitTestBehavior(HitTestMode.Transparent)
+        } else {
+          Stack() {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor($r('sys.color.brand'))
+            Text(book.title ? book.title.substring(0, 1) : '?')
+              .fontSize(24)
+              .fontColor(Color.White)
+              .fontWeight(FontWeight.Bold)
+          }
+          .width(72)
+          .height(100)
+          .borderRadius(AppRadius.Sm)
+          .clip(true)
+        }
+        this.buildTypeBadge(true)
+      }
+
+      Column({ space: 4 }) {
+        Text(book.title)
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Medium)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Text(book.author)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Text(this.getProgressText(book))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(1)
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Center)
+    }
+    .width('100%')
+    .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
+    .scale(this.draggingBookId === book.id ? { x: 0.92, y: 0.92 } : { x: 1, y: 1 })
+    .opacity(this.draggingBookId === book.id ? 0.4 : 1)
+    .animation(this.dragging ? { duration: 200, curve: Curve.FastOutSlowIn } : null)
+    .onDragStart(() => {
+      this.draggingBookId = book.id;
+      this.dragging = true;
+      return { builder: (): void => this.buildDragPreview(book) };
+    })
+    .onDragEnd(() => {
+      setTimeout(() => {
+        this.dragging = false;
+        this.trashHover = false;
+        this.draggingBookId = '';
+      }, 100);
+    })
+    .onClick(() => {
+      if (!this.dragging && !this.resolvingTocId) {
+        this.handleBookTap(book);
+      }
+    })
   }
 
   @Builder
