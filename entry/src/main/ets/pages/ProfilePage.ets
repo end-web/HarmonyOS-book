@@ -1,11 +1,11 @@
-import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface ProfileItem {
   icon: Resource;
   label: string;
   id: string;
-  iconBg: string;
+  iconBg: ResourceColor;
 }
 
 const CONTENT_ITEMS: ProfileItem[] = [
@@ -41,33 +41,59 @@ export struct ProfilePage {
   }
 
   build() {
-    Scroll(this.scrollScroller) {
-      Column({ space: AppSpace.Lg }) {
-        this.buildTopSpacer()
-        this.buildGroup('我的内容', CONTENT_ITEMS)
-        this.buildGroup('系统', SYSTEM_ITEMS)
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [HomeTheme.BgWarmTop, 0.0],
+            [HomeTheme.BgWarmMid, 0.35],
+            [HomeTheme.BgNeutral, 1.0]
+          ]
+        })
+
+      Scroll(this.scrollScroller) {
+        Column({ space: AppSpace.Lg }) {
+          this.buildHeader()
+          this.buildGroup('我的内容', CONTENT_ITEMS)
+          this.buildGroup('系统', SYSTEM_ITEMS)
+        }
+        .width('100%')
+        .padding({
+          left: AppSpace.Md,
+          right: AppSpace.Md,
+          bottom: WindowUtils.getFloatingTabBottomVp()
+        })
       }
       .width('100%')
-      .padding({
-        left: AppSpace.Md,
-        right: AppSpace.Md,
-        bottom: WindowUtils.getFloatingTabBottomVp()
-      })
+      .height('100%')
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+      .backgroundColor(Color.Transparent)
+      .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
-    .backgroundColor($r('sys.color.background_secondary'))
-    .align(Alignment.Top)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder
-  buildTopSpacer() {
-    Column()
-      .width('100%')
-      .height(WindowUtils.getStatusBarHeightVp() + AppSpace.Xl)
+  buildHeader() {
+    Column() {
+      Text('我的')
+        .fontSize(AppFont.TitleL)
+        .fontColor($r('sys.color.font_primary'))
+        .fontWeight(FontWeight.Bold)
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({
+      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
+      bottom: AppSpace.Sm
+    })
   }
 
   @Builder
@@ -90,8 +116,9 @@ export struct ProfilePage {
         }, (item: ProfileItem) => item.id)
       }
       .width('100%')
-      .backgroundColor($r('sys.color.comp_background_primary'))
+      .backgroundColor($r('app.color.home_card_surface_soft'))
       .borderRadius(AppRadius.Lg)
+      .shadow({ radius: 12, color: HomeTheme.CardShadow, offsetY: 4 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

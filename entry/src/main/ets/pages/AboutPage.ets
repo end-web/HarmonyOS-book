@@ -1,4 +1,4 @@
-import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
 @ComponentV2
@@ -26,22 +26,13 @@ export struct AboutPage {
 
       Column({ space: AppSpace.Lg }) {
         Column({ space: AppSpace.Sm }) {
-          Stack() {
-            Column()
-              .width(80)
-              .height(80)
-              .borderRadius(AppRadius.Xl)
-              .linearGradient({
-                angle: 135,
-                colors: [[AppColor.BrandDark, 0.0], [AppColor.Brand, 1.0]]
-              })
-            Text('听')
-              .fontSize(32)
-              .fontColor('#FFFFFF')
-              .fontWeight(FontWeight.Bold)
-          }
-          .width(80)
-          .height(80)
+          Image($r('app.media.app_icon_legacy'))
+            .width(80)
+            .height(80)
+            .borderRadius(AppRadius.Xl)
+            .clip(true)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 12, color: '#1F000000', offsetY: 4 })
 
           Text('ListenBook')
             .fontSize(AppFont.TitleL)

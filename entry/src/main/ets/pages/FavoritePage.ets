@@ -449,61 +449,64 @@ export struct FavoritePage {
           ]
         })
 
-      // 内容层
-      Refresh({ refreshing: $$this.isRefreshing, offset: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL }) {
-        Grid(this.listScroller) {
-          LazyForEach(this.bookDataSource, (book: Book) => {
-            GridItem() {
-              this.buildBookTile(book)
-            }
-          }, (book: Book) => book.id)
-          GridItem() {
-            this.buildAddTile()
+      // 内容层：标题固定在上方，Refresh 只负责标题下方的书籍区域
+      Column() {
+        Column() {
+          Row() {
+            Text('书架')
+              .fontSize(AppFont.TitleL)
+              .fontColor($r('sys.color.font_primary'))
+              .fontWeight(FontWeight.Bold)
           }
+          .width('100%')
         }
-        .columnsTemplate('1fr 1fr 1fr')
-        .columnsGap(AppSpace.Sm)
-        .rowsGap(AppSpace.Md)
-        .cachedCount(6)
         .width('100%')
-        .height('100%')
+        .alignItems(HorizontalAlign.Start)
         .padding({
           left: AppSpace.Md,
           right: AppSpace.Md,
-          top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xl + AppFont.TitleL,
-          bottom: WindowUtils.getFloatingTabBottomVp()
+          top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
+          bottom: AppSpace.Sm
         })
-        .scrollBar(BarState.Off)
+
+        Refresh({ refreshing: $$this.isRefreshing }) {
+          Grid(this.listScroller) {
+            LazyForEach(this.bookDataSource, (book: Book) => {
+              GridItem() {
+                this.buildBookTile(book)
+              }
+            }, (book: Book) => book.id)
+            GridItem() {
+              this.buildAddTile()
+            }
+          }
+          .columnsTemplate('1fr 1fr 1fr')
+          .columnsGap(AppSpace.Sm)
+          .rowsGap(AppSpace.Md)
+          .cachedCount(6)
+          .width('100%')
+          .height('100%')
+          .padding({
+            left: AppSpace.Md,
+            right: AppSpace.Md,
+            top: AppSpace.Sm,
+            bottom: WindowUtils.getFloatingTabBottomVp()
+          })
+          .scrollBar(BarState.Off)
+          .backgroundColor(Color.Transparent)
+        }
+        .onRefreshing(() => {
+          this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
+        })
+        .refreshOffset(64)
+        .pullToRefresh(true)
+        .width('100%')
+        .layoutWeight(1)
         .backgroundColor(Color.Transparent)
       }
-      .onRefreshing(() => {
-        this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
-      })
-      .backgroundColor(Color.Transparent)
-
-      // 浮顶标题（透明底，让暖色透出）
-      Column() {
-        Row() {
-          Text('书架')
-            .fontSize(AppFont.TitleL)
-            .fontColor($r('sys.color.font_primary'))
-            .fontWeight(FontWeight.Bold)
-          if (this.refreshProgress) {
-            Text(this.refreshProgress)
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
-              .margin({ left: AppSpace.Sm })
-          }
-        }
-        .width('100%')
-      }
       .width('100%')
-      .alignItems(HorizontalAlign.Start)
-      .padding({
-        left: AppSpace.Md,
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
-        bottom: AppSpace.Sm
-      })
+      .height('100%')
+      .backgroundColor(Color.Transparent)
 
       // 拖动删除浮层（自己居中）
       Column() {

@@ -507,7 +507,7 @@ export struct HomePage {
         ListItem() {
           Column() {
           Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
-            .searchButton('搜索')
+            .searchButton('搜索', { fontColor: HomeTheme.Accent })
             .onSubmit(() => this.doSearch())
             .onChange((value: string) => {
               this.keyword = value;

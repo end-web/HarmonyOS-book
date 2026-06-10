@@ -15,6 +15,7 @@
     { "name": "home_accent", "value": "#FF8A5A" },
     { "name": "home_accent_soft", "value": "#33FF8A5A" },
     { "name": "home_card_surface", "value": "#2C2C2C" },
+    { "name": "home_card_surface_soft", "value": "#2A241F" },
     { "name": "home_card_shadow", "value": "#33000000" },
     { "name": "home_progress_track", "value": "#1FFFFFFF" },
     { "name": "app_brand", "value": "#FF8A5A" },
