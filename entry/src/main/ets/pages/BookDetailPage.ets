@@ -294,6 +294,7 @@ export struct BookDetailPage {
       // 详情页入口,非共享元素,且清理栈避免重复 player
       playerEntryState.fromMini = false;
       playerEntryState.fromBookCard = false;
+      playerEntryState.bookCardId = '';
       this.cleanStackBeforePushPlayer();
       this.navStack.pushPathByName('player', this.bookId);
       this.isStartingPlay = false;
@@ -307,6 +308,7 @@ export struct BookDetailPage {
     // 详情页入口,非共享元素,且清理栈避免重复 player
     playerEntryState.fromMini = false;
     playerEntryState.fromBookCard = false;
+    playerEntryState.bookCardId = '';
     this.cleanStackBeforePushPlayer();
     this.navStack.pushPathByName('player', playerParams);
     this.isStartingPlay = false;

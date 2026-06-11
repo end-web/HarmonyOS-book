@@ -190,10 +190,11 @@ export struct PlayerPage {
 
   aboutToDisappear(): void {
     PlayerBackInterceptor.set(null);
+    PlayerEntryDecider.set(null);
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
-    // 不在这里清 fromMini,避免第二次快速进入时状态竞态
+    // 不在这里清 fromMini/fromBookCard,避免第二次快速进入时状态竞态
   }
 
   /**

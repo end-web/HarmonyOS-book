@@ -87,6 +87,7 @@ export struct MainPage {
       // 点击当前正在播放的书,直接进播放页(不走共享元素,用常规转场)
       playerEntryState.fromMini = false;
       playerEntryState.fromBookCard = false;
+      playerEntryState.bookCardId = '';
       this.navStack.pushPathByName('player', bookId);
       return;
     }
@@ -94,6 +95,7 @@ export struct MainPage {
       // 从详情页进入指定章节,非共享元素入口
       playerEntryState.fromMini = false;
       playerEntryState.fromBookCard = false;
+      playerEntryState.bookCardId = '';
       const params: Record<string, Object> = {
         'bookId': bookId,
         'chapterId': chapterId,
