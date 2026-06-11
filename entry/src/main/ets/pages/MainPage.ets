@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
+import { AppStorageV2, SymbolGlyphModifier, curves } from '@kit.ArkUI';
 import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
@@ -17,6 +17,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
+import { playerEntryState } from './PlayerPage';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -83,10 +84,14 @@ export struct MainPage {
       return;
     }
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
+      // 点击当前正在播放的书,直接进播放页(不走 mini,用常规转场)
+      playerEntryState.fromMini = false;
       this.navStack.pushPathByName('player', bookId);
       return;
     }
     if (chapterId) {
+      // 从详情页进入指定章节,非 mini 入口
+      playerEntryState.fromMini = false;
       const params: Record<string, Object> = {
         'bookId': bookId,
         'chapterId': chapterId,
@@ -316,7 +321,15 @@ export struct MainPage {
 
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
-    this.navigateToBook(this.playerState.currentBook.id, '', 0, false);
+    const bookId = this.playerState.currentBook.id;
+    // mini→player:共享元素转场,关闭系统转场
+    playerEntryState.fromMini = true;
+    this.getUIContext().animateTo({
+      duration: 420,
+      curve: curves.springMotion(0.6, 0.9)
+    }, () => {
+      this.navStack.pushPathByName('player', bookId, false);
+    });
   }
 
   private playNext(): void {

@@ -14,6 +14,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
+import { playerEntryState } from './PlayerPage';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -290,6 +291,9 @@ export struct BookDetailPage {
     // ★ 当前在播的就是同书:直接 push player 不带 chapter 参数,PlayerPage 复用 live state,
     //   避免 tryResumePlay 触发 playChapterAndSeek 重置
     if (PlaybackStore.getInstance().isCurrentBook(this.book.id)) {
+      // 详情页入口,非 mini,且清理栈避免重复 player
+      playerEntryState.fromMini = false;
+      this.cleanStackBeforePushPlayer();
       this.navStack.pushPathByName('player', this.bookId);
       this.isStartingPlay = false;
       return;
@@ -299,8 +303,22 @@ export struct BookDetailPage {
       'chapterId': target.id as Object,
       'progressMs': resumeProgressMs as Object
     };
+    // 详情页入口,非 mini,且清理栈避免重复 player
+    playerEntryState.fromMini = false;
+    this.cleanStackBeforePushPlayer();
     this.navStack.pushPathByName('player', playerParams);
     this.isStartingPlay = false;
+  }
+
+  /** 从详情页进播放页前,清理栈避免重复 player。如果栈里已有 player,先 pop 到 home,再 push player */
+  private cleanStackBeforePushPlayer(): void {
+    const names = this.navStack.getAllPathName();
+    if (!names || names.length === 0) return;
+    // 栈结构:home, player?, detail, ...
+    // 如果 names[1] === 'player',说明从 player 进的 detail,需要 pop 到 home
+    if (names.length >= 2 && names[1] === 'player') {
+      this.navStack.popToName('home');
+    }
   }
 
   private formatDuration(seconds: number): string {

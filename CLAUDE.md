@@ -50,8 +50,6 @@ entry/src/main/ets/
 - 列表：长列表用 `LazyForEach`（参考 `BookDataSource` / `ParagraphDataSource`），禁止 index 作为 key
 - 搜索：**多源并行**聚合（不做单选），见 `SearchCache`
 - 文案：UI 文案改字符串即可，不要联动改对应 `.ets` 文件名 / 类名
-- TextInput（V2）：必须 `text: !!model.field` 双向绑定，不要单向 `text + onChange`，否则 IME 光标会跳
-- 资源：颜色/字号/字符串走 `theme/Theme.ets` 或 `$r('sys.xxx')`，禁止硬编码
 
 ## Skills（在 `.claude/skills/`）
 

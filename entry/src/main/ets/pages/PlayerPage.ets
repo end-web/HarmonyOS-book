@@ -3,7 +3,7 @@ import { AppStorageV2, curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
-import { AppColor, AppSpace, AppFont, AppMotion } from '../theme/Theme';
+import { AppColor, AppSpace, AppFont, AppMotion, AppRadius } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
@@ -37,6 +37,40 @@ export class PlayerBackInterceptor {
   }
 }
 
+/**
+ * mini 入口标志:仅当从 MiniPlayer 点击进入 player 时为 true。
+ * Index 的 customTransition 据此跳过下滑转场,让 geometryTransition 共享元素接管。
+ * PlayerPage 的返回按钮也据此走 animateTo 反向共享元素。
+ * 用 @ObservedV2 单例实例:mini/player 两端的 geometryTransition id 才能响应变化。
+ *
+ * 注意:fromMini 只在转场动画期间为 true,进入 player 后会被清成 false,
+ * 避免后续 player 内部状态变化(如 isPlaying)触发 mini 节点重建,
+ * 引发 geometryTransition id 误匹配导致大封面缩小到 mini。
+ */
+@ObservedV2
+export class PlayerEntryState {
+  @Trace fromMini: boolean = false;
+}
+
+export const playerEntryState = new PlayerEntryState();
+
+/**
+ * 由 PlayerPage 注册的"是否 mini 入口"决策器。
+ * 进入后 playerEntryState.fromMini 会被清,但 PlayerPage 自身记忆 entryFromMini,
+ * Index 的 onBackPressed 通过此决策器读取真实入口类型,决定走共享元素还是普通 pop。
+ */
+export class PlayerEntryDecider {
+  private static handler: (() => boolean) | null = null;
+
+  static set(h: (() => boolean) | null): void {
+    PlayerEntryDecider.handler = h;
+  }
+
+  static isFromMini(): boolean {
+    return PlayerEntryDecider.handler ? PlayerEntryDecider.handler() : false;
+  }
+}
+
 @ComponentV2
 export struct PlayerPage {
   @Param navStack: NavPathStack = new NavPathStack();
@@ -62,6 +96,8 @@ export struct PlayerPage {
   @Local chapterCacheTick: number = 0;
   /** 章节列表滚动位置 vs 当前播放章节的偏离（vp）；用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
+  /** 章节搜索关键词；非空时章节列表按标题过滤 */
+  @Local chapterSearchKeyword: string = '';
 
   private context: common.UIAbilityContext | null = null;
   private speeds: number[] = [0.75, 1.0, 1.25, 1.75, 2.0];
@@ -73,9 +109,14 @@ export struct PlayerPage {
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
   };
+  /** 记忆入口类型:进入时捕获 fromMini 值,用于决定返回时走共享元素还是普通 pop */
+  private entryFromMini: boolean = false;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    // 记忆入口并注册决策器
+    this.entryFromMini = playerEntryState.fromMini;
+    PlayerEntryDecider.set(() => this.entryFromMini);
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
@@ -83,6 +124,12 @@ export struct PlayerPage {
     setTimeout(() => {
       this.renderBlur = true;
       this.loadBook();
+      // 共享元素动画完成后清 fromMini,避免 player 内部状态变化触发 mini 节点重建误配对
+      if (this.entryFromMini) {
+        setTimeout(() => {
+          playerEntryState.fromMini = false;
+        }, 500);
+      }
     }, AppMotion.Page);
   }
 
@@ -102,16 +149,12 @@ export struct PlayerPage {
       return;
     }
 
-    // ★ 延迟 200ms 设置背景色,给封面 Image 组件留解码时间
-    setTimeout(() => {
-      const cachedRgb = ColorPickerUtils.getCached(b!.cover);
-      if (!cachedRgb) return;
-      this.blurColor = ColorPickerUtils.toBlurColor(cachedRgb);
-      this.themeColorHex = ColorPickerUtils.toHex(cachedRgb);
-      this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(cachedRgb, 0.4));
-      this.hasThemeColor = true;
-      this.lastCoverKey = b!.cover;
-    }, 200);
+    // 缓存命中:立即同步设置融合色,避免灰色过渡
+    this.blurColor = ColorPickerUtils.toBlurColor(rgb);
+    this.themeColorHex = ColorPickerUtils.toHex(rgb);
+    this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.4));
+    this.hasThemeColor = true;
+    this.lastCoverKey = b.cover;
   }
 
   aboutToDisappear(): void {
@@ -119,6 +162,7 @@ export struct PlayerPage {
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
+    // 不在这里清 fromMini,避免第二次快速进入时状态竞态
   }
 
   /**
@@ -302,9 +346,28 @@ export struct PlayerPage {
   private openChapterList(): void {
     this.showChapterList = true;
     this.listOffsetFromCurrent = 0;
+    this.chapterSearchKeyword = '';
     if (!this.book) return;
     this.chapterDataSource.setChapters(this.book.chapters);
     this.scrollToCurrentChapter();
+  }
+
+  /** 按关键词过滤章节列表（关键词为空时还原全部，并滚回当前章节） */
+  private applyChapterFilter(keyword: string): void {
+    this.chapterSearchKeyword = keyword;
+    if (!this.book) return;
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) {
+      this.chapterDataSource.setChapters(this.book.chapters);
+      this.scrollToCurrentChapter();
+      return;
+    }
+    const filtered = this.book.chapters.filter((c) => c.title.toLowerCase().includes(kw));
+    this.chapterDataSource.setChapters(filtered);
+    // 过滤结果重置滚动到顶部
+    setTimeout(() => {
+      try { this.chapterListScroller.scrollToIndex(0, false, ScrollAlign.START); } catch (_e) { /* ignore */ }
+    }, 50);
   }
 
   private scrollToCurrentChapter(): void {
@@ -341,9 +404,10 @@ export struct PlayerPage {
     return this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
   }
 
-  /** 是否需要显示"回到当前章节"浮动按钮:列表滚动距离当前章节超过 200vp */
+  /** 是否需要显示"回到当前章节"浮动按钮:列表滚动距离当前章节超过 200vp（搜索过滤时不显示） */
   private shouldShowJumpButton(): boolean {
-    return Math.abs(this.listOffsetFromCurrent) > 200;
+    return this.chapterSearchKeyword.trim().length === 0
+      && Math.abs(this.listOffsetFromCurrent) > 200;
   }
 
   private formatSleepRemaining(): string {
@@ -383,8 +447,20 @@ export struct PlayerPage {
   private async extractCoverColor(cover: string): Promise<void> {
     // 已成功取过色 / 正在取这张图 → 跳过
     if (!cover || cover === this.lastCoverKey || cover === this.pickingCover) return;
-    this.pickingCover = cover;
 
+    // 缓存命中:立即同步设置融合色,不走 setTimeout
+    const cachedRgb = ColorPickerUtils.getCached(cover);
+    if (cachedRgb) {
+      this.blurColor = ColorPickerUtils.toBlurColor(cachedRgb);
+      this.themeColorHex = ColorPickerUtils.toHex(cachedRgb);
+      this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(cachedRgb, 0.4));
+      this.hasThemeColor = true;
+      this.lastCoverKey = cover;
+      return;
+    }
+
+    // 缓存未命中:异步取色
+    this.pickingCover = cover;
     setTimeout(async () => {
       let rgb: RgbColor | null = null;
       try {
@@ -418,50 +494,18 @@ export struct PlayerPage {
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 背景层：取色成功用主色渐变，失败/未完成时封面模糊兜底
+      // 背景层：统一用渐变，未取色时用深灰色过渡，取色后渐变到主色
       Stack() {
-        if (this.hasThemeColor) {
-          // 取色成功：主色→深主色渐变，不渲染封面图
-          Column()
-            .width('100%')
-            .height('100%')
-            .linearGradient({
-              angle: 160,
-              colors: [[this.themeColorHex, 0], [this.themeColorDarkHex, 1]]
-            })
-            .animation({ duration: 600, curve: Curve.EaseOut })
-        } else {
-          // 取色未完成/失败：封面模糊兜底
-          if (this.book && this.book.cover) {
-            if (this.book.cover.startsWith('http')) {
-              Image(this.book.cover)
-                .width('100%')
-                .height('100%')
-                .objectFit(ImageFit.Cover)
-            } else if (this.book.cover.startsWith('/')) {
-              Image('file://' + this.book.cover)
-                .width('100%')
-                .height('100%')
-                .objectFit(ImageFit.Cover)
-            } else {
-              Image($rawfile(this.book.cover))
-                .width('100%')
-                .height('100%')
-                .objectFit(ImageFit.Cover)
-            }
-          }
-          // 封面模糊层
-          Column()
-            .width('100%')
-            .height('100%')
-            .backgroundEffect({
-              radius: this.renderBlur ? 80 : 0,
-              saturation: 0.7,
-              brightness: 0.85,
-              color: this.blurColor
-            })
-            .animation({ duration: 600, curve: Curve.EaseOut })
-        }
+        Column()
+          .width('100%')
+          .height('100%')
+          .linearGradient({
+            angle: 160,
+            colors: this.hasThemeColor
+              ? [[this.themeColorHex, 0], [this.themeColorDarkHex, 1]]
+              : [['#2A2A2A', 0], ['#1A1A1A', 1]]
+          })
+          .animation({ duration: 600, curve: Curve.EaseOut })
       }
       .width('100%')
       .height('100%')
@@ -512,7 +556,22 @@ export struct PlayerPage {
       SymbolGlyph($r('sys.symbol.chevron_down'))
         .fontSize(24)
         .fontColor(['#FFFFFF'])
-        .onClick(() => this.navStack.pop())
+        .onClick(() => {
+          // mini 入口走共享元素反向,其他入口走 customTransition 下滑
+          if (this.entryFromMini) {
+            // 恢复 fromMini 让 mini 端挂上 id,然后走反向共享元素
+            playerEntryState.fromMini = true;
+            this.getUIContext().animateTo({
+              duration: 420,
+              curve: curves.springMotion(0.6, 0.9)
+            }, () => {
+              // 必须传 false 关闭系统默认转场,否则会吞掉共享元素动画
+              this.navStack.pop(false);
+            });
+          } else {
+            this.navStack.pop();
+          }
+        })
       Blank()
       SymbolGlyph($r('sys.symbol.info_circle'))
         .fontSize(24)
@@ -530,47 +589,91 @@ export struct PlayerPage {
   @Builder
   buildCover() {
     Column() {
-      Stack() {
-        if (this.book!.cover && this.book!.cover.startsWith('http')) {
-          Image(this.book!.cover)
+      if (this.entryFromMini) {
+        // mini 入口:挂 geometryTransition 共享元素
+        Stack() {
+          if (this.book!.cover && this.book!.cover.startsWith('http')) {
+            Image(this.book!.cover)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .alt($r('app.media.startIcon'))
+              .onError(() => {
+                console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
+              })
+              .onAppear(() => {
+                console.error('[PlayerPage] cover APPEAR, fromMini=true, id=mini-cover-' + this.bookId);
+              })
+          } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+            Image('file://' + this.book!.cover)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          } else if (this.book!.cover) {
+            Image($rawfile(this.book!.cover))
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          } else {
+            Column() {
+              SymbolGlyph($r('sys.symbol.music'))
+                .fontSize(80)
+                .fontColor(['#FFFFFF'])
+            }
             .width('100%')
-            .aspectRatio(1)
-            .borderRadius(16)
-            .objectFit(ImageFit.Cover)
-            .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-            .alt($r('app.media.startIcon'))
-            .onError(() => {
-              console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
-            })
-        } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-          Image('file://' + this.book!.cover)
-            .width('100%')
-            .aspectRatio(1)
-            .borderRadius(16)
-            .objectFit(ImageFit.Cover)
-            .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-        } else if (this.book!.cover) {
-          Image($rawfile(this.book!.cover))
-            .width('100%')
-            .aspectRatio(1)
-            .borderRadius(16)
-            .objectFit(ImageFit.Cover)
-            .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-        } else {
-          Column() {
-            SymbolGlyph($r('sys.symbol.music'))
-              .fontSize(80)
-              .fontColor(['#FFFFFF'])
+            .height('100%')
+            .backgroundColor('#55FFFFFF')
+            .justifyContent(FlexAlign.Center)
+            .alignItems(HorizontalAlign.Center)
           }
-          .width('100%')
-          .aspectRatio(1)
-          .borderRadius(16)
-          .backgroundColor('#55FFFFFF')
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
         }
+        .width('100%')
+        .aspectRatio(1)
+        .borderRadius(16)
+        .clip(true)
+        .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+        .geometryTransition('mini-cover-' + this.bookId)
+      } else {
+        // 其他入口:不挂 geometryTransition
+        Stack() {
+          if (this.book!.cover && this.book!.cover.startsWith('http')) {
+            Image(this.book!.cover)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .alt($r('app.media.startIcon'))
+              .onError(() => {
+                console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
+              })
+          } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+            Image('file://' + this.book!.cover)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          } else if (this.book!.cover) {
+            Image($rawfile(this.book!.cover))
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+          } else {
+            Column() {
+              SymbolGlyph($r('sys.symbol.music'))
+                .fontSize(80)
+                .fontColor(['#FFFFFF'])
+            }
+            .width('100%')
+            .height('100%')
+            .backgroundColor('#55FFFFFF')
+            .justifyContent(FlexAlign.Center)
+            .alignItems(HorizontalAlign.Center)
+          }
+        }
+        .width('100%')
+        .aspectRatio(1)
+        .borderRadius(16)
+        .clip(true)
+        .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
       }
-      .width('100%')
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -693,6 +796,7 @@ export struct PlayerPage {
       .height(64)
       .clickEffect({ level: ClickEffectLevel.MIDDLE, scale: 0.92 })
       .onClick(() => {
+        console.error('[PlayerPage] Play button clicked, fromMini=' + playerEntryState.fromMini);
         // 加载中禁止重复触发
         if (!this.playerState.isLoading) this.togglePlay();
       })
@@ -804,6 +908,14 @@ export struct PlayerPage {
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+
+          // 章节搜索框（原生 Search,与首页一致）
+          Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
+            .onChange((value: string) => this.applyChapterFilter(value))
+            .height(40)
+            .backgroundColor($r('sys.color.comp_background_tertiary'))
+            .borderRadius(AppRadius.Lg)
+            .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
           this.buildChapterItems()
         }

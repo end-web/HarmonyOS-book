@@ -1,5 +1,6 @@
 import { AppSpace, AppFont } from '../theme/Theme';
 import { PlayerState } from '../model/PlayerState';
+import { playerEntryState } from '../pages/PlayerPage';
 
 @ComponentV2
 export struct MiniPlayer {
@@ -59,7 +60,6 @@ export struct MiniPlayer {
         Image(this.playerState.currentBook.cover)
           .width('100%')
           .height('100%')
-          .borderRadius(this.collapsed ? 28 : 20)
           .objectFit(ImageFit.Cover)
           .rotate({ angle: this.coverAngle })
           .id('mini-cover-img')
@@ -67,7 +67,6 @@ export struct MiniPlayer {
         Image('file://' + this.playerState.currentBook.cover)
           .width('100%')
           .height('100%')
-          .borderRadius(this.collapsed ? 28 : 20)
           .objectFit(ImageFit.Cover)
           .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
           .animation({
@@ -81,7 +80,6 @@ export struct MiniPlayer {
         Image($rawfile(this.playerState.currentBook.cover))
           .width('100%')
           .height('100%')
-          .borderRadius(this.collapsed ? 28 : 20)
           .objectFit(ImageFit.Cover)
           .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
           .animation({
@@ -106,13 +104,28 @@ export struct MiniPlayer {
         .onClick(() => this.onExpand())
       } else {
         Row({ space: AppSpace.Sm }) {
-          Stack() {
-            this.coverImageBuilder()
+          if (playerEntryState.fromMini) {
+            // mini 入口:挂 geometryTransition
+            Stack() {
+              this.coverImageBuilder()
+            }
+            .width(44)
+            .height(44)
+            .borderRadius(22)
+            .clip(true)
+            .geometryTransition('mini-cover-' + this.bookId(), { follow: true })
+            .onClick(() => this.onTapBody())
+          } else {
+            // 非 mini 入口:不挂 geometryTransition
+            Stack() {
+              this.coverImageBuilder()
+            }
+            .width(44)
+            .height(44)
+            .borderRadius(22)
+            .clip(true)
+            .onClick(() => this.onTapBody())
           }
-          .width(44)
-          .height(44)
-          .geometryTransition('mini-cover-' + this.bookId(), { follow: true })
-          .onClick(() => this.onTapBody())
 
           Column({ space: 2 }) {
             Text(this.playerState.currentBook.title)

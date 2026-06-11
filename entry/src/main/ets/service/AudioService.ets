@@ -18,6 +18,7 @@ import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
+import { ColorPickerUtils } from '../utils/ColorPickerUtils';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
@@ -508,6 +509,12 @@ export class AudioService {
       throw new Error('AudioService not bound');
     }
     this.cancelExternalMediaWatch();
+
+    // 封面变化时预取融合色,让播放页入场时直接命中缓存
+    if (book.cover && (!this.state.currentBook || this.state.currentBook.cover !== book.cover)) {
+      this.preFetchCoverColor(book.cover);
+    }
+
     // ★ 同书+同章节短路:不 reset,直接 seek(0) + play,避免重新嗅探 URL
     if (this.canReuseSameChapter(book, chapter)) {
       await this.replaySameChapterFromStart();
@@ -552,6 +559,27 @@ export class AudioService {
     if (!p) return false;
     const s = p.state;
     return s === 'playing' || s === 'paused' || s === 'prepared' || s === 'completed';
+  }
+
+  /** 封面变化时预取融合色并缓存,让播放页入场时瞬时显示而非灰色过渡 */
+  private preFetchCoverColor(cover: string): void {
+    if (!this.context) return;
+    // 缓存命中直接返回
+    if (ColorPickerUtils.getCached(cover)) return;
+    // 异步取色不阻塞播放,立即启动
+    (async () => {
+      try {
+        if (cover.startsWith('http')) {
+          await ColorPickerUtils.pickFromUrl(cover);
+        } else if (cover.startsWith('/')) {
+          await ColorPickerUtils.pickFromFile(cover);
+        } else {
+          await ColorPickerUtils.pickFromRawfile(this.context!, cover);
+        }
+      } catch (e) {
+        // 取色失败不影响播放,静默
+      }
+    })();
   }
 
   /**

@@ -1,6 +1,8 @@
+import { common } from '@kit.AbilityKit';
+import { curves } from '@kit.ArkUI';
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
-import { PlayerPage, PlayerBackInterceptor } from './PlayerPage';
+import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider, playerEntryState } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
@@ -38,6 +40,9 @@ struct Index {
   private lastConsumedRouteTs: number = 0;
 
   aboutToAppear(): void {
+    // 先 push home 作为栈底,再消费 widget 路由,保证栈不空
+    this.navStack.pushPathByName('home', null, false);
+
     // 注册 JavaBridge 回调（toast / 浏览器 / 刷新发现页）
     this.registerJavaBridgeCallbacks();
 
@@ -142,6 +147,8 @@ struct Index {
         // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
         const cur = this.navStack.getAllPathName();
         if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
+        // widget 入口,非 mini
+        playerEntryState.fromMini = false;
         this.navStack.pushPathByName('player', bookId, false);
       }
       // 无 bookId 时停在主页,避免黑屏
@@ -153,7 +160,24 @@ struct Index {
 
   @Builder
   routerMap(name: string, param: object) {
-    if (name === 'detail') {
+    if (name === 'home') {
+      NavDestination() {
+        MainPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .onBackPressed((): boolean => {
+        // 根页返回:移到后台而不是 pop,保证退出应用
+        try {
+          const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+          ctx.moveAbilityToBackground();
+          return true;
+        } catch (e) {
+          console.error(`[Index] moveAbilityToBackground error: ${e}`);
+          return false;
+        }
+      })
+    } else if (name === 'detail') {
       NavDestination() {
         DetailPageWrapper({ navStack: this.navStack, bookId: param as Object as string })
       }
@@ -165,12 +189,39 @@ struct Index {
         PlayerPageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
+      // 关闭系统默认转场,让 customTransition + geometryTransition 完全接管
+      .systemTransition(NavigationSystemTransitionType.NONE)
       // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
-      .onBackPressed((): boolean => PlayerBackInterceptor.consume())
+      .onBackPressed((): boolean => {
+        const isFromMini = PlayerEntryDecider.isFromMini();
+        console.error('[ListenBook][BACK] onBackPressed fired, isFromMini=' + isFromMini);
+        // 优先关抽屉
+        if (PlayerBackInterceptor.consume()) return true;
+        // mini 入口走共享元素反向
+        if (isFromMini) {
+          console.error('[ListenBook][BACK] running animateTo reverse');
+          // 恢复 fromMini 让 mini 端挂上 id
+          playerEntryState.fromMini = true;
+          this.getUIContext().animateTo({
+            duration: 420,
+            curve: curves.springMotion(0.6, 0.9)
+          }, () => {
+            this.navStack.pop(false);
+          });
+          return true;
+        }
+        console.error('[ListenBook][BACK] fallback to system pop');
+        return false;
+      })
       .backgroundColor('#000000')
       .translate({ y: this.playerTranslateY })
       .borderRadius(this.playerBorderRadius)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
+        // mini 入口走 geometryTransition,跳过 customTransition
+        if (playerEntryState.fromMini) {
+          return undefined;
+        }
+        // 其他入口保留上滑/下滑转场
         if (op === NavigationOperation.PUSH && isEnter) {
           this.playerTranslateY = '100%';
           this.playerBorderRadius = 20;
@@ -193,7 +244,12 @@ struct Index {
               this.playerTranslateY = '100%';
               this.playerBorderRadius = 20;
             },
-            onTransitionEnd: () => {}
+            onTransitionEnd: () => {
+              // POP 动画结束后必须把状态归零,否则下次 push(尤其 animated:false 的 mini 入口)
+              // 会拿到上次 POP 留下的 '100%',NavDestination 整页向下偏导致白屏。
+              this.playerTranslateY = '0';
+              this.playerBorderRadius = 0;
+            }
           }];
         }
         return undefined;
@@ -270,7 +326,7 @@ struct Index {
 
   build() {
     Navigation(this.navStack) {
-      MainPage({ navStack: this.navStack })
+      // home 已在 aboutToAppear 中 push,根内容留空
     }
     .navDestination(this.routerMap)
     .hideTitleBar(true)
