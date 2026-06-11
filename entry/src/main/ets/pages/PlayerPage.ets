@@ -72,6 +72,8 @@ export class PlayerEntryDecider {
   private static handler: (() => PlayerEntryInfo) | null = null;
   /** 取消 pending 的标志清理 timer,避免反向动画时被错误清空 */
   private static cancelPendingClearHandler: (() => void) | null = null;
+  /** 标记 PlayerPage 即将离开,让 loadBook 异步链提前退出 */
+  private static markLeavingHandler: (() => void) | null = null;
 
   static set(h: (() => PlayerEntryInfo) | null): void {
     PlayerEntryDecider.handler = h;
@@ -79,6 +81,10 @@ export class PlayerEntryDecider {
 
   static setCancelPendingClear(h: (() => void) | null): void {
     PlayerEntryDecider.cancelPendingClearHandler = h;
+  }
+
+  static setMarkLeaving(h: (() => void) | null): void {
+    PlayerEntryDecider.markLeavingHandler = h;
   }
 
   static get(): PlayerEntryInfo {
@@ -93,6 +99,13 @@ export class PlayerEntryDecider {
   static cancelPendingClear(): void {
     if (PlayerEntryDecider.cancelPendingClearHandler) {
       PlayerEntryDecider.cancelPendingClearHandler();
+    }
+  }
+
+  /** 返回前调用,通知 PlayerPage 立即停止 loadBook 等异步操作 */
+  static markLeaving(): void {
+    if (PlayerEntryDecider.markLeavingHandler) {
+      PlayerEntryDecider.markLeavingHandler();
     }
   }
 
@@ -150,6 +163,8 @@ export struct PlayerPage {
   private clearBookCardTimerId: number = -1;
   /** 延迟加载 timer id,用户立即返回时需要 cancel,避免阻塞返回响应 */
   private deferredLoadTimerId: number = -1;
+  /** 用户已触发返回,loadBook 异步链应在 await 后检查并提前退出,避免阻塞主线程 */
+  private isLeaving: boolean = false;
 
   /** 取消 pending 的清理 timer,返回前调用确保标志保留供反向动画使用 */
   private cancelPendingClearTimers(): void {
@@ -182,6 +197,7 @@ export struct PlayerPage {
       return info;
     });
     PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
+    PlayerEntryDecider.setMarkLeaving(() => { this.isLeaving = true; });
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
@@ -232,9 +248,11 @@ export struct PlayerPage {
   }
 
   aboutToDisappear(): void {
+    this.isLeaving = true;
     PlayerBackInterceptor.set(null);
     PlayerEntryDecider.set(null);
     PlayerEntryDecider.setCancelPendingClear(null);
+    PlayerEntryDecider.setMarkLeaving(null);
     this.cancelPendingClearTimers();
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
@@ -275,9 +293,11 @@ export struct PlayerPage {
   private async loadBook(): Promise<void> {
     // 等待 EntryAbility.bootstrapAudioService 完成，确保冷启动时 playerState/DataService 已就绪
     await AudioService.getInstance().whenReady();
+    if (this.isLeaving) return;
     let b = SearchCache.get(this.bookId);
     if (!b) {
       b = await DataService.getBookById(this.context!, this.bookId) || null;
+      if (this.isLeaving) return;
     }
     if (!b && this.playerState.currentBook) {
       // 不强制 id 匹配:卡片语义就是"打开正在播放的书",不同会话间 id 可能因
@@ -291,13 +311,14 @@ export struct PlayerPage {
     }
     this.book = b;
     this.isFavorite = await PreferenceService.isFavorite(b.id);
+    if (this.isLeaving) return;
     this.extractCoverColor(b.cover);
 
     // 绑定全局状态/上下文
     AudioService.getInstance().bind(this.playerState, this.context!);
 
     // 历史记录入口：若指定了恢复章节，且当前 AudioService 没有在播放该章节，则主动起播 + seek
-    if (this.resumeChapterId) {
+    if (this.resumeChapterId && !this.isLeaving) {
       await this.tryResumePlay(b);
     }
   }
@@ -634,6 +655,8 @@ export struct PlayerPage {
         .fontSize(24)
         .fontColor(['#FFFFFF'])
         .onClick(() => {
+          // 立即标记离开,让 loadBook 异步链提前退出,不阻塞主线程
+          this.isLeaving = true;
           // mini/书架入口走共享元素反向,其他入口走 customTransition 下滑
           if (this.entryFromMini || this.entryFromBookCard) {
             // 先取消 pending 的清理 timer,避免反向动画期间标志被误清
