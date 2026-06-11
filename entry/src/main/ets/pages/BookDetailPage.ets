@@ -291,10 +291,8 @@ export struct BookDetailPage {
     // ★ 当前在播的就是同书:直接 push player 不带 chapter 参数,PlayerPage 复用 live state,
     //   避免 tryResumePlay 触发 playChapterAndSeek 重置
     if (PlaybackStore.getInstance().isCurrentBook(this.book.id)) {
-      // 详情页入口,非共享元素,且清理栈避免重复 player
+      // 详情页入口,非 mini,且清理栈避免重复 player
       playerEntryState.fromMini = false;
-      playerEntryState.fromBookCard = false;
-      playerEntryState.bookCardId = '';
       this.cleanStackBeforePushPlayer();
       this.navStack.pushPathByName('player', this.bookId);
       this.isStartingPlay = false;
@@ -305,10 +303,8 @@ export struct BookDetailPage {
       'chapterId': target.id as Object,
       'progressMs': resumeProgressMs as Object
     };
-    // 详情页入口,非共享元素,且清理栈避免重复 player
+    // 详情页入口,非 mini,且清理栈避免重复 player
     playerEntryState.fromMini = false;
-    playerEntryState.fromBookCard = false;
-    playerEntryState.bookCardId = '';
     this.cleanStackBeforePushPlayer();
     this.navStack.pushPathByName('player', playerParams);
     this.isStartingPlay = false;

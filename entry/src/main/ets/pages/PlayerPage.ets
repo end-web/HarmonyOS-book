@@ -50,32 +50,23 @@ export class PlayerBackInterceptor {
 @ObservedV2
 export class PlayerEntryState {
   @Trace fromMini: boolean = false;
-  /** 书架卡片入口:书籍卡片封面飞起来放大变成播放页 */
-  @Trace fromBookCard: boolean = false;
-  @Trace bookCardId: string = '';
 }
 
 export const playerEntryState = new PlayerEntryState();
 
 /**
  * 由 PlayerPage 注册的"是否共享元素入口"决策器。
- * 进入后 playerEntryState 的标志会被清,但 PlayerPage 自身记忆入口类型,
+ * 进入后 playerEntryState.fromMini 会被清,但 PlayerPage 自身记忆 entryFromMini,
  * Index 的 onBackPressed 通过此决策器读取真实入口类型,决定走共享元素还是普通 pop。
  */
-export interface PlayerEntryInfo {
-  fromMini: boolean;
-  fromBookCard: boolean;
-  bookCardId: string;
-}
-
 export class PlayerEntryDecider {
-  private static handler: (() => PlayerEntryInfo) | null = null;
+  private static handler: (() => boolean) | null = null;
   /** 取消 pending 的标志清理 timer,避免反向动画时被错误清空 */
   private static cancelPendingClearHandler: (() => void) | null = null;
   /** 标记 PlayerPage 即将离开,让 loadBook 异步链提前退出 */
   private static markLeavingHandler: (() => void) | null = null;
 
-  static set(h: (() => PlayerEntryInfo) | null): void {
+  static set(h: (() => boolean) | null): void {
     PlayerEntryDecider.handler = h;
   }
 
@@ -87,12 +78,8 @@ export class PlayerEntryDecider {
     PlayerEntryDecider.markLeavingHandler = h;
   }
 
-  static get(): PlayerEntryInfo {
-    if (PlayerEntryDecider.handler) {
-      return PlayerEntryDecider.handler();
-    }
-    const empty: PlayerEntryInfo = { fromMini: false, fromBookCard: false, bookCardId: '' };
-    return empty;
+  static isFromMini(): boolean {
+    return PlayerEntryDecider.handler ? PlayerEntryDecider.handler() : false;
   }
 
   /** 返回前调用,取消可能 pending 的标志清理 timer,确保反向动画期间标志保持 true */
@@ -107,11 +94,6 @@ export class PlayerEntryDecider {
     if (PlayerEntryDecider.markLeavingHandler) {
       PlayerEntryDecider.markLeavingHandler();
     }
-  }
-
-  static isFromSharedEntry(): boolean {
-    const info = PlayerEntryDecider.get();
-    return info.fromMini || info.fromBookCard;
   }
 }
 
@@ -155,12 +137,8 @@ export struct PlayerPage {
   };
   /** 记忆入口类型:进入时捕获 fromMini 值,用于决定返回时走共享元素还是普通 pop */
   private entryFromMini: boolean = false;
-  /** 记忆书架卡片入口:书籍卡片封面飞起来放大 */
-  private entryFromBookCard: boolean = false;
-  private entryBookCardId: string = '';
   /** 标志清理 timer id,返回时需要 cancel 避免反向动画期间误清 */
   private clearMiniTimerId: number = -1;
-  private clearBookCardTimerId: number = -1;
   /** 延迟加载 timer id,用户立即返回时需要 cancel,避免阻塞返回响应 */
   private deferredLoadTimerId: number = -1;
   /** 用户已触发返回,loadBook 异步链应在 await 后检查并提前退出,避免阻塞主线程 */
@@ -172,10 +150,6 @@ export struct PlayerPage {
       clearTimeout(this.clearMiniTimerId);
       this.clearMiniTimerId = -1;
     }
-    if (this.clearBookCardTimerId !== -1) {
-      clearTimeout(this.clearBookCardTimerId);
-      this.clearBookCardTimerId = -1;
-    }
     if (this.deferredLoadTimerId !== -1) {
       clearTimeout(this.deferredLoadTimerId);
       this.deferredLoadTimerId = -1;
@@ -186,16 +160,7 @@ export struct PlayerPage {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     // 记忆入口并注册决策器
     this.entryFromMini = playerEntryState.fromMini;
-    this.entryFromBookCard = playerEntryState.fromBookCard;
-    this.entryBookCardId = playerEntryState.bookCardId;
-    PlayerEntryDecider.set((): PlayerEntryInfo => {
-      const info: PlayerEntryInfo = {
-        fromMini: this.entryFromMini,
-        fromBookCard: this.entryFromBookCard,
-        bookCardId: this.entryBookCardId
-      };
-      return info;
-    });
+    PlayerEntryDecider.set((): boolean => this.entryFromMini);
     PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
     PlayerEntryDecider.setMarkLeaving(() => { this.isLeaving = true; });
     PlayerBackInterceptor.set((): boolean => this.handleBack());
@@ -211,13 +176,6 @@ export struct PlayerPage {
         this.clearMiniTimerId = setTimeout(() => {
           playerEntryState.fromMini = false;
           this.clearMiniTimerId = -1;
-        }, 500);
-      }
-      if (this.entryFromBookCard) {
-        this.clearBookCardTimerId = setTimeout(() => {
-          playerEntryState.fromBookCard = false;
-          playerEntryState.bookCardId = '';
-          this.clearBookCardTimerId = -1;
         }, 500);
       }
     }, AppMotion.Page);
@@ -257,7 +215,7 @@ export struct PlayerPage {
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
-    // 不在这里清 fromMini/fromBookCard,避免第二次快速进入时状态竞态
+    // 不在这里清 fromMini,避免第二次快速进入时状态竞态
   }
 
   /**
@@ -657,18 +615,12 @@ export struct PlayerPage {
         .onClick(() => {
           // 立即标记离开,让 loadBook 异步链提前退出,不阻塞主线程
           this.isLeaving = true;
-          // mini/书架入口走共享元素反向,其他入口走 customTransition 下滑
-          if (this.entryFromMini || this.entryFromBookCard) {
+          // mini 入口走共享元素反向,其他入口走 customTransition 下滑
+          if (this.entryFromMini) {
             // 先取消 pending 的清理 timer,避免反向动画期间标志被误清
             this.cancelPendingClearTimers();
-            // 恢复标志让 source 端挂上 id,然后走反向共享元素
-            if (this.entryFromMini) {
-              playerEntryState.fromMini = true;
-            }
-            if (this.entryFromBookCard) {
-              playerEntryState.fromBookCard = true;
-              playerEntryState.bookCardId = this.entryBookCardId;
-            }
+            // 恢复 fromMini 让 mini 端挂上 id,然后走反向共享元素
+            playerEntryState.fromMini = true;
             this.getUIContext().animateTo({
               duration: 420,
               curve: curves.springMotion(0.6, 0.9)
@@ -694,13 +646,10 @@ export struct PlayerPage {
     .height(48)
   }
 
-  /** 计算 geometryTransition id:仅当从 mini/书架入口时返回非空 */
+  /** 计算 geometryTransition id:仅当从 mini 入口时返回非空 */
   private getCoverTransitionId(): string {
     if (this.entryFromMini) {
       return 'mini-cover-' + this.bookId;
-    }
-    if (this.entryFromBookCard) {
-      return 'book-cover-' + this.entryBookCardId;
     }
     return '';
   }

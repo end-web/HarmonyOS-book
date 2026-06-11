@@ -147,10 +147,8 @@ struct Index {
         // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
         const cur = this.navStack.getAllPathName();
         if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
-        // widget 入口,非共享元素
+        // widget 入口,非 mini
         playerEntryState.fromMini = false;
-        playerEntryState.fromBookCard = false;
-        playerEntryState.bookCardId = '';
         this.navStack.pushPathByName('player', bookId, false);
       }
       // 无 bookId 时停在主页,避免黑屏
@@ -195,26 +193,19 @@ struct Index {
       .systemTransition(NavigationSystemTransitionType.NONE)
       // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
       .onBackPressed((): boolean => {
-        const entryInfo = PlayerEntryDecider.get();
-        const isSharedEntry = entryInfo.fromMini || entryInfo.fromBookCard;
-        console.error('[ListenBook][BACK] onBackPressed fired, isSharedEntry=' + isSharedEntry);
+        const isFromMini = PlayerEntryDecider.isFromMini();
+        console.error('[ListenBook][BACK] onBackPressed fired, isFromMini=' + isFromMini);
         // 优先关抽屉
         if (PlayerBackInterceptor.consume()) return true;
-        // mini/书架入口走共享元素反向
-        if (isSharedEntry) {
+        // mini 入口走共享元素反向
+        if (isFromMini) {
           console.error('[ListenBook][BACK] running animateTo reverse');
           // 立即标记 PlayerPage 离开,让 loadBook 异步链提前退出,不阻塞返回响应
           PlayerEntryDecider.markLeaving();
           // 取消 pending 的清理 timer,避免反向动画期间标志被误清
           PlayerEntryDecider.cancelPendingClear();
-          // 恢复标志让 source 端挂上 id
-          if (entryInfo.fromMini) {
-            playerEntryState.fromMini = true;
-          }
-          if (entryInfo.fromBookCard) {
-            playerEntryState.fromBookCard = true;
-            playerEntryState.bookCardId = entryInfo.bookCardId;
-          }
+          // 恢复 fromMini 让 mini 端挂上 id
+          playerEntryState.fromMini = true;
           this.getUIContext().animateTo({
             duration: 420,
             curve: curves.springMotion(0.6, 0.9)
@@ -230,8 +221,8 @@ struct Index {
       .translate({ y: this.playerTranslateY })
       .borderRadius(this.playerBorderRadius)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        // mini/书架入口走 geometryTransition,跳过 customTransition
-        if (playerEntryState.fromMini || playerEntryState.fromBookCard) {
+        // mini 入口走 geometryTransition,跳过 customTransition
+        if (playerEntryState.fromMini) {
           return undefined;
         }
         // 其他入口保留上滑/下滑转场

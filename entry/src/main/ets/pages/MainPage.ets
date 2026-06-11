@@ -84,18 +84,14 @@ export struct MainPage {
       return;
     }
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      // 点击当前正在播放的书,直接进播放页(不走共享元素,用常规转场)
+      // 点击当前正在播放的书,直接进播放页(不走 mini,用常规转场)
       playerEntryState.fromMini = false;
-      playerEntryState.fromBookCard = false;
-      playerEntryState.bookCardId = '';
       this.navStack.pushPathByName('player', bookId);
       return;
     }
     if (chapterId) {
-      // 从详情页进入指定章节,非共享元素入口
+      // 从详情页进入指定章节,非 mini 入口
       playerEntryState.fromMini = false;
-      playerEntryState.fromBookCard = false;
-      playerEntryState.bookCardId = '';
       const params: Record<string, Object> = {
         'bookId': bookId,
         'chapterId': chapterId,
@@ -326,10 +322,8 @@ export struct MainPage {
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
     const bookId = this.playerState.currentBook.id;
-    // mini→player:共享元素转场,关闭系统转场(互斥清掉 fromBookCard)
+    // mini→player:共享元素转场,关闭系统转场
     playerEntryState.fromMini = true;
-    playerEntryState.fromBookCard = false;
-    playerEntryState.bookCardId = '';
     this.getUIContext().animateTo({
       duration: 420,
       curve: curves.springMotion(0.6, 0.9)
