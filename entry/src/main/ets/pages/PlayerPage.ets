@@ -76,9 +76,11 @@ export class PlayerEntryDecider {
   }
 
   static get(): PlayerEntryInfo {
-    return PlayerEntryDecider.handler
-      ? PlayerEntryDecider.handler()
-      : { fromMini: false, fromBookCard: false, bookCardId: '' };
+    if (PlayerEntryDecider.handler) {
+      return PlayerEntryDecider.handler();
+    }
+    const empty: PlayerEntryInfo = { fromMini: false, fromBookCard: false, bookCardId: '' };
+    return empty;
   }
 
   static isFromSharedEntry(): boolean {
@@ -137,11 +139,14 @@ export struct PlayerPage {
     this.entryFromMini = playerEntryState.fromMini;
     this.entryFromBookCard = playerEntryState.fromBookCard;
     this.entryBookCardId = playerEntryState.bookCardId;
-    PlayerEntryDecider.set(() => ({
-      fromMini: this.entryFromMini,
-      fromBookCard: this.entryFromBookCard,
-      bookCardId: this.entryBookCardId
-    }));
+    PlayerEntryDecider.set((): PlayerEntryInfo => {
+      const info: PlayerEntryInfo = {
+        fromMini: this.entryFromMini,
+        fromBookCard: this.entryFromBookCard,
+        bookCardId: this.entryBookCardId
+      };
+      return info;
+    });
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
@@ -624,18 +629,21 @@ export struct PlayerPage {
     .height(48)
   }
 
+  /** 计算 geometryTransition id:仅当从 mini/书架入口时返回非空 */
+  private getCoverTransitionId(): string {
+    if (this.entryFromMini) {
+      return 'mini-cover-' + this.bookId;
+    }
+    if (this.entryFromBookCard) {
+      return 'book-cover-' + this.entryBookCardId;
+    }
+    return '';
+  }
+
   @Builder
   buildCover() {
     Column() {
-      // 计算 geometryTransition id
-      let transitionId = '';
-      if (this.entryFromMini) {
-        transitionId = 'mini-cover-' + this.bookId;
-      } else if (this.entryFromBookCard) {
-        transitionId = 'book-cover-' + this.entryBookCardId;
-      }
-
-      if (transitionId) {
+      if (this.getCoverTransitionId()) {
         // mini/书架入口:挂 geometryTransition 共享元素
         Stack() {
           if (this.book!.cover && this.book!.cover.startsWith('http')) {
@@ -675,7 +683,7 @@ export struct PlayerPage {
         .borderRadius(16)
         .clip(true)
         .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-        .geometryTransition(transitionId)
+        .geometryTransition(this.getCoverTransitionId())
       } else {
         // 其他入口:不挂 geometryTransition
         Stack() {

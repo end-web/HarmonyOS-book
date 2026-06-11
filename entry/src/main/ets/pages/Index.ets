@@ -147,8 +147,10 @@ struct Index {
         // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
         const cur = this.navStack.getAllPathName();
         if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
-        // widget 入口,非 mini
+        // widget 入口,非共享元素
         playerEntryState.fromMini = false;
+        playerEntryState.fromBookCard = false;
+        playerEntryState.bookCardId = '';
         this.navStack.pushPathByName('player', bookId, false);
       }
       // 无 bookId 时停在主页,避免黑屏
