@@ -281,7 +281,8 @@ export struct FavoritePage {
     SearchCache.put(book);
     // ★ 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state
     if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
-      // 设置书架入口标志,启用共享元素动画
+      // 设置书架入口标志,启用共享元素动画(互斥清掉 fromMini)
+      playerEntryState.fromMini = false;
       playerEntryState.fromBookCard = true;
       playerEntryState.bookCardId = book.id;
       this.navStack.pushPathByName('player', book.id, onPop);
@@ -318,7 +319,8 @@ export struct FavoritePage {
       'chapterId': resolved.id as Object,
       'progressMs': history.progressMs as Object
     };
-    // 设置书架入口标志,启用共享元素动画
+    // 设置书架入口标志,启用共享元素动画(互斥清掉 fromMini)
+    playerEntryState.fromMini = false;
     playerEntryState.fromBookCard = true;
     playerEntryState.bookCardId = book.id;
     this.navStack.pushPathByName('player', params, onPop);
@@ -381,7 +383,8 @@ export struct FavoritePage {
         'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
-      // 设置书架入口标志,启用共享元素动画
+      // 设置书架入口标志,启用共享元素动画(互斥清掉 fromMini)
+      playerEntryState.fromMini = false;
       playerEntryState.fromBookCard = true;
       playerEntryState.bookCardId = book.id;
       this.navStack.pushPathByName('player', params, onPop);

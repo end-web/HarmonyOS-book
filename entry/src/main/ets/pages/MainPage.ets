@@ -326,8 +326,10 @@ export struct MainPage {
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
     const bookId = this.playerState.currentBook.id;
-    // mini→player:共享元素转场,关闭系统转场
+    // mini→player:共享元素转场,关闭系统转场(互斥清掉 fromBookCard)
     playerEntryState.fromMini = true;
+    playerEntryState.fromBookCard = false;
+    playerEntryState.bookCardId = '';
     this.getUIContext().animateTo({
       duration: 420,
       curve: curves.springMotion(0.6, 0.9)

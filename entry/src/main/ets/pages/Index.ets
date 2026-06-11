@@ -203,6 +203,8 @@ struct Index {
         // mini/书架入口走共享元素反向
         if (isSharedEntry) {
           console.error('[ListenBook][BACK] running animateTo reverse');
+          // 先取消 pending 的清理 timer,避免反向动画期间标志被误清
+          PlayerEntryDecider.cancelPendingClear();
           // 恢复标志让 source 端挂上 id
           if (entryInfo.fromMini) {
             playerEntryState.fromMini = true;

@@ -70,9 +70,15 @@ export interface PlayerEntryInfo {
 
 export class PlayerEntryDecider {
   private static handler: (() => PlayerEntryInfo) | null = null;
+  /** 取消 pending 的标志清理 timer,避免反向动画时被错误清空 */
+  private static cancelPendingClearHandler: (() => void) | null = null;
 
   static set(h: (() => PlayerEntryInfo) | null): void {
     PlayerEntryDecider.handler = h;
+  }
+
+  static setCancelPendingClear(h: (() => void) | null): void {
+    PlayerEntryDecider.cancelPendingClearHandler = h;
   }
 
   static get(): PlayerEntryInfo {
@@ -81,6 +87,13 @@ export class PlayerEntryDecider {
     }
     const empty: PlayerEntryInfo = { fromMini: false, fromBookCard: false, bookCardId: '' };
     return empty;
+  }
+
+  /** 返回前调用,取消可能 pending 的标志清理 timer,确保反向动画期间标志保持 true */
+  static cancelPendingClear(): void {
+    if (PlayerEntryDecider.cancelPendingClearHandler) {
+      PlayerEntryDecider.cancelPendingClearHandler();
+    }
   }
 
   static isFromSharedEntry(): boolean {
@@ -132,6 +145,27 @@ export struct PlayerPage {
   /** 记忆书架卡片入口:书籍卡片封面飞起来放大 */
   private entryFromBookCard: boolean = false;
   private entryBookCardId: string = '';
+  /** 标志清理 timer id,返回时需要 cancel 避免反向动画期间误清 */
+  private clearMiniTimerId: number = -1;
+  private clearBookCardTimerId: number = -1;
+  /** 延迟加载 timer id,用户立即返回时需要 cancel,避免阻塞返回响应 */
+  private deferredLoadTimerId: number = -1;
+
+  /** 取消 pending 的清理 timer,返回前调用确保标志保留供反向动画使用 */
+  private cancelPendingClearTimers(): void {
+    if (this.clearMiniTimerId !== -1) {
+      clearTimeout(this.clearMiniTimerId);
+      this.clearMiniTimerId = -1;
+    }
+    if (this.clearBookCardTimerId !== -1) {
+      clearTimeout(this.clearBookCardTimerId);
+      this.clearBookCardTimerId = -1;
+    }
+    if (this.deferredLoadTimerId !== -1) {
+      clearTimeout(this.deferredLoadTimerId);
+      this.deferredLoadTimerId = -1;
+    }
+  }
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -147,23 +181,27 @@ export struct PlayerPage {
       };
       return info;
     });
+    PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(true);
-    setTimeout(() => {
+    this.deferredLoadTimerId = setTimeout(() => {
+      this.deferredLoadTimerId = -1;
       this.renderBlur = true;
       this.loadBook();
       // 共享元素动画完成后清标志,避免 player 内部状态变化触发节点重建误配对
       if (this.entryFromMini) {
-        setTimeout(() => {
+        this.clearMiniTimerId = setTimeout(() => {
           playerEntryState.fromMini = false;
+          this.clearMiniTimerId = -1;
         }, 500);
       }
       if (this.entryFromBookCard) {
-        setTimeout(() => {
+        this.clearBookCardTimerId = setTimeout(() => {
           playerEntryState.fromBookCard = false;
           playerEntryState.bookCardId = '';
+          this.clearBookCardTimerId = -1;
         }, 500);
       }
     }, AppMotion.Page);
@@ -196,6 +234,8 @@ export struct PlayerPage {
   aboutToDisappear(): void {
     PlayerBackInterceptor.set(null);
     PlayerEntryDecider.set(null);
+    PlayerEntryDecider.setCancelPendingClear(null);
+    this.cancelPendingClearTimers();
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
@@ -596,6 +636,8 @@ export struct PlayerPage {
         .onClick(() => {
           // mini/书架入口走共享元素反向,其他入口走 customTransition 下滑
           if (this.entryFromMini || this.entryFromBookCard) {
+            // 先取消 pending 的清理 timer,避免反向动画期间标志被误清
+            this.cancelPendingClearTimers();
             // 恢复标志让 source 端挂上 id,然后走反向共享元素
             if (this.entryFromMini) {
               playerEntryState.fromMini = true;
