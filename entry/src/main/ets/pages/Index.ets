@@ -193,15 +193,22 @@ struct Index {
       .systemTransition(NavigationSystemTransitionType.NONE)
       // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
       .onBackPressed((): boolean => {
-        const isFromMini = PlayerEntryDecider.isFromMini();
-        console.error('[ListenBook][BACK] onBackPressed fired, isFromMini=' + isFromMini);
+        const entryInfo = PlayerEntryDecider.get();
+        const isSharedEntry = entryInfo.fromMini || entryInfo.fromBookCard;
+        console.error('[ListenBook][BACK] onBackPressed fired, isSharedEntry=' + isSharedEntry);
         // 优先关抽屉
         if (PlayerBackInterceptor.consume()) return true;
-        // mini 入口走共享元素反向
-        if (isFromMini) {
+        // mini/书架入口走共享元素反向
+        if (isSharedEntry) {
           console.error('[ListenBook][BACK] running animateTo reverse');
-          // 恢复 fromMini 让 mini 端挂上 id
-          playerEntryState.fromMini = true;
+          // 恢复标志让 source 端挂上 id
+          if (entryInfo.fromMini) {
+            playerEntryState.fromMini = true;
+          }
+          if (entryInfo.fromBookCard) {
+            playerEntryState.fromBookCard = true;
+            playerEntryState.bookCardId = entryInfo.bookCardId;
+          }
           this.getUIContext().animateTo({
             duration: 420,
             curve: curves.springMotion(0.6, 0.9)
@@ -217,8 +224,8 @@ struct Index {
       .translate({ y: this.playerTranslateY })
       .borderRadius(this.playerBorderRadius)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        // mini 入口走 geometryTransition,跳过 customTransition
-        if (playerEntryState.fromMini) {
+        // mini/书架入口走 geometryTransition,跳过 customTransition
+        if (playerEntryState.fromMini || playerEntryState.fromBookCard) {
           return undefined;
         }
         // 其他入口保留上滑/下滑转场

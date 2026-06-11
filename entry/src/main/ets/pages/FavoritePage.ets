@@ -8,6 +8,7 @@ import { TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
+import { playerEntryState } from './PlayerPage';
 import { SourceDataService } from '../service/SourceDataService';
 import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { PlaybackStore } from '../service/PlaybackStore';
@@ -280,6 +281,9 @@ export struct FavoritePage {
     SearchCache.put(book);
     // ★ 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state
     if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
+      // 设置书架入口标志,启用共享元素动画
+      playerEntryState.fromBookCard = true;
+      playerEntryState.bookCardId = book.id;
       this.navStack.pushPathByName('player', book.id, onPop);
       return;
     }
@@ -314,6 +318,9 @@ export struct FavoritePage {
       'chapterId': resolved.id as Object,
       'progressMs': history.progressMs as Object
     };
+    // 设置书架入口标志,启用共享元素动画
+    playerEntryState.fromBookCard = true;
+    playerEntryState.bookCardId = book.id;
     this.navStack.pushPathByName('player', params, onPop);
   }
 
@@ -374,6 +381,9 @@ export struct FavoritePage {
         'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
+      // 设置书架入口标志,启用共享元素动画
+      playerEntryState.fromBookCard = true;
+      playerEntryState.bookCardId = book.id;
       this.navStack.pushPathByName('player', params, onPop);
     } catch (_e) {
       try {
@@ -622,6 +632,7 @@ export struct FavoritePage {
       .borderRadius(AppRadius.Md)
       .clip(true)
       .shadow({ radius: 4, color: '#1A000000', offsetY: 1 })
+      .geometryTransition(playerEntryState.fromBookCard ? 'book-cover-' + book.id : '')
 
       Text(book.title)
         .fontSize(AppFont.Body)
@@ -735,6 +746,7 @@ export struct FavoritePage {
         }
         this.buildTypeBadge(true)
       }
+      .geometryTransition(playerEntryState.fromBookCard ? 'book-cover-' + book.id : '')
 
       Column({ space: 4 }) {
         Text(book.title)

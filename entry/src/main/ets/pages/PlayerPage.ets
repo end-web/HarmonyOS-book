@@ -50,24 +50,40 @@ export class PlayerBackInterceptor {
 @ObservedV2
 export class PlayerEntryState {
   @Trace fromMini: boolean = false;
+  /** 书架卡片入口:书籍卡片封面飞起来放大变成播放页 */
+  @Trace fromBookCard: boolean = false;
+  @Trace bookCardId: string = '';
 }
 
 export const playerEntryState = new PlayerEntryState();
 
 /**
- * 由 PlayerPage 注册的"是否 mini 入口"决策器。
- * 进入后 playerEntryState.fromMini 会被清,但 PlayerPage 自身记忆 entryFromMini,
+ * 由 PlayerPage 注册的"是否共享元素入口"决策器。
+ * 进入后 playerEntryState 的标志会被清,但 PlayerPage 自身记忆入口类型,
  * Index 的 onBackPressed 通过此决策器读取真实入口类型,决定走共享元素还是普通 pop。
  */
-export class PlayerEntryDecider {
-  private static handler: (() => boolean) | null = null;
+export interface PlayerEntryInfo {
+  fromMini: boolean;
+  fromBookCard: boolean;
+  bookCardId: string;
+}
 
-  static set(h: (() => boolean) | null): void {
+export class PlayerEntryDecider {
+  private static handler: (() => PlayerEntryInfo) | null = null;
+
+  static set(h: (() => PlayerEntryInfo) | null): void {
     PlayerEntryDecider.handler = h;
   }
 
-  static isFromMini(): boolean {
-    return PlayerEntryDecider.handler ? PlayerEntryDecider.handler() : false;
+  static get(): PlayerEntryInfo {
+    return PlayerEntryDecider.handler
+      ? PlayerEntryDecider.handler()
+      : { fromMini: false, fromBookCard: false, bookCardId: '' };
+  }
+
+  static isFromSharedEntry(): boolean {
+    const info = PlayerEntryDecider.get();
+    return info.fromMini || info.fromBookCard;
   }
 }
 
@@ -111,12 +127,21 @@ export struct PlayerPage {
   };
   /** 记忆入口类型:进入时捕获 fromMini 值,用于决定返回时走共享元素还是普通 pop */
   private entryFromMini: boolean = false;
+  /** 记忆书架卡片入口:书籍卡片封面飞起来放大 */
+  private entryFromBookCard: boolean = false;
+  private entryBookCardId: string = '';
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     // 记忆入口并注册决策器
     this.entryFromMini = playerEntryState.fromMini;
-    PlayerEntryDecider.set(() => this.entryFromMini);
+    this.entryFromBookCard = playerEntryState.fromBookCard;
+    this.entryBookCardId = playerEntryState.bookCardId;
+    PlayerEntryDecider.set(() => ({
+      fromMini: this.entryFromMini,
+      fromBookCard: this.entryFromBookCard,
+      bookCardId: this.entryBookCardId
+    }));
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
@@ -124,10 +149,16 @@ export struct PlayerPage {
     setTimeout(() => {
       this.renderBlur = true;
       this.loadBook();
-      // 共享元素动画完成后清 fromMini,避免 player 内部状态变化触发 mini 节点重建误配对
+      // 共享元素动画完成后清标志,避免 player 内部状态变化触发节点重建误配对
       if (this.entryFromMini) {
         setTimeout(() => {
           playerEntryState.fromMini = false;
+        }, 500);
+      }
+      if (this.entryFromBookCard) {
+        setTimeout(() => {
+          playerEntryState.fromBookCard = false;
+          playerEntryState.bookCardId = '';
         }, 500);
       }
     }, AppMotion.Page);
@@ -557,10 +588,16 @@ export struct PlayerPage {
         .fontSize(24)
         .fontColor(['#FFFFFF'])
         .onClick(() => {
-          // mini 入口走共享元素反向,其他入口走 customTransition 下滑
-          if (this.entryFromMini) {
-            // 恢复 fromMini 让 mini 端挂上 id,然后走反向共享元素
-            playerEntryState.fromMini = true;
+          // mini/书架入口走共享元素反向,其他入口走 customTransition 下滑
+          if (this.entryFromMini || this.entryFromBookCard) {
+            // 恢复标志让 source 端挂上 id,然后走反向共享元素
+            if (this.entryFromMini) {
+              playerEntryState.fromMini = true;
+            }
+            if (this.entryFromBookCard) {
+              playerEntryState.fromBookCard = true;
+              playerEntryState.bookCardId = this.entryBookCardId;
+            }
             this.getUIContext().animateTo({
               duration: 420,
               curve: curves.springMotion(0.6, 0.9)
@@ -589,8 +626,16 @@ export struct PlayerPage {
   @Builder
   buildCover() {
     Column() {
+      // 计算 geometryTransition id
+      let transitionId = '';
       if (this.entryFromMini) {
-        // mini 入口:挂 geometryTransition 共享元素
+        transitionId = 'mini-cover-' + this.bookId;
+      } else if (this.entryFromBookCard) {
+        transitionId = 'book-cover-' + this.entryBookCardId;
+      }
+
+      if (transitionId) {
+        // mini/书架入口:挂 geometryTransition 共享元素
         Stack() {
           if (this.book!.cover && this.book!.cover.startsWith('http')) {
             Image(this.book!.cover)
@@ -600,9 +645,6 @@ export struct PlayerPage {
               .alt($r('app.media.startIcon'))
               .onError(() => {
                 console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
-              })
-              .onAppear(() => {
-                console.error('[PlayerPage] cover APPEAR, fromMini=true, id=mini-cover-' + this.bookId);
               })
           } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
             Image('file://' + this.book!.cover)
@@ -632,7 +674,7 @@ export struct PlayerPage {
         .borderRadius(16)
         .clip(true)
         .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-        .geometryTransition('mini-cover-' + this.bookId)
+        .geometryTransition(transitionId)
       } else {
         // 其他入口:不挂 geometryTransition
         Stack() {
