@@ -81,6 +81,9 @@ export class ReaderService {
    */
   static async loadChapterText(book: Book, chapter: Chapter, nextChapter?: Chapter): Promise<string> {
     const paragraphs = await ReaderService.loadContent(book, chapter, nextChapter);
+    if (paragraphs.length > 1 && ReaderService.sameHeading(paragraphs[0], chapter.title)) {
+      paragraphs.shift();
+    }
     let text = paragraphs.join('\n\n');
     hilog.info(0x9527, 'RdrDbg', 'content src=%{public}s paraN=%{public}d len=%{public}d head=%{public}s',
       book.sourceUrl, paragraphs.length, text.length, text.substring(0, 180));
@@ -94,17 +97,21 @@ export class ReaderService {
 
   /**
    * 把章节文本写成沙箱 txt 文件,返回绝对路径,供 bookParser.getDefaultHandler(path) 解析。
-   * Reader Kit 仅支持当前 hap 沙箱路径;首行写章节标题,UTF-8。
+   * Reader Kit 仅支持当前 hap 沙箱路径;首行保留章节标题,否则 txt 解析后 startPlay 可能不触发 pageShow。
    * 一书一章一文件(同章重读 TRUNC 覆盖),文件很小(KB 级)。
    */
   static async writeChapterTxt(context: common.UIAbilityContext, book: Book, chapter: Chapter, text: string): Promise<string> {
     const fileName = `reader_${ReaderService.sanitizeName(book.id)}_${ReaderService.sanitizeName(chapter.id)}.txt`;
     const filePath = `${context.filesDir}/${fileName}`;
-    const body = `${chapter.title}\n\n${text}`;
+    const body = `${chapter.title}\n\n${text.trim()}`;
     let f: fileIo.File | null = null;
     try {
-      f = await fileIo.open(filePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-      await fileIo.write(f.fd, body);
+      try {
+        f = await fileIo.open(filePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+        await fileIo.write(f.fd, body);
+      } catch (e) {
+        throw new Error(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       if (f) {
         try { await fileIo.close(f); } catch (_e) { /* ignore */ }
@@ -116,6 +123,14 @@ export class ReaderService {
   /** 文件名安全化:非 [a-zA-Z0-9._-] 一律替换为下划线 */
   private static sanitizeName(s: string): string {
     return s.replace(/[^a-zA-Z0-9._-]/g, '_');
+  }
+
+  private static sameHeading(a: string, b: string): boolean {
+    return ReaderService.normalizeHeading(a) === ReaderService.normalizeHeading(b);
+  }
+
+  private static normalizeHeading(s: string): string {
+    return s.replace(/\s+/g, '').replace(/[　：:]/g, '').trim();
   }
 
   static splitParagraphs(content: string): string[] {

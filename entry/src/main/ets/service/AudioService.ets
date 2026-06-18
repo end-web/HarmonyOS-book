@@ -450,7 +450,8 @@ export class AudioService {
       chapterIndex: chapterIndex >= 0 ? chapterIndex : 0,
       positionMs: progressMs,
       durationMs,
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      speed: this.state.speed
     };
     await PreferenceService.saveProgress(progress);
     await DataService.upsertCachedBook(book);
@@ -594,9 +595,19 @@ export class AudioService {
   private async flushBeforeSwitch(targetBook: Book, targetChapter: Chapter): Promise<void> {
     if (!this.state) return;
     const curBookId = this.state.currentBook?.id ?? '';
-    if (curBookId && curBookId !== targetBook.id) {
+    const bookChanged = curBookId !== targetBook.id;
+    if (curBookId && bookChanged) {
       // 切书:先把当前书的进度落盘
       try { await this.persistHistory(); } catch (_e) { /* ignore */ }
+    }
+    // 切书(含冷启动首播)时恢复该书上次的倍速;同书切章保持当前倍速不变。
+    // 必须 await getProgress 走持久化 store:冷启动后 progressMemo 为空,
+    // getProgressSync 只读内存缓存会恒为 null,导致重启后倍速永远回落 1.0x。
+    // 顺带把该书进度读进 memo,后面 savedDurationMs 兜底也能命中。
+    // 真正下发到 AVPlayer 由 prepared 回调里的 state.speed 补回逻辑负责。
+    if (bookChanged) {
+      const saved = await PreferenceService.getProgress(targetBook.id);
+      this.state.speed = this.normalizeSpeed(saved?.speed);
     }
     // savedDurationMs 兜底:让 Slider max 在 prepared 之前就有非 0 值,
     // 视觉上不再"从头加载"——立刻显示"当前位置/总时长"比例。
@@ -884,11 +895,18 @@ export class AudioService {
     this.state.playMode = mode;
   }
 
+  /** 归一化倍速:缺省/NaN/Infinity/非正数一律回 1.0,其余 clamp 到 AVPlayer 合法区间 [0.125, 4.0]。
+   *  恢复持久化值和 setSpeed 走同一逻辑,防止反序列化出的脏数据被直接喂给 setPlaybackRate。 */
+  private normalizeSpeed(speed: number | undefined): number {
+    if (speed === undefined || !Number.isFinite(speed) || speed <= 0) return 1.0;
+    return Math.min(4.0, Math.max(0.125, speed));
+  }
+
   async setSpeed(speed: number): Promise<void> {
     const p = await this.ensurePlayer();
     // 连续(无级)倍速:用 setPlaybackRate,有效范围 [0.125, 4.0]。
     // 旧实现用 media.PlaybackSpeed 离散枚举,只能 0.75/1/1.25/1.75/2,无法无级调节。
-    const rate = Math.min(4.0, Math.max(0.125, speed));
+    const rate = this.normalizeSpeed(speed);
     try {
       p.setPlaybackRate(rate);
     } catch (e) {
@@ -898,6 +916,8 @@ export class AudioService {
     }
     if (this.state) this.state.speed = rate;
     this.syncPlaybackState();
+    // 立即落盘该书倍速:slider 松手才调用,频率低;避免「改完没暂停就杀进程」丢记忆
+    try { await this.persistHistory(); } catch (_e) { /* ignore */ }
   }
 
   setSleepTimer(minutes: number): void {

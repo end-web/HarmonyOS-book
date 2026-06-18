@@ -328,7 +328,7 @@ export struct ReaderPage {
       fontName: '系统字体',
       fontPath: '',
       fontSize: this.fontSize,
-      fontWeight: 400,
+      fontWeight: 500,
       fontColor: hex6(t.text),
       lineHeight: this.lineHeight, // 用户设置的行距(settingSheet 行距滑块)
       nightMode: night,
@@ -712,9 +712,20 @@ export struct ReaderPage {
     WindowUtils.setStatusBarVisible(this.toolbarVisible);
   }
 
-  /** 细分隔线颜色(夜间浅、日间深) */
-  private dividerColor(): string {
-    return this.themeIndex === NIGHT_INDEX ? '#1AFFFFFF' : '#14000000';
+  private bottomGlassBg(): string {
+    return this.themeIndex === NIGHT_INDEX ? '#26000000' : '#2EFFFFFF';
+  }
+
+  private glassStroke(): string {
+    return this.themeIndex === NIGHT_INDEX ? '#29FFFFFF' : '#66FFFFFF';
+  }
+
+  private glassShadow(): string {
+    return this.themeIndex === NIGHT_INDEX ? '#45000000' : '#1A000000';
+  }
+
+  private glassIconColor(): string {
+    return this.themeIndex === NIGHT_INDEX ? '#FFF3F0EA' : '#FF111111';
   }
 
 
@@ -899,12 +910,15 @@ export struct ReaderPage {
     .backgroundColor(this.theme().bg)
   }
 
-  /** 全屏常驻底部信息:章节、时间/电量、页码。 */
+  /** 全屏常驻底部信息:时间/电量、页码。 */
   @Builder
   buildReaderHud() {
     Column() {
       Blank()
       Row() {
+        Blank()
+          .layoutWeight(1)
+
         Row({ space: 8 }) {
           Text(this.hudTime || this.timeText())
             .fontSize(AppFont.Caption)
@@ -914,12 +928,13 @@ export struct ReaderPage {
             .fontSize(AppFont.Caption)
             .fontColor(this.theme().sub)
         }
-        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
 
-        // 章节已移到顶栏中间,这里底部只留 左:时间/电量 右:页码
         Text(this.pageFooter || '')
           .fontSize(AppFont.Caption)
           .fontColor(this.theme().sub)
+          .textAlign(TextAlign.End)
+          .layoutWeight(1)
       }
       .width('100%')
       .padding({
@@ -933,30 +948,47 @@ export struct ReaderPage {
     .hitTestBehavior(HitTestMode.None)
   }
 
-  /** 唤出菜单时的左上返回 + 右上详情悬浮按钮。 */
+  /** 唤出菜单时的顶部沉浸式玻璃按钮。 */
   @Builder
   buildFloatingActions() {
     Row() {
-      this.floatingAction($r('sys.symbol.chevron_left'), () => this.navStack.pop())
-      // 顶栏中间显示当前章节(原在底部 HUD,移到此处)
-      Text(this.currentChapter?.title ?? '')
-        .fontSize(AppFont.Body)
-        .fontColor(this.theme().text)
-        .fontWeight(FontWeight.Medium)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Row() {
+        this.floatingAction($r('sys.symbol.chevron_left'), () => this.navStack.pop())
+      }
+      .width(88)
+      .justifyContent(FlexAlign.Start)
+
+      Column() {
+        Text(this.currentChapter?.title ?? '')
+          .fontSize(AppFont.Caption)
+          .fontColor(this.glassIconColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Center)
+          .opacity(0.66)
+          .width('100%')
+      }
         .layoutWeight(1)
-        .textAlign(TextAlign.Center)
+        .height(40)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
         .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-      this.floatingAction($r('sys.symbol.info_circle'), () => this.gotoDetail())
+
+      Row({ space: 8 }) {
+        this.floatingAction($r('sys.symbol.list_bullet'), () => this.openCatalog())
+        this.floatingAction($r('sys.symbol.info_circle'), () => this.gotoDetail())
+      }
+      .width(88)
+      .justifyContent(FlexAlign.End)
     }
     .width('100%')
+    .height(40)
     .alignItems(VerticalAlign.Center)
     .padding({
-      left: AppSpace.Lg,
-      right: AppSpace.Lg,
+      left: 20,
+      right: 20,
       // 用稳定状态栏高度避让:菜单唤出瞬间 topPx 可能尚未恢复,直接用 getStatusBarHeightVp 会贴到状态栏
-      top: WindowUtils.getTopSafeStableVp() + AppSpace.Sm
+      top: WindowUtils.getTopSafeStableVp() + 20
     })
     .transition(
       TransitionEffect.OPACITY
@@ -970,39 +1002,36 @@ export struct ReaderPage {
 
   @Builder
   floatingAction(icon: Resource, action: () => void) {
-    Button() {
+    Column() {
       SymbolGlyph(icon)
         .fontSize(20)
-        .fontColor([this.theme().text])
+        .fontColor([this.glassIconColor()])
     }
     .width(40)
     .height(40)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
     .borderRadius(20)
-    .backgroundColor(this.theme().glass)
-    .backdropBlur(28)
-    .shadow({ radius: 14, color: '#18000000', offsetY: 4 })
+    .backgroundColor(this.bottomGlassBg())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+    .border({ width: 0.5, color: this.glassStroke() })
+    .shadow({ radius: 14, color: this.glassShadow(), offsetY: 4 })
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.92 })
     .onClick(action)
   }
 
-  /** 底部悬浮菜单:脱离底部边缘的胶囊工具条。 */
+  /** 底部悬浮菜单:单层玻璃胶囊工具条。 */
   @Builder
   buildBottomBar() {
     Row() {
-      this.barRegion($r('sys.symbol.chevron_left'), '上一章', () => this.goPrevChapter())
-      this.barRegion($r('sys.symbol.textformat'), '设置', () => { this.sheetMode = 2; this.sheetOpen = true; })
-      this.barRegion($r('sys.symbol.list_bullet'), '目录', () => this.openCatalog())
-      this.barRegion($r('sys.symbol.chevron_right'), '下一章', () => this.goNextChapter())
+      this.readerToolBar()
     }
-    .width('92%')
-    .height(60)
-    .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-    // 逼近首页 HdsTabs 悬浮沉浸光感:更透的系统材质模糊(THIN)、不加不透明底色以保留通透感、悬浮圆角 + 离底间距 + 轻阴影。
-    // (官方 systemMaterialEffect 仅 HdsTabs/HdsNavigation 可用,自定义底栏只能用 backgroundBlurStyle 逼近)
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-    .borderRadius(28)
-    .border({ width: 0.5, color: $r('sys.color.comp_divider') })
-    .shadow({ radius: 20, color: '#1A000000', offsetY: 6 })
-    .margin({ bottom: WindowUtils.getBottomSafeVp() + 18 })
+    .width('100%')
+    .padding({
+      left: 24,
+      right: 24,
+      bottom: WindowUtils.getBottomSafeVp() + 30
+    })
     .transition(
       TransitionEffect.OPACITY
         .combine(TransitionEffect.move(TransitionEdge.BOTTOM))
@@ -1013,20 +1042,46 @@ export struct ReaderPage {
   }
 
   @Builder
-  barRegion(icon: Resource, label: string, action: () => void) {
-    Column({ space: 3 }) {
+  readerToolBar() {
+    Row() {
+      this.toolBarItem($r('sys.symbol.chevron_left'), '上一章', () => this.goPrevChapter())
+      this.toolBarItem($r('sys.symbol.textformat'), '设置', () => this.openSettings())
+      this.toolBarItem($r('sys.symbol.list_bullet'), '目录', () => this.openCatalog())
+      this.toolBarItem($r('sys.symbol.chevron_right'), '下一章', () => this.goNextChapter())
+    }
+    .width('100%')
+    .height(56)
+    .padding({ left: 10, right: 10 })
+    .backgroundColor(this.bottomGlassBg())
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+    .borderRadius(28)
+    .border({ width: 0.5, color: this.glassStroke() })
+    .shadow({ radius: 18, color: this.glassShadow(), offsetY: 5 })
+  }
+
+  @Builder
+  toolBarItem(icon: Resource, label: string, action: () => void) {
+    Column({ space: 2 }) {
       SymbolGlyph(icon)
-        .fontSize(22)
-        .fontColor([$r('sys.color.font_primary')])
+        .fontSize(20)
+        .fontColor([this.glassIconColor()])
       Text(label)
-        .fontSize(11)
-        .fontColor($r('sys.color.font_secondary'))
+        .fontSize(10)
+        .fontColor(this.glassIconColor())
+        .opacity(0.72)
+        .maxLines(1)
     }
     .layoutWeight(1)
-    .height(52)
+    .height('100%')
     .justifyContent(FlexAlign.Center)
-    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.95 })
+    .alignItems(HorizontalAlign.Center)
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.92 })
     .onClick(action)
+  }
+
+  private openSettings(): void {
+    this.sheetMode = 2;
+    this.sheetOpen = true;
   }
 
   /** 打开目录并滚到当前章 */

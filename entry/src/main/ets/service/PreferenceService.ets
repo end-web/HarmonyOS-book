@@ -74,6 +74,8 @@ export interface PlayProgress {
   updatedAt: number;
   // 电子书章内位置(Reader Kit domPos):文本阅读模式恢复"上次读到的页",audio 书不写
   domPos?: string;
+  // 该书上次使用的播放倍速(每本书独立记忆),缺省视为 1.0
+  speed?: number;
 }
 
 /** 卡片侧需要的最小快照,主进程写,FormExtensionAbility 读后渲染 */
