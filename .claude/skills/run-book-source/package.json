@@ -1,0 +1,15 @@
+{
+  "name": "run-book-source",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Legado 书源验证/正文抓取运行器（ListenBook 规则引擎的离线对照实现）",
+  "bin": {
+    "run-book-source": "run.mjs"
+  },
+  "dependencies": {
+    "booksrc-work": "file:C:/Users/ylwang112/booksrc-work",
+    "cheerio": "^1.0.0",
+    "iconv-lite": "^0.6.3"
+  }
+}

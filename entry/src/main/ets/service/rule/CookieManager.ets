@@ -5,10 +5,10 @@
  *  1) 书源 JS 规则中 cookie.xxx 方法（按 url 整段保存）
  *  2) HttpClient 自动 cookie jar：按 (host, path) 维度持久化每个 cookie
  *
- * 持久化：使用 @ohos.data.preferences 写入磁盘，重启不丢失
+ * 持久化：使用 @kit.ArkData 的 preferences 写入磁盘，重启不丢失
  */
 
-import dataPreferences from '@ohos.data.preferences';
+import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 
 const COOKIE_PREFS_NAME = 'cookie_store';
@@ -36,7 +36,7 @@ class CookieManagerImpl {
   private jar: Map<string, Map<string, CookieEntry>> = new Map();
 
   // 持久化状态
-  private prefs: dataPreferences.Preferences | null = null;
+  private prefs: preferences.Preferences | null = null;
   private initialized: boolean = false;
   private saveTimer: number = -1;
 
@@ -46,7 +46,7 @@ class CookieManagerImpl {
   async init(context: common.BaseContext): Promise<void> {
     if (this.initialized) return;
     try {
-      this.prefs = await dataPreferences.getPreferences(context, COOKIE_PREFS_NAME);
+      this.prefs = await preferences.getPreferences(context, COOKIE_PREFS_NAME);
       await this.loadFromDisk();
       this.initialized = true;
     } catch (e) {

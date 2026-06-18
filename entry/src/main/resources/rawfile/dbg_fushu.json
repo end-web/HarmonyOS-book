@@ -1,0 +1,46 @@
+{
+  "bookSourceComment": "https://www.fushuwang.org\nhttps://www.fushucun.com\nhttps://www.fushuwang.com",
+  "bookSourceGroup": "⛎JJ城",
+  "bookSourceName": "🔥 福书网[分页]",
+  "bookSourceType": 0,
+  "bookSourceUrl": "https://www.fushucun.com#改进",
+  "customButton": false,
+  "customOrder": 33,
+  "enabled": true,
+  "enabledCookieJar": false,
+  "enabledExplore": true,
+  "eventListener": false,
+  "exploreUrl": "[{\"title\":\"专题\",\"url\":\"\",\"style\":{\"layout_flexBasisPercent\":1,\"layout_flexGrow\":1}},\n{\"title\":\"本站推荐\",\"url\":\"/best/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"重生专题\",\"url\":\"/chshwzt/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"修真专题\",\"url\":\"/xzhwztindex<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"穿越专题\",\"url\":\"/chywzt/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"兽人专题\",\"url\":\"/shrwzt/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"末世专题\",\"url\":\"/mshwzt/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"分类\",\"url\":\"\",\"style\":{\"layout_flexBasisPercent\":1,\"layout_flexGrow\":1}},\n{\"title\":\"穿越重生\",\"url\":\"/chuanyuechongsheng/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"玄幻网游\",\"url\":\"/xuanhuanwangyou/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"现代都市\",\"url\":\"/xiandaixiaoshuo/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"古代架空\",\"url\":\"/gudaixiaoshuo/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"同人ＢＬ\",\"url\":\"/tongrenxiaoshuo/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"百合ＧＬ\",\"url\":\"/baihexiaoshuo/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"年份\",\"url\":\"\",\"style\":{\"layout_flexBasisPercent\":1,\"layout_flexGrow\":1}},\n{\"title\":\"2025年\",\"url\":\"/2025/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2024年\",\"url\":\"/2024/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2022年\",\"url\":\"/2022/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2021年\",\"url\":\"/2021/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2020年\",\"url\":\"/2020/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2019年\",\"url\":\"/2019/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2018年\",\"url\":\"/2018/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2017年\",\"url\":\"/2017/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2016年\",\"url\":\"/2016/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2015年\",\"url\":\"/2015/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2014年\",\"url\":\"/2014/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2013年\",\"url\":\"/2013/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2012年\",\"url\":\"/2012/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2011年\",\"url\":\"/2011/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2010年\",\"url\":\"/2010/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.25,\"layout_flexGrow\":1}},\n{\"title\":\"2009年\",\"url\":\"/2009/index<,_{{page}}>.html\",\"style\":{\"layout_flexBasisPercent\":0.29}}]",
+  "lastUpdateTime": 1777577961323,
+  "respondTime": 4942,
+  "ruleBookInfo": {
+    "intro": "#text div@html##[\\s\\S]立意：.*([\\s\\S]*)|\\s文案：|\\s.*作者:.*|\\s.*简介:.*"
+  },
+  "ruleContent": {
+    "content": "@js:org.jsoup.Jsoup.parse(String(result).match(/<td id=\"text\">([\\s\\S]*?)<p align=\"center\"/)[1]).html()",
+    "imageStyle": "0",
+    "replaceRegex": "##.*》作者.*|\\s文案：|\\s简介："
+  },
+  "ruleExplore": {
+    "author": "a.0@title##.*—",
+    "bookList": "class.box.0@ul@li",
+    "bookUrl": "a.0@href",
+    "kind": "a.0@title##.*（|）.*",
+    "lastChapter": "span@text",
+    "name": "a.0@title##—.*|（.*"
+  },
+  "ruleSearch": {
+    "author": "a.0@title##^([^s]*)——",
+    "bookList": ".article-list li",
+    "bookUrl": "a.0@href",
+    "kind": "span@text",
+    "name": "a.0@title##——.*$"
+  },
+  "ruleToc": {
+    "chapterList": "//select[@name=\"titleselect\"]/option",
+    "chapterName": "text##.*\\((\\d+)\\)##第$1页",
+    "chapterUrl": "//@value"
+  },
+  "searchUrl": "/e/search/index.php,{\n  \"charset\": \"gbk\",\n  \"method\": \"POST\",\n  \"body\": \"keyboard={{key}}&show=title&classid=\"\n}",
+  "weight": 0
+}

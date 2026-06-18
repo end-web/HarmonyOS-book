@@ -17,6 +17,7 @@
  */
 
 import { HttpClient } from '../http/HttpClient';
+import { JsvmEngine } from './JsvmEngine';
 import { SimpleCSSSelector, HTMLElement } from '../rule/SimpleCSSSelector';
 import { getJavaBridge } from '../rule/JavaBridge';
 import { getCookieManager } from '../rule/CookieManager';
@@ -83,6 +84,20 @@ export class JSExecutor {
     // 必须用 .call() 绑定 this 到共享上下文对象
     const jsLib = context['_jsLib'] as string;
     const hasJsLib = !!(jsLib && jsLib.trim());
+
+    // 通用 JSVM 引擎优先：真 JS 引擎(闭包/箭头/解构/eval) + 同步 java.ajax(net_http)
+    // 在 code 被改写前用原始 code + 原始 jsLib；失败/不支持(undefined)或空结果则回落现有引擎
+    const jsvmNeedsDOM = code.includes('document.');
+    const jsvmNeedsJava = code.includes('java.');
+    if (!jsvmNeedsDOM && (jsvmNeedsJava || hasJsLib)) {
+      try {
+        const jsvmCode = hasJsLib ? (jsLib + '\n' + code) : code;
+        const jr = await JsvmEngine.eval(jsvmCode, context);
+        if (jr !== undefined && jr !== null && jr !== '') return jr;
+      } catch (e) {
+        console.warn(`[JSExecutor] JSVM path failed, fallback: ${e}`);
+      }
+    }
 
     if (hasJsLib) {
       // 不使用 IIFE 包装！

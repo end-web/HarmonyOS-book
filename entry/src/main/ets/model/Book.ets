@@ -23,6 +23,8 @@ export interface Chapter {
 
 export interface Book {
   id: string;
+  /** 内容类型：audio=有声书，text=电子书。旧数据可通过 category/source 类型兜底判断。 */
+  contentType?: 'audio' | 'text';
   title: string;
   author: string;
   narrator: string;

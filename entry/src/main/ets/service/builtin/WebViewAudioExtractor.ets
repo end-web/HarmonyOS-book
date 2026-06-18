@@ -16,7 +16,7 @@
  * 任务串行：同一时间只跑一个 extract（避免 controller 状态污染）
  */
 
-import web_webview from '@ohos.web.webview';
+import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 interface ExtractTask {
@@ -44,13 +44,13 @@ export function getWebViewAudioExtractor(): WebViewAudioExtractor {
 }
 
 export class WebViewAudioExtractor {
-  private controller: web_webview.WebviewController | null = null;
+  private controller: webview.WebviewController | null = null;
   private currentUrl: string = '';
   private taskQueue: ExtractTask[] = [];
   private busy: boolean = false;
   private timeoutMs: number = 25000;
 
-  setController(c: web_webview.WebviewController): void {
+  setController(c: webview.WebviewController): void {
     this.controller = c;
   }
 
@@ -279,7 +279,7 @@ export class WebViewAudioExtractor {
 /** 不可见 WebView 宿主组件（在 MainPage 中放置一次即可） */
 @ComponentV2
 export struct WebViewAudioExtractorHost {
-  private controller: web_webview.WebviewController = new web_webview.WebviewController();
+  private controller: webview.WebviewController = new webview.WebviewController();
   private extractor: WebViewAudioExtractor = getWebViewAudioExtractor();
 
   aboutToAppear(): void {

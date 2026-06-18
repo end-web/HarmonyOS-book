@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2 } from '@kit.ArkUI';
+import { emitter } from '@kit.BasicServicesKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
@@ -14,7 +15,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
-import { playerEntryState } from './PlayerPage';
+import { EVT_READER_JUMP_CHAPTER } from './ReaderPage';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -90,6 +91,8 @@ export struct BookDetailPage {
     const item = history.find((h) => h.bookId === bookId);
     if (item) {
       this.lastHistory = item;
+      // 历史就绪后再定位一次(loadBook 首次滚动时 lastHistory 可能尚未加载)
+      this.scrollToCurrentChapter();
     }
   }
 
@@ -176,7 +179,9 @@ export struct BookDetailPage {
           tags: book.tags,
           chapters: book.chapters,
           bookUrl: book.bookUrl,
-          sourceUrl: book.sourceUrl
+          sourceUrl: book.sourceUrl,
+          contentType: book.contentType,
+          variables: Object.keys(mergedVars).length > 0 ? mergedVars : book.variables
         };
         this.book = cloned;
         this.chapterDataSource.setChapters(cloned.chapters);
@@ -212,10 +217,19 @@ export struct BookDetailPage {
   }
 
   private scrollToCurrentChapter(): void {
-    if (!this.book || !this.playerState.currentBook || !this.playerState.currentChapter) return;
-    if (this.playerState.currentBook.id !== this.bookId) return;
-    const idx = this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
-    this.scrollChapterListToIndex(idx);
+    if (!this.book) return;
+    // 1) 正在播放本书:定位到播放章
+    if (this.playerState.currentBook && this.playerState.currentChapter
+        && this.playerState.currentBook.id === this.bookId) {
+      const pIdx = this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
+      this.scrollChapterListToIndex(pIdx);
+      return;
+    }
+    // 2) 否则用最近阅读/播放历史定位(文本书从阅读页进来时定位到正在读的章)
+    if (this.lastHistory) {
+      const hIdx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+      if (hIdx >= 0) this.scrollChapterListToIndex(hIdx);
+    }
   }
 
   /**
@@ -261,6 +275,18 @@ export struct BookDetailPage {
     }
   }
 
+  private isTextBook(): boolean {
+    return this.book?.contentType === 'text' || this.book?.category === 'text';
+  }
+
+  private openPrimaryAction(chapter?: Chapter): void {
+    if (this.isTextBook()) {
+      this.startRead(chapter);
+    } else {
+      this.startPlay(chapter);
+    }
+  }
+
   private async startPlay(chapter?: Chapter): Promise<void> {
     if (!this.book || this.isStartingPlay) return;
     this.isStartingPlay = true;
@@ -291,8 +317,7 @@ export struct BookDetailPage {
     // ★ 当前在播的就是同书:直接 push player 不带 chapter 参数,PlayerPage 复用 live state,
     //   避免 tryResumePlay 触发 playChapterAndSeek 重置
     if (PlaybackStore.getInstance().isCurrentBook(this.book.id)) {
-      // 详情页入口,非 mini,且清理栈避免重复 player
-      playerEntryState.fromMini = false;
+      // 详情页入口,清理栈避免重复 player
       this.cleanStackBeforePushPlayer();
       this.navStack.pushPathByName('player', this.bookId);
       this.isStartingPlay = false;
@@ -303,10 +328,46 @@ export struct BookDetailPage {
       'chapterId': target.id as Object,
       'progressMs': resumeProgressMs as Object
     };
-    // 详情页入口,非 mini,且清理栈避免重复 player
-    playerEntryState.fromMini = false;
+    // 详情页入口,清理栈避免重复 player
     this.cleanStackBeforePushPlayer();
     this.navStack.pushPathByName('player', playerParams);
+    this.isStartingPlay = false;
+  }
+
+  private async startRead(chapter?: Chapter): Promise<void> {
+    if (!this.book || this.isStartingPlay) return;
+    this.isStartingPlay = true;
+
+    let target: Chapter | undefined = chapter;
+    let resumeProgressMs = 0;
+    if (!target && this.lastHistory) {
+      const hi = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+      target = hi >= 0 ? this.book.chapters[hi] : undefined;
+      resumeProgressMs = this.lastHistory.progressMs;
+    }
+    if (!target) {
+      target = this.book.chapters[0];
+    }
+    if (!target) {
+      this.isStartingPlay = false;
+      return;
+    }
+
+    SearchCache.put(this.book);
+    const readerParams: Record<string, Object> = {
+      'bookId': this.book.id as Object,
+      'chapterId': target.id as Object,
+      'progressMs': resumeProgressMs as Object
+    };
+    // 若本详情页由阅读页进入(栈中紧邻下层是 reader):交给阅读页处理(它会弹掉本详情页并切到该章),
+    // 避免重复开阅读页。不在此处 pop+replace —— 同一回合两次栈操作不能正确合成,会残留旧阅读页。
+    const names = this.navStack.getAllPathName();
+    if (names && names.length >= 2 && names[names.length - 2] === 'reader') {
+      emitter.emit(EVT_READER_JUMP_CHAPTER, { data: { bookId: this.book.id, chapterId: target.id } });
+      this.isStartingPlay = false;
+      return;
+    }
+    this.navStack.pushPathByName('reader', readerParams);
     this.isStartingPlay = false;
   }
 
@@ -348,6 +409,24 @@ export struct BookDetailPage {
   private isPlayingChapter(ch: Chapter): boolean {
     if (!this.playerState.currentBook || !this.playerState.currentChapter) return false;
     return this.playerState.currentBook.id === this.bookId && this.playerState.currentChapter.id === ch.id;
+  }
+
+  private isReadingChapter(ch: Chapter): boolean {
+    if (!this.book || !this.lastHistory) return false;
+    const idx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+    if (idx < 0 || idx >= this.book.chapters.length) return false;
+    return this.book.chapters[idx].id === ch.id;
+  }
+
+  /** 文本书:当前正在阅读的章节(详情页"在读"标记 + 定位用) */
+  private isReadingTextChapter(ch: Chapter): boolean {
+    return this.isTextBook() && this.isReadingChapter(ch);
+  }
+
+  private getReadProgress(ch: Chapter): number {
+    const dur = this.lastHistory?.durationMs ?? 0;
+    if (!this.isReadingChapter(ch) || !this.lastHistory || dur <= 0) return 0;
+    return Math.round(this.lastHistory.progressMs / dur * 100);
   }
 
   build() {
@@ -437,14 +516,12 @@ export struct BookDetailPage {
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else {
-          Column() {
-            SymbolGlyph($r('sys.symbol.book'))
-              .fontSize(48).fontColor(['#FFFFFF'])
-          }
-          .width(100).height(130)
-          .borderRadius(AppRadius.Sm)
-          .backgroundColor('#33FFFFFF')
-          .justifyContent(FlexAlign.Center)
+          // 无封面:用 app 图标占位(替代旧的书形占位)
+          Image($r('app.media.app_icon_legacy'))
+            .width(100).height(130)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+            .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         }
       }
 
@@ -511,11 +588,11 @@ export struct BookDetailPage {
 
       // 章节数
       Column({ space: 2 }) {
-        Text(this.book!.chapterCount > 0 ? this.book!.chapterCount.toString() + ' 集' : '--')
+        Text(this.book!.chapterCount > 0 ? this.book!.chapterCount.toString() + (this.isTextBook() ? ' 章' : ' 集') : '--')
           .fontSize(AppFont.Title)
           .fontColor('#FFFFFF')
           .fontWeight(FontWeight.Bold)
-        Text('总集数')
+        Text(this.isTextBook() ? '总章数' : '总集数')
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF99')
       }
@@ -569,15 +646,17 @@ export struct BookDetailPage {
 
   /** 根据是否有历史记录返回按钮文案 */
   private resumeButtonText(): string {
+    const read = this.isTextBook();
     if (!this.lastHistory || !this.book) {
-      return '开始播放';
+      return read ? '开始阅读' : '开始播放';
     }
     const idx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
+    const verb = read ? '继续阅读' : '继续播放';
     if (idx >= 0) {
       const title = this.book.chapters[idx].title;
-      return `继续播放 ${title}`;
+      return `${verb} ${title}`;
     }
-    return '继续播放';
+    return verb;
   }
 
   @Builder
@@ -613,7 +692,7 @@ export struct BookDetailPage {
         .borderRadius(24)
         .backgroundColor(AppColor.Brand)
         .margin({ top: AppSpace.Md })
-        .onClick(() => this.startPlay())
+        .onClick(() => this.openPrimaryAction())
       }
       .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Lg, bottom: AppSpace.Xl })
     }
@@ -627,7 +706,7 @@ export struct BookDetailPage {
     Column() {
       // 章节头部
       Row() {
-        Text(`共 ${this.book!.chapters.length} 集`)
+        Text(`共 ${this.book!.chapters.length} ${this.isTextBook() ? '章' : '集'}`)
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
         if (this.loadingToc) {
@@ -684,8 +763,9 @@ export struct BookDetailPage {
       Column({ space: 2 }) {
         Text(ch.title)
           .fontSize(AppFont.BodyL)
-          .fontColor(this.isPlayingChapter(ch) ? '#D4380D' : $r('sys.color.font_primary'))
-          .fontWeight(this.isPlayingChapter(ch) ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.isPlayingChapter(ch) ? '#D4380D'
+            : (this.isReadingTextChapter(ch) ? AppColor.Brand : $r('sys.color.font_primary')))
+          .fontWeight(this.isPlayingChapter(ch) || this.isReadingTextChapter(ch) ? FontWeight.Medium : FontWeight.Normal)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
@@ -708,11 +788,18 @@ export struct BookDetailPage {
       if (this.isPlayingChapter(ch)) {
         SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
           .fontSize(18).fontColor(['#D4380D'])
+      } else if (this.isReadingTextChapter(ch)) {
+        Text('在读')
+          .fontSize(AppFont.Caption)
+          .fontColor('#FFFFFF')
+          .backgroundColor(AppColor.Brand)
+          .borderRadius(AppRadius.Xs)
+          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
       }
     }
     .width('100%')
     .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: 14, bottom: 14 })
-    .onClick(() => this.startPlay(ch))
+    .onClick(() => this.openPrimaryAction(ch))
   }
 
   @Builder
@@ -732,7 +819,7 @@ export struct BookDetailPage {
         if (this.playerState.currentBook?.id === this.bookId && this.playerState.currentChapter) {
           AudioService.getInstance().toggle();
         } else {
-          this.startPlay();
+          this.openPrimaryAction();
         }
       })
 

@@ -1,8 +1,8 @@
 import { common } from '@kit.AbilityKit';
-import { curves } from '@kit.ArkUI';
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
-import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider, playerEntryState } from './PlayerPage';
+import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
+import { ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
@@ -35,6 +35,10 @@ struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local playerTranslateY: string = '0';
   @Local playerBorderRadius: number = 0;
+  // 层叠下沉:player 升起时底层首页缩小+圆角+压暗,沉到后面去
+  @Local homeScale: number = 1;
+  @Local homeRadius: number = 0;
+  @Local homeBrightness: number = 1;
   private widgetSubscribed: boolean = false;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
@@ -147,8 +151,6 @@ struct Index {
         // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
         const cur = this.navStack.getAllPathName();
         if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
-        // widget 入口,非 mini
-        playerEntryState.fromMini = false;
         this.navStack.pushPathByName('player', bookId, false);
       }
       // 无 bookId 时停在主页,避免黑屏
@@ -166,6 +168,14 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      // 作为根/底层页:被任何子页覆盖时保持静止,不走系统默认 push 的左移视差。
+      // 否则 player 上滑升起时,底下首页会跟着向左滑一下。
+      .systemTransition(NavigationSystemTransitionType.NONE)
+      // 层叠下沉:player 升起时随之缩小+圆角+压暗(由 player 的 customTransition 联动驱动)
+      .scale({ x: this.homeScale, y: this.homeScale })
+      .borderRadius(this.homeRadius)
+      .clip(true)
+      .brightness(this.homeBrightness)
       .onBackPressed((): boolean => {
         // 根页返回:移到后台而不是 pop,保证退出应用
         try {
@@ -189,43 +199,22 @@ struct Index {
         PlayerPageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
-      // 关闭系统默认转场,让 customTransition + geometryTransition 完全接管
+      // 关闭系统默认转场,让 customTransition 接管上滑(进)/下滑(返回)
       .systemTransition(NavigationSystemTransitionType.NONE)
       // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
       .onBackPressed((): boolean => {
-        const isFromMini = PlayerEntryDecider.isFromMini();
-        console.error('[ListenBook][BACK] onBackPressed fired, isFromMini=' + isFromMini);
         // 优先关抽屉
         if (PlayerBackInterceptor.consume()) return true;
-        // mini 入口走共享元素反向
-        if (isFromMini) {
-          console.error('[ListenBook][BACK] running animateTo reverse');
-          // 立即标记 PlayerPage 离开,让 loadBook 异步链提前退出,不阻塞返回响应
-          PlayerEntryDecider.markLeaving();
-          // 取消 pending 的清理 timer,避免反向动画期间标志被误清
-          PlayerEntryDecider.cancelPendingClear();
-          // 恢复 fromMini 让 mini 端挂上 id
-          playerEntryState.fromMini = true;
-          this.getUIContext().animateTo({
-            duration: 420,
-            curve: curves.springMotion(0.6, 0.9)
-          }, () => {
-            this.navStack.pop(false);
-          });
-          return true;
-        }
-        console.error('[ListenBook][BACK] fallback to system pop');
+        // 立即标记 PlayerPage 离开,让 loadBook 异步链提前退出,不阻塞返回响应
+        PlayerEntryDecider.markLeaving();
+        // 放行,由 customTransition 播放下滑退场
         return false;
       })
       .backgroundColor('#000000')
       .translate({ y: this.playerTranslateY })
       .borderRadius(this.playerBorderRadius)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        // mini 入口走 geometryTransition,跳过 customTransition
-        if (playerEntryState.fromMini) {
-          return undefined;
-        }
-        // 其他入口保留上滑/下滑转场
+        // 所有入口统一走上滑(进)/下滑(返回)转场,同时联动底层 home 缩小下沉
         if (op === NavigationOperation.PUSH && isEnter) {
           this.playerTranslateY = '100%';
           this.playerBorderRadius = 20;
@@ -233,8 +222,13 @@ struct Index {
             duration: 380,
             curve: Curve.Friction,
             event: () => {
+              // player 上滑归位
               this.playerTranslateY = '0';
               this.playerBorderRadius = 0;
+              // 同时 home 下沉:缩到 0.93,圆角 16,亮度降到 0.7(压暗)
+              this.homeScale = 0.93;
+              this.homeRadius = 16;
+              this.homeBrightness = 0.7;
             },
             onTransitionEnd: () => {}
           }];
@@ -245,11 +239,16 @@ struct Index {
             duration: 320,
             curve: Curve.FastOutSlowIn,
             event: () => {
+              // player 下滑退场
               this.playerTranslateY = '100%';
               this.playerBorderRadius = 20;
+              // 同时 home 弹回:恢复 scale=1,圆角=0,亮度=1
+              this.homeScale = 1;
+              this.homeRadius = 0;
+              this.homeBrightness = 1;
             },
             onTransitionEnd: () => {
-              // POP 动画结束后必须把状态归零,否则下次 push(尤其 animated:false 的 mini 入口)
+              // POP 动画结束后必须把状态归零,否则下次 push(尤其 animated:false 的 widget 入口)
               // 会拿到上次 POP 留下的 '100%',NavDestination 整页向下偏导致白屏。
               this.playerTranslateY = '0';
               this.playerBorderRadius = 0;
@@ -258,6 +257,13 @@ struct Index {
         }
         return undefined;
       })
+    } else if (name === 'reader') {
+      NavDestination() {
+        ReaderPageWrapper({ navStack: this.navStack, param: param as Object })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })
@@ -303,6 +309,7 @@ struct Index {
     } else if (name === 'login') {
       NavDestination() {
         LoginPage({
+          navStack: this.navStack,
           loginUrl: ((param as Record<string, string>)?.['loginUrl']) || 'https://v1.gyks.cf/login',
           serverHost: ((param as Record<string, string>)?.['serverHost']) || 'https://v1.gyks.cf',
           title: ((param as Record<string, string>)?.['title']) || '登录聚合源',
@@ -376,6 +383,40 @@ struct PlayerPageWrapper {
 
   build() {
     PlayerPage({
+      navStack: this.navStack,
+      bookId: this.resolveBookId(),
+      resumeChapterId: this.resolveChapterId(),
+      resumeProgressMs: this.resolveProgressMs()
+    })
+  }
+}
+
+@ComponentV2
+struct ReaderPageWrapper {
+  @Param navStack: NavPathStack = new NavPathStack();
+  @Param param: Object = '';
+
+  private resolveBookId(): string {
+    if (typeof this.param === 'string') return this.param as string;
+    const r = this.param as Record<string, Object>;
+    return (r['bookId'] as string) ?? '';
+  }
+
+  private resolveChapterId(): string {
+    if (typeof this.param === 'string') return '';
+    const r = this.param as Record<string, Object>;
+    return (r['chapterId'] as string) ?? '';
+  }
+
+  private resolveProgressMs(): number {
+    if (typeof this.param === 'string') return 0;
+    const r = this.param as Record<string, Object>;
+    const v = r['progressMs'];
+    return typeof v === 'number' ? v : 0;
+  }
+
+  build() {
+    ReaderPage({
       navStack: this.navStack,
       bookId: this.resolveBookId(),
       resumeChapterId: this.resolveChapterId(),

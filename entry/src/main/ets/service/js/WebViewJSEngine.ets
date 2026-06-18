@@ -9,7 +9,7 @@
  * 2. 调用 getWebViewJSEngine().eval(code, context) 执行 JS
  */
 
-import web_webview from '@ohos.web.webview';
+import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { JSExecutor } from './JSExecutor';
 
@@ -309,7 +309,7 @@ window.__nativeBridge = {
 // ──────────── 引擎核心 ────────────
 
 export class WebViewJSEngine {
-  private controller: web_webview.WebviewController | null = null;
+  private controller: webview.WebviewController | null = null;
   private isReady: boolean = false;
   private readyCallbacks: Array<() => void> = [];
   private pendingTasks: Map<number, EvalTask> = new Map();
@@ -319,7 +319,7 @@ export class WebViewJSEngine {
   /**
    * 由 WebViewJSEngineHost 组件调用
    */
-  setController(ctrl: web_webview.WebviewController): void {
+  setController(ctrl: webview.WebviewController): void {
     this.controller = ctrl;
   }
 
@@ -439,7 +439,7 @@ export class WebViewJSEngine {
  */
 @ComponentV2
 export struct WebViewJSEngineHost {
-  private controller: web_webview.WebviewController = new web_webview.WebviewController();
+  private controller: webview.WebviewController = new webview.WebviewController();
   private engine: WebViewJSEngine = getWebViewJSEngine();
   private bridgeInjected: boolean = false;
 

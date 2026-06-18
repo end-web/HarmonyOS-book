@@ -24,6 +24,7 @@ import { getCacheService } from '../CacheService';
 import { SimpleCSSSelector, HTMLElement } from './SimpleCSSSelector';
 import { SimpleXPath } from './SimpleXPath';
 import { AnalyzeByRegex } from './AnalyzeByRegex';
+import { getJsoup } from './JsoupBridge';
 
 export enum RuleMode {
   Json = 'Json',
@@ -792,6 +793,28 @@ export class AnalyzeRule {
     ctx['result'] = typeof raw === 'string' ? raw : JSON.stringify(raw);
     ctx['baseUrl'] = this.context.baseUrl || '';
     ctx['src'] = typeof this.content === 'string' ? this.content : JSON.stringify(this.content);
+
+    const jsoupMatch = code.match(/^(?:org\.jsoup\.)?Jsoup\.parse\(String\(result\)\.match\((\/[\s\S]+\/[gimsuy]*)\)\[(\d+)\]\)\.(html|text|outerHtml)\(\)$/);
+    if (jsoupMatch) {
+      try {
+        const regex = AnalyzeRule.regexFromLiteral(jsoupMatch[1]);
+        const groupIndex = parseInt(jsoupMatch[2], 10);
+        const source = String(ctx['result'] || '');
+        if (regex) {
+          const matched = source.match(regex);
+          if (matched && matched.length > groupIndex) {
+            const doc = getJsoup().parse(matched[groupIndex]);
+            const method = jsoupMatch[3];
+            if (method === 'text') return doc.text();
+            if (method === 'outerHtml') return doc.outerHtml();
+            return doc.html();
+          }
+        }
+      } catch {
+        return '';
+      }
+    }
+
     if (this.context.book) ctx['book'] = this.context.book;
     if (this.context.chapter) ctx['chapter'] = this.context.chapter;
     if (this.context.variables) {
@@ -815,6 +838,19 @@ export class AnalyzeRule {
 
     try {
       return await executor.eval(code, ctx);
+    } catch {
+      return null;
+    }
+  }
+
+  private static regexFromLiteral(literal: string): RegExp | null {
+    if (!literal || !literal.startsWith('/')) return null;
+    const lastSlash = literal.lastIndexOf('/');
+    if (lastSlash <= 0) return null;
+    const pattern = literal.substring(1, lastSlash);
+    const flags = literal.substring(lastSlash + 1);
+    try {
+      return new RegExp(pattern, flags);
     } catch {
       return null;
     }

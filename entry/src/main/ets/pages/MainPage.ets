@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, SymbolGlyphModifier, curves } from '@kit.ArkUI';
+import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
@@ -13,11 +13,11 @@ import { AudioService } from '../service/AudioService';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { PlaybackStore } from '../service/PlaybackStore';
+import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
-import { playerEntryState } from './PlayerPage';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -83,15 +83,28 @@ export struct MainPage {
       this.navStack.pushPathByName('detail', bookId);
       return;
     }
+    const cached = SearchCache.get(bookId);
+    const isTextBook = cached?.contentType === 'text' || cached?.category === 'text';
+    if (isTextBook && chapterId) {
+      const params: Record<string, Object> = {
+        'bookId': bookId,
+        'chapterId': chapterId,
+        'progressMs': progressMs
+      };
+      this.navStack.pushPathByName('reader', params);
+      return;
+    }
+    if (isTextBook) {
+      this.navStack.pushPathByName('detail', bookId);
+      return;
+    }
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      // 点击当前正在播放的书,直接进播放页(不走 mini,用常规转场)
-      playerEntryState.fromMini = false;
+      // 点击当前正在播放的书,直接进播放页
       this.navStack.pushPathByName('player', bookId);
       return;
     }
     if (chapterId) {
-      // 从详情页进入指定章节,非 mini 入口
-      playerEntryState.fromMini = false;
+      // 从详情页进入指定章节
       const params: Record<string, Object> = {
         'bookId': bookId,
         'chapterId': chapterId,
@@ -250,11 +263,12 @@ export struct MainPage {
         // 迷你栏配置:HdsTabs 会自动管理折叠/展开
         miniBar: this.playerState.currentBook ? {
           miniBarBuilder: () => this.miniBarBuilder(),
-          miniBarStyle: HdsBarStyle.EXPAND, // 默认展开样式,滚动时系统自动折叠
+          // 跟随当前实际状态,避免主题切换等重建把迷你栏强制重置回展开态
+          miniBarStyle: this.miniBarCollapsed ? HdsBarStyle.COLLAPSE : HdsBarStyle.EXPAND,
           enableMiniBarBackground: true,
           enableMiniBarClip: true,
           // 系统切换样式时同步给 MiniPlayer,让它切换内部布局(折叠态只显示封面)
-          onBarStyleChange: (miniStyle: HdsBarStyle) => {
+          onBarStyleChange: (miniStyle: HdsBarStyle, _tabStyle: HdsBarStyle) => {
             this.miniBarCollapsed = miniStyle === HdsBarStyle.COLLAPSE;
           }
         } : undefined
@@ -280,13 +294,7 @@ export struct MainPage {
       .onChange((index: number) => { this.currentTab = index; })
       .width('100%')
       .height('100%')
-      .linearGradient({
-        angle: 180,
-        colors: [
-          ['#FFF8F3F1', 0.0],
-          ['#FFFAF6F3', 1.0]
-        ]
-      })
+      .backgroundColor('#FFF5F5F5')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       WebViewJSEngineHost()
@@ -322,14 +330,10 @@ export struct MainPage {
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
     const bookId = this.playerState.currentBook.id;
-    // mini→player:共享元素转场,关闭系统转场
-    playerEntryState.fromMini = true;
-    this.getUIContext().animateTo({
-      duration: 420,
-      curve: curves.springMotion(0.6, 0.9)
-    }, () => {
-      this.navStack.pushPathByName('player', bookId, false);
-    });
+    // mini→player:走与其他入口一致的 customTransition 上滑转场。
+    // (放弃跨 NavDestination 的 geometryTransition 共享元素——它在 push/pop 反复时
+    //  绑定表错乱,返回动画正常/异常交替,且非官方推荐用法。)
+    this.navStack.pushPathByName('player', bookId);
   }
 
   private playNext(): void {

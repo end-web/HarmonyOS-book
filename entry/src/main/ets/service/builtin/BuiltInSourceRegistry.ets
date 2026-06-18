@@ -83,6 +83,7 @@ class BuiltInBookSource implements BookSource {
     this.bookSourceUrl = BUILTIN_SCHEME + s.id;
     this.bookSourceName = s.name;
     this.bookSourceComment = s.desc;
+    this.bookSourceType = s.sourceType ?? 1;
     this.searchUrl = s.searchable ? '__builtin__' : '';
     this.customOrder = customOrder;
     this.enabled = enabled;

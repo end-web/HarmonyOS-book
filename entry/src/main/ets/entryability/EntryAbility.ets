@@ -53,6 +53,8 @@ export default class EntryAbility extends UIAbility {
     registerBuiltInSources();
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
+    // 缓存书改用文件持久化,注入 context 供 filesDir 读写
+    DataService.setContext(this.context);
     PreferenceService.init(this.context).then(async () => {
       this.restoreColorMode();
       // 初始化源变量存储和缓存服务
@@ -141,6 +143,10 @@ export default class EntryAbility extends UIAbility {
   private registerCallee(): void {
     try {
       this.callee.on('play', (_data: rpc.MessageSequence) => {
+        // 乐观更新:立即翻转卡片图标，不等 AVPlayer
+        WidgetUpdater.optimisticSetPlaying(true).catch((err: Error) => {
+          hilog.warn(DOMAIN, TAG, 'optimistic play push failed: %{public}s', err?.message ?? '');
+        });
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().play();
         }).catch((err: Error) => {
@@ -149,6 +155,10 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('pause', (_data: rpc.MessageSequence) => {
+        // 乐观更新:立即翻转卡片图标，不等 AVPlayer
+        WidgetUpdater.optimisticSetPlaying(false).catch((err: Error) => {
+          hilog.warn(DOMAIN, TAG, 'optimistic pause push failed: %{public}s', err?.message ?? '');
+        });
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().pause();
         }).catch((err: Error) => {

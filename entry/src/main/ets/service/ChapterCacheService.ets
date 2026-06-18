@@ -327,7 +327,7 @@ export class ChapterCacheService {
     try {
       const source = await this.findSource(book.sourceUrl);
       if (!source) return;
-      const text = await BookSourceService.getTextContent(source, chapter.source.value);
+      const text = await BookSourceService.getTextContent(source, chapter.originSourceValue || chapter.source.value);
       if (text) {
         this.evictIfNeeded(this.textCache);
         this.textCache.set(chapter.id, { content: text, timestamp: Date.now() });

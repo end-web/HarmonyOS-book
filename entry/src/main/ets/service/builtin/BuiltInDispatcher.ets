@@ -149,6 +149,18 @@ export class BuiltInDispatcher {
     }
   }
 
+  static async getTextContent(source: BookSource, chapterUrl: string, nextChapterUrl?: string): Promise<string> {
+    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+    if (!plugin || !plugin.getTextContent) return '';
+    try {
+      return await plugin.getTextContent(chapterUrl, nextChapterUrl);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      console.error(`[${TAG}] getTextContent ${plugin.name} error: ${msg}`);
+      return '';
+    }
+  }
+
   /** 发现页：取每个内置源第一个分类 tab 的前 N 本 */
   static async getExploreBooks(source: BookSource): Promise<SearchResult[]> {
     const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);

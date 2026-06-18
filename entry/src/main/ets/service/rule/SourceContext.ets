@@ -23,6 +23,7 @@ export interface BookSource {
   bookSourceUrl: string;
   bookSourceName: string;
   bookSourceType?: number;
+  bookSourceComment?: string;
   loginUrl?: string;
   loginCheckJs?: string;
   header?: string;

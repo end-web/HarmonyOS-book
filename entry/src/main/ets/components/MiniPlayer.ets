@@ -1,6 +1,5 @@
 import { AppSpace, AppFont } from '../theme/Theme';
 import { PlayerState } from '../model/PlayerState';
-import { playerEntryState } from '../pages/PlayerPage';
 
 @ComponentV2
 export struct MiniPlayer {
@@ -49,10 +48,6 @@ export struct MiniPlayer {
     // 保持当前角度,不回正
   }
 
-  private bookId(): string {
-    return this.playerState.currentBook ? this.playerState.currentBook.id : '';
-  }
-
   @Builder
   coverImageBuilder(): void {
     if (this.playerState.currentBook) {
@@ -89,6 +84,13 @@ export struct MiniPlayer {
             expectedFrameRateRange: { min: 30, max: 120, expected: 60 }
           })
           .id('mini-cover-img-raw')
+      } else {
+        // 无封面:用 app 图标占位(替代旧的绿色书形占位)
+        Image($r('app.media.app_icon_legacy'))
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .id('mini-cover-img-fallback')
       }
     }
   }
@@ -104,28 +106,14 @@ export struct MiniPlayer {
         .onClick(() => this.onExpand())
       } else {
         Row({ space: AppSpace.Sm }) {
-          if (playerEntryState.fromMini) {
-            // mini 入口:挂 geometryTransition
-            Stack() {
-              this.coverImageBuilder()
-            }
-            .width(44)
-            .height(44)
-            .borderRadius(22)
-            .clip(true)
-            .geometryTransition('mini-cover-' + this.bookId(), { follow: true })
-            .onClick(() => this.onTapBody())
-          } else {
-            // 非 mini 入口:不挂 geometryTransition
-            Stack() {
-              this.coverImageBuilder()
-            }
-            .width(44)
-            .height(44)
-            .borderRadius(22)
-            .clip(true)
-            .onClick(() => this.onTapBody())
+          Stack() {
+            this.coverImageBuilder()
           }
+          .width(44)
+          .height(44)
+          .borderRadius(22)
+          .clip(true)
+          .onClick(() => this.onTapBody())
 
           Column({ space: 2 }) {
             Text(this.playerState.currentBook.title)

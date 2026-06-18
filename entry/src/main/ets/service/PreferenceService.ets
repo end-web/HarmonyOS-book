@@ -1,5 +1,9 @@
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
+import { emitter } from '@kit.BasicServicesKit';
+
+/** 书架收藏变化事件:加入/移出书架后触发,书架页据此自动刷新 */
+export const EVT_FAVORITES_CHANGED = 'app.favorites.changed';
 
 /**
  * 本地持久化：书架 / 播放历史 / 设置
@@ -20,6 +24,8 @@ const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
+/** 阅读器外观设置(字号/主题/翻页模式),JSON 持久化,跨次打开保持一致 */
+const KEY_READER_SETTINGS = 'reader_settings_v2';
 /** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
 const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 /** 已添加的卡片 formId 集合(按卡片名分桶) */
@@ -28,6 +34,8 @@ const KEY_WIDGET_FORM_IDS = 'widget_form_ids_v1';
 const KEY_PROGRESS_PREFIX = 'progress_v1_';
 /** 订阅源发现导航缓存,key = `${KEY_EXPLORE_NAV_PREFIX}${sourceUrlHash}` */
 const KEY_EXPLORE_NAV_PREFIX = 'explore_nav_v1_';
+/** 华为账号登录身份标识(UnionID/OpenID),JSON 持久化 */
+const KEY_HW_ACCOUNT = 'hw_account_v1';
 
 export interface PlayHistoryItem {
   bookId: string;
@@ -38,6 +46,8 @@ export interface PlayHistoryItem {
   chapterTitle?: string;
   // 章节真实时长(ms):有声书 TOC 不带时长,prepared 时回写,用于冷启动滑块/百分比
   durationMs?: number;
+  // 电子书章内位置(Reader Kit domPos):文本阅读模式恢复"上次读到的页",audio 书不写
+  domPos?: string;
 }
 
 export interface LastPlayedItem {
@@ -62,6 +72,8 @@ export interface PlayProgress {
   positionMs: number;
   durationMs: number;
   updatedAt: number;
+  // 电子书章内位置(Reader Kit domPos):文本阅读模式恢复"上次读到的页",audio 书不写
+  domPos?: string;
 }
 
 /** 卡片侧需要的最小快照,主进程写,FormExtensionAbility 读后渲染 */
@@ -100,6 +112,14 @@ export interface ExploreNavCache {
 export interface ExploreNavItem {
   title: string;
   url: string;
+}
+
+/** 华为账号登录身份标识(端侧直接返回,无需后端) */
+export interface HwAccount {
+  unionID: string;
+  openID: string;
+  /** 登录时间戳 */
+  loginAt: number;
 }
 
 export class PreferenceService {
@@ -190,6 +210,7 @@ export class PreferenceService {
     await s.put(KEY_FAVORITES, JSON.stringify(list));
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId } });
     return added;
   }
 
@@ -202,12 +223,40 @@ export class PreferenceService {
       await s.put(KEY_FAVORITES, JSON.stringify(list));
       await s.flush();
       PreferenceService.notifyFavoriteChanged();
+      emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId } });
     }
   }
 
   static async isFavorite(bookId: string): Promise<boolean> {
     const list = await PreferenceService.getFavorites();
     return list.includes(bookId);
+  }
+
+  // ===== 华为账号登录身份标识 =====
+
+  static async getHwAccount(): Promise<HwAccount | null> {
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_HW_ACCOUNT, '') as string;
+    if (!raw) {
+      return null;
+    }
+    try {
+      return JSON.parse(raw) as HwAccount;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  static async setHwAccount(account: HwAccount): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_HW_ACCOUNT, JSON.stringify(account));
+    await s.flush();
+  }
+
+  static async clearHwAccount(): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.delete(KEY_HW_ACCOUNT);
+    await s.flush();
   }
 
   static async getHistory(): Promise<PlayHistoryItem[]> {
@@ -563,4 +612,33 @@ export class PreferenceService {
     await s.put(KEY_PRELOAD_CHAPTERS, count);
     await s.flush();
   }
+
+  /** 阅读器外观设置:字号/主题索引/翻页模式索引。themeIndex<0 表示未设置(由页面按系统深浅色挑默认) */
+  static async getReaderSettings(): Promise<ReaderSettingsItem | null> {
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_READER_SETTINGS, '') as string;
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as ReaderSettingsItem;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  static async setReaderSettings(item: ReaderSettingsItem): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_READER_SETTINGS, JSON.stringify(item));
+    await s.flush();
+  }
+}
+
+/** 阅读器外观设置(持久化)。字体固定为系统字体,不再持久化字体族/字重 */
+export interface ReaderSettingsItem {
+  fontSize: number;
+  themeIndex: number;
+  flipModeIndex: number;
+  /** 屏幕亮度:-1=跟随系统,[0,1]=覆盖。旧数据无此字段时按跟随系统处理 */
+  brightness?: number;
+  /** 行距系数(行高 = 字号 * 该值)。旧数据无此字段时用默认 1.8 */
+  lineHeight?: number;
 }

@@ -215,6 +215,10 @@ export class AudioService {
           p.seek(this.pendingSeek, media.SeekMode.SEEK_PREV_SYNC);
           this.pendingSeek = 0;
         }
+        // 续用上次的倍速:切章节/换书 reset 后 AVPlayer 会回到 1.0x,这里在 prepared 合法态补回
+        if (this.state.speed !== 1.0) {
+          try { p.setPlaybackRate(this.state.speed); } catch (_e) { /* 状态异常忽略 */ }
+        }
         // 立即设置播放状态，让UI立即响应
         this.state.isPlaying = true;
         p.play();
@@ -786,6 +790,12 @@ export class AudioService {
   private async pauseFromSession(): Promise<void> {
     if (!this.player) return;
     if (this.player.state === 'playing') {
+      // 立即设置暂停状态，让UI立即响应（乐观更新）
+      if (this.state) {
+        this.state.isPlaying = false;
+        // 立即同步到 AVSession 和控制中心
+        this.syncPlaybackState();
+      }
       try {
         await this.player.pause();
       } catch (err) {
@@ -811,11 +821,19 @@ export class AudioService {
     }
     const p = await this.ensurePlayer();
     if (p.state === 'playing') {
+      // 立即设置暂停状态，让UI立即响应（乐观更新）
+      if (this.state) {
+        this.state.isPlaying = false;
+        // 立即同步到 AVSession 和控制中心
+        this.syncPlaybackState();
+      }
       await p.pause();
     } else if (p.state === 'paused') {
       // 立即设置播放状态，让UI立即响应
       if (this.state) {
         this.state.isPlaying = true;
+        // 立即同步到 AVSession 和控制中心
+        this.syncPlaybackState();
       }
       await p.play();
     } else if (p.state === 'completed') {
@@ -868,17 +886,18 @@ export class AudioService {
 
   async setSpeed(speed: number): Promise<void> {
     const p = await this.ensurePlayer();
-    let target: media.PlaybackSpeed | null = null;
-    if (speed === 0.75) target = media.PlaybackSpeed.SPEED_FORWARD_0_75_X;
-    else if (speed === 1) target = media.PlaybackSpeed.SPEED_FORWARD_1_00_X;
-    else if (speed === 1.25) target = media.PlaybackSpeed.SPEED_FORWARD_1_25_X;
-    else if (speed === 1.75) target = media.PlaybackSpeed.SPEED_FORWARD_1_75_X;
-    else if (speed === 2) target = media.PlaybackSpeed.SPEED_FORWARD_2_00_X;
-    if (target !== null) {
-      p.setSpeed(target);
-      if (this.state) this.state.speed = speed;
-      this.syncPlaybackState();
+    // 连续(无级)倍速:用 setPlaybackRate,有效范围 [0.125, 4.0]。
+    // 旧实现用 media.PlaybackSpeed 离散枚举,只能 0.75/1/1.25/1.75/2,无法无级调节。
+    const rate = Math.min(4.0, Math.max(0.125, speed));
+    try {
+      p.setPlaybackRate(rate);
+    } catch (e) {
+      // setPlaybackRate 仅在 prepared/playing/paused/completed 合法,其它状态会抛异常;
+      // 忽略即可,prepared 时会在 stateChange 里重新应用 state.speed。
+      hilog.warn(DOMAIN, TAG, 'setPlaybackRate failed: %{public}s', JSON.stringify(e));
     }
+    if (this.state) this.state.speed = rate;
+    this.syncPlaybackState();
   }
 
   setSleepTimer(minutes: number): void {
@@ -1055,6 +1074,12 @@ export class AudioService {
     this.cancelExternalMediaWatch();
     if (!this.player) return;
     if (this.player.state === 'playing') {
+      // 立即设置暂停状态，让UI立即响应（乐观更新）
+      if (this.state) {
+        this.state.isPlaying = false;
+        // 立即同步到 AVSession 和控制中心
+        this.syncPlaybackState();
+      }
       try {
         await this.player.pause();
       } catch (err) {

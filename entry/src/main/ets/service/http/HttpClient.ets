@@ -1,12 +1,18 @@
 /**
- * HttpClient - HTTP 请求封装（ArkTS 兼容）
+ * HttpClient - HTTP 请求封装（基于 Remote Communication Kit / rcp）
+ *
+ * 迁移自旧的 @ohos.net.http：
+ * - 用共享的 rcp.Session 替代手写的 HttpRequest 连接池（rcp Session 内部即连接复用）
+ * - 始终取原始字节（response.body: ArrayBuffer），按显式 charset 或自动探测解码，兼容 GBK/GB2312 书源
+ * - 保持公开 API 完全不变：request / get / post / clearPool / HttpRequestOptions / HttpResponse
  */
 
-import http from '@ohos.net.http';
+import { rcp } from '@kit.RemoteCommunicationKit';
 import { CharsetCodec } from '../../utils/CharsetCodec';
 import { getCookieManager } from '../rule/CookieManager';
 
 const DEFAULT_UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+const DEFAULT_TIMEOUT = 30000;
 
 export interface HttpRequestOptions {
   method?: string;
@@ -23,115 +29,112 @@ export interface HttpResponse {
   body: string;
 }
 
-const POOL: http.HttpRequest[] = [];
-const MAX_POOL_SIZE = 5;
-const DEFAULT_TIMEOUT = 30000;
+// 共享会话：rcp.Session 内部维护连接池，并发请求复用底层连接。
+// 超时按请求级 configuration 设置，因此一个会话即可服务所有请求。
+let sharedSession: rcp.Session | null = null;
 
-function getRequestMethod(method: string): http.RequestMethod {
-  const m = method.toUpperCase();
-  if (m === 'POST') return http.RequestMethod.POST;
-  if (m === 'PUT') return http.RequestMethod.PUT;
-  if (m === 'DELETE') return http.RequestMethod.DELETE;
-  return http.RequestMethod.GET;
-}
-
-function getHttpRequest(): http.HttpRequest {
-  const r = POOL.pop();
-  if (r) return r;
-  return http.createHttp();
-}
-
-function returnHttpRequest(request: http.HttpRequest): void {
-  if (POOL.length < MAX_POOL_SIZE) {
-    POOL.push(request);
-  } else {
-    request.destroy();
+function getSession(): rcp.Session {
+  if (!sharedSession) {
+    sharedSession = rcp.createSession();
   }
+  return sharedSession;
 }
 
 export class HttpClient {
   static async request(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
-    const httpRequest = getHttpRequest();
+    const session = getSession();
     const cookieJar = getCookieManager();
 
-    try {
-      // 用大小写不敏感的累积器收集 header（最终发送时再转成 Record）
-      const accum: Map<string, string> = new Map();
-      if (options.headers) {
-        const keys = Object.keys(options.headers);
-        for (const k of keys) accum.set(k.toLowerCase(), options.headers[k]);
-      }
-      // 默认 UA / Accept
-      if (!accum.has('user-agent')) accum.set('user-agent', DEFAULT_UA);
-      if (!accum.has('accept')) {
-        accum.set('accept', 'text/html,application/xhtml+xml,application/json,application/xml;q=0.9,*/*;q=0.8');
-      }
-      // 注入 cookie jar 中匹配的 cookie（合并已有 Cookie header）
-      const jarCookie = cookieJar.getCookieHeader(url);
-      if (jarCookie) {
-        const existing = accum.get('cookie') || '';
-        accum.set('cookie', existing ? existing + '; ' + jarCookie : jarCookie);
-      }
-
-      const charset = (options.charset || '').toLowerCase();
-      const isNonUtf8 = charset !== '' && charset !== 'utf-8' && charset !== 'utf8';
-
-      let extraData: string | undefined = undefined;
-      if (options.body && options.method !== 'GET') {
-        if (typeof options.body === 'string') {
-          extraData = options.body;
-          // body 是 query 形式 (a=1&b=2) 自动补 Content-Type
-          if (!accum.has('content-type') && /^[\w\-]+=[^=]/.test(options.body as string)) {
-            accum.set('content-type', 'application/x-www-form-urlencoded'
-              + (isNonUtf8 ? `; charset=${charset}` : ''));
-          }
-        } else {
-          extraData = JSON.stringify(options.body);
-          if (!accum.has('content-type')) accum.set('content-type', 'application/json');
-        }
-      }
-
-      // Map → Record（首字母大写更友好），保留多个值用 \n 拼（不应用，但谨慎）
-      const finalHeaders: Record<string, string> = {};
-      accum.forEach((v: string, k: string) => {
-        finalHeaders[HttpClient.titleCaseHeader(k)] = v;
-      });
-
-      const requestOptions: http.HttpRequestOptions = {
-        method: getRequestMethod(options.method || 'GET'),
-        header: finalHeaders,
-        readTimeout: options.timeout || DEFAULT_TIMEOUT,
-        connectTimeout: options.timeout || DEFAULT_TIMEOUT,
-      };
-      // 非 UTF-8 站点：拿原始字节，自己解码
-      if (isNonUtf8) {
-        requestOptions.expectDataType = http.HttpDataType.ARRAY_BUFFER;
-      }
-      if (extraData !== undefined) {
-        requestOptions.extraData = extraData;
-      }
-
-      const response = await httpRequest.request(url, requestOptions);
-
-      let body: string;
-      if (isNonUtf8 && response.result instanceof ArrayBuffer) {
-        body = CharsetCodec.decodeBuffer(response.result as ArrayBuffer, charset);
-      } else {
-        body = response.result as string;
-      }
-
-      const respHeaders = response.header as Record<string, string>;
-      cookieJar.acceptResponseCookies(url, respHeaders);
-
-      const result: HttpResponse = {
-        statusCode: response.responseCode,
-        headers: respHeaders,
-        body,
-      };
-      return result;
-    } finally {
-      returnHttpRequest(httpRequest);
+    // 用大小写不敏感的累积器收集 header（最终发送时再转成 Record）
+    const accum: Map<string, string> = new Map();
+    if (options.headers) {
+      const keys = Object.keys(options.headers);
+      for (const k of keys) accum.set(k.toLowerCase(), options.headers[k]);
     }
+    // 默认 UA / Accept
+    if (!accum.has('user-agent')) accum.set('user-agent', DEFAULT_UA);
+    if (!accum.has('accept')) {
+      accum.set('accept', 'text/html,application/xhtml+xml,application/json,application/xml;q=0.9,*/*;q=0.8');
+    }
+    // 注入 cookie jar 中匹配的 cookie（合并已有 Cookie header）
+    const jarCookie = cookieJar.getCookieHeader(url);
+    if (jarCookie) {
+      const existing = accum.get('cookie') || '';
+      accum.set('cookie', existing ? existing + '; ' + jarCookie : jarCookie);
+    }
+
+    const charset = (options.charset || '').toLowerCase();
+    const isNonUtf8 = charset !== '' && charset !== 'utf-8' && charset !== 'utf8';
+
+    const method = (options.method || 'GET').toUpperCase();
+    let content: string | undefined = undefined;
+    if (options.body && method !== 'GET') {
+      if (typeof options.body === 'string') {
+        content = options.body;
+        // body 是 query 形式 (a=1&b=2) 自动补 Content-Type
+        if (!accum.has('content-type') && /^[\w\-]+=[^=]/.test(options.body as string)) {
+          accum.set('content-type', 'application/x-www-form-urlencoded'
+            + (isNonUtf8 ? `; charset=${charset}` : ''));
+        }
+      } else {
+        content = JSON.stringify(options.body);
+        if (!accum.has('content-type')) accum.set('content-type', 'application/json');
+      }
+    }
+
+    // Map → Record（首字母大写更友好）
+    const finalHeaders: Record<string, string> = {};
+    accum.forEach((v: string, k: string) => {
+      finalHeaders[HttpClient.titleCaseHeader(k)] = v;
+    });
+
+    const timeout = options.timeout || DEFAULT_TIMEOUT;
+    const req = new rcp.Request(url, method, finalHeaders, content);
+    req.configuration = {
+      transfer: {
+        timeout: {
+          connectMs: timeout,
+          transferMs: timeout,
+        },
+      },
+    };
+
+    const response = await session.fetch(req);
+
+    // 始终按原始字节解码：显式 charset 优先，否则按 Content-Type / HTML meta 自动探测，默认 UTF-8
+    const respHeaders = HttpClient.toHeaderRecord(response.headers);
+    let body: string;
+    const buf = response.body;
+    if (buf && buf.byteLength > 0) {
+      let cs = charset;
+      if (!cs || cs === 'utf-8' || cs === 'utf8') {
+        cs = HttpClient.detectCharset(respHeaders, buf);
+      }
+      body = CharsetCodec.decodeBuffer(buf, cs);
+    } else {
+      body = '';
+    }
+
+    cookieJar.acceptResponseCookies(url, respHeaders);
+
+    const result: HttpResponse = {
+      statusCode: response.statusCode,
+      headers: respHeaders,
+      body,
+    };
+    return result;
+  }
+
+  /** 把 rcp.ResponseHeaders 规整成普通 Record（保留原始 key，值统一为 string） */
+  private static toHeaderRecord(headers: rcp.ResponseHeaders | undefined): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!headers) return out;
+    const keys = Object.keys(headers);
+    for (const k of keys) {
+      const v = (headers as Record<string, string>)[k];
+      if (v !== undefined && v !== null) out[k] = String(v);
+    }
+    return out;
   }
 
   private static titleCaseHeader(name: string): string {
@@ -139,6 +142,28 @@ export class HttpClient {
       if (!p) return p;
       return p.charAt(0).toUpperCase() + p.substring(1);
     }).join('-');
+  }
+
+  /** 自动探测响应编码：Content-Type 头 → HTML meta(前2KB) → 默认 utf-8 */
+  private static detectCharset(headers: Record<string, string>, buf: ArrayBuffer): string {
+    try {
+      const keys = headers ? Object.keys(headers) : [];
+      for (const k of keys) {
+        if (k.toLowerCase() === 'content-type') {
+          const m = (headers[k] || '').toLowerCase().match(/charset\s*=\s*([\w-]+)/);
+          if (m) return m[1];
+        }
+      }
+    } catch { /* ignore */ }
+    try {
+      const n = Math.min(buf.byteLength, 2048);
+      const bytes = new Uint8Array(buf, 0, n);
+      let head = '';
+      for (let i = 0; i < n; i++) head += String.fromCharCode(bytes[i]);
+      const m = head.toLowerCase().match(/charset\s*=\s*["']?\s*([\w-]+)/);
+      if (m) return m[1];
+    } catch { /* ignore */ }
+    return 'utf-8';
   }
 
   static async get(url: string, headers?: Record<string, string>, charset?: string): Promise<string> {
@@ -152,9 +177,9 @@ export class HttpClient {
   }
 
   static clearPool(): void {
-    for (const r of POOL) {
-      r.destroy();
+    if (sharedSession) {
+      sharedSession.close();
+      sharedSession = null;
     }
-    POOL.length = 0;
   }
 }

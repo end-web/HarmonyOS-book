@@ -5,8 +5,7 @@
  * 登录完成后自动返回上一页。
  */
 
-import web_webview from '@ohos.web.webview';
-import { router } from '@kit.ArkUI';
+import { webview } from '@kit.ArkWeb';
 import { getCookieManager } from '../service/rule/CookieManager';
 
 const TAG = 'LoginPage';
@@ -16,8 +15,9 @@ export struct LoginPage {
   @Param loginUrl: string = 'https://v1.gyks.cf/login';
   @Param serverHost: string = 'https://v1.gyks.cf';
   @Param title: string = '登录聚合源';
+  @Param navStack: NavPathStack = new NavPathStack();
   @Local isLoading: boolean = true;
-  private controller: web_webview.WebviewController = new web_webview.WebviewController();
+  private controller: webview.WebviewController = new webview.WebviewController();
   private cookieCheckTimer: number = -1;
   private loginSuccess: boolean = false;
 
@@ -36,7 +36,7 @@ export struct LoginPage {
           .height(24)
           .fillColor('#333333')
           .onClick(() => {
-            router.back();
+            this.navStack.pop();
           })
         Text(this.title)
           .fontSize(18)
@@ -121,7 +121,7 @@ export struct LoginPage {
               this.cookieCheckTimer = -1;
               // 延迟返回，让用户看到"登录成功"提示
               setTimeout(() => {
-                router.back();
+                this.navStack.pop();
               }, 1500);
             }
           }

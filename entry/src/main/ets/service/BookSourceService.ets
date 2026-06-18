@@ -43,6 +43,29 @@ interface ExploreSection {
   books: SearchResult[];
 }
 
+interface MaoyanConfig {
+  host: string;
+  aesKey: string;
+  authorization: string;
+  headers: Record<string, string>;
+}
+
+interface MaoyanCrypto {
+  doFinal: (data: string, op: string) => string;
+}
+
+interface MaoyanCategory {
+  title: string;
+  id: string;
+  channel: number;
+}
+
+interface MaoyanSort {
+  label: string;
+  value: number;
+  suffix: string;
+}
+
 /** 订阅源单分类抓取结果（含分页信息） */
 export interface ExploreFetchResult {
   books: SearchResult[];
@@ -71,6 +94,436 @@ class HomeBlockImpl implements HomeBlockSection {
 
 export class BookSourceService {
   // ──────────────────── 辅助方法 ────────────────────
+
+  private static isMaoyanSource(source: BookSource): boolean {
+    const name = source.bookSourceName || '';
+    const comment = source.bookSourceComment || '';
+    const sourceUrl = source.bookSourceUrl || '';
+    return name.includes('猫眼') || comment.includes('maoyankanshu') || sourceUrl.includes('yichnmedia.com');
+  }
+
+  private static getMaoyanConfig(source: BookSource): MaoyanConfig {
+    let aesKey = '4395daa50ad6baf7';
+    let authorization = 'bearereyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOlwvXC9hcGkueGluZ2xpYW5nZ2xvYmFsLmNvbVwvYXV0aFwvdGhpcmQiLCJpYXQiOjE3MDY4NjA2NzcsImV4cCI6MTgwMDE3MjY3NywibmJmIjoxNzA2ODYwNjc3LCJqdGkiOiJxdXBGbWo5cnJRMHFoTFVIIiwic3ViIjozMjY4ODcsInBydiI6ImExY2IwMzcxODAyOTZjNmExOTM4ZWYzMGI0Mzc5NDY3MmRkMDE2YzUifQ.CQsDsiDJyyriPmJuT6A38KIvGgq6BEOMWl8H5plqArQ';
+    const comment = source.bookSourceComment || '';
+    const pairRegex = /\["([0-9a-fA-F]{16,32})",\s*"(bearer[^"]+)"\]/g;
+    let match: RegExpExecArray | null = pairRegex.exec(comment);
+    while (match !== null) {
+      // 该源中最后一组是 xingliangglobal 新 AES 配置；保留默认值兜底。
+      aesKey = match[1];
+      authorization = match[2];
+      match = pairRegex.exec(comment);
+    }
+
+    const headers = AnalyzeUrl.mergeHeaders(source.header || '', {
+      'client-device': getJavaBridge().md5Encode(aesKey),
+      'Authorization': authorization,
+    });
+    return {
+      host: 'http://api.xingliangglobal.com',
+      aesKey,
+      authorization,
+      headers,
+    };
+  }
+
+  private static decodeDataUrlPayload(dataUrl: string): string {
+    const base64Idx = dataUrl.indexOf('base64,');
+    if (base64Idx < 0) return '';
+    const encoded = dataUrl.substring(base64Idx + 7);
+    const configIdx = encoded.lastIndexOf(',{');
+    const payload = configIdx > 0 ? encoded.substring(0, configIdx) : encoded;
+    return DataUrlHandler.base64Decode(payload).trim();
+  }
+
+  private static resolveMaoyanApiUrl(rawUrl: string, host: string, page: number = 1): string {
+    let url = (rawUrl || '').replace(/[\r\n\t]/g, '').trim();
+    if (DataUrlHandler.isDataUrl(url)) {
+      url = BookSourceService.decodeDataUrlPayload(url);
+    }
+    url = url.replace(/\{\{page\}\}/g, String(page));
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return BookSourceService.normalizeMaoyanUrl(url, host);
+    }
+    if (url.startsWith('/')) {
+      return host + url;
+    }
+    return host + '/' + url;
+  }
+
+  private static normalizeMaoyanUrl(url: string, host: string): string {
+    if (!url) return '';
+    if (url.startsWith('//')) return 'http:' + url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url.replace(/^https?:\/\/api\.[^/]+\.com/i, host);
+    }
+    if (url.startsWith('/')) return host + url;
+    return url;
+  }
+
+  private static asRecord(value: Object | undefined | null): Record<string, Object> | null {
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      return value as Record<string, Object>;
+    }
+    return null;
+  }
+
+  private static valueToText(value: Object | undefined | null): string {
+    if (value === undefined || value === null) return '';
+    if (Array.isArray(value)) {
+      const parts: string[] = [];
+      for (const item of value as Object[]) {
+        const rec = BookSourceService.asRecord(item);
+        if (rec) {
+          const label = BookSourceService.getStringField(rec, ['className', 'categoryName', 'tagName', 'name', 'title']);
+          if (label) parts.push(label);
+        } else {
+          const s = String(item).trim();
+          if (s) parts.push(s);
+        }
+      }
+      return parts.join(' ');
+    }
+    const rec = BookSourceService.asRecord(value);
+    if (rec) {
+      const label = BookSourceService.getStringField(rec, ['className', 'categoryName', 'tagName', 'name', 'title']);
+      return label || JSON.stringify(value);
+    }
+    return String(value).trim();
+  }
+
+  private static getStringField(record: Record<string, Object>, keys: string[]): string {
+    for (const key of keys) {
+      const text = BookSourceService.valueToText(record[key]);
+      if (text) return text;
+    }
+    return '';
+  }
+
+  private static getMaoyanList(parsed: Record<string, Object>): Object[] {
+    const data = parsed['data'];
+    if (Array.isArray(data)) return data as Object[];
+    const dataRec = BookSourceService.asRecord(data);
+    if (dataRec) {
+      const keys = ['list', 'books', 'items', 'data'];
+      for (const key of keys) {
+        const value = dataRec[key];
+        if (Array.isArray(value)) return value as Object[];
+      }
+    }
+    const rootKeys = ['list', 'books', 'items'];
+    for (const key of rootKeys) {
+      const value = parsed[key];
+      if (Array.isArray(value)) return value as Object[];
+    }
+    return [];
+  }
+
+  private static getMaoyanDataRecord(parsed: Record<string, Object>): Record<string, Object> {
+    const dataRec = BookSourceService.asRecord(parsed['data']);
+    return dataRec || parsed;
+  }
+
+  private static getMaoyanNovelId(record: Record<string, Object>): string {
+    return BookSourceService.getStringField(record, ['novelId', 'bookId', 'id']);
+  }
+
+  private static getMaoyanLastChapter(record: Record<string, Object>): string {
+    const lastObj = BookSourceService.asRecord(record['lastChapter']) ||
+      BookSourceService.asRecord(record['latestChapter']);
+    if (lastObj) {
+      const title = BookSourceService.getStringField(lastObj, ['chapterName', 'name', 'title']);
+      const time = BookSourceService.getStringField(lastObj, ['updatedAt', 'updateTime', 'time']);
+      return `${title} ${time}`.trim();
+    }
+    return BookSourceService.getStringField(record, ['lastChapterName', 'latestChapterName', 'lastChapter']);
+  }
+
+  private static getMaoyanKind(record: Record<string, Object>): string {
+    const parts: string[] = [];
+    const score = BookSourceService.getStringField(record, ['averageScore', 'score']);
+    if (score) parts.push(score.includes('分') ? score : `${score}分`);
+    const category = BookSourceService.getStringField(record, ['categoryNames', 'categoryName', 'category']);
+    if (category) parts.push(category);
+    const tags = BookSourceService.getStringField(record, ['tagNames', 'tags']);
+    if (tags) parts.push(tags);
+    const status = BookSourceService.getStringField(record, ['statusText', 'status']);
+    const isComplete = BookSourceService.getStringField(record, ['isComplete', 'complete']);
+    if (status && status !== '0' && status !== '1') {
+      parts.push(status);
+    } else if (isComplete) {
+      parts.push(isComplete === '1' || isComplete === 'true' ? '完结' : '连载');
+    }
+    return parts.join('\n');
+  }
+
+  private static mapMaoyanBook(source: BookSource, item: Object, host: string): SearchResult | null {
+    const record = BookSourceService.asRecord(item);
+    if (!record) return null;
+    const name = BookSourceService.getStringField(record, ['novelName', 'bookName', 'name', 'title']);
+    if (!name) return null;
+    const author = BookSourceService.getStringField(record, ['authorName', 'author']);
+    const coverRaw = BookSourceService.getStringField(record, ['cover', 'coverUrl', 'picUrl', 'image']);
+    const novelId = BookSourceService.getMaoyanNovelId(record);
+    const urlRaw = BookSourceService.getStringField(record, ['bookUrl', 'url']);
+    const bookUrl = novelId ? `${host}/novel/${novelId}` : BookSourceService.normalizeMaoyanUrl(urlRaw, host);
+    const variables: Record<string, string> = {};
+    if (novelId) variables['novelId'] = novelId;
+    variables['maoyanHost'] = host;
+    return {
+      name,
+      author,
+      coverUrl: BookSourceService.normalizeMaoyanUrl(coverRaw, host),
+      bookUrl,
+      intro: BookSourceService.getStringField(record, ['summary', 'intro', 'description', 'rankInfo']),
+      kind: BookSourceService.getMaoyanKind(record),
+      lastChapter: BookSourceService.getMaoyanLastChapter(record),
+      wordCount: BookSourceService.getStringField(record, ['wordNum', 'wordCount', 'words']),
+      sourceName: source.bookSourceName,
+      sourceUrl: source.bookSourceUrl,
+      variables,
+    };
+  }
+
+  private static extractMaoyanNovelId(bookUrl: string, variables?: Record<string, string>): string {
+    if (variables && variables['novelId']) return variables['novelId'];
+    let url = (bookUrl || '').trim();
+    if (DataUrlHandler.isDataUrl(url)) url = BookSourceService.decodeDataUrlPayload(url);
+    const novelMatch = url.match(/\/novel\/([^/?#]+)/);
+    if (novelMatch) return decodeURIComponent(novelMatch[1]);
+    const queryMatch = url.match(/[?&](?:novelId|bookId|id)=([^&#]+)/);
+    if (queryMatch) return decodeURIComponent(queryMatch[1]);
+    if (/^[A-Za-z0-9_-]+$/.test(url)) return url;
+    return '';
+  }
+
+  private static bytesToHex(bytes: number[]): string {
+    return bytes.map((b: number) => (b & 0xFF).toString(16).padStart(2, '0')).join('');
+  }
+
+  private static base64ToBytes(s: string): number[] {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const map: Map<string, number> = new Map();
+    for (let i = 0; i < alphabet.length; i++) map.set(alphabet.charAt(i), i);
+    let clean = (s || '').replace(/-/g, '+').replace(/_/g, '/').replace(/[^A-Za-z0-9+/=]/g, '');
+    while (clean.length % 4 !== 0) clean += '=';
+    const bytes: number[] = [];
+    for (let i = 0; i < clean.length; i += 4) {
+      const c1 = map.get(clean.charAt(i)) ?? 0;
+      const c2 = map.get(clean.charAt(i + 1)) ?? 0;
+      const c3 = map.get(clean.charAt(i + 2)) ?? 0;
+      const c4 = map.get(clean.charAt(i + 3)) ?? 0;
+      bytes.push(((c1 << 2) | (c2 >> 4)) & 0xFF);
+      if (clean.charAt(i + 2) !== '=') bytes.push(((c2 << 4) | (c3 >> 2)) & 0xFF);
+      if (clean.charAt(i + 3) !== '=') bytes.push(((c3 << 6) | c4) & 0xFF);
+    }
+    return bytes;
+  }
+
+  private static decryptMaoyanPath(encrypted: string, aesKey: string): string {
+    const raw = (encrypted || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('/')) return raw;
+    try {
+      const cipherHex = /^[0-9a-fA-F]+$/.test(raw) && raw.length % 2 === 0
+        ? raw
+        : BookSourceService.bytesToHex(BookSourceService.base64ToBytes(raw));
+      const javaBridge = getJavaBridge();
+      const crypto = javaBridge.createSymmetricCrypto(
+        'AES/CBC/PKCS5Padding',
+        javaBridge.hexEncodeToString(aesKey),
+        javaBridge.hexEncodeToString('0123456789abcdef'),
+      ) as MaoyanCrypto;
+      const plainHex = crypto.doFinal(cipherHex, 'decrypt');
+      return javaBridge.hexDecodeToString(plainHex);
+    } catch (e) {
+      console.warn(`[${TAG}] decryptMaoyanPath failed: ${e}`);
+      return '';
+    }
+  }
+
+  private static async fetchMaoyanJsonWithConfig(config: MaoyanConfig, rawUrl: string, page: number = 1): Promise<Record<string, Object> | null> {
+    const url = BookSourceService.resolveMaoyanApiUrl(rawUrl, config.host, page);
+    if (!url) return null;
+    const body = await HttpClient.get(url, config.headers);
+    hilog.info(0x9527, 'MaoyanDbg', 'url=%{public}s bodyLen=%{public}d head=%{public}s',
+      url, body.length, body.substring(0, 400));
+    try {
+      return JSON.parse(body) as Record<string, Object>;
+    } catch (e) {
+      console.warn(`[${TAG}] fetchMaoyanJson parse failed: ${e}, url=${url}`);
+      return null;
+    }
+  }
+
+  private static async searchMaoyanBooks(source: BookSource, keyword: string, page: number): Promise<SearchResult[]> {
+    const config = BookSourceService.getMaoyanConfig(source);
+    const parsed = await BookSourceService.fetchMaoyanJsonWithConfig(
+      config,
+      `/search?keyword=${encodeURIComponent(keyword)}&page=${page}`,
+      page,
+    );
+    if (!parsed) return [];
+    const list = BookSourceService.getMaoyanList(parsed);
+    const results: SearchResult[] = [];
+    for (const item of list) {
+      const mapped = BookSourceService.mapMaoyanBook(source, item, config.host);
+      if (mapped) results.push(mapped);
+    }
+    return results;
+  }
+
+  private static async getMaoyanBookInfo(source: BookSource, bookUrl: string, variables?: Record<string, string>): Promise<BookInfo | null> {
+    const config = BookSourceService.getMaoyanConfig(source);
+    const novelId = BookSourceService.extractMaoyanNovelId(bookUrl, variables);
+    if (!novelId) return null;
+    const parsed = await BookSourceService.fetchMaoyanJsonWithConfig(config, `/novel/${novelId}`);
+    if (!parsed) return null;
+    const record = BookSourceService.getMaoyanDataRecord(parsed);
+    const name = BookSourceService.getStringField(record, ['novelName', 'bookName', 'name', 'title']);
+    const coverRaw = BookSourceService.getStringField(record, ['cover', 'coverUrl', 'picUrl', 'image']);
+    const vars: Record<string, string> = {};
+    vars['novelId'] = novelId;
+    vars['maoyanHost'] = config.host;
+    return {
+      name,
+      author: BookSourceService.getStringField(record, ['authorName', 'author']),
+      coverUrl: BookSourceService.normalizeMaoyanUrl(coverRaw, config.host),
+      intro: BookSourceService.getStringField(record, ['summary', 'intro', 'description']),
+      kind: BookSourceService.getMaoyanKind(record),
+      wordCount: BookSourceService.getStringField(record, ['wordNum', 'wordCount', 'words']),
+      lastChapter: BookSourceService.getMaoyanLastChapter(record),
+      tocUrl: `${config.host}/novel/${novelId}/chapters`,
+      variables: vars,
+    };
+  }
+
+  private static async getMaoyanToc(source: BookSource, tocUrl: string, variables?: Record<string, string>, bookName?: string): Promise<TocItem[]> {
+    const config = BookSourceService.getMaoyanConfig(source);
+    let url = BookSourceService.resolveMaoyanApiUrl(tocUrl, config.host);
+    if (!url.includes('/chapters')) {
+      const novelId = BookSourceService.extractMaoyanNovelId(url, variables);
+      if (!novelId) return [];
+      url = `${config.host}/novel/${novelId}/chapters`;
+    }
+    const parsed = await BookSourceService.fetchMaoyanJsonWithConfig(config, url);
+    if (!parsed) return [];
+    const list = BookSourceService.getMaoyanList(parsed);
+    const items: TocItem[] = [];
+    for (const item of list) {
+      const record = BookSourceService.asRecord(item);
+      if (!record) continue;
+      let name = BookSourceService.getStringField(record, ['chapterName', 'name', 'title']);
+      if (!name) continue;
+      if (bookName) name = ChapterTitleFormatter.stripBookPrefix(name, bookName);
+      const encryptedPath = BookSourceService.getStringField(record, ['path', 'chapterUrl', 'url']);
+      const decryptedPath = BookSourceService.decryptMaoyanPath(encryptedPath, config.aesKey);
+      const chapterUrl = BookSourceService.resolveMaoyanApiUrl(decryptedPath || encryptedPath, config.host);
+      if (!chapterUrl) continue;
+      const wordNum = BookSourceService.getStringField(record, ['wordNum', 'wordCount', 'words']);
+      const updatedAt = BookSourceService.getStringField(record, ['updatedAt', 'updateTime', 'time']);
+      const tocItem: TocItem = { name, url: chapterUrl };
+      const infoParts: string[] = [];
+      if (wordNum) infoParts.push(`章节字数：${wordNum}`);
+      if (updatedAt) infoParts.push(`更新时间：${updatedAt}`);
+      if (infoParts.length > 0) tocItem.updateTime = infoParts.join('　');
+      items.push(tocItem);
+    }
+    return items;
+  }
+
+  private static async getMaoyanTextContent(source: BookSource, chapterUrl: string): Promise<string> {
+    const config = BookSourceService.getMaoyanConfig(source);
+    let rawUrl = (chapterUrl || '').replace(/[\r\n\t]/g, '').trim();
+    if (DataUrlHandler.isDataUrl(rawUrl)) {
+      rawUrl = BookSourceService.decodeDataUrlPayload(rawUrl);
+    }
+    if (rawUrl && !rawUrl.startsWith('http://') && !rawUrl.startsWith('https://') && !rawUrl.startsWith('/')) {
+      const decrypted = BookSourceService.decryptMaoyanPath(rawUrl, config.aesKey);
+      if (decrypted) rawUrl = decrypted;
+    }
+    const url = BookSourceService.resolveMaoyanApiUrl(rawUrl, config.host);
+    const parsed = await BookSourceService.fetchMaoyanJsonWithConfig(config, url);
+    if (!parsed) return '';
+    const directContent = BookSourceService.getStringField(parsed, ['content']);
+    if (directContent) return directContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const dataRec = BookSourceService.asRecord(parsed['data']);
+    if (dataRec) {
+      const content = BookSourceService.getStringField(dataRec, ['content', 'body', 'text']);
+      return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    }
+    const data = BookSourceService.valueToText(parsed['data']);
+    return data.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  }
+
+  private static getMaoyanExploreNavigation(): ExploreNavItem[] {
+    const nav: ExploreNavItem[] = [];
+    const push = (title: string, url: string): void => {
+      nav.push({ title, url });
+    };
+
+    const rankTitles = ['必读榜', '完本榜', '更新榜', '搜索榜', '潜力榜', '评论榜'];
+    for (let channel = 1; channel <= 2; channel++) {
+      const channelTitle = channel === 1 ? '男生' : '女生';
+      for (let i = 0; i < rankTitles.length; i++) {
+        push(`${channelTitle} · ${rankTitles[i]}`, `/module/rank?type=${i + 1}&channel=${channel}&page={{page}}`);
+      }
+      push(`${channelTitle} · 人气完本`, `/module/mep2bM?channel=${channel}&page={{page}}`);
+      push(`${channelTitle} · 新书速递`, `/module/YerEdO?channel=${channel}&page={{page}}`);
+    }
+
+    const categories: MaoyanCategory[] = [
+      { title: '玄幻', id: 'lejRej', channel: 1 },
+      { title: '武侠', id: 'nel5aK', channel: 1 },
+      { title: '都市', id: 'mbk5ez', channel: 1 },
+      { title: '仙侠', id: 'vbmOeY', channel: 1 },
+      { title: '军事', id: 'penRe7', channel: 1 },
+      { title: '历史', id: 'xbojag', channel: 1 },
+      { title: '游戏', id: 'mep2bM', channel: 1 },
+      { title: '科幻', id: 'zbq2dp', channel: 1 },
+      { title: '轻小说', id: 'YerEdO', channel: 1 },
+      { title: '现代言情', id: '9avmeG', channel: 2 },
+      { title: '古代言情', id: 'DdwRb1', channel: 2 },
+      { title: '幻想言情', id: '7ax9by', channel: 2 },
+      { title: '青春校园', id: 'Pdy7aQ', channel: 2 },
+      { title: '唯美纯爱', id: 'kazYeJ', channel: 2 },
+      { title: '同人衍生', id: '9aAOdv', channel: 2 },
+    ];
+    const sorts: MaoyanSort[] = [
+      { label: '热度', value: 1, suffix: '' },
+      { label: '更新', value: 2, suffix: '' },
+      { label: '评分', value: 3, suffix: '' },
+      { label: '新书', value: 4, suffix: '' },
+      { label: '连载', value: 1, suffix: '&isComplete=0' },
+      { label: '完结', value: 1, suffix: '&isComplete=1' },
+    ];
+    for (const category of categories) {
+      const channelTitle = category.channel === 1 ? '男生' : '女生';
+      for (const sort of sorts) {
+        push(`${channelTitle} · ${category.title} · ${sort.label}`,
+          `/novel?sort=${sort.value}&categoryId=${category.id}${sort.suffix}&page={{page}}`);
+      }
+    }
+    return nav;
+  }
+
+  private static async getMaoyanExploreBooksByUrl(
+    source: BookSource, categoryUrl: string, page: number
+  ): Promise<ExploreFetchResult> {
+    const empty: ExploreFetchResult = { books: [], nextUrl: '' };
+    const config = BookSourceService.getMaoyanConfig(source);
+    const parsed = await BookSourceService.fetchMaoyanJsonWithConfig(config, categoryUrl, page);
+    if (!parsed) return empty;
+    const list = BookSourceService.getMaoyanList(parsed);
+    const books: SearchResult[] = [];
+    for (const item of list) {
+      const mapped = BookSourceService.mapMaoyanBook(source, item, config.host);
+      if (mapped) books.push(mapped);
+    }
+    const nextUrl = books.length > 0 && categoryUrl.includes('{{page}}') ? categoryUrl : '';
+    return { books, nextUrl, nextPage: page + 1 };
+  }
 
   /**
    * 构建 JS 执行上下文，注入 jsLib、源变量、cache 等
@@ -347,6 +800,9 @@ export class BookSourceService {
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
       return BuiltInDispatcher.search(source, keyword, page);
     }
+    if (BookSourceService.isMaoyanSource(source)) {
+      return BookSourceService.searchMaoyanBooks(source, keyword, page);
+    }
 
     // 聚合源（bookSourceType=0）搜索时临时设置搜索模式为"听书"
     // 这样服务端只搜听书后端（喜马拉雅、懒人听书等），不搜小说/漫画
@@ -379,6 +835,7 @@ export class BookSourceService {
       let analyzedUrl: string;
       let analyzedMethod = 'GET';
       let analyzedBody: string | undefined;
+      let analyzedCharset: string | undefined;
       const analyzedHeaders: Record<string, string> = {};
       if (!source.jsLib && source.searchUrl.startsWith('http')) {
         analyzedUrl = source.searchUrl
@@ -413,9 +870,13 @@ export class BookSourceService {
         analyzedUrl = analyzed.url;
         analyzedMethod = analyzed.method;
         analyzedBody = analyzed.body;
+        analyzedCharset = analyzed.charset;
         const hdrKeys = Object.keys(analyzed.headers);
         for (const hk of hdrKeys) analyzedHeaders[hk] = analyzed.headers[hk];
       }
+
+      hilog.info(0x9527, 'FushuDbg', '[%{public}s] REQ method=%{public}s url=%{public}s body=%{public}s',
+        source.bookSourceName, analyzedMethod, analyzedUrl, analyzedBody);
 
       // 处理 data: URL — 搜索 URL 返回 data: 编码的参数
       // data: URL 的 base64 内容需要作为 result 传给 bookList 规则
@@ -433,7 +894,7 @@ export class BookSourceService {
           body = '';
         }
       } else {
-        const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, retry: 0 };
+        const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, charset: analyzedCharset, retry: 0 };
         body = await BookSourceService.fetch(tmpAnalyzed);
       }
 
@@ -444,10 +905,13 @@ export class BookSourceService {
         body = await BookSourceService.executeLoginCheck(source, body, keyword);
         // loginCheck 返回重试标记 → POST 已建立搜索会话，重新 GET 原始 URL
         if (body === '__RETRY_SEARCH__') {
-          const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, retry: 0 };
+          const tmpAnalyzed: AnalyzedUrl = { url: analyzedUrl, method: analyzedMethod, body: analyzedBody, headers: analyzedHeaders, charset: analyzedCharset, retry: 0 };
           body = await BookSourceService.fetch(tmpAnalyzed);
         }
       }
+
+      hilog.info(0x9527, 'FushuDbg', '[%{public}s] bodyLen=%{public}d head=%{public}s',
+        source.bookSourceName, body.length, body.substring(0, 350));
 
       // 检查 checkKeyWord（反爬检测，软警告）
       // 原意：响应被反爬拦截（如跳转到验证页）时会缺少这个关键词
@@ -466,6 +930,8 @@ export class BookSourceService {
       ctx.jsLib = source.jsLib || '';
       const analyzer = new AnalyzeRule(body, ctx);
       const items: Object[] = await analyzer.getElements(rule.bookList);
+      hilog.info(0x9527, 'FushuDbg', '[%{public}s] bookList=%{public}s matched=%{public}d',
+        source.bookSourceName, rule.bookList, items.length);
       if (items.length === 0) return [];
 
       // 子源标识：bookSourceGroup 以 '聚合听书,' 开头
@@ -536,6 +1002,9 @@ export class BookSourceService {
   static async getBookInfo(source: BookSource, bookUrl: string, variables?: Record<string, string>): Promise<BookInfo | null> {
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
       return BuiltInDispatcher.getBookInfo(source, bookUrl);
+    }
+    if (BookSourceService.isMaoyanSource(source)) {
+      return BookSourceService.getMaoyanBookInfo(source, bookUrl, variables);
     }
     try {
       const rule = source.ruleBookInfo;
@@ -643,6 +1112,9 @@ export class BookSourceService {
         uniqueBuiltin.push(item);
       }
       return uniqueBuiltin;
+    }
+    if (BookSourceService.isMaoyanSource(source)) {
+      return BookSourceService.getMaoyanToc(source, tocUrl, variables, bookName);
     }
     const rule = source.ruleToc;
     const allItems: TocItem[] = [];
@@ -1055,10 +1527,21 @@ export class BookSourceService {
   // ──────────────────── 文本内容（支持多页） ────────────────────
 
   static async getTextContent(source: BookSource, chapterUrl: string, nextChapterUrl?: string): Promise<string> {
+    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
+      return BuiltInDispatcher.getTextContent(source, chapterUrl, nextChapterUrl);
+    }
+    if (BookSourceService.isMaoyanSource(source)) {
+      return BookSourceService.getMaoyanTextContent(source, chapterUrl);
+    }
     try {
       const rule = source.ruleContent;
       const allContent: string[] = [];
       let currentUrl: string = chapterUrl;
+      const resolvedNextChapterUrl = nextChapterUrl ? AnalyzeUrl.resolveUrl(chapterUrl, nextChapterUrl) : '';
+      const chapterCtx: Record<string, Object> = {};
+      chapterCtx['url'] = chapterUrl as Object;
+      chapterCtx['chapterUrl'] = chapterUrl as Object;
+      if (nextChapterUrl) chapterCtx['nextUrl'] = nextChapterUrl as Object;
 
       // 处理 data: URL（代理书源的中间路由机制）
       if (DataUrlHandler.isDataUrl(currentUrl)) {
@@ -1072,7 +1555,7 @@ export class BookSourceService {
         visitedUrls.add(currentUrl);
 
         // 防止循环到下一章
-        if (nextChapterUrl && currentUrl === nextChapterUrl) break;
+        if (resolvedNextChapterUrl && AnalyzeUrl.resolveUrl(chapterUrl, currentUrl) === resolvedNextChapterUrl) break;
 
         // data: URL 不需要 HTTP 请求，但要把 base64 内容作为 result 传给规则
         let body: string;
@@ -1091,7 +1574,8 @@ export class BookSourceService {
         }
         const ctx = new AnalyzeContext(currentUrl);
         ctx.jsLib = source.jsLib || '';
-        ctx.book = { origin: source.bookSourceUrl, bookUrl: currentUrl, name: '' } as BookContext;
+        ctx.book = { origin: source.bookSourceUrl, bookUrl: chapterUrl, name: '' } as BookContext;
+        ctx.chapter = chapterCtx;
         const analyzer = new AnalyzeRule(body, ctx);
         const content = await analyzer.getString(rule.content);
         if (content) {
@@ -1103,7 +1587,7 @@ export class BookSourceService {
           const nextUrl = await analyzer.getString(rule.nextContentUrl);
           if (nextUrl) {
             const resolved = AnalyzeUrl.resolveUrl(currentUrl, nextUrl);
-            if (resolved !== nextChapterUrl) {
+            if (resolved !== resolvedNextChapterUrl) {
               currentUrl = resolved;
             } else {
               hasMore = false;
@@ -1126,6 +1610,7 @@ export class BookSourceService {
           const firstPageCtx = new AnalyzeContext(chapterUrl);
           firstPageCtx.jsLib = source.jsLib || '';
           firstPageCtx.book = { origin: source.bookSourceUrl, bookUrl: chapterUrl, name: '' } as BookContext;
+          firstPageCtx.chapter = chapterCtx;
           // 需要重新解析第一页（因为 analyzer 已经迭代完了）
           // 简化处理：从 result 中尝试提取标题（如果有 HTML 结构）
           const titleAnalyzer = new AnalyzeRule(result, firstPageCtx);
@@ -1186,6 +1671,9 @@ export class BookSourceService {
    */
   private static async parseExploreNavigation(source: BookSource): Promise<ExploreNavItem[]> {
     if (!source.exploreUrl || source.exploreUrl.length === 0) return [];
+    if (BookSourceService.isMaoyanSource(source)) {
+      return BookSourceService.getMaoyanExploreNavigation();
+    }
 
     // 先查缓存（30 天 TTL，含版本戳）
     const sourceVersion = source.lastUpdateTime || 0;
@@ -1284,12 +1772,20 @@ export class BookSourceService {
     const empty: ExploreFetchResult = { books: [], nextUrl: '' };
     try {
       if (!source.ruleExplore || !categoryUrl) return empty;
+      if (BookSourceService.isMaoyanSource(source)) {
+        return BookSourceService.getMaoyanExploreBooksByUrl(source, categoryUrl, page);
+      }
 
-      const analyzeUrl = new AnalyzeUrl(categoryUrl, {
+      const resolvedCategoryUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, categoryUrl);
+      const analyzeUrl = new AnalyzeUrl(resolvedCategoryUrl, {
         page, baseUrl: source.bookSourceUrl,
         _jsLib: source.jsLib || '',
       }, source.header);
       const analyzed = await analyzeUrl.getUrl();
+      if (!analyzed.charset) {
+        const inferred = BookSourceService.inferCharset(source);
+        if (inferred) analyzed.charset = inferred;
+      }
       let body = await BookSourceService.fetch(analyzed);
 
       // JS 反爬兜底（与 getBookToc 保持一致）
@@ -1329,8 +1825,8 @@ export class BookSourceService {
 
         results.push({
           name, author,
-          coverUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, coverUrlRaw),
-          bookUrl: AnalyzeUrl.resolveUrl(source.bookSourceUrl, bookUrlRaw),
+          coverUrl: AnalyzeUrl.resolveUrl(analyzed.url, coverUrlRaw),
+          bookUrl: AnalyzeUrl.resolveUrl(analyzed.url, bookUrlRaw),
           intro, kind, lastChapter, wordCount,
           sourceName: source.bookSourceName,
           sourceUrl: source.bookSourceUrl,

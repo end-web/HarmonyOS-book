@@ -7,7 +7,8 @@
 
 import { BuiltInSourceRegistry } from './BuiltInSourceRegistry';
 
-import { TianXiaShuYin } from './sources/TianXiaShuYin';
+import { TingYouFM } from './sources/TingYouFM';
+import { Maoyan } from './sources/Maoyan';
 
 let registered = false;
 
@@ -17,6 +18,8 @@ export function registerBuiltInSources(): void {
   }
   registered = true;
 
-  BuiltInSourceRegistry.register(TianXiaShuYin);
+  // 天下书音(m.shuyinfm.com)线路已失效,改用听友FM(www.tingyou.fm)
+  BuiltInSourceRegistry.register(TingYouFM);
+  BuiltInSourceRegistry.register(Maoyan);
 
 }

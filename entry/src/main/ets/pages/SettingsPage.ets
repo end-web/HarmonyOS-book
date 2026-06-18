@@ -57,6 +57,7 @@ const ROW_INDENT: number = AppSpace.Md;
 export struct SettingsPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Local currentMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
+  @Local selectedThemeIndex: number = 0;
   @Local defaultTab: number = 0;
   @Local focusMode: number = 0;
   @Local autoResume: boolean = true;
@@ -69,6 +70,10 @@ export struct SettingsPage {
 
   private async loadPrefs(): Promise<void> {
     this.currentMode = await PreferenceService.getColorMode();
+    this.selectedThemeIndex = THEME_OPTIONS.findIndex((opt: ThemeOption) => opt.mode === this.currentMode);
+    if (this.selectedThemeIndex === -1) {
+      this.selectedThemeIndex = 0;
+    }
     this.defaultTab = await PreferenceService.getDefaultTab();
     this.focusMode = await PreferenceService.getAudioInterruptMode();
     this.autoResume = await PreferenceService.getAudioAutoResume();
@@ -111,7 +116,14 @@ export struct SettingsPage {
       appCtx.setColorMode(mode);
     } catch (_e) { /* system API may throw on invalid context */ }
     this.currentMode = mode;
+    const newIndex = THEME_OPTIONS.findIndex((opt: ThemeOption) => opt.mode === mode);
+    this.selectedThemeIndex = newIndex !== -1 ? newIndex : 0;
     await PreferenceService.setColorMode(mode);
+
+    // 延迟更新状态栏，让主题切换完成后再应用
+    setTimeout(() => {
+      WindowUtils.updateColorMode(mode);
+    }, 100);
   }
 
   build() {
@@ -188,14 +200,33 @@ export struct SettingsPage {
       this.buildGroupTitle('外观')
 
       Column() {
-        this.buildSelectItem(
-          '主题模式',
-          '',
-          THEME_OPTIONS.map((opt: ThemeOption): SelectOption => { return { value: opt.label }; }),
-          THEME_OPTIONS.findIndex((opt: ThemeOption) => opt.mode === this.currentMode),
-          THEME_OPTIONS.find((opt: ThemeOption) => opt.mode === this.currentMode)?.label ?? '跟随系统',
-          (index: number) => this.setColorMode(THEME_OPTIONS[index].mode)
-        )
+        Row() {
+          Column({ space: 2 }) {
+            Text('主题模式')
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary'))
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Select(THEME_OPTIONS.map((opt: ThemeOption): SelectOption => { return { value: opt.label }; }))
+            .selected(this.selectedThemeIndex)
+            .value(THEME_OPTIONS[this.selectedThemeIndex]?.label ?? '跟随系统')
+            .font({ size: AppFont.Body })
+            .fontColor($r('sys.color.font_secondary'))
+            .backgroundColor(Color.Transparent)
+            .onSelect((index: number) => {
+              this.setColorMode(THEME_OPTIONS[index].mode);
+            })
+        }
+        .width('100%')
+        .padding({
+          left: ROW_INDENT,
+          right: AppSpace.Xs,
+          top: AppSpace.Sm,
+          bottom: AppSpace.Sm
+        })
+        .constraintSize({ minHeight: 56 })
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))
@@ -216,7 +247,6 @@ export struct SettingsPage {
           '',
           TAB_OPTIONS.map((opt: TabOption): SelectOption => { return { value: opt.label }; }),
           this.defaultTab,
-          TAB_OPTIONS[this.defaultTab].label,
           (index: number) => this.setDefaultTab(index)
         )
       }
@@ -239,7 +269,6 @@ export struct SettingsPage {
           this.focusMode === 1 ? '与本应用其他音频独立计算焦点' : '与系统其他音频互斥（推荐）',
           FOCUS_MODE_OPTIONS.map((opt: FocusModeOption): SelectOption => { return { value: opt.label }; }),
           FOCUS_MODE_OPTIONS.findIndex((opt: FocusModeOption) => opt.mode === this.focusMode),
-          FOCUS_MODE_OPTIONS.find((opt: FocusModeOption) => opt.mode === this.focusMode)?.label ?? '共享焦点',
           (index: number) => this.setFocusMode(FOCUS_MODE_OPTIONS[index].mode)
         )
 
@@ -259,7 +288,6 @@ export struct SettingsPage {
           '播放时提前缓存后续章节',
           PRELOAD_OPTIONS.map((opt: PreloadOption): SelectOption => { return { value: opt.label }; }),
           PRELOAD_OPTIONS.findIndex((opt: PreloadOption) => opt.count === this.preloadCount),
-          PRELOAD_OPTIONS.find((opt: PreloadOption) => opt.count === this.preloadCount)?.label ?? '3章',
           (index: number) => this.setPreloadCount(PRELOAD_OPTIONS[index].count)
         )
 
@@ -281,7 +309,6 @@ export struct SettingsPage {
     subtitle: string,
     options: SelectOption[],
     selected: number,
-    valueLabel: string,
     onSelect: (index: number) => void
   ) {
     Row() {
@@ -300,7 +327,7 @@ export struct SettingsPage {
 
       Select(options)
         .selected(selected)
-        .value(valueLabel)
+        .value(options[selected]?.value ?? '')
         .font({ size: AppFont.Body })
         .fontColor($r('sys.color.font_secondary'))
         .backgroundColor(Color.Transparent)

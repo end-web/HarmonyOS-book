@@ -1,5 +1,5 @@
 import { Book } from '../model/Book';
-import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
+import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
 
 /**
  * 书架卡片：封面 + 标题 + 作者
@@ -37,10 +37,6 @@ export struct BookCard {
     BookCard.shownIds.clear();
   }
 
-  private firstChar(): string {
-    return this.book.title ? this.book.title.substring(0, 1) : '?';
-  }
-
   private sourceName(): string {
     if (this.book.narrator) return this.book.narrator;
     if (this.book.tags && this.book.tags.length > 0) return this.book.tags[0];
@@ -60,7 +56,7 @@ export struct BookCard {
             .aspectRatio(0.75)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
-            .alt($r('app.media.startIcon'))
+            .alt($r('app.media.app_icon_legacy'))
             .onError(() => {
               this.imageLoadFailed = true;
             })
@@ -79,21 +75,12 @@ export struct BookCard {
             .objectFit(ImageFit.Cover)
             .onError(() => { this.imageLoadFailed = true; })
         } else {
-          Stack() {
-            Column()
-              .width('100%')
-              .height('100%')
-              .backgroundColor(AppColor.Brand)
-              .borderRadius(AppRadius.Md)
-            Text(this.firstChar())
-              .fontSize(36)
-              .fontColor(Color.White)
-              .fontWeight(FontWeight.Bold)
-          }
-          .width('100%')
-          .aspectRatio(0.7)
-          .borderRadius(AppRadius.Md)
-          .clip(true)
+          // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
+          Image($r('app.media.app_icon_legacy'))
+            .width('100%')
+            .aspectRatio(0.75)
+            .borderRadius(AppRadius.Md)
+            .objectFit(ImageFit.Cover)
         }
 
         if (this.sourceName()) {

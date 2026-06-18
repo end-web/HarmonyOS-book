@@ -94,10 +94,14 @@ export class AnalyzeUrl {
     // 3.5 GET：URL 中已有的非 ASCII 字符按 charset percent-encode（保留已编码的 %XX）
     baseUrl = AnalyzeUrl.reencodeUrlQuery(baseUrl, charset);
 
-    // 3.6 POST：body 是 a=1&b=2 形式时，按 charset 重编码 value
+    // 3.6 POST：body 先替换模板变量（{{key}}/{{page}}/{{js}}，按 charset percent-encode），
+    //     再按 charset 重编码剩余非 ASCII value（encodeIfNeeded 会保留已编码的 %XX，不会双重编码）
     let bodyOut = option.body;
-    if ((option.method || 'GET').toUpperCase() === 'POST' && bodyOut && bodyOut.indexOf('=') > 0) {
-      bodyOut = AnalyzeUrl.reencodeFormBody(bodyOut, charset);
+    if (bodyOut) {
+      bodyOut = await this.replaceTemplateVars(bodyOut, charset);
+      if ((option.method || 'GET').toUpperCase() === 'POST' && bodyOut.indexOf('=') > 0) {
+        bodyOut = AnalyzeUrl.reencodeFormBody(bodyOut, charset);
+      }
     }
 
     // 4. 合并 headers
@@ -374,7 +378,10 @@ export class AnalyzeUrl {
     if (cleanRelative.startsWith('http://') || cleanRelative.startsWith('https://') || cleanRelative.startsWith('//')) {
       return cleanRelative;
     }
-    const cleanBase = AnalyzeUrl.stripSourceGroup(base.replace(/[\r\n\t]/g, '').trim());
+    let cleanBase = AnalyzeUrl.stripSourceGroup(base.replace(/[\r\n\t]/g, '').trim());
+    // 去掉 bookSourceUrl 里的 #注释/fragment（如 "https://www.fushucun.com#改进"），否则会被拼进 host
+    const baseHashIdx = cleanBase.indexOf('#');
+    if (baseHashIdx >= 0) cleanBase = cleanBase.substring(0, baseHashIdx);
     const match = cleanBase.match(/^(https?:\/\/[^/]+)/);
     if (!match) return cleanRelative;
     const origin = match[1];

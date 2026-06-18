@@ -29,3 +29,15 @@ simple_dump_*.txt
 
 # Superpowers brainstorming workdir
 .superpowers/
+# 本地真机分析/调试临时产物(截图、UI dump、字体生成中间件)
+.apk-analysis/
+.tmp_debug/
+.verify/
+reader_shot.png
+
+# 书源导出/抓取的临时文本 dump(run-book-source skill 产物)
+/*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_*.txt
+/猫眼.txt
+
+# skill 本地依赖
+.claude/skills/*/node_modules/

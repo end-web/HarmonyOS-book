@@ -7,7 +7,7 @@ import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
-import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
+import { PreferenceService, PlayHistoryItem, EVT_FAVORITES_CHANGED } from '../service/PreferenceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { PlaybackStore } from '../service/PlaybackStore';
@@ -19,6 +19,63 @@ interface BookUpdateInfo {
   title: string;
   oldCount: number;
   newCount: number;
+}
+
+function cloneChapter(ch: Chapter): Chapter {
+  return {
+    id: ch.id,
+    index: ch.index,
+    title: ch.title,
+    duration: ch.duration,
+    source: {
+      type: ch.source.type,
+      value: ch.source.value
+    },
+    originSourceValue: ch.originSourceValue
+  };
+}
+
+function cloneBook(book: Book): Book {
+  const variables: Record<string, string> | undefined = book.variables ? {} : undefined;
+  if (book.variables && variables) {
+    for (const k of Object.keys(book.variables)) {
+      variables[k] = book.variables[k];
+    }
+  }
+  return {
+    id: book.id,
+    contentType: book.contentType,
+    title: book.title,
+    author: book.author,
+    narrator: book.narrator,
+    cover: book.cover,
+    category: book.category,
+    intro: book.intro,
+    totalDuration: book.totalDuration,
+    chapterCount: book.chapterCount,
+    rating: book.rating,
+    tags: book.tags ? book.tags.slice() : [],
+    chapters: book.chapters ? book.chapters.map((ch: Chapter): Chapter => cloneChapter(ch)) : [],
+    bookUrl: book.bookUrl,
+    sourceUrl: book.sourceUrl,
+    variables,
+    skipIntro: book.skipIntro,
+    skipOutro: book.skipOutro
+  };
+}
+
+function chaptersChanged(oldChapters: Chapter[], newChapters: Chapter[]): boolean {
+  if (oldChapters.length !== newChapters.length) return true;
+  for (let i = 0; i < newChapters.length; i++) {
+    const oldChapter = oldChapters[i];
+    const newChapter = newChapters[i];
+    if (!oldChapter || oldChapter.title !== newChapter.title ||
+      oldChapter.originSourceValue !== newChapter.originSourceValue ||
+      oldChapter.source.value !== newChapter.source.value) {
+      return true;
+    }
+  }
+  return false;
 }
 
 @ComponentV2
@@ -43,16 +100,30 @@ export struct FavoritePage {
   private listScroller: Scroller = new Scroller();
   private bookDataSource: BookDataSource = new BookDataSource();
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
+  /** 加入/移出书架后重新拉书清单(覆盖从阅读页/详情页等任意入口的收藏变化) */
+  private favoritesChangedHandler: () => void = () => { this.loadFavorites(); };
+
+  private getChapterCount(book: Book): number {
+    return book.chapters && book.chapters.length > 0 ? book.chapters.length : (book.chapterCount || 0);
+  }
+
+  private syncFavoriteBook(updatedBook: Book): void {
+    const books = this.favoriteBooks.map((book: Book): Book => book.id === updatedBook.id ? updatedBook : book);
+    this.favoriteBooks = books;
+    this.bookDataSource.setBooks(books);
+  }
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadFavorites();
     emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
+    emitter.on(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     this.onScrollerReady(this.listScroller);
   }
 
   aboutToDisappear(): void {
     emitter.off(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
+    emitter.off(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
   }
 
   @Monitor('visible')
@@ -95,7 +166,10 @@ export struct FavoritePage {
         const seen = new Set<string>();
         const unique: Chapter[] = [];
         for (const ch of b.chapters) {
-          const key = ch.title;
+          // 去重键用章节页 URL(唯一且稳定):originSourceValue 不会被播放期解析覆盖。
+          // 旧实现用 title 去重会误删"同名不同章"(网文源极常见,如多章都叫"正文"),
+          // 导致刷新拿到的新章节数(如 758)被吞回旧值(472)。
+          const key = ch.originSourceValue || ch.source.value || ch.title;
           if (seen.has(key)) continue;
           seen.add(key);
           unique.push(ch);
@@ -104,6 +178,9 @@ export struct FavoritePage {
           b.chapters = unique;
           b.chapterCount = unique.length;
           // 持久化修正后的数据
+          await DataService.upsertCachedBook(b);
+        } else if (b.chapterCount !== b.chapters.length) {
+          b.chapterCount = b.chapters.length;
           await DataService.upsertCachedBook(b);
         }
       }
@@ -156,65 +233,73 @@ export struct FavoritePage {
           failed++;
           return;
         }
+        const nextBook = cloneBook(book);
         // 1. 获取最新书籍信息
-        const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+        const bookInfo = await BookSourceService.getBookInfo(source, nextBook.bookUrl, nextBook.variables);
         let hasChange = false;
         let chapterChanged = false;
-        const oldCount = book.chapterCount || 0;
+        const oldCount = this.getChapterCount(book);
         let newCount = oldCount;
         if (bookInfo) {
           // 更新封面/简介/作者等元数据
-          if (bookInfo.coverUrl && bookInfo.coverUrl !== book.cover) {
-            book.cover = bookInfo.coverUrl;
+          if (bookInfo.coverUrl && bookInfo.coverUrl !== nextBook.cover) {
+            nextBook.cover = bookInfo.coverUrl;
             hasChange = true;
           }
-          if (bookInfo.intro && bookInfo.intro !== book.intro) {
-            book.intro = bookInfo.intro;
+          if (bookInfo.intro && bookInfo.intro !== nextBook.intro) {
+            nextBook.intro = bookInfo.intro;
             hasChange = true;
           }
-          if (bookInfo.author && bookInfo.author !== book.author) {
-            book.author = bookInfo.author;
+          if (bookInfo.author && bookInfo.author !== nextBook.author) {
+            nextBook.author = bookInfo.author;
             hasChange = true;
           }
           // 合并变量
           if (bookInfo.variables) {
-            if (!book.variables) book.variables = {};
+            if (!nextBook.variables) nextBook.variables = {};
             for (const k of Object.keys(bookInfo.variables)) {
-              book.variables[k] = bookInfo.variables[k];
+              nextBook.variables[k] = bookInfo.variables[k];
             }
           }
         }
         // 2. 获取最新章节列表
         const mergedVars: Record<string, string> = {};
-        if (book.variables) {
-          for (const k of Object.keys(book.variables)) mergedVars[k] = book.variables[k];
+        if (nextBook.variables) {
+          for (const k of Object.keys(nextBook.variables)) mergedVars[k] = nextBook.variables[k];
         }
         if (bookInfo?.variables) {
           for (const k of Object.keys(bookInfo.variables)) mergedVars[k] = bookInfo.variables[k];
         }
-        const tocUrl = bookInfo?.tocUrl || book.bookUrl;
-        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
+        const tocUrl = bookInfo?.tocUrl || nextBook.bookUrl;
+        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, nextBook.title);
         if (tocItems.length > 0) {
-          book.chapters = tocItems.map((item: TocItem, i: number): Chapter => ({
-            id: `${book.id}-c${i}`,
+          const chapters = tocItems.map((item: TocItem, i: number): Chapter => ({
+            id: `${nextBook.id}-c${i}`,
             index: i + 1,
             title: item.name,
             duration: item.duration || 0,
-            source: { type: 'url', value: item.url }
+            source: { type: 'url', value: item.url },
+            originSourceValue: item.url
           }));
-          book.chapterCount = book.chapters.length;
-          newCount = book.chapterCount;
-          if (newCount !== oldCount) {
+          if (chaptersChanged(nextBook.chapters || [], chapters)) {
             hasChange = true;
-            chapterChanged = newCount > oldCount;
           }
+          nextBook.chapters = chapters;
+          nextBook.chapterCount = chapters.length;
+          newCount = nextBook.chapterCount;
+          chapterChanged = newCount > oldCount;
+        } else if (nextBook.chapters && nextBook.chapters.length > 0 && nextBook.chapterCount !== nextBook.chapters.length) {
+          nextBook.chapterCount = nextBook.chapters.length;
+          newCount = nextBook.chapterCount;
+          hasChange = true;
         }
         if (hasChange) {
-          await DataService.upsertCachedBook(book);
-          SearchCache.put(book);
+          await DataService.upsertCachedBook(nextBook);
+          SearchCache.put(nextBook);
+          this.syncFavoriteBook(nextBook);
           updated++;
           if (chapterChanged) {
-            updatedBooks.push({ title: book.title, oldCount, newCount });
+            updatedBooks.push({ title: nextBook.title, oldCount, newCount });
           }
         }
       } catch (_e) {
@@ -260,17 +345,36 @@ export struct FavoritePage {
     } catch (_e) { /* ignore */ }
   }
 
+  /** 电子书判定:文本源标"章"+进阅读器,有声书标"集"+进播放器 */
+  private isText(book: Book): boolean {
+    return book.contentType === 'text' || book.category === 'text';
+  }
+
+  /** 当前在读章节的短标签:优先"第N章/集/回",取不到用完整标题(由 Text 省略号兜底) */
+  private currentChapterLabel(book: Book, idx: number): string {
+    const ch = book.chapters && book.chapters[idx] ? book.chapters[idx] : undefined;
+    if (!ch || !ch.title) return '';
+    const m = ch.title.match(/^第\s*\d+\s*[章集回话]/);
+    return m ? m[0] : ch.title;
+  }
+
   private getProgressText(book: Book): string {
+    const unit = this.isText(book) ? '章' : '集';
+    const chapterCount = this.getChapterCount(book);
     const h = this.historyMap[book.id];
-    if (h && book.chapterCount > 0) {
+    if (h && chapterCount > 0) {
       const idx = this.chapterIdxMap[book.id];
       if (idx !== undefined && idx >= 0) {
-        return `${idx + 1}集/${book.chapterCount}集`;
+        // 显示"当前章标题 · 总数",与阅读/播放页内章号一致;不用 idx+1(列表位置),
+        // 因为含水章/公告章时列表位置≠作者章号(如列表第527位其实是"第512章"),会对不上
+        const label = this.currentChapterLabel(book, idx);
+        if (label) return `${label} · ${chapterCount}${unit}`;
+        return `${idx + 1}${unit}/${chapterCount}${unit}`;
       }
-      return `共${book.chapterCount}集`;
+      return `共${chapterCount}${unit}`;
     }
-    if (book.chapterCount > 0) {
-      return `共${book.chapterCount}集`;
+    if (chapterCount > 0) {
+      return `共${chapterCount}${unit}`;
     }
     return book.author || '';
   }
@@ -278,8 +382,9 @@ export struct FavoritePage {
   private handleBookTap(book: Book): void {
     const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
-    // ★ 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state
-    if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
+    const text = this.isText(book);
+    // ★ 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state(电子书不走此路)
+    if (!text && PlaybackStore.getInstance().isCurrentBook(book.id)) {
       this.navStack.pushPathByName('player', book.id, onPop);
       return;
     }
@@ -314,7 +419,7 @@ export struct FavoritePage {
       'chapterId': resolved.id as Object,
       'progressMs': history.progressMs as Object
     };
-    this.navStack.pushPathByName('player', params, onPop);
+    this.navStack.pushPathByName(text ? 'reader' : 'player', params, onPop);
   }
 
   /** 老收藏的在线书没缓存章节时,先拉 toc 再恢复进度;期间禁用重复点击 */
@@ -353,7 +458,8 @@ export struct FavoritePage {
         index: idx + 1,
         title: item.name,
         duration: item.duration || 0,
-        source: { type: 'url', value: item.url }
+        source: { type: 'url', value: item.url },
+        originSourceValue: item.url
       }));
       book.chapterCount = book.chapters.length;
       // 持久化新 toc,下次点击不用再拉
@@ -374,8 +480,7 @@ export struct FavoritePage {
         'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
-      // 设置书架入口标志,启用共享元素动画(互斥清掉 fromMini)
-      this.navStack.pushPathByName('player', params, onPop);
+      this.navStack.pushPathByName(this.isText(book) ? 'reader' : 'player', params, onPop);
     } catch (_e) {
       try {
         this.getUIContext().getPromptAction().showToast({ message: '章节加载失败' });
@@ -476,7 +581,10 @@ export struct FavoritePage {
               GridItem() {
                 this.buildBookTile(book)
               }
-            }, (book: Book) => book.id)
+              // key 带上"总章数 + 当前章索引":LazyForEach 对相同 key 的项会复用旧节点、
+              // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
+              // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
+            }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
             GridItem() {
               this.buildAddTile()
             }
@@ -581,7 +689,7 @@ export struct FavoritePage {
             .aspectRatio(0.72)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
-            .alt($r('app.media.startIcon'))
+            .alt($r('app.media.app_icon_legacy'))
             .draggable(false)
             .hitTestBehavior(HitTestMode.Transparent)
         } else if (book.cover && (book.cover.startsWith('/data/') || book.cover.startsWith('file://'))) {
@@ -601,23 +709,14 @@ export struct FavoritePage {
             .draggable(false)
             .hitTestBehavior(HitTestMode.Transparent)
         } else {
-          Stack() {
-            Column()
-              .width('100%')
-              .height('100%')
-              .backgroundColor(AppColor.Brand)
-              .borderRadius(AppRadius.Md)
-            Text(book.title ? book.title.substring(0, 1) : '?')
-              .fontSize(36)
-              .fontColor(Color.White)
-              .fontWeight(FontWeight.Bold)
-          }
-          .width('100%')
-          .aspectRatio(0.72)
-          .borderRadius(AppRadius.Md)
-          .clip(true)
+          // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
+          Image($r('app.media.app_icon_legacy'))
+            .width('100%')
+            .aspectRatio(0.72)
+            .borderRadius(AppRadius.Md)
+            .objectFit(ImageFit.Cover)
         }
-        this.buildTypeBadge(false)
+        this.buildTypeBadge(false, this.isText(book))
       }
       .width('100%')
       .borderRadius(AppRadius.Md)
@@ -677,12 +776,12 @@ export struct FavoritePage {
   }
 
   @Builder
-  buildTypeBadge(small: boolean) {
+  buildTypeBadge(small: boolean, isTextBook: boolean) {
     Row({ space: small ? 2 : 3 }) {
-      SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
+      SymbolGlyph(isTextBook ? $r('sys.symbol.book') : $r('sys.symbol.speaker_wave_2_fill'))
         .fontSize(small ? 10 : 12)
         .fontColor([Color.White])
-      Text('有声书')
+      Text(isTextBook ? '电子书' : '有声书')
         .fontSize(small ? 9 : 10)
         .fontColor(Color.White)
         .fontWeight(FontWeight.Medium)
@@ -693,7 +792,7 @@ export struct FavoritePage {
       top: small ? 2 : 3,
       bottom: small ? 2 : 3
     })
-    .backgroundColor('#CCFF8800')
+    .backgroundColor(isTextBook ? '#CC3478F6' : '#CCFF8800')
     .borderRadius(AppRadius.Sm)
     .margin({ top: small ? 5 : 6, left: small ? 5 : 6 })
   }
@@ -734,7 +833,7 @@ export struct FavoritePage {
           .borderRadius(AppRadius.Sm)
           .clip(true)
         }
-        this.buildTypeBadge(true)
+        this.buildTypeBadge(true, this.isText(book))
       }
 
       Column({ space: 4 }) {

@@ -1,12 +1,12 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
-import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType, hdsMaterial } from '@kit.UIDesignKit';
-import { AppStorageV2, LengthMetrics } from '@kit.ArkUI';
+import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
+import { AppStorageV2 } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
-import { SearchResult, HomeBlockSection } from '../model/BookSource';
+import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
@@ -30,57 +30,62 @@ export const EVT_REFRESH_HOME = 'app.home.refresh';
 /** 首页分类入口项 */
 interface HomeCategory {
   name: string;
-  /** 分类列表 URL（内置源天下书音的 listinfo 路径） */
+  /** 分类列表 URL（听友FM 的 types/<typeId>/comprehensive/p1 路径） */
   url: string;
 }
 
-/** 完整的16个分类(对接天下书音「小说」组,与 TianXiaShuYin NOVEL_CATS 一致) */
+interface SearchJob {
+  source: BookSource;
+  contentType: string;
+}
+
+/** 完整的16个分类(对接听友FM filters 的 type，url=types/<id>/comprehensive/p1) */
 const HOME_CATEGORIES: HomeCategory[] = [
-  { name: '言情', url: '/listinfo-1-1.html' },
-  { name: '玄幻', url: '/listinfo-2-1.html' },
-  { name: '恐怖', url: '/listinfo-5-1.html' },
-  { name: '穿越', url: '/listinfo-7-1.html' },
-  { name: '都市', url: '/listinfo-8-1.html' },
-  { name: '历史', url: '/listinfo-16-1.html' },
-  { name: '悬疑', url: '/listinfo-33-1.html' },
-  { name: '文学', url: '/listinfo-38-1.html' },
-  { name: '推理', url: '/listinfo-39-1.html' },
-  { name: '军事', url: '/listinfo-40-1.html' },
-  { name: '职场', url: '/listinfo-41-1.html' },
-  { name: '反腐', url: '/listinfo-56-1.html' },
-  { name: '人物', url: '/listinfo-58-1.html' },
-  { name: '修真', url: '/listinfo-60-1.html' },
-  { name: '网游', url: '/listinfo-63-1.html' },
-  { name: '武侠', url: '/listinfo-92-1.html' },
+  { name: '玄幻奇幻', url: 'types/46/comprehensive/p1' },
+  { name: '武侠小说', url: 'types/11/comprehensive/p1' },
+  { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' },
+  { name: '言情通俗', url: 'types/19/comprehensive/p1' },
+  { name: '历史军事', url: 'types/15/comprehensive/p1' },
+  { name: '官场商战', url: 'types/17/comprehensive/p1' },
+  { name: '百家讲坛', url: 'types/9/comprehensive/p1' },
+  { name: '有声文学', url: 'types/10/comprehensive/p1' },
+  { name: '刑侦反腐', url: 'types/16/comprehensive/p1' },
+  { name: '广播剧', url: 'types/36/comprehensive/p1' },
+  { name: '人物纪实', url: 'types/18/comprehensive/p1' },
+  { name: '相声小品', url: 'types/21/comprehensive/p1' },
+  { name: '健康养生', url: 'types/33/comprehensive/p1' },
+  { name: '商业财经', url: 'types/42/comprehensive/p1' },
+  { name: '童话寓言', url: 'types/20/comprehensive/p1' },
+  { name: '单田芳', url: 'types/1/comprehensive/p1' },
 ];
 
-/** 第一行固定分类:悬疑、玄幻、恐怖(配合"推荐"凑4个) */
+/** 第一行固定分类:玄幻奇幻、武侠小说、恐怖惊悚(配合"推荐"凑4个) */
 const FIXED_CATEGORIES: HomeCategory[] = [
-  { name: '悬疑', url: '/listinfo-33-1.html' },
-  { name: '玄幻', url: '/listinfo-2-1.html' },
-  { name: '恐怖', url: '/listinfo-5-1.html' },
+  { name: '玄幻奇幻', url: 'types/46/comprehensive/p1' },
+  { name: '武侠小说', url: 'types/11/comprehensive/p1' },
+  { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' },
 ];
 
 /** 剩余13个分类池(用于随机抽取第二行,已排除第一行固定的3个) */
 const RANDOM_POOL_CATEGORIES: HomeCategory[] = [
-  { name: '言情', url: '/listinfo-1-1.html' },
-  { name: '穿越', url: '/listinfo-7-1.html' },
-  { name: '都市', url: '/listinfo-8-1.html' },
-  { name: '历史', url: '/listinfo-16-1.html' },
-  { name: '文学', url: '/listinfo-38-1.html' },
-  { name: '推理', url: '/listinfo-39-1.html' },
-  { name: '军事', url: '/listinfo-40-1.html' },
-  { name: '职场', url: '/listinfo-41-1.html' },
-  { name: '反腐', url: '/listinfo-56-1.html' },
-  { name: '人物', url: '/listinfo-58-1.html' },
-  { name: '修真', url: '/listinfo-60-1.html' },
-  { name: '网游', url: '/listinfo-63-1.html' },
-  { name: '武侠', url: '/listinfo-92-1.html' },
+  { name: '言情通俗', url: 'types/19/comprehensive/p1' },
+  { name: '历史军事', url: 'types/15/comprehensive/p1' },
+  { name: '官场商战', url: 'types/17/comprehensive/p1' },
+  { name: '百家讲坛', url: 'types/9/comprehensive/p1' },
+  { name: '有声文学', url: 'types/10/comprehensive/p1' },
+  { name: '刑侦反腐', url: 'types/16/comprehensive/p1' },
+  { name: '广播剧', url: 'types/36/comprehensive/p1' },
+  { name: '人物纪实', url: 'types/18/comprehensive/p1' },
+  { name: '相声小品', url: 'types/21/comprehensive/p1' },
+  { name: '健康养生', url: 'types/33/comprehensive/p1' },
+  { name: '商业财经', url: 'types/42/comprehensive/p1' },
+  { name: '童话寓言', url: 'types/20/comprehensive/p1' },
+  { name: '单田芳', url: 'types/1/comprehensive/p1' },
 ];
 
-/** 天下书音内置源标识(分类入口固定走该源) */
-const TIANXIA_SOURCE_URL = 'builtin://eprendre/tianxiashuyin_shuyinfm';
-const TIANXIA_SOURCE_NAME = '天下书音';
+/** 听友FM内置源标识(分类入口固定走该源) */
+const TIANXIA_SOURCE_URL = 'builtin://eprendre/tingyou_fm';
+const TIANXIA_SOURCE_NAME = '听友FM';
 
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
@@ -90,14 +95,17 @@ const HEADER_TOOLBAR_HEIGHT: number = 40;
 @ComponentV2
 export struct HomePage {
   @Local audioBooks: Book[] = [];
+  @Local textBooks: Book[] = [];
   @Local keyword: string = '';
   @Local searching: boolean = false;
   @Local searchingSource: string = '';
   @Local hasSearched: boolean = false;
   @Local sourceCount: number = 0;
   @Local viewMode: number = 1; // 0=grid, 1=list (默认列表模式)
+  @Local searchType: number = 0; // 0=有声书, 1=电子书
   @Local pendingCount: number = 0;
   @Local audioCount: number = 0;
+  @Local textCount: number = 0;
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local loadingHome: boolean = false;
   /** 续听卡状态（由 loadResumeState 维护） */
@@ -115,8 +123,8 @@ export struct HomePage {
   @Local categoryError: string = '';
   @Local categoryHasMore: boolean = true;
   @Local categoryNextUrl: string = '';
-  /** 搜索框是否已上滑收起(滚出可视区),用于右上角搜索图标显隐 */
-  @Local searchBoxHidden: boolean = false;
+  /** 固定搜索栏实测高度(含状态栏让位),用于给列表首项让出等高占位 */
+  @Local searchBarHeight: number = 0;
   /** 第二行随机分类(每次刷新时更新) */
   @Local randomCategories: HomeCategory[] = [];
 
@@ -128,6 +136,7 @@ export struct HomePage {
 
   private contentScroller: Scroller = new Scroller();
   private audioDataSource: BookDataSource = new BookDataSource();
+  private textDataSource: BookDataSource = new BookDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private searchGen: number = 0;
   private homeGen: number = 0;
@@ -139,6 +148,8 @@ export struct HomePage {
 
   aboutToAppear(): void {
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
+    // 固定搜索栏高度初始估值(状态栏 + 搜索框约 56vp),实际以 onAreaChange 实测为准
+    this.searchBarHeight = WindowUtils.getStatusBarHeightVp() + 56;
     this.shuffleRandomCategories();
     this.loadSourceCount();
     this.loadHomeBlocks();
@@ -185,9 +196,8 @@ export struct HomePage {
   private async loadSourceCount(): Promise<void> {
     try {
       const sources = await SourceDataService.getSources();
-      // 仅统计有声书源（type=1），其它（电子书）已不再使用
-      const audioSources = sources.filter(s => s.bookSourceType === 1);
-      const enabledSources = audioSources.filter(s => s.enabled !== false);
+      const enabledSources = sources.filter(s => s.enabled !== false &&
+        (this.isAudioSearchSource(s) || this.isTextSearchSource(s)));
       // 强制触发响应式更新:先置 -1 再赋新值,确保 ArkUI V2 能检测到变化
       this.sourceCount = -1;
       this.sourceCount = enabledSources.length;
@@ -270,8 +280,11 @@ export struct HomePage {
     this.searchingSource = '';
     this.hasSearched = false;
     this.audioBooks = [];
+    this.textBooks = [];
     this.audioCount = 0;
+    this.textCount = 0;
     this.audioDataSource.clear();
+    this.textDataSource.clear();
     this.pendingCount = 0;
   }
 
@@ -301,7 +314,7 @@ export struct HomePage {
       const plugin = BuiltInSourceRegistry.getByUrl(TIANXIA_SOURCE_URL);
       if (!plugin) {
         this.categoryLoading = false;
-        this.categoryError = '天下书音源不可用';
+        this.categoryError = '听友FM源不可用';
         return;
       }
 
@@ -376,6 +389,7 @@ export struct HomePage {
       narrator: r.sourceName,
       cover: r.coverUrl || '',
       category: 'audio',
+      contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,
       chapterCount: 0,
@@ -390,6 +404,39 @@ export struct HomePage {
     return book;
   }
 
+  private isTextSearchSource(source: BookSource): boolean {
+    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+    if (plugin) {
+      return (plugin.sourceType ?? 1) === 0;
+    }
+    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) return false;
+    const isAggregateAudio = source.bookSourceType === 0 &&
+      !!source.jsLib && source.jsLib.includes('getCloudSettings');
+    return source.bookSourceType === 0 && !isAggregateAudio;
+  }
+
+  private isAudioSearchSource(source: BookSource): boolean {
+    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+    if (plugin) {
+      return (plugin.sourceType ?? 1) === 1;
+    }
+    const isAggregateAudio = source.bookSourceType === 0 &&
+      !!source.jsLib && source.jsLib.includes('getCloudSettings');
+    return source.bookSourceType === 1 || isAggregateAudio;
+  }
+
+  private activeSearchCount(): number {
+    return this.searchType === 0 ? this.audioCount : this.textCount;
+  }
+
+  private totalSearchCount(): number {
+    return this.audioCount + this.textCount;
+  }
+
+  private activeSearchDataSource(): BookDataSource {
+    return this.searchType === 0 ? this.audioDataSource : this.textDataSource;
+  }
+
   private async doSearch(): Promise<void> {
     if (!this.keyword.trim()) {
       this.clearSearch();
@@ -401,32 +448,44 @@ export struct HomePage {
     this.searchingSource = '';
     this.hasSearched = true;
     this.audioBooks = [];
+    this.textBooks = [];
     this.audioCount = 0;
+    this.textCount = 0;
     this.audioDataSource.clear();
+    this.textDataSource.clear();
     BookCard.resetAnimations();
     try {
       const sources = await SourceDataService.getSources();
-      // 包含音频源(bookSourceType=1)和聚合源(bookSourceType=0，如光遇聚合)
-      // 聚合源内部已配置搜索模式，默认返回听书结果
-      const audioSources =
-        sources.filter(s => s.enabled !== false && (s.bookSourceType === 1 || s.bookSourceType === 0));
-      this.pendingCount = audioSources.length;
+      const audioSources = sources.filter(s => s.enabled !== false && this.isAudioSearchSource(s));
+      const textSources = sources.filter(s => s.enabled !== false && this.isTextSearchSource(s));
+      const searchJobs: SearchJob[] = [];
+      for (const s of audioSources) searchJobs.push({ source: s, contentType: 'audio' });
+      for (const s of textSources) searchJobs.push({ source: s, contentType: 'text' });
+      this.pendingCount = searchJobs.length;
 
       if (this.pendingCount === 0) {
         this.searching = false;
         return;
       }
 
-      for (const source of audioSources) {
+      for (const job of searchJobs) {
+        const source = job.source;
+        const contentType = job.contentType;
         BookSourceService.searchBooks(source, this.keyword.trim())
           .then((r: SearchResult[]) => {
             if (gen !== this.searchGen) return;
             this.searchingSource = source.bookSourceName;
             if (r && r.length > 0) {
-              const books = r.map((item) => this.searchResultToBook(item));
-              this.audioBooks = this.audioBooks.concat(books);
-              this.audioCount = this.audioBooks.length;
-              this.audioDataSource.appendBooks(books);
+              const books = r.map((item) => this.searchResultToBook(item, contentType === 'text' ? 'text' : 'audio'));
+              if (contentType === 'text') {
+                this.textBooks = this.textBooks.concat(books);
+                this.textCount = this.textBooks.length;
+                this.textDataSource.appendBooks(books);
+              } else {
+                this.audioBooks = this.audioBooks.concat(books);
+                this.audioCount = this.audioBooks.length;
+                this.audioDataSource.appendBooks(books);
+              }
             }
           })
           .catch((e: Object) => {
@@ -447,26 +506,29 @@ export struct HomePage {
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'search failed: %{public}s', String(e));
       this.audioBooks = [];
+      this.textBooks = [];
       this.searching = false;
       this.searchingSource = '';
     }
   }
 
-  private searchResultToBook(r: SearchResult): Book {
+  private searchResultToBook(r: SearchResult, contentType: string): Book {
     const emptyChapters: Chapter[] = [];
     const idHash = this.hashSearchKey(r.sourceUrl || '', r.bookUrl || r.name);
+    const isText = contentType === 'text';
     const book: Book = {
-      id: `search_audio_${idHash}`,
+      id: `search_${isText ? 'text' : 'audio'}_${idHash}`,
       title: r.name,
       author: r.author || '未知',
-      narrator: r.sourceName,
+      narrator: isText ? '' : r.sourceName,
       cover: r.coverUrl || '',
-      category: 'audio',
+      category: isText ? 'text' : 'audio',
+      contentType: isText ? 'text' : 'audio',
       intro: r.intro || '',
       totalDuration: 0,
       chapterCount: 0,
       rating: 0,
-      tags: [r.sourceName],
+      tags: isText ? [r.sourceName, '电子书'] : [r.sourceName],
       chapters: emptyChapters,
       bookUrl: r.bookUrl,
       sourceUrl: r.sourceUrl,
@@ -485,9 +547,78 @@ export struct HomePage {
     return (h >>> 0).toString(36);
   }
 
+  /**
+   * 固定搜索栏：常驻顶部、不随内容上滑，整条栏透明(悬浮无背景)。
+   * 搜索框胶囊浮在内容上方，列表从其下方滚过、四周直接透出。
+   * expandSafeArea + padding.top 让搜索框落在状态栏下方。
+   * onAreaChange 实测栏高 → 列表首项用等高占位让出空间。
+   */
+  @Builder
+  fixedSearchBar() {
+    Column() {
+      Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
+        .searchButton('搜索', { fontColor: HomeTheme.Accent })
+        .onSubmit(() => this.doSearch())
+        .onChange((value: string) => {
+          this.keyword = value;
+          if (value.length === 0 && this.hasSearched) {
+            this.clearSearch();
+          }
+        })
+        .height(40)
+        // 搜索框胶囊做成磨砂玻璃：内容从其下方滚过被模糊，既有沉浸光感观感、又看得清
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .borderRadius(AppRadius.Lg)
+        .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+
+      if (this.hasSearched) {
+        Row() {
+          Row({ space: 4 }) {
+            this.searchTypeTab('有声书', 0)
+            this.searchTypeTab('电子书', 1)
+          }
+          .padding(3)
+          .borderRadius(18)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          if (this.searching) {
+            LoadingProgress()
+              .width(18).height(18)
+              .color($r('sys.color.brand'))
+              .margin({ left: AppSpace.Xs })
+          }
+          Blank()
+          SymbolGlyph(this.viewMode === 0
+            ? $r('sys.symbol.list_bullet')
+            : $r('sys.symbol.square_grid_2x2'))
+            .fontSize(18)
+            .fontColor([$r('sys.color.font_primary')])
+            .padding(8)
+            .borderRadius(18)
+            .backgroundColor($r('sys.color.comp_background_tertiary'))
+            .onClick(() => {
+              this.getUIContext()?.animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard },
+                () => { this.viewMode = this.viewMode === 0 ? 1 : 0; });
+            })
+        }
+        .width('100%')
+        .height(HEADER_TOOLBAR_HEIGHT)
+        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+        .alignItems(VerticalAlign.Center)
+      }
+    }
+    .width('100%')
+    .padding({ top: WindowUtils.getStatusBarHeightVp() })
+    // 悬浮无背景：整条栏透明，搜索框胶囊浮在内容上方，四周直接透出滚动内容
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+    .onAreaChange((_o: Area, n: Area) => {
+      this.searchBarHeight = n.height as number;
+    })
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // L0 暖色渐变背景层（满屏，覆盖到状态栏）
+      // L0 背景层（满屏，覆盖到状态栏）
+      // 浅色模式为暖色渐变,深色模式三色统一为中性色(等效纯色)
       Column()
         .width('100%')
         .height('100%')
@@ -499,60 +630,16 @@ export struct HomePage {
             [HomeTheme.BgNeutral, 1.0]
           ]
         })
+        // 仅让背景渐变铺到状态栏后面，不影响 HdsNavigation 自身的状态栏避让
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
       // L1 原 HdsNavigation
       HdsNavigation() {
         List({ scroller: this.contentScroller }) {
-        // 第1项:搜索框 + (条件)工具栏 —— 作为列表首项跟随滚动:上滑收起、滑到标题栏下产生沉浸光感
+        // 第1项:固定搜索栏的等高占位 —— 搜索栏本身常驻不滚动(见 fixedSearchBar),
+        // 这里只用等高空白把列表内容顶到固定栏下方开始。
         ListItem() {
-          Column() {
-          Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
-            .searchButton('搜索', { fontColor: HomeTheme.Accent })
-            .onSubmit(() => this.doSearch())
-            .onChange((value: string) => {
-              this.keyword = value;
-              if (value.length === 0 && this.hasSearched) {
-                this.clearSearch();
-              }
-            })
-            .height(40)
-            .backgroundColor($r('sys.color.comp_background_tertiary'))
-            .borderRadius(AppRadius.Lg)
-            .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
-
-          if (this.hasSearched && this.audioCount > 0) {
-            Row() {
-              Text(`有声书 ${this.audioCount}`)
-                .fontSize(13)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('sys.color.font_secondary'))
-              if (this.searching) {
-                LoadingProgress()
-                  .width(18).height(18)
-                  .color($r('sys.color.brand'))
-                  .margin({ left: AppSpace.Xs })
-              }
-              Blank()
-              SymbolGlyph(this.viewMode === 0
-                ? $r('sys.symbol.list_bullet')
-                : $r('sys.symbol.square_grid_2x2'))
-                .fontSize(18)
-                .fontColor([$r('sys.color.font_primary')])
-                .padding(8)
-                .borderRadius(18)
-                .backgroundColor($r('sys.color.comp_background_tertiary'))
-                .onClick(() => {
-                  this.getUIContext()?.animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard },
-                    () => { this.viewMode = this.viewMode === 0 ? 1 : 0; });
-                })
-            }
-            .width('100%')
-            .height(HEADER_TOOLBAR_HEIGHT)
-            .padding({ left: AppSpace.Md, right: AppSpace.Md })
-            .alignItems(VerticalAlign.Center)
-          }
-          }
-          .width('100%')
+          Column().height(this.searchBarHeight)
         }
 
         // 第1.5项：分类标签横向滚动（仅推荐态，未搜索时显示）
@@ -564,11 +651,11 @@ export struct HomePage {
         }
 
         // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
-        if (this.searching && this.audioBooks.length === 0) {
+        if (this.hasSearched && this.activeSearchCount() === 0 && this.searching) {
           ListItem() {
             this.buildSearchingState()
           }
-        } else if (this.hasSearched && this.audioBooks.length === 0 && !this.searching) {
+        } else if (this.hasSearched && this.activeSearchCount() === 0 && !this.searching) {
           ListItem() {
             this.buildNoResultState()
           }
@@ -576,17 +663,23 @@ export struct HomePage {
           // 搜索结果：直接渲染为 ListItem
           if (this.viewMode === 0) {
             // Grid 模式：用单个 ListItem 包裹 Grid
+            // 按 searchType 分 if 各挂一个 LazyForEach：切 tab 时分支结构性重建，
+            // 强制重新绑定对应 DataSource(单个 LazyForEach 热替换 source 实例不会刷新)
             ListItem() {
               Grid() {
-                LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
-                  GridItem() {
-                    BookCard({
-                      book: book,
-                      indexHint: idx,
-                      onTap: () => this.onBookTap(book.id)
-                    })
-                  }
-                }, (book: Book) => book.id)
+                if (this.searchType === 0) {
+                  LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
+                    GridItem() {
+                      BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
+                    }
+                  }, (book: Book) => book.id)
+                } else {
+                  LazyForEach(this.textDataSource, (book: Book, idx: number) => {
+                    GridItem() {
+                      BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
+                    }
+                  }, (book: Book) => book.id)
+                }
               }
               .columnsTemplate('1fr 1fr 1fr')
               .columnsGap(AppSpace.Sm)
@@ -596,12 +689,21 @@ export struct HomePage {
             }
           } else {
             // List 模式：每本书一个 ListItem
-            LazyForEach(this.audioDataSource, (book: Book) => {
-              ListItem() {
-                this.buildListItem(book)
-              }
-              .padding({ left: AppSpace.Md, right: AppSpace.Md })
-            }, (book: Book) => book.id)
+            if (this.searchType === 0) {
+              LazyForEach(this.audioDataSource, (book: Book) => {
+                ListItem() {
+                  this.buildListItem(book)
+                }
+                .padding({ left: AppSpace.Md, right: AppSpace.Md })
+              }, (book: Book) => book.id)
+            } else {
+              LazyForEach(this.textDataSource, (book: Book) => {
+                ListItem() {
+                  this.buildListItem(book)
+                }
+                .padding({ left: AppSpace.Md, right: AppSpace.Md })
+              }, (book: Book) => book.id)
+            }
           }
         } else {
           // 未搜索状态:根据 selectedCategoryIndex 显示推荐或分类书单
@@ -716,58 +818,40 @@ export struct HomePage {
       .width('100%')
       .height('100%')
       .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.None) // 下拉不动:顶部不回弹,搜索框不被下拉带动
-      .onScroll(() => {
-        // 上滑收起:搜索框滚出可视区后,右上角显示搜索图标
-        const offset = this.contentScroller.currentOffset().yOffset;
-        this.searchBoxHidden = offset > 60;
-      })
+      .edgeEffect(EdgeEffect.None) // 下拉不动:顶部不回弹
       .cachedCount(5)
-      .clip(false) // 允许内容穿透到标题栏下方产生沉浸光感
+      .clip(false) // 允许内容穿透到固定搜索栏下方产生毛玻璃透出
       .backgroundColor(Color.Transparent) // 让 L0 暖色渐变透出
       }
     .titleBar({
-      content: {
-        title: { mainTitle: '' }
-      },
-      style: {
-        scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
-          blurEffectiveStartOffset: LengthMetrics.vp(0),
-          blurEffectiveEndOffset: LengthMetrics.vp(20)
-        },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-        }
-      },
-      enableComponentSafeArea: true
+      content: { title: { mainTitle: '' } }
     })
-    .bindToScrollable([this.contentScroller])
+    .hideTitleBar(true) // 顶部改用固定毛玻璃搜索栏(fixedSearchBar)，HdsNavigation 标题栏不再使用
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
 
-      // 搜索框上滑收起后,右上角显示搜索图标,点按回到顶部
-      if (this.searchBoxHidden) {
-        Row() {
-          Blank()
-          SymbolGlyph($r('sys.symbol.magnifyingglass'))
-            .fontSize(20)
-            .fontColor([$r('sys.color.font_primary')])
-            .padding(10)
-            .borderRadius(20)
-            .backgroundColor($r('sys.color.comp_background_tertiary'))
-            .onClick(() => {
-              this.contentScroller.scrollEdge(Edge.Top);
-            })
-        }
-        .width('100%')
-        .padding({ top: WindowUtils.getStatusBarHeightVp() + 8, right: AppSpace.Md })
-        .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
-      }
+      // 固定搜索栏：常驻顶部、不随内容上滑，内容从其下方滚过被毛玻璃材质模糊透出。
+      // 背景渐变由 L0 Column 的 expandSafeArea 铺到状态栏后面。
+      this.fixedSearchBar()
     }
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+  }
+
+  @Builder
+  searchTypeTab(label: string, type: number) {
+    // 直接读 this.audioCount/textCount 建立 V2 响应式依赖;
+    // 不能用按值传入的 count 参数(@Builder 按值基本类型不会随状态变化重渲染)
+    Text(`${label} ${type === 0 ? this.audioCount : this.textCount}`)
+      .fontSize(13)
+      .fontWeight(this.searchType === type ? FontWeight.Medium : FontWeight.Normal)
+      .fontColor(this.searchType === type ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
+      .height(30)
+      .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+      .textAlign(TextAlign.Center)
+      .borderRadius(15)
+      .backgroundColor(this.searchType === type ? $r('sys.color.comp_background_primary') : Color.Transparent)
+      .onClick(() => {
+        this.searchType = type;
+      })
   }
 
   @Builder
@@ -780,7 +864,7 @@ export struct HomePage {
           .fontColor($r('sys.color.font_tertiary'))
           .margin({ top: AppSpace.Sm })
       } else {
-        Text('正在搜索...')
+        Text(this.searchType === 0 ? '正在搜索有声书...' : '正在搜索电子书...')
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_tertiary'))
           .margin({ top: AppSpace.Sm })
@@ -797,7 +881,7 @@ export struct HomePage {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
         .fontSize(48)
         .fontColor([$r('sys.color.font_tertiary')])
-      Text('未找到相关书籍')
+      Text(this.searchType === 0 ? '未找到相关有声书' : '未找到相关电子书')
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Md })
@@ -805,17 +889,19 @@ export struct HomePage {
         .fontSize(AppFont.Caption)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Xs })
-      // 聚合源登录按钮
-      Button('登录聚合源获取更多资源')
-        .fontSize(AppFont.Caption)
-        .fontColor('#FFFFFF')
-        .backgroundColor('#FF6B35')
-        .borderRadius(20)
-        .height(36)
-        .margin({ top: AppSpace.Lg })
-        .onClick(() => {
-          emitter.emit(EVT_OPEN_LOGIN);
-        })
+      if (this.searchType === 0) {
+        // 聚合源登录按钮
+        Button('登录聚合源获取更多资源')
+          .fontSize(AppFont.Caption)
+          .fontColor('#FFFFFF')
+          .backgroundColor('#FF6B35')
+          .borderRadius(20)
+          .height(36)
+          .margin({ top: AppSpace.Lg })
+          .onClick(() => {
+            emitter.emit(EVT_OPEN_LOGIN);
+          })
+      }
     }
     .width('100%')
     .height(300)

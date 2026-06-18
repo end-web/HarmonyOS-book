@@ -41,6 +41,9 @@ export class WidgetUpdater {
   private static coverPathCache: Map<string, string> = new Map();
   /** url -> 文件大小（字节），>MAX_IMG_BYTES 的不走 FD 通道 */
   private static coverSizeCache: Map<string, number> = new Map();
+  /** 乐观更新的保护期：在此时间内不允许 updatePlayerCard 覆盖 */
+  private static optimisticUpdateUntil: number = 0;
+  private static readonly OPTIMISTIC_GUARD_MS: number = 500;
 
   static setContext(ctx: common.Context): void {
     WidgetUpdater.appContext = ctx;
@@ -159,9 +162,27 @@ export class WidgetUpdater {
 
   /** 把当前 PlayerState 写入快照,并广播给所有听书卡片 */
   static async updatePlayerCard(state: PlayerState | null): Promise<void> {
+    // 乐观更新保护期：如果刚刚执行过 optimisticSetPlaying，跳过本次更新避免覆盖
+    if (Date.now() < WidgetUpdater.optimisticUpdateUntil) {
+      return;
+    }
     const snap = WidgetUpdater.buildSnapshot(state);
     await WidgetUpdater.ensureBgColor(snap);
     await PreferenceService.setWidgetPlayerSnapshot(snap);
+    // form-id 列表是 FormExtensionAbility 进程写的,主进程的 preferences 内存缓存
+    // 不会感知另一进程写入。不刷新 → 用户在 App 运行期间新加的卡片读不到 →
+    // updateForm 直推被跳过,只能等系统的定时 onUpdateForm,表现就是"状态更新很慢"。
+    // 同 FormExt 的做法,推送前抛掉本进程缓存重新打开,读到最新写入。
+    if (WidgetUpdater.appContext) {
+      try {
+        await PreferenceService.invalidateCache(WidgetUpdater.appContext);
+        await PreferenceService.init(WidgetUpdater.appContext);
+      } catch (err) {
+        const e = err as Error;
+        hilog.warn(DOMAIN, TAG, 'invalidate before push failed: %{public}s',
+          e?.message ?? JSON.stringify(err));
+      }
+    }
     const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
     if (ids.length === 0) return;
     const built = await WidgetUpdater.buildPlayerBinding(snap);
@@ -266,6 +287,65 @@ export class WidgetUpdater {
       }
     } finally {
       WidgetUpdater.closeFd(built.imgFile);
+    }
+  }
+
+  /**
+   * 乐观更新卡片播放/暂停状态:卡片按钮点击瞬间立即调,不等 AVPlayer 真正 play/pause。
+   * 卡片按钮原本要走完整往返(卡片→IPC→主进程→AVPlayer 异步→stateChange 回调→
+   * syncPlaybackState→updatePlayerCard→卡片)图标才翻,体感"慢一拍"。
+   * 这里只翻转快照里的 isPlaying 字段并立即推送,真实状态稍后由 syncPlaybackState 兜底校正
+   * (即使 AVPlayer 实际失败,下一次 stateChange 也会把卡片纠回正确状态)。
+   */
+  static async optimisticSetPlaying(isPlaying: boolean): Promise<void> {
+    if (!WidgetUpdater.appContext) return;
+
+    // 设置保护期：在接下来的 500ms 内，updatePlayerCard 会被跳过
+    WidgetUpdater.optimisticUpdateUntil = Date.now() + WidgetUpdater.OPTIMISTIC_GUARD_MS;
+
+    try {
+      // 直接读取当前快照
+      const snap = await PreferenceService.getWidgetPlayerSnapshot();
+      if (!snap || snap.bookId.length === 0 || snap.isPlaying === isPlaying) {
+        return;
+      }
+
+      // 更新状态
+      snap.isPlaying = isPlaying;
+      snap.updatedAt = Date.now();
+      await PreferenceService.setWidgetPlayerSnapshot(snap);
+
+      // 获取卡片ID列表
+      const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
+      if (ids.length === 0) return;
+
+      // 最小数据包：只更新 isPlaying
+      const data: Record<string, Object> = {
+        'hasBook': 1,
+        'bookId': snap.bookId,
+        'bookTitle': snap.bookTitle,
+        'author': snap.author,
+        'cover': snap.cover,
+        'chapterTitle': snap.chapterTitle,
+        'isPlaying': isPlaying ? 1 : 0,
+        'bgColor': snap.bgColor || '',
+      };
+      const binding = formBindingData.createFormBindingData(data);
+
+      // 推送到所有卡片
+      for (const id of ids) {
+        try {
+          await formProvider.updateForm(id, binding);
+        } catch (err) {
+          const e = err as BusinessError;
+          if (e.code === 16500001 || e.code === 16500100 || e.code === 16501001) {
+            await PreferenceService.removeWidgetFormId(WIDGET_PLAYER, id);
+          }
+        }
+      }
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'optimisticSetPlaying failed: %{public}s',
+        (err as Error)?.message ?? '');
     }
   }
 

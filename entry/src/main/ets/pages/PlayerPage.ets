@@ -38,37 +38,14 @@ export class PlayerBackInterceptor {
 }
 
 /**
- * mini 入口标志:仅当从 MiniPlayer 点击进入 player 时为 true。
- * Index 的 customTransition 据此跳过下滑转场,让 geometryTransition 共享元素接管。
- * PlayerPage 的返回按钮也据此走 animateTo 反向共享元素。
- * 用 @ObservedV2 单例实例:mini/player 两端的 geometryTransition id 才能响应变化。
- *
- * 注意:fromMini 只在转场动画期间为 true,进入 player 后会被清成 false,
- * 避免后续 player 内部状态变化(如 isPlaying)触发 mini 节点重建,
- * 引发 geometryTransition id 误匹配导致大封面缩小到 mini。
- */
-@ObservedV2
-export class PlayerEntryState {
-  @Trace fromMini: boolean = false;
-}
-
-export const playerEntryState = new PlayerEntryState();
-
-/**
- * 由 PlayerPage 注册的"是否共享元素入口"决策器。
- * 进入后 playerEntryState.fromMini 会被清,但 PlayerPage 自身记忆 entryFromMini,
- * Index 的 onBackPressed 通过此决策器读取真实入口类型,决定走共享元素还是普通 pop。
+ * 由 PlayerPage 注册的离场协调器:
+ * 返回时通知 PlayerPage 取消延迟加载 timer、提前中断 loadBook 异步链,避免阻塞返回响应。
  */
 export class PlayerEntryDecider {
-  private static handler: (() => boolean) | null = null;
-  /** 取消 pending 的标志清理 timer,避免反向动画时被错误清空 */
+  /** 取消 pending 的延迟加载 timer */
   private static cancelPendingClearHandler: (() => void) | null = null;
   /** 标记 PlayerPage 即将离开,让 loadBook 异步链提前退出 */
   private static markLeavingHandler: (() => void) | null = null;
-
-  static set(h: (() => boolean) | null): void {
-    PlayerEntryDecider.handler = h;
-  }
 
   static setCancelPendingClear(h: (() => void) | null): void {
     PlayerEntryDecider.cancelPendingClearHandler = h;
@@ -78,11 +55,7 @@ export class PlayerEntryDecider {
     PlayerEntryDecider.markLeavingHandler = h;
   }
 
-  static isFromMini(): boolean {
-    return PlayerEntryDecider.handler ? PlayerEntryDecider.handler() : false;
-  }
-
-  /** 返回前调用,取消可能 pending 的标志清理 timer,确保反向动画期间标志保持 true */
+  /** 返回前调用,取消 pending 的延迟加载 timer */
   static cancelPendingClear(): void {
     if (PlayerEntryDecider.cancelPendingClearHandler) {
       PlayerEntryDecider.cancelPendingClearHandler();
@@ -108,8 +81,11 @@ export struct PlayerPage {
   @Local showChapterList: boolean = false;
   @Local showSleepSheet: boolean = false;
   @Local showSkipSheet: boolean = false;
+  @Local showSpeedSheet: boolean = false;
   @Local skipIntroValue: number = 0;
   @Local skipOutroValue: number = 0;
+  /** 倍速滑块当前值(拖动时实时显示,松手才真正下发到 AudioService) */
+  @Local speedValue: number = 1.0;
   @Local blurColor: string = 'rgba(42,42,42,0)';
   @Local themeColorHex: string = '';
   @Local themeColorDarkHex: string = '';
@@ -126,7 +102,6 @@ export struct PlayerPage {
   @Local chapterSearchKeyword: string = '';
 
   private context: common.UIAbilityContext | null = null;
-  private speeds: number[] = [0.75, 1.0, 1.25, 1.75, 2.0];
   private lastCoverKey: string = '';
   /** 正在取色的封面 key,防止异步取色并发重复触发(取色成功才写 lastCoverKey,失败可重试) */
   private pickingCover: string = '';
@@ -135,21 +110,15 @@ export struct PlayerPage {
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
   };
-  /** 记忆入口类型:进入时捕获 fromMini 值,用于决定返回时走共享元素还是普通 pop */
-  private entryFromMini: boolean = false;
-  /** 标志清理 timer id,返回时需要 cancel 避免反向动画期间误清 */
-  private clearMiniTimerId: number = -1;
   /** 延迟加载 timer id,用户立即返回时需要 cancel,避免阻塞返回响应 */
   private deferredLoadTimerId: number = -1;
   /** 用户已触发返回,loadBook 异步链应在 await 后检查并提前退出,避免阻塞主线程 */
   private isLeaving: boolean = false;
+  /** 错落渐显:控制内容进场动画,进入后延迟触发 */
+  @Local contentVisible: boolean = false;
 
-  /** 取消 pending 的清理 timer,返回前调用确保标志保留供反向动画使用 */
+  /** 取消 pending 的延迟加载 timer,返回前调用避免阻塞返回响应 */
   private cancelPendingClearTimers(): void {
-    if (this.clearMiniTimerId !== -1) {
-      clearTimeout(this.clearMiniTimerId);
-      this.clearMiniTimerId = -1;
-    }
     if (this.deferredLoadTimerId !== -1) {
       clearTimeout(this.deferredLoadTimerId);
       this.deferredLoadTimerId = -1;
@@ -158,26 +127,18 @@ export struct PlayerPage {
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    // 记忆入口并注册决策器
-    this.entryFromMini = playerEntryState.fromMini;
-    PlayerEntryDecider.set((): boolean => this.entryFromMini);
     PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
     PlayerEntryDecider.setMarkLeaving(() => { this.isLeaving = true; });
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(true);
+    // 错落渐显:进场后下一帧触发内容动画
+    setTimeout(() => { this.contentVisible = true; }, 16);
     this.deferredLoadTimerId = setTimeout(() => {
       this.deferredLoadTimerId = -1;
       this.renderBlur = true;
       this.loadBook();
-      // 共享元素动画完成后清标志,避免 player 内部状态变化触发节点重建误配对
-      if (this.entryFromMini) {
-        this.clearMiniTimerId = setTimeout(() => {
-          playerEntryState.fromMini = false;
-          this.clearMiniTimerId = -1;
-        }, 500);
-      }
     }, AppMotion.Page);
   }
 
@@ -208,14 +169,12 @@ export struct PlayerPage {
   aboutToDisappear(): void {
     this.isLeaving = true;
     PlayerBackInterceptor.set(null);
-    PlayerEntryDecider.set(null);
     PlayerEntryDecider.setCancelPendingClear(null);
     PlayerEntryDecider.setMarkLeaving(null);
     this.cancelPendingClearTimers();
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
-    // 不在这里清 fromMini,避免第二次快速进入时状态竞态
   }
 
   /**
@@ -233,6 +192,10 @@ export struct PlayerPage {
     }
     if (this.showSkipSheet) {
       this.showSkipSheet = false;
+      return true;
+    }
+    if (this.showSpeedSheet) {
+      this.showSpeedSheet = false;
       return true;
     }
     return false;
@@ -349,11 +312,10 @@ export struct PlayerPage {
     }
   }
 
-  private async cycleSpeed(): Promise<void> {
-    const cur = this.playerState.speed;
-    let idx = this.speeds.indexOf(cur);
-    idx = (idx + 1) % this.speeds.length;
-    await AudioService.getInstance().setSpeed(this.speeds[idx]);
+  /** 倍速显示:整十分位用一位小数(1.0/1.2/2.0),其余保留两位(0.75/1.25) */
+  private fmtSpeed(s: number): string {
+    const r = Math.round(s * 20) / 20;
+    return Math.abs(r * 10 - Math.round(r * 10)) < 1e-6 ? r.toFixed(1) : r.toFixed(2);
   }
 
   private async resetSpeed(): Promise<void> {
@@ -600,6 +562,9 @@ export struct PlayerPage {
       if (this.showSkipSheet) {
         this.buildSkipOverlay()
       }
+      if (this.showSpeedSheet) {
+        this.buildSpeedOverlay()
+      }
     }
     .width('100%')
     .height('100%')
@@ -615,22 +580,8 @@ export struct PlayerPage {
         .onClick(() => {
           // 立即标记离开,让 loadBook 异步链提前退出,不阻塞主线程
           this.isLeaving = true;
-          // mini 入口走共享元素反向,其他入口走 customTransition 下滑
-          if (this.entryFromMini) {
-            // 先取消 pending 的清理 timer,避免反向动画期间标志被误清
-            this.cancelPendingClearTimers();
-            // 恢复 fromMini 让 mini 端挂上 id,然后走反向共享元素
-            playerEntryState.fromMini = true;
-            this.getUIContext().animateTo({
-              duration: 420,
-              curve: curves.springMotion(0.6, 0.9)
-            }, () => {
-              // 必须传 false 关闭系统默认转场,否则会吞掉共享元素动画
-              this.navStack.pop(false);
-            });
-          } else {
-            this.navStack.pop();
-          }
+          // 统一走 customTransition 下滑退场
+          this.navStack.pop();
         })
       Blank()
       SymbolGlyph($r('sys.symbol.info_circle'))
@@ -646,103 +597,55 @@ export struct PlayerPage {
     .height(48)
   }
 
-  /** 计算 geometryTransition id:仅当从 mini 入口时返回非空 */
-  private getCoverTransitionId(): string {
-    if (this.entryFromMini) {
-      return 'mini-cover-' + this.bookId;
+  @Builder
+  coverContent() {
+    if (this.book!.cover && this.book!.cover.startsWith('http')) {
+      Image(this.book!.cover)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .alt($r('app.media.app_icon_legacy'))
+        .onError(() => {
+          console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
+        })
+    } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
+      Image('file://' + this.book!.cover)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+    } else if (this.book!.cover) {
+      Image($rawfile(this.book!.cover))
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+    } else {
+      // 无封面:用 app 图标占位(替代旧的绿色书形占位)
+      Image($r('app.media.app_icon_legacy'))
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
     }
-    return '';
   }
 
   @Builder
   buildCover() {
     Column() {
-      if (this.getCoverTransitionId()) {
-        // mini/书架入口:挂 geometryTransition 共享元素
-        Stack() {
-          if (this.book!.cover && this.book!.cover.startsWith('http')) {
-            Image(this.book!.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-              .alt($r('app.media.startIcon'))
-              .onError(() => {
-                console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
-              })
-          } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-            Image('file://' + this.book!.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          } else if (this.book!.cover) {
-            Image($rawfile(this.book!.cover))
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          } else {
-            Column() {
-              SymbolGlyph($r('sys.symbol.music'))
-                .fontSize(80)
-                .fontColor(['#FFFFFF'])
-            }
-            .width('100%')
-            .height('100%')
-            .backgroundColor('#55FFFFFF')
-            .justifyContent(FlexAlign.Center)
-            .alignItems(HorizontalAlign.Center)
-          }
-        }
-        .width('100%')
-        .aspectRatio(1)
-        .borderRadius(16)
-        .clip(true)
-        .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
-        .geometryTransition(this.getCoverTransitionId())
-      } else {
-        // 其他入口:不挂 geometryTransition
-        Stack() {
-          if (this.book!.cover && this.book!.cover.startsWith('http')) {
-            Image(this.book!.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-              .alt($r('app.media.startIcon'))
-              .onError(() => {
-                console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
-              })
-          } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-            Image('file://' + this.book!.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          } else if (this.book!.cover) {
-            Image($rawfile(this.book!.cover))
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-          } else {
-            Column() {
-              SymbolGlyph($r('sys.symbol.music'))
-                .fontSize(80)
-                .fontColor(['#FFFFFF'])
-            }
-            .width('100%')
-            .height('100%')
-            .backgroundColor('#55FFFFFF')
-            .justifyContent(FlexAlign.Center)
-            .alignItems(HorizontalAlign.Center)
-          }
-        }
-        .width('100%')
-        .aspectRatio(1)
-        .borderRadius(16)
-        .clip(true)
-        .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
+      Stack() {
+        this.coverContent()
       }
+      .width('100%')
+      .aspectRatio(1)
+      .borderRadius(16)
+      .clip(true)
+      .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
     .margin({ top: AppSpace.Lg })
+    // 错落渐显:封面先入场(50ms delay)
+    .opacity(this.contentVisible ? 1 : 0)
+    .translate({ y: this.contentVisible ? 0 : 20 })
+    .animation({ duration: 400, delay: 50, curve: Curve.Sharp })
   }
 
   @Builder
@@ -790,8 +693,8 @@ export struct PlayerPage {
         .selectedColor('#FFFFFF')
         .trackColor('#33FFFFFF')
         .blockColor('#FFFFFF')
-        .blockSize({ width: 14, height: 14 })
-        .trackThickness(3)
+        .blockSize({ width: 18, height: 18 })
+        .trackThickness(6)
         .enabled(this.playerState.durationMs > 0)
         .onChange((value: number, mode: SliderChangeMode) => {
           if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
@@ -815,9 +718,17 @@ export struct PlayerPage {
           .fontColor('#FFFFFF')
       }
       .width('100%')
+      // 左右内缩 ~ block 半径,让时间对齐到轨道两端而非贴边
+      .padding({ left: 9, right: 9 })
+      // 再往上靠一点点,缩小与进度条的间距
+      .margin({ top: -3 })
     }
     .width('100%')
     .padding({ bottom: AppSpace.Md })
+    // 错落渐显:进度条第二入场(100ms delay)
+    .opacity(this.contentVisible ? 1 : 0)
+    .translate({ y: this.contentVisible ? 0 : 20 })
+    .animation({ duration: 400, delay: 100, curve: Curve.Sharp })
   }
 
   @Builder
@@ -849,19 +760,18 @@ export struct PlayerPage {
           LoadingProgress()
             .width(36)
             .height(36)
-            .color('#2A4A45')
+            .color(this.hasThemeColor ? this.themeColorDarkHex : '#333333')
         } else {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
             .fontSize(30)
-            .fontColor(['#2A4A45'])
+            .fontColor([this.hasThemeColor ? this.themeColorDarkHex : '#333333'])
         }
       }
       .width(64)
       .height(64)
       .clickEffect({ level: ClickEffectLevel.MIDDLE, scale: 0.92 })
       .onClick(() => {
-        console.error('[PlayerPage] Play button clicked, fromMini=' + playerEntryState.fromMini);
         // 加载中禁止重复触发
         if (!this.playerState.isLoading) this.togglePlay();
       })
@@ -885,22 +795,29 @@ export struct PlayerPage {
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+    // 错落渐显:控制条最后入场(150ms delay)
+    .opacity(this.contentVisible ? 1 : 0)
+    .translate({ y: this.contentVisible ? 0 : 20 })
+    .animation({ duration: 400, delay: 150, curve: Curve.Sharp })
   }
 
   @Builder
   buildBottomBar() {
     Row() {
       Column({ space: 4 }) {
-        Text(this.playerState.speed.toString() + 'x')
+        Text(this.fmtSpeed(this.playerState.speed) + 'x')
           .fontSize(AppFont.Body)
-          .fontColor('#FFFFFF')
+          .fontColor(this.playerState.speed !== 1.0 ? AppColor.Brand : '#FFFFFF')
           .fontWeight(FontWeight.Medium)
         Text('倍速')
           .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF')
+          .fontColor(this.playerState.speed !== 1.0 ? AppColor.Brand : '#FFFFFF')
       }
       .layoutWeight(1)
-      .onClick(() => this.cycleSpeed())
+      .onClick(() => {
+        this.speedValue = this.playerState.speed;
+        this.showSpeedSheet = true;
+      })
       .gesture(
         LongPressGesture({ repeat: false, duration: 500 })
           .onAction(() => this.resetSpeed())
@@ -926,10 +843,10 @@ export struct PlayerPage {
       Column({ space: 4 }) {
         SymbolGlyph($r('sys.symbol.gearshape'))
           .fontSize(22)
-          .fontColor([this.hasSkipConfig() ? '#FF6B8A' : '#FFFFFF'])
+          .fontColor([this.hasSkipConfig() ? AppColor.Brand : '#FFFFFF'])
         Text(this.hasSkipConfig() ? '已设置' : '跳过')
           .fontSize(AppFont.Caption)
-          .fontColor(this.hasSkipConfig() ? '#FF6B8A' : '#FFFFFF')
+          .fontColor(this.hasSkipConfig() ? AppColor.Brand : '#FFFFFF')
       }
       .layoutWeight(1)
       .onClick(() => {
@@ -1218,6 +1135,83 @@ export struct PlayerPage {
               }
             })
             .padding({ left: AppSpace.Md, right: AppSpace.Md })
+        }
+        .width('100%')
+        .padding({ top: AppSpace.Sm })
+      }
+      .width('100%')
+      .backgroundColor($r('sys.color.comp_background_primary'))
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+      .shadow({ radius: 40, color: '#33000000', offsetY: -8 })
+      .transition(TransitionEffect.OPACITY
+        .animation({ curve: curves.springMotion(0.6, 0.9) })
+        .combine(TransitionEffect.translate({ y: 1000 })
+          .animation({ curve: curves.springMotion(0.6, 0.9) })))
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  buildSpeedOverlay() {
+    Column() {
+      Blank()
+        .layoutWeight(1)
+        .onClick(() => { this.showSpeedSheet = false; })
+
+      Column({ space: AppSpace.Md }) {
+        Row() {
+          Text('播放速度')
+            .fontSize(AppFont.Title)
+            .fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Bold)
+          Blank()
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(20)
+            .fontColor([$r('sys.color.font_tertiary')])
+            .onClick(() => { this.showSpeedSheet = false; })
+        }
+        .width('100%')
+        .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+
+        Column({ space: AppSpace.Xs }) {
+          Row() {
+            Text('倍速')
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary'))
+            Blank()
+            Text(this.fmtSpeed(this.speedValue) + 'x')
+              .fontSize(AppFont.TitleL)
+              .fontColor(AppColor.Brand)
+              .fontWeight(FontWeight.Bold)
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
+            .blockColor(AppColor.Brand)
+            .trackColor($r('sys.color.comp_background_tertiary'))
+            .selectedColor(AppColor.Brand)
+            .onChange((value: number) => { this.speedValue = Math.round(value * 20) / 20; })
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Up) {
+                AudioService.getInstance().setSpeed(this.speedValue);
+              }
+            })
+            .padding({ left: AppSpace.Md, right: AppSpace.Md })
+
+          Row() {
+            Text('0.5x')
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+            Blank()
+            Text('3.0x')
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
         }
         .width('100%')
         .padding({ top: AppSpace.Sm })

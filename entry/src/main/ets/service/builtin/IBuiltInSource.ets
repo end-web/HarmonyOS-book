@@ -119,7 +119,9 @@ export class HomeBlock {
 /**
  * 内置源接口
  *
- * 所有源都视为音频源（bookSourceType = 1）：搜索 → 详情(返回 episodes) → 音频 URL。
+ * 内置源可声明 sourceType：
+ * - 0: 文本源，搜索 → 详情 → 目录 → 正文
+ * - 1: 音频源，搜索 → 详情 → 目录 → 音频 URL
  */
 export interface IBuiltInSource {
   /** 源 ID（保持与 eprendre 原 ID 一致，便于后续兼容老收藏） */
@@ -132,12 +134,16 @@ export interface IBuiltInSource {
   readonly desc: string;
   /** 是否支持搜索（不支持时仅出现在分类发现） */
   readonly searchable: boolean;
+  /** 书源类型：0=文本, 1=音频。不声明时默认音频，兼容旧内置源。 */
+  readonly sourceType?: number;
 
   search(keywords: string, page: number): Promise<BuiltInSearchResult>;
   getCategoryMenus(): Promise<BuiltInCategoryMenu[]>;
   getCategoryList(url: string): Promise<BuiltInCategory>;
   getBookDetail(bookUrl: string, loadEpisodes: boolean, loadFullPages: boolean): Promise<BuiltInBookDetail>;
   getAudioUrl(chapterUrl: string): Promise<string>;
+  /** 文本源正文；音频源可不实现。 */
+  getTextContent?(chapterUrl: string, nextChapterUrl?: string): Promise<string>;
   /** 可选：音频请求所需的额外头（Referer/Cookie 等） */
   getAudioHeaders(audioUrl: string): Record<string, string>;
   /** 首页推荐板块；不支持时返回空数组即可 */
