@@ -35,6 +35,7 @@ interface CacheEntry {
 
 interface TextCacheEntry {
   content: string;
+  pageUrl: string;
   timestamp: number;
 }
 
@@ -97,6 +98,43 @@ export class ChapterCacheService {
     this.fileCache.clear();
   }
 
+  /**
+   * 物理清除磁盘上的章节缓存:电子书 reader_*.txt 桥接文件(filesDir)+
+   * 有声书 chap_*.mp3 与图片缓存(cacheDir)。用于"清空书架"彻底释放空间。
+   */
+  async wipeDiskCaches(): Promise<void> {
+    this.clearAllCache();
+    const ctx = this.appContext;
+    if (!ctx) return;
+    await ChapterCacheService.deleteEntries(ctx.filesDir, true);
+    await ChapterCacheService.deleteEntries(ctx.cacheDir, false);
+  }
+
+  /** readerScope=true:删 filesDir 里 reader_/widget_cover_;false:删 cacheDir 里 chap_/image_file_cache */
+  private static async deleteEntries(dir: string, readerScope: boolean): Promise<void> {
+    let names: string[] = [];
+    try {
+      names = await fileIo.listFile(dir);
+    } catch (_e) {
+      return;
+    }
+    for (const name of names) {
+      const hit = readerScope
+        ? (name.startsWith('reader_') || name.startsWith('widget_cover_'))
+        : (name.startsWith('chap_') || name === 'image_file_cache');
+      if (!hit) continue;
+      const p = `${dir}/${name}`;
+      try {
+        const st = await fileIo.stat(p);
+        if (st.isDirectory()) {
+          await fileIo.rmdir(p);
+        } else {
+          await fileIo.unlink(p);
+        }
+      } catch (_e) { /* ignore */ }
+    }
+  }
+
   setContext(ctx: common.Context): void {
     this.appContext = ctx;
   }
@@ -115,9 +153,17 @@ export class ChapterCacheService {
     return entry.filePath;
   }
 
-  getTextContent(chapterId: string): string | null {
+  getTextContent(chapterId: string, pageUrl?: string): string | null {
     const entry = this.textCache.get(chapterId);
-    return entry ? entry.content : null;
+    if (!entry) return null;
+    if (pageUrl && entry.pageUrl !== pageUrl) return null;
+    return entry.content;
+  }
+
+  putTextContent(chapterId: string, pageUrl: string, content: string): void {
+    if (!content) return;
+    this.evictIfNeeded(this.textCache);
+    this.textCache.set(chapterId, { content, pageUrl, timestamp: Date.now() });
   }
 
   preloadAudioChapters(book: Book, currentIndex: number): void {
@@ -151,7 +197,8 @@ export class ChapterCacheService {
       const ch = book.chapters[i];
       if (ch.source.type === 'file') continue;
       if (this.textCache.has(ch.id) || this.pendingTasks.has(`text_${ch.id}`)) continue;
-      this.enqueue(() => this.resolveText(book, ch));
+      const next = i + 1 < book.chapters.length ? book.chapters[i + 1] : undefined;
+      this.enqueue(() => this.resolveText(book, ch, next));
     }
   }
 
@@ -321,16 +368,17 @@ export class ChapterCacheService {
     }
   }
 
-  private async resolveText(book: Book, chapter: Chapter): Promise<void> {
+  private async resolveText(book: Book, chapter: Chapter, nextChapter?: Chapter): Promise<void> {
     const taskKey = `text_${chapter.id}`;
     this.pendingTasks.add(taskKey);
     try {
       const source = await this.findSource(book.sourceUrl);
       if (!source) return;
-      const text = await BookSourceService.getTextContent(source, chapter.originSourceValue || chapter.source.value);
+      const pageUrl = chapter.originSourceValue || chapter.source.value;
+      const nextUrl = nextChapter ? (nextChapter.originSourceValue || nextChapter.source.value) : undefined;
+      const text = await BookSourceService.getTextContent(source, pageUrl, nextUrl);
       if (text) {
-        this.evictIfNeeded(this.textCache);
-        this.textCache.set(chapter.id, { content: text, timestamp: Date.now() });
+        this.putTextContent(chapter.id, pageUrl, text);
       }
     } catch (_e) {
     } finally {

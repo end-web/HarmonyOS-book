@@ -1,6 +1,10 @@
 import { window } from '@kit.ArkUI';
 import { display } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
+import { emitter } from '@kit.BasicServicesKit';
+
+/** 系统/App 深浅色变更事件。payload: { dark: boolean }。阅读页"跟随系统"主题据此实时重排 */
+export const EVT_COLOR_MODE_CHANGED = 'app.system.colorModeChanged';
 
 /**
  * 沉浸式 + 安全区域工具
@@ -81,8 +85,13 @@ export class WindowUtils {
 
   /** 深浅色模式变更时调用（EntryAbility.onConfigurationUpdate），重新刷新当前状态栏字色 */
   static updateColorMode(colorMode: ConfigurationConstant.ColorMode): void {
+    const changed = WindowUtils.colorMode !== colorMode;
     WindowUtils.colorMode = colorMode;
     WindowUtils.applySystemBarContent().catch(() => { /* ignore */ });
+    // 仅在实际变化时广播,避免 onConfigurationUpdate 的非深浅色变更误触发重排
+    if (changed) {
+      emitter.emit(EVT_COLOR_MODE_CHANGED, { data: { dark: WindowUtils.isDarkMode() } });
+    }
   }
 
   private static async applySystemBarContent(): Promise<void> {

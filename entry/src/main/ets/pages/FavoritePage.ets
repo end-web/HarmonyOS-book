@@ -90,6 +90,7 @@ export struct FavoritePage {
   @Local isRefreshing: boolean = false;
   @Local resolvingTocId: string = '';
   @Local refreshProgress: string = '';
+  @Local missingFavoriteCount: number = 0;
   @Param visible: boolean = false;
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
@@ -158,10 +159,49 @@ export struct FavoritePage {
     if (!this.context) return;
     const ids = await PreferenceService.getFavorites();
     const allBooks = await DataService.getBooks(this.context);
-    const books = allBooks.filter((b) => ids.includes(b.id));
+    const byId = new Map<string, Book>();
+    for (const book of allBooks) {
+      if (book && book.id) {
+        byId.set(book.id, book);
+      }
+    }
+
+    const history = await PreferenceService.getHistory();
+    const map: Record<string, PlayHistoryItem> = {};
+    for (const item of history) {
+      if (!map[item.bookId]) {
+        map[item.bookId] = item;
+      }
+    }
+
+    const lastPlayed = await PreferenceService.getLastPlayed();
+    const books: Book[] = [];
+    let missingCount = 0;
+    for (const id of ids) {
+      const book = byId.get(id);
+      if (book) {
+        books.push(book);
+        continue;
+      }
+      const progress = await PreferenceService.getProgress(id);
+      const chapterTitle = map[id]?.chapterTitle ?? progress?.chapterTitle ??
+        (lastPlayed?.bookId === id ? (lastPlayed.chapterTitle ?? '') : '');
+      const chapterId = map[id]?.chapterId ?? progress?.chapterId ??
+        (lastPlayed?.bookId === id ? lastPlayed.chapterId : '');
+      const chapterIndex = progress?.chapterIndex ?? this.parseLegacyChapterIndex(chapterId);
+      const alias = this.findFavoriteAlias(id, chapterTitle, chapterIndex, allBooks);
+      if (alias) {
+        books.push(alias);
+        continue;
+      }
+      books.push(this.createMissingFavoriteBook(id, chapterTitle));
+      missingCount++;
+    }
+    this.missingFavoriteCount = missingCount;
 
     // 修复历史缓存中的双倍章节:按 title + index 去重(title 稳定,不会被播放覆盖)
     for (const b of books) {
+      if (this.isMissingCachedBook(b)) continue;
       if (b.chapters && b.chapters.length > 0) {
         const seen = new Set<string>();
         const unique: Chapter[] = [];
@@ -186,13 +226,6 @@ export struct FavoritePage {
       }
     }
 
-    const history = await PreferenceService.getHistory();
-    const map: Record<string, PlayHistoryItem> = {};
-    for (const item of history) {
-      if (!map[item.bookId]) {
-        map[item.bookId] = item;
-      }
-    }
     // 预算每本书的 chapterId → chapterIndex,避免后续 build / click 反复 findIndex
     const idxMap: Record<string, number> = {};
     for (const b of books) {
@@ -208,15 +241,128 @@ export struct FavoritePage {
     this.loading = false;
   }
 
+  private createMissingFavoriteBook(id: string, chapterTitle: string): Book {
+    const isTextBook = id.startsWith('search_text_') || id.startsWith('home_text_');
+    const inferredTitle = this.legacyBookNameFromChapterTitle(chapterTitle);
+    return {
+      id,
+      contentType: isTextBook ? 'text' : 'audio',
+      title: inferredTitle || (isTextBook ? '电子书缓存缺失' : '有声书缓存缺失'),
+      author: '收藏记录仍在',
+      narrator: '',
+      cover: '',
+      category: isTextBook ? 'text' : 'audio',
+      intro: '',
+      totalDuration: 0,
+      chapterCount: 0,
+      rating: 0,
+      tags: ['cache_missing'],
+      chapters: [],
+      bookUrl: '',
+      sourceUrl: ''
+    };
+  }
+
+  private createFavoriteAliasBook(id: string, source: Book): Book {
+    const book = cloneBook(source);
+    book.id = id;
+    const tags = book.tags ? book.tags.filter((tag: string): boolean =>
+      tag !== 'cache_missing' && tag !== 'cache_alias') : [];
+    tags.push('cache_alias');
+    book.tags = tags;
+    book.chapters = book.chapters ? book.chapters.map((ch: Chapter, idx: number): Chapter => {
+      const next = cloneChapter(ch);
+      next.id = `${id}-c${idx}`;
+      next.index = idx + 1;
+      return next;
+    }) : [];
+    book.chapterCount = book.chapters.length > 0 ? book.chapters.length : book.chapterCount;
+    return book;
+  }
+
+  private isMissingCachedBook(book: Book): boolean {
+    return book.tags ? book.tags.includes('cache_missing') : false;
+  }
+
+  private isFavoriteAliasBook(book: Book): boolean {
+    return book.tags ? book.tags.includes('cache_alias') : false;
+  }
+
+  private legacyBookNameFromChapterTitle(title: string): string {
+    const t = title.trim();
+    if (!t || t.startsWith('第') || /^[0-9０-９]/.test(t)) return '';
+    const space = t.search(/[\s　]/);
+    if (space <= 0) return '';
+    const name = t.substring(0, space).trim();
+    if (!name || name.startsWith('第') || /^[0-9０-９]/.test(name)) return '';
+    return name;
+  }
+
+  private normalizeRecoverName(name: string): string {
+    return name
+      .replace(/[《》【】\[\]（）()：:，,。.\s　]/g, '')
+      .trim();
+  }
+
+  private parseLegacyChapterIndex(chapterId: string): number {
+    const m = chapterId.match(/-c(\d+)$/);
+    if (!m) return -1;
+    const idx = parseInt(m[1], 10);
+    return isNaN(idx) ? -1 : idx;
+  }
+
+  /**
+   * 只做运行期别名,不写 favorite_book_ids。
+   * 规则故意保守:旧标题里能取到书名,且缓存池里只有一本完整标题精确匹配的同类型书,才用于展示和打开。
+   */
+  private findFavoriteAlias(oldId: string, chapterTitle: string, chapterIndex: number, books: Book[]): Book | null {
+    const oldIsText = oldId.startsWith('search_text_') || oldId.startsWith('home_text_');
+    const oldIsAudio = oldId.startsWith('search_audio_') || oldId.startsWith('home_audio_');
+    if (!oldIsAudio && !oldIsText) return null;
+
+    if (oldIsText) {
+      return this.findTextFavoriteAlias(oldId, chapterTitle, chapterIndex, books);
+    }
+
+    const name = this.normalizeRecoverName(this.legacyBookNameFromChapterTitle(chapterTitle));
+    if (!name) return null;
+    const candidates: Book[] = [];
+    for (const book of books) {
+      if (this.isText(book)) continue;
+      if (this.normalizeRecoverName(book.title) !== name) continue;
+      if (chapterIndex >= 0 && book.chapters && chapterIndex >= book.chapters.length) continue;
+      candidates.push(book);
+    }
+    if (candidates.length !== 1) return null;
+    return this.createFavoriteAliasBook(oldId, candidates[0]);
+  }
+
+  private findTextFavoriteAlias(oldId: string, chapterTitle: string, chapterIndex: number, books: Book[]): Book | null {
+    if (!chapterTitle) return null;
+    const candidates: Book[] = [];
+    for (const book of books) {
+      if (!this.isText(book) || !book.chapters || book.chapters.length === 0) continue;
+      const idx = DataService.resolveChapterIndex(book, '', chapterTitle);
+      if (idx < 0) continue;
+      if (chapterIndex >= 0 && idx !== chapterIndex) continue;
+      candidates.push(book);
+    }
+    if (candidates.length !== 1) return null;
+    return this.createFavoriteAliasBook(oldId, candidates[0]);
+  }
+
   /** 下拉刷新:从书源重新加载在线书籍的最新数据 */
   private async refreshOnlineBooks(): Promise<void> {
     if (!this.context) return;
     // 筛选出在线书源的书(非本地导入)
     const onlineBooks = this.favoriteBooks.filter(b =>
-      !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
+      !this.isMissingCachedBook(b) && !this.isFavoriteAliasBook(b) &&
+        !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
     if (onlineBooks.length === 0) {
       try {
-        this.getUIContext().getPromptAction().showToast({ message: '书架中没有在线书籍' });
+        const message = this.missingFavoriteCount > 0 ?
+          `有 ${this.missingFavoriteCount} 本收藏缓存缺失，请重新搜索加入` : '书架中没有在线书籍';
+        this.getUIContext().getPromptAction().showToast({ message });
       } catch (_e) { /* ignore */ }
       return;
     }
@@ -359,6 +505,9 @@ export struct FavoritePage {
   }
 
   private getProgressText(book: Book): string {
+    if (this.isMissingCachedBook(book)) {
+      return '缓存缺失 · 重新搜索后加入';
+    }
     const unit = this.isText(book) ? '章' : '集';
     const chapterCount = this.getChapterCount(book);
     const h = this.historyMap[book.id];
@@ -380,6 +529,12 @@ export struct FavoritePage {
   }
 
   private handleBookTap(book: Book): void {
+    if (this.isMissingCachedBook(book)) {
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '这本书的缓存快照缺失，请重新搜索后加入书架' });
+      } catch (_e) { /* ignore */ }
+      return;
+    }
     const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
     const text = this.isText(book);
@@ -492,6 +647,10 @@ export struct FavoritePage {
   }
 
   private confirmDelete(book: Book): void {
+    if (this.isMissingCachedBook(book)) {
+      this.confirmRemoveMissingFavorite(book);
+      return;
+    }
     const isLocal = book.id.startsWith('import_');
     const prompt = this.getUIContext().getPromptAction();
     if (isLocal) {
@@ -524,6 +683,22 @@ export struct FavoritePage {
         }
       }).catch(() => { /* ignore */ });
     }
+  }
+
+  private confirmRemoveMissingFavorite(book: Book): void {
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.showDialog({
+      title: '移除失效收藏',
+      message: `确认从书架移除"${book.title}"？收藏记录还在，但本地缓存快照缺失。`,
+      buttons: [
+        { text: '取消', color: '#8F8F8F' },
+        { text: '移除', color: '#FF4444' }
+      ]
+    }).then((result) => {
+      if (result.index === 1) {
+        this.doRemove(book.id, false);
+      }
+    }).catch(() => { /* ignore */ });
   }
 
   private async doRemove(bookId: string, deleteFiles: boolean): Promise<void> {
@@ -683,7 +858,26 @@ export struct FavoritePage {
   buildBookTile(book: Book) {
     Column({ space: AppSpace.Xs }) {
       Stack({ alignContent: Alignment.TopStart }) {
-        if (book.cover && book.cover.startsWith('http')) {
+        if (this.isMissingCachedBook(book)) {
+          Stack() {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor('#FFE8D6D6')
+            SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+              .fontSize(34)
+              .fontColor(['#B3261E'])
+            Text('缓存缺失')
+              .fontSize(AppFont.Caption)
+              .fontColor('#B3261E')
+              .fontWeight(FontWeight.Medium)
+              .margin({ top: 48 })
+          }
+          .width('100%')
+          .aspectRatio(0.72)
+          .borderRadius(AppRadius.Md)
+          .clip(true)
+        } else if (book.cover && book.cover.startsWith('http')) {
           Image(book.cover)
             .width('100%')
             .aspectRatio(0.72)

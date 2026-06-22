@@ -1,12 +1,12 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { BookSourceService } from './BookSourceService';
 import { DataService } from './DataService';
 import { SourceDataService } from './SourceDataService';
 import { SearchCache } from '../utils/SearchCache';
+import { ChapterCacheService } from './ChapterCacheService';
 
 export class ReaderService {
   static async getBook(context: common.UIAbilityContext, bookId: string): Promise<Book | null> {
@@ -71,7 +71,11 @@ export class ReaderService {
     if (!source) return [];
     const url = chapter.originSourceValue || chapter.source.value;
     const nextUrl = nextChapter ? (nextChapter.originSourceValue || nextChapter.source.value) : undefined;
+    const cache = ChapterCacheService.getInstance();
+    const cached = cache.getTextContent(chapter.id, url);
+    if (cached !== null) return ReaderService.splitParagraphs(cached);
     const content = await BookSourceService.getTextContent(source, url, nextUrl);
+    cache.putTextContent(chapter.id, url, content);
     return ReaderService.splitParagraphs(content);
   }
 
@@ -85,8 +89,6 @@ export class ReaderService {
       paragraphs.shift();
     }
     let text = paragraphs.join('\n\n');
-    hilog.info(0x9527, 'RdrDbg', 'content src=%{public}s paraN=%{public}d len=%{public}d head=%{public}s',
-      book.sourceUrl, paragraphs.length, text.length, text.substring(0, 180));
     // 防御:正常章节远小于此;超出多为书源 JS 内容规则返回异常(整本/错误页),截断避免排版引擎产生上千页
     const MAX_CHARS = 200000;
     if (text.length > MAX_CHARS) {

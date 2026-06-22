@@ -32,6 +32,8 @@ export struct BookDetailPage {
   @Local bgColorDark: string = '#1A1A1A';
   @Local hasThemeColor: boolean = false;
   @Local debugInfo: string = '';
+  /** 章节搜索关键词(对齐阅读页目录搜索) */
+  @Local chapterQuery: string = '';
   private chapterListScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
 
@@ -246,6 +248,18 @@ export struct BookDetailPage {
         try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
       }, 150);
     }, 50);
+  }
+
+  /** 按关键词过滤章节,刷新 LazyForEach 数据源。空关键词回到完整列表。 */
+  private applyChapterFilter(): void {
+    if (!this.book) return;
+    const q = this.chapterQuery.trim();
+    if (!q) {
+      this.chapterDataSource.setChapters(this.book.chapters);
+      return;
+    }
+    const filtered = this.book.chapters.filter((c) => c.title.indexOf(q) >= 0);
+    this.chapterDataSource.setChapters(filtered);
   }
 
   private async toggleFavorite(): Promise<void> {
@@ -629,6 +643,11 @@ export struct BookDetailPage {
           : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
         .onClick(() => {
           this.activeTab = 1;
+          // 进「节目」tab 复位搜索,避免带着旧过滤态定位章节
+          if (this.chapterQuery.length > 0) {
+            this.chapterQuery = '';
+            this.applyChapterFilter();
+          }
           this.scrollToCurrentChapter();
         })
     }
@@ -706,7 +725,9 @@ export struct BookDetailPage {
     Column() {
       // 章节头部
       Row() {
-        Text(`共 ${this.book!.chapters.length} ${this.isTextBook() ? '章' : '集'}`)
+        Text(this.chapterQuery.trim().length > 0
+          ? `匹配 ${this.chapterDataSource.totalCount()} ${this.isTextBook() ? '章' : '集'}`
+          : `共 ${this.book!.chapters.length} ${this.isTextBook() ? '章' : '集'}`)
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
         if (this.loadingToc) {
@@ -718,6 +739,19 @@ export struct BookDetailPage {
       }
       .width('100%')
       .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Sm })
+
+      // 章节搜索(有章节时才显示,对齐阅读页目录搜索)
+      if (this.book!.chapters.length > 0) {
+        Search({ value: this.chapterQuery, placeholder: this.isTextBook() ? '搜索章节' : '搜索节目' })
+          .height(38)
+          .margin({ left: AppSpace.Lg, right: AppSpace.Lg, bottom: AppSpace.Sm })
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          .borderRadius(AppRadius.Lg)
+          .onChange((v: string) => {
+            this.chapterQuery = v;
+            this.applyChapterFilter();
+          })
+      }
 
       // 章节列表
       if (this.book!.chapters.length === 0 && !this.loadingToc) {
@@ -736,6 +770,13 @@ export struct BookDetailPage {
               .maxLines(10)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
+        }
+        .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else if (this.chapterQuery.trim().length > 0 && this.chapterDataSource.totalCount() === 0) {
+        Column() {
+          Text('无匹配章节')
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_tertiary'))
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {

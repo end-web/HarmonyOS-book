@@ -262,8 +262,9 @@ struct Index {
         ReaderPageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+      // 对齐官方 ReaderKit Demo:阅读页关闭系统转场,避免夜间主题重进时先露浅色首帧。
+      .backgroundColor('#121212')
+      .systemTransition(NavigationSystemTransitionType.NONE)
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })

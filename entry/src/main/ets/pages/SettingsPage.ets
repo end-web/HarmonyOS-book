@@ -4,6 +4,7 @@ import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { PreferenceService } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
+import { DataService } from '../service/DataService';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface ThemeOption {
@@ -106,6 +107,30 @@ export struct SettingsPage {
     ChapterCacheService.getInstance().clearAllCache();
     try {
       this.getUIContext().getPromptAction().showToast({ message: '缓存已清除' });
+    } catch (_e) { /* ignore */ }
+  }
+
+  /** 二次确认后清空书架与历史(收藏/缓存书/播放记录),保留书源与设置 */
+  private confirmClearBookshelf(): void {
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.showDialog({
+      title: '清空书架与历史',
+      message: '将清除全部收藏、缓存书与播放记录(进度/历史)。书源、设置、登录会保留。此操作不可恢复,确定吗?',
+      buttons: [
+        { text: '取消', color: '#8F8F8F' },
+        { text: '清空', color: '#FF4444' }
+      ]
+    }).then((result) => {
+      if (result.index === 1) this.doClearBookshelf();
+    }).catch(() => { /* ignore */ });
+  }
+
+  private async doClearBookshelf(): Promise<void> {
+    await PreferenceService.clearBookshelfAndHistory();
+    await DataService.clearCachedBooks();
+    await ChapterCacheService.getInstance().wipeDiskCaches();
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: '书架与历史已清空' });
     } catch (_e) { /* ignore */ }
   }
 
@@ -284,8 +309,8 @@ export struct SettingsPage {
         this.buildDivider()
 
         this.buildSelectItem(
-          '预加载章数',
-          '播放时提前缓存后续章节',
+          '预加载章节数',
+          '有声书与电子书通用:阅读/收听时提前缓存后续章节',
           PRELOAD_OPTIONS.map((opt: PreloadOption): SelectOption => { return { value: opt.label }; }),
           PRELOAD_OPTIONS.findIndex((opt: PreloadOption) => opt.count === this.preloadCount),
           (index: number) => this.setPreloadCount(PRELOAD_OPTIONS[index].count)
@@ -293,7 +318,11 @@ export struct SettingsPage {
 
         this.buildDivider()
 
-        this.buildActionItem('清除预加载缓存', '释放已缓存的音频文件', () => this.clearCache())
+        this.buildActionItem('清除预加载缓存', '释放已缓存的有声书音频与电子书正文', () => this.clearCache())
+
+        this.buildDivider()
+
+        this.buildActionItem('清空书架与历史', '清除收藏 / 缓存书 / 播放记录(书源与设置保留)', () => this.confirmClearBookshelf())
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))

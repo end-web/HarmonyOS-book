@@ -551,6 +551,33 @@ export class PreferenceService {
     await s.flush();
   }
 
+  /**
+   * 清空"书架 + 播放记录":收藏 / 历史 / 每本进度 / 上次播放 / 卡片快照 / 旧缓存池。
+   * 保留:书源订阅、阅读播放设置、登录、卡片 formId 等其余偏好。
+   */
+  static async clearBookshelfAndHistory(): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.delete(KEY_FAVORITES);
+    await s.delete(KEY_HISTORY);
+    await s.delete(KEY_LAST_PLAYED);
+    await s.delete(KEY_WIDGET_PLAYER_SNAPSHOT);
+    await s.delete(KEY_CACHED_BOOKS);
+    // 逐本进度 progress_v1_*:枚举全部 key,前缀匹配删除
+    try {
+      const all = await s.getAll() as Record<string, Object>;
+      for (const key of Object.keys(all)) {
+        if (key.startsWith(KEY_PROGRESS_PREFIX)) {
+          await s.delete(key);
+        }
+      }
+    } catch (_e) { /* ignore */ }
+    PreferenceService.progressMemo.clear();
+    await s.flush();
+    PreferenceService.notifyFavoriteChanged();
+    PreferenceService.notifyHistoryChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });
+  }
+
   /** 卡片快照:主进程写,FormExtensionAbility 在 onAddForm/onUpdateForm 里读 */
   static async getWidgetPlayerSnapshot(): Promise<WidgetPlayerSnapshot | null> {
     const s = await PreferenceService.ensureStore();
@@ -644,4 +671,6 @@ export interface ReaderSettingsItem {
   brightness?: number;
   /** 行距系数(行高 = 字号 * 该值)。旧数据无此字段时用默认 1.8 */
   lineHeight?: number;
+  /** 主题是否跟随系统深浅色。旧数据无此字段(undefined)按 false 处理,保留手选主题 */
+  followSystem?: boolean;
 }

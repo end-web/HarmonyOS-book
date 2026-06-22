@@ -1,6 +1,5 @@
 import { common } from '@kit.AbilityKit';
 import { emitter, BusinessError, batteryInfo } from '@kit.BasicServicesKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display } from '@kit.ArkUI';
 import { bookParser, ReadPageComponent, readerCore } from '@kit.ReaderKit';
 import { AppColor, AppFont, AppRadius, AppSpace, AppCurve } from '../theme/Theme';
@@ -10,7 +9,7 @@ import { ReaderService } from '../service/ReaderService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { SearchCache } from '../utils/SearchCache';
-import { WindowUtils } from '../utils/WindowUtils';
+import { WindowUtils, EVT_COLOR_MODE_CHANGED } from '../utils/WindowUtils';
 import { DataService } from '../service/DataService';
 import { EVT_SWITCH_TAB } from './ImportPage';
 
@@ -34,31 +33,12 @@ const READER_THEMES: ReaderTheme[] = [
   { name: '夜', bg: '#FF121212', text: '#FFD8D5CF', sub: '#99999086', glass: 'rgba(18, 18, 18, 0.72)' },
 ];
 const NIGHT_INDEX = 3;
-/** 进页默认主题:护眼米(索引 1) */
-const DEFAULT_THEME_INDEX = 1;
+/** 跟随系统的浅色主题:白(索引 0)。深色则映射夜间(NIGHT_INDEX) */
+const FOLLOW_LIGHT_INDEX = 0;
+/** 阅读页首帧默认用夜间底色,防止历史夜间主题进入时暴露系统/组件白底。 */
+const BOOT_THEME_INDEX = NIGHT_INDEX;
 /** 工具栏显隐动画时长(ms),按 UI 规范取 300 */
 const TOOLBAR_ANIM = 300;
-
-/** #AARRGGBB / #RRGGBB -> rgba(r, g, b, a)（Reader Kit themeColor 接受 rgba 或 6 位 hex,统一走 rgba） */
-function toRgba(c: string): string {
-  let hex = c;
-  if (hex.charAt(0) === '#') hex = hex.substring(1);
-  let a = 1;
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  if (hex.length === 8) {
-    a = parseInt(hex.substring(0, 2), 16) / 255;
-    r = parseInt(hex.substring(2, 4), 16);
-    g = parseInt(hex.substring(4, 6), 16);
-    b = parseInt(hex.substring(6, 8), 16);
-  } else if (hex.length === 6) {
-    r = parseInt(hex.substring(0, 2), 16);
-    g = parseInt(hex.substring(2, 4), 16);
-    b = parseInt(hex.substring(4, 6), 16);
-  }
-  return `rgba(${r}, ${g}, ${b}, ${a})`;
-}
 
 /** #AARRGGBB / #RRGGBB -> #RRGGBB（Reader Kit fontColor 用 6 位 hex，对齐官方示例） */
 function hex6(c: string): string {
@@ -96,13 +76,7 @@ function parsePageBounds(footer: string): PageBounds {
     const current = parseInt(m[1], 10);
     const total = parseInt(m[2], 10);
     if (!isNaN(current) && !isNaN(total) && total > 0) {
-      return {
-        parsed: true,
-        current,
-        total,
-        isFirst: current <= 1,
-        isLast: current >= total
-      };
+      return { parsed: true, current, total, isFirst: current <= 1, isLast: current >= total };
     }
   }
   return empty;
@@ -129,13 +103,17 @@ export struct ReaderPage {
   @Local lineHeight: number = 1.9;
   /** 目录搜索关键词 */
   @Local chapterQuery: string = '';
-  @Local themeIndex: number = 0;
+  @Local themeIndex: number = BOOT_THEME_INDEX;
+  /** 主题是否跟随系统深浅色(开启后 themeIndex 由系统 colorMode 实时推导) */
+  @Local followSystem: boolean = false;
   @Local flipModeIndex: number = 0; // 0=仿真翻页, 1=平移翻页
   @Local pageFooter: string = '';
   // 屏幕亮度:-1=跟随系统, [0,1]=覆盖。命名避开组件内置 .brightness() 属性
   @Local screenBrightness: number = -1;
   @Local hudTime: string = '';
   @Local batteryPercent: number = -1;
+  @Local readerThemeSettled: boolean = false;
+  @Local settingsReady: boolean = false;
 
   private context: common.UIAbilityContext | null = null;
   private chapterScroller: Scroller = new Scroller();
@@ -147,12 +125,14 @@ export struct ReaderPage {
   private pageShowBound: boolean = false;
   private currentDomPos: string = '';
   private lastPersistAt: number = 0;
+  private lastSettingApplyAt: number = 0;
+  private firstPageConfigApplied: boolean = false;
+  private waitingThemePageShow: boolean = false;
   // 每次 openChapter 自增,失效旧的兜底定时器/异步分支
   private openSeq: number = 0;
-  // 翻页边界检测:flipPage 后等 pageShow,超时未变页=到边界
+  // Reader Kit 官方翻页接口只有 flipPage(isNext);边界用 pageShow/短超时兜底判定。
   private flipSeq: number = 0;
-  private pendingDir: number = 0; // 1=向后翻待确认, -1=向前翻待确认, 0=无
-  // driveFlip 翻页前记录的页起始位置;pageShow 回来若 startDomPos 相同=没翻动(到章首/章末)
+  private pendingDir: number = 0; // 1=下一页待确认, -1=上一页待确认, 0=无
   private flipBaselineDomPos: string = '';
   private flipBaselineFooter: string = '';
   private flipBaselineAtLastPage: boolean = false;
@@ -161,7 +141,6 @@ export struct ReaderPage {
   private pageViewW: number = 0;
   private pageViewH: number = 0;
   private hudTimerId: number = -1;
-  // 当前页在本章的位置(从 pageFooterContent 解析),用于快速判断首/末页
   private isLastPage: boolean = false;
   private isFirstPage: boolean = false;
   // ReadPageComponent 必须先就绪(readerCallback 触发),否则排版引擎(textTpl)未挂载,
@@ -190,14 +169,26 @@ export struct ReaderPage {
     }, 50);
   };
 
+  /** 跟随系统时:系统/App 深浅色变更 → 实时切换阅读主题并重排 */
+  private onColorModeChanged = (): void => {
+    if (this.isLeaving || !this.followSystem) return;
+    const next = WindowUtils.isDarkMode() ? NIGHT_INDEX : FOLLOW_LIGHT_INDEX;
+    if (next === this.themeIndex) return;
+    this.themeIndex = next;
+    this.readerThemeSettled = true; // 用户态切换,无需首帧防闪遮罩
+    this.applyStatusBar();
+    this.applySetting();
+  };
+
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    // 先按系统深浅给默认主题:浅色→护眼米,深色→夜间,避免深色模式下闪白
-    this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : DEFAULT_THEME_INDEX;
+    // 偏好异步读取前用夜间底色占位,避免历史夜间主题重进时出现浅色首帧。
+    this.themeIndex = BOOT_THEME_INDEX;
     this.applyStatusBar();
     WindowUtils.setStatusBarVisible(false);
     this.startHudTicker();
     emitter.on(EVT_READER_JUMP_CHAPTER, this.onJumpChapter);
+    emitter.on(EVT_COLOR_MODE_CHANGED, this.onColorModeChanged);
     this.bootstrap();
   }
 
@@ -207,11 +198,13 @@ export struct ReaderPage {
     WindowUtils.setReaderBrightness(-1);
     WindowUtils.setStatusBarVisible(true);
     this.stopHudTicker();
+    void this.persistReaderSettings();
     this.persistProgress(true);
     if (this.pageShowBound) {
       try { this.readerController.off('pageShow'); } catch (_e) { /* ignore */ }
     }
     try { emitter.off(EVT_READER_JUMP_CHAPTER); } catch (_e) { /* ignore */ }
+    try { emitter.off(EVT_COLOR_MODE_CHANGED); } catch (_e) { /* ignore */ }
     try { this.readerController.releaseBook(); } catch (_e) { /* ignore */ }
   }
 
@@ -220,7 +213,13 @@ export struct ReaderPage {
     PreferenceService.getReaderSettings().then((s: ReaderSettingsItem | null): void => {
       if (s) {
         if (s.fontSize > 0) this.fontSize = s.fontSize;
-        if (s.themeIndex >= 0 && s.themeIndex < READER_THEMES.length) this.themeIndex = s.themeIndex;
+        // 跟随系统(老数据无此字段按 false):主题由系统深浅色推导;否则用手选 themeIndex
+        this.followSystem = s.followSystem === true;
+        if (this.followSystem) {
+          this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : FOLLOW_LIGHT_INDEX;
+        } else if (s.themeIndex >= 0 && s.themeIndex < READER_THEMES.length) {
+          this.themeIndex = s.themeIndex;
+        }
         if (s.flipModeIndex === 0 || s.flipModeIndex === 1) this.flipModeIndex = s.flipModeIndex;
         if (s.lineHeight !== undefined && s.lineHeight >= 1.2 && s.lineHeight <= 2.4) this.lineHeight = s.lineHeight;
         if (s.brightness !== undefined && s.brightness >= 0 && s.brightness <= 1) {
@@ -228,8 +227,19 @@ export struct ReaderPage {
           WindowUtils.setReaderBrightness(s.brightness);
         }
         this.applyStatusBar();
+      } else {
+        // 全新用户:默认跟随系统深浅色
+        this.followSystem = true;
+        this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : FOLLOW_LIGHT_INDEX;
+        this.applyStatusBar();
       }
-    }).catch((): void => { /* ignore */ }).then((): Promise<void> => this.loadBookAndChapter())
+      this.settingsReady = true;
+    }).catch((): void => {
+      this.followSystem = true;
+      this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : FOLLOW_LIGHT_INDEX;
+      this.applyStatusBar();
+      this.settingsReady = true;
+    }).then((): Promise<void> => this.loadBookAndChapter())
       .catch((): void => { /* ignore */ });
   }
 
@@ -242,15 +252,36 @@ export struct ReaderPage {
     WindowUtils.setStatusBarLight(this.themeIndex === NIGHT_INDEX);
   }
 
-  private persistReaderSettings(): void {
+  /** 开启"跟随系统":主题由当前系统深浅色推导,后续随 colorMode 实时切换 */
+  private enableFollowSystem(): void {
+    this.followSystem = true;
+    this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : FOLLOW_LIGHT_INDEX;
+    this.readerThemeSettled = true;
+    this.applyStatusBar();
+    this.applySetting();
+    void this.persistReaderSettings();
+  }
+
+  /** 手选具体主题:关闭跟随系统,固定为该主题 */
+  private selectTheme(idx: number): void {
+    this.followSystem = false;
+    this.themeIndex = idx;
+    this.readerThemeSettled = true;
+    this.applyStatusBar();
+    this.applySetting();
+    void this.persistReaderSettings();
+  }
+
+  private async persistReaderSettings(): Promise<void> {
     const item: ReaderSettingsItem = {
       fontSize: this.fontSize,
       themeIndex: this.themeIndex,
       flipModeIndex: this.flipModeIndex,
       brightness: this.screenBrightness,
-      lineHeight: this.lineHeight
+      lineHeight: this.lineHeight,
+      followSystem: this.followSystem
     };
-    PreferenceService.setReaderSettings(item).catch((): void => { /* ignore */ });
+    await PreferenceService.setReaderSettings(item);
   }
 
   /**
@@ -263,25 +294,30 @@ export struct ReaderPage {
       if (this.pageShowBound) return;
       this.readerController.on('pageShow', (data: readerCore.PageDataInfo): void => {
         if (this.isLeaving) return;
-        hilog.info(0x9527, 'RdrDbg', 'pageShow state=%{public}d footer=%{public}s startDom=%{public}s resIdx=%{public}d',
-          data.state, data.pageFooterContent, data.startDomPos, data.resourceIndex);
         if (data.state === readerCore.PageState.PAGE_ON_SHOW) {
-          // 翻页后页起始位置没变(startDomPos 相同)= 已到章首/章末,这次翻页是 no-op。
-          // 有些机型/翻页模式下 Reader Kit 到末页仍会回调 pageShow,且 startDomPos 可能轻微变化;
-          // 此时再用页脚和翻页前的首末页状态兜底,避免误判为翻页成功而停在当前章。
-          // 保留 pendingDir 不清,交给 driveFlip 的 280ms 超时去自动续章(避免连跳)。
-          if (this.isBoundaryNoopPageShow(data.pageFooterContent, data.startDomPos)) {
-            this.pageFooter = data.pageFooterContent;
-            this.updatePageBounds(data.pageFooterContent);
+          const footer = this.resolvePageFooter(data);
+          if (this.isBoundaryNoopPageShow(footer, data.startDomPos)) {
+            this.pageFooter = footer;
+            this.updatePageBounds(footer);
+            return;
+          }
+          if (this.shouldOpenNextChapterFromRepeatedLastPage(data.startDomPos, footer)) {
+            this.goNextChapter();
             return;
           }
           this.loading = false;
           this.errorMsg = ''; // 正文已出页:清掉可能由兜底/初始化失败设过的错误态,避免错误页盖住正文
           this.pendingDir = 0; // 真实翻页发生,取消边界待确认
           this.currentDomPos = data.startDomPos;
-          this.pageFooter = data.pageFooterContent;
-          this.updatePageBounds(data.pageFooterContent);
+          this.pageFooter = footer;
+          this.updatePageBounds(footer);
           this.persistProgress(false);
+          if (this.waitingThemePageShow) {
+            this.waitingThemePageShow = false;
+            this.settleReaderThemeSoon(120);
+          } else {
+            this.applyFirstPageConfigAfterShow();
+          }
         } else if (data.state === readerCore.PageState.OPEN_BOOK_FAIL) {
           this.loading = false;
           this.errorMsg = '打开本章失败';
@@ -291,7 +327,11 @@ export struct ReaderPage {
     } catch (_e) { /* ignore */ }
   }
 
-  /** 解析 "cur/total" 形式的页脚,更新首/末页标记;解析不出则保持 false,交给翻页超时兜底 */
+  private resolvePageFooter(data: readerCore.PageDataInfo): string {
+    return data.pageFooterContent ?? '';
+  }
+
+  /** 解析 "cur/total" 形式的页脚,更新首/末页标记;解析不出则保持 false,交给翻页超时兜底。 */
   private updatePageBounds(footer: string): void {
     this.isLastPage = false;
     this.isFirstPage = false;
@@ -311,6 +351,15 @@ export struct ReaderPage {
     return false;
   }
 
+  private shouldOpenNextChapterFromRepeatedLastPage(startDomPos: string, footer: string): boolean {
+    if (this.loading || this.switching || this.isLeaving || !this.opened) return false;
+    if (!this.book || this.chapterIndex >= this.book.chapters.length - 1) return false;
+    if (Date.now() - this.lastSettingApplyAt < 1000) return false;
+    if (!startDomPos || startDomPos !== this.currentDomPos || footer !== this.pageFooter) return false;
+    const bounds = parsePageBounds(footer);
+    return bounds.parsed && bounds.isLast;
+  }
+
   private buildSetting(): readerCore.ReaderSetting {
     let d: display.Display | null = null;
     try {
@@ -322,17 +371,16 @@ export struct ReaderPage {
     const night = this.themeIndex === NIGHT_INDEX;
     const vw = this.pageViewW > 0 ? this.pageViewW : (d ? d.width : 1080);
     const vh = this.pageViewH > 0 ? this.pageViewH : (d ? d.height : 1920);
-    hilog.info(0x9527, 'RdrDbg', 'buildSetting vp=%{public}dx%{public}d', vw, vh);
     const setting: readerCore.ReaderSetting = {
       // 纯系统字体:fontName='系统字体' + fontPath=''(不引入任何字体文件)
       fontName: '系统字体',
       fontPath: '',
       fontSize: this.fontSize,
-      fontWeight: 500,
+      fontWeight: 600,
       fontColor: hex6(t.text),
       lineHeight: this.lineHeight, // 用户设置的行距(settingSheet 行距滑块)
       nightMode: night,
-      themeColor: toRgba(t.bg),
+      themeColor: hex6(t.bg),
       themeBgImg: '',
       flipMode: this.flipModeIndex === 1 ? '1' : '0',
       scaledDensity: d && d.scaledDensity > 0 ? d.scaledDensity : 1,
@@ -409,8 +457,6 @@ export struct ReaderPage {
     setTimeout((): void => {
       if (this.isLeaving || openId !== this.openSeq || !this.loading) return;
       // 仍在 loading:多为 stale domPos 导致 startPlay 不触发 pageShow。从章首重挂重渲染。
-      hilog.warn(0x9527, 'RdrDbg', 'failsafe: no pageShow, re-render from head openId=%{public}d ready=%{public}s',
-        openId, String(this.componentReady));
       this.renderDomPos = '';
       this.currentDomPos = '';
       this.requestRender(openId);
@@ -438,9 +484,11 @@ export struct ReaderPage {
     this.currentChapter = this.book.chapters[index];
     this.currentDomPos = domPos;
     this.pageFooter = '';
+    this.firstPageConfigApplied = false;
+    this.waitingThemePageShow = false;
+    this.readerThemeSettled = this.themeIndex !== NIGHT_INDEX;
     this.isLastPage = false;
     this.isFirstPage = false;
-    // 新章重置:位置基线清空、取消未决翻页,避免跨章误判
     this.flipBaselineDomPos = '';
     this.flipBaselineFooter = '';
     this.flipBaselineAtLastPage = false;
@@ -451,9 +499,6 @@ export struct ReaderPage {
     this.armLoadingFailsafe(openId);
     try {
       const next = index + 1 < this.book.chapters.length ? this.book.chapters[index + 1] : undefined;
-      hilog.info(0x9527, 'RdrDbg', 'openChapter begin openId=%{public}d idx=%{public}d title=%{public}s url=%{public}s',
-        openId, index, this.currentChapter.title,
-        this.currentChapter.originSourceValue || this.currentChapter.source.value);
       const text = await ReaderService.loadChapterText(this.book, this.currentChapter, next);
       if (this.isLeaving || openId !== this.openSeq) { this.switching = false; return; }
       if (!text || !text.trim()) {
@@ -463,8 +508,6 @@ export struct ReaderPage {
         return;
       }
       const path = await ReaderService.writeChapterTxt(this.context!, this.book, this.currentChapter, text);
-      hilog.info(0x9527, 'RdrDbg', 'openChapter txt openId=%{public}d idx=%{public}d title=%{public}s path=%{public}s len=%{public}d head=%{public}s',
-        openId, index, this.currentChapter.title, path, text.length, text.substring(0, 120));
       if (this.isLeaving || openId !== this.openSeq) { this.switching = false; return; }
       const handler = await bookParser.getDefaultHandler(path);
       if (this.isLeaving || openId !== this.openSeq) { this.switching = false; return; }
@@ -474,8 +517,6 @@ export struct ReaderPage {
         const spineList = handler.getSpineList();
         if (spineList && spineList.length > 0) spineIndex = spineList[0].index;
       } catch (_e) { /* ignore */ }
-      hilog.info(0x9527, 'RdrDbg', 'openChapter parser openId=%{public}d idx=%{public}d spine=%{public}d',
-        openId, index, spineIndex);
       this.renderHandler = handler;
       this.renderSpineIndex = spineIndex;
       this.renderDomPos = domPos ?? '';
@@ -526,14 +567,8 @@ export struct ReaderPage {
       }
       this.readerController.setPageConfig(this.buildSetting());
       this.readerController.registerBookParser(this.renderHandler);
-      hilog.info(0x9527, 'RdrDbg', 'doRender startPlay openId=%{public}d spine=%{public}d dom=%{public}s title=%{public}s',
-        openId, this.renderSpineIndex, this.renderDomPos, this.currentChapter?.title ?? '');
       // 不 await:让 pageShow 回调驱动 loading=false(stale domPos 时 await 会永久挂起并阻断兜底)
-      this.readerController.startPlay(this.renderSpineIndex, this.renderDomPos).catch((e: BusinessError): void => {
-        const be = e as BusinessError;
-        hilog.error(0x9527, 'RdrDbg', 'startPlay failed openId=%{public}d code=%{public}d msg=%{public}s',
-          openId, be?.code ?? 0, be?.message ?? String(e));
-      });
+      this.readerController.startPlay(this.renderSpineIndex, this.renderDomPos).catch((): void => { /* ignore */ });
     } catch (e) {
       if (this.isLeaving || openId !== this.openSeq) return;
       const be = e as BusinessError;
@@ -560,8 +595,6 @@ export struct ReaderPage {
           this.inited = false;
           this.pageShowBound = false;
           this.registerPageShow();
-          hilog.info(0x9527, 'RdrDbg', 'readerCallback ready pending=%{public}s openId=%{public}d',
-            String(this.pendingRender), this.renderOpenId);
           if (this.pendingRender) {
             this.pendingRender = false;
             this.doRender(this.renderOpenId);
@@ -569,9 +602,6 @@ export struct ReaderPage {
         } else {
           // 组件初始化失败过去被直接忽略 → componentReady 永为 false → 永不出页 → 黑屏。
           // 直接回填错误态,给用户可见反馈而非干等兜底定时器。
-          const be = err as BusinessError;
-          hilog.error(0x9527, 'RdrDbg', 'readerCallback failed code=%{public}d msg=%{public}s',
-            be?.code ?? 0, be?.message ?? 'null data');
           if (!this.isLeaving) {
             this.loading = false;
             this.errorMsg = '阅读组件加载失败,请返回重试';
@@ -669,41 +699,74 @@ export struct ReaderPage {
   }
 
   /**
-   * 驱动 Reader Kit 翻页;若翻页后 ~280ms 内没有 pageShow(说明已在章首/章末,翻页是 no-op),
-   * 则自动切到上/下一章 —— Reader Kit 没有"翻到尽头"事件,只能用此法兜住自动续章。
+   * 按官方 ReaderComponentController.flipPage(isNext) 驱动页级翻页。
+   * 到章首/章末时 Reader Kit 可能不回调 pageShow,用短超时兜底切章。
    */
   private driveFlip(isNext: boolean): void {
+    if (this.loading || this.switching || this.isLeaving || !this.opened) return;
+    if (isNext && this.isLastPage) { this.goNextChapter(); return; }
+    if (!isNext && this.isFirstPage) { this.goPrevChapter(); return; }
+
     const seq = ++this.flipSeq;
     this.pendingDir = isNext ? 1 : -1;
-    // 记录翻页前页起始位置;pageShow 回来若 startDomPos 没变即判定到边界(见 registerPageShow)
     this.flipBaselineDomPos = this.currentDomPos;
     this.flipBaselineFooter = this.pageFooter;
     this.flipBaselineAtLastPage = this.isLastPage;
     this.flipBaselineAtFirstPage = this.isFirstPage;
-    try { this.readerController.flipPage(isNext); } catch (_e) { /* ignore */ }
+    try {
+      this.readerController.flipPage(isNext);
+    } catch (_e) {
+      this.pendingDir = 0;
+      return;
+    }
     setTimeout((): void => {
-      if (this.isLeaving) return;
-      if (seq !== this.flipSeq) return;     // 期间又翻页/切章,作废
-      if (this.pendingDir === 0) return;    // pageShow 已确认翻页成功
+      if (this.isLeaving || seq !== this.flipSeq || this.pendingDir === 0) return;
       this.pendingDir = 0;
       if (isNext) this.goNextChapter(); else this.goPrevChapter();
     }, 280);
   }
 
-  private onTapForward(): void {
-    if (this.loading || this.switching || this.isLeaving || !this.opened) return;
-    if (this.isLastPage) { this.goNextChapter(); return; }
-    this.driveFlip(true);
+  private applyFirstPageConfigAfterShow(): void {
+    if (this.firstPageConfigApplied) return;
+    this.firstPageConfigApplied = true;
+    setTimeout((): void => {
+      if (this.isLeaving || !this.opened) return;
+      try {
+        this.lastSettingApplyAt = Date.now();
+        this.readerController.setPageConfig(this.buildSetting());
+        this.waitingThemePageShow = true;
+        setTimeout((): void => {
+          if (this.isLeaving || !this.waitingThemePageShow) return;
+          this.waitingThemePageShow = false;
+          this.readerThemeSettled = true;
+        }, 900);
+      } catch (_e) {
+        this.readerThemeSettled = true;
+      }
+    }, 0);
   }
 
-  private onTapBackward(): void {
-    if (this.loading || this.switching || this.isLeaving || !this.opened) return;
-    if (this.isFirstPage) { this.goPrevChapter(); return; }
-    this.driveFlip(false);
+  private settleReaderThemeSoon(delayMs: number): void {
+    if (this.themeIndex !== NIGHT_INDEX) {
+      this.readerThemeSettled = true;
+      return;
+    }
+    setTimeout((): void => {
+      if (!this.isLeaving) this.readerThemeSettled = true;
+    }, delayMs);
+  }
+
+  private handleReaderPanEnd(event: GestureEvent | undefined): void {
+    if (!event || this.loading || this.switching || this.isLeaving || !this.opened) return;
+    const offsetX = event.offsetX;
+    const offsetY = event.offsetY;
+    if (Math.abs(offsetX) < 48 || Math.abs(offsetX) < Math.abs(offsetY) * 1.4) return;
+    this.driveFlip(offsetX < 0);
   }
 
   private applySetting(): void {
     if (!this.opened) return;
+    this.lastSettingApplyAt = Date.now();
     try { this.readerController.setPageConfig(this.buildSetting()); } catch (_e) { /* ignore */ }
   }
 
@@ -791,8 +854,10 @@ export struct ReaderPage {
         .height('100%')
         .backgroundColor(this.theme().bg)
 
-      // Reader Kit 排版组件常驻挂载。每个阅读页实例只渲染一章;切章=新建阅读页实例(navigateToChapter)。
-      this.buildReaderComponent()
+      // Reader Kit 等阅读设置加载完成后再挂载,避免历史夜间主题重进时先露出默认白底。
+      if (this.settingsReady) {
+        this.buildReaderComponent()
+      }
 
       // HUD(底部时间/电量/页码):纯展示层,放在正文之上、热区之下。
       // 必须声明在热区之前且不设 zIndex —— 否则其内部 Blank 会盖在热区上拦截中间点击,唤不出菜单。
@@ -801,31 +866,23 @@ export struct ReaderPage {
         this.buildReaderHud()
       }
 
-      // 翻页/唤起热区:左(上一页/章) 中(唤起工具栏) 右(下一页/章)。
-      // 声明在 HUD 之后→处于最上层,确保中间点击命中 toggleToolbar;仅工具栏隐藏时存在,避免与按钮冲突。
+      // 阅读热区:左/右点击或左右滑动翻页,中间点击唤起工具栏。实际翻页仍走 Reader Kit 官方 flipPage。
       if (!this.loading && !this.errorMsg && !this.toolbarVisible) {
-        Row() {
-          Column()
-            .width('30%')
-            .height('100%')
-            .onClick(() => this.onTapBackward())
-          Column()
-            .width('40%')
-            .height('100%')
-            .onClick(() => this.toggleToolbar())
-          Column()
-            .width('30%')
-            .height('100%')
-            .onClick(() => this.onTapForward())
-        }
-        .width('100%')
-        .height('100%')
+        this.buildReaderTouchLayer()
       }
 
       if (this.loading) {
         this.buildLoading()
       } else if (this.errorMsg) {
         this.buildError()
+      }
+
+      if (!this.loading && !this.errorMsg && !this.readerThemeSettled) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor(this.theme().bg)
+          .hitTestBehavior(HitTestMode.None)
       }
 
       // 工具栏覆盖层:用纵向 Column 让顶栏贴顶、底栏沉底。
@@ -948,6 +1005,49 @@ export struct ReaderPage {
     .hitTestBehavior(HitTestMode.None)
   }
 
+  /** 正文交互层:点击左/右翻页,点击中间唤菜单,左右滑动翻页。 */
+  @Builder
+  buildReaderTouchLayer() {
+    Row() {
+      Column()
+        .width('30%')
+        .height('100%')
+        .onClick(() => this.driveFlip(false))
+      Column()
+        .width('40%')
+        .height('100%')
+        .onClick(() => this.toggleToolbar())
+      Column()
+        .width('30%')
+        .height('100%')
+        .onClick(() => this.driveFlip(true))
+    }
+    .width('100%')
+    .height('100%')
+    .gesture(
+      PanGesture({ direction: PanDirection.Horizontal, distance: 12 })
+        .onActionEnd((event: GestureEvent | undefined) => {
+          this.handleReaderPanEnd(event);
+        })
+    )
+  }
+
+  /** 唤出菜单时的顶部沉浸式玻璃按钮。 */
+  @Builder
+  buildReaderMenuEntry() {
+    Row() {
+      Blank()
+      Row() {
+        this.floatingAction($r('sys.symbol.list_bullet'), () => this.toggleToolbar())
+      }
+      .margin({ top: WindowUtils.getTopSafeVp() + 10, right: AppSpace.Md })
+    }
+    .width('100%')
+    .height(64 + WindowUtils.getTopSafeVp())
+    .alignItems(VerticalAlign.Top)
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
   /** 唤出菜单时的顶部沉浸式玻璃按钮。 */
   @Builder
   buildFloatingActions() {
@@ -1044,10 +1144,10 @@ export struct ReaderPage {
   @Builder
   readerToolBar() {
     Row() {
-      this.toolBarItem($r('sys.symbol.chevron_left'), '上一章', () => this.goPrevChapter())
+      this.toolBarItem($r('sys.symbol.chevron_left'), '上一页', () => this.driveFlip(false))
       this.toolBarItem($r('sys.symbol.textformat'), '设置', () => this.openSettings())
       this.toolBarItem($r('sys.symbol.list_bullet'), '目录', () => this.openCatalog())
-      this.toolBarItem($r('sys.symbol.chevron_right'), '下一章', () => this.goNextChapter())
+      this.toolBarItem($r('sys.symbol.chevron_right'), '下一页', () => this.driveFlip(true))
     }
     .width('100%')
     .height(56)
@@ -1189,7 +1289,7 @@ export struct ReaderPage {
             this.fontSize = Math.round(value); // 数字实时更新
             if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
               this.applySetting(); // 重排版较重,松手才应用
-              this.persistReaderSettings();
+              void this.persistReaderSettings();
             }
           })
       }.width('100%')
@@ -1209,10 +1309,44 @@ export struct ReaderPage {
             this.lineHeight = Math.round(value * 10) / 10; // 数字实时更新
             if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
               this.applySetting(); // 重排版较重,松手才应用
-              this.persistReaderSettings();
+              void this.persistReaderSettings();
             }
           })
       }.width('100%')
+
+      // 翻页方式
+      Row({ space: AppSpace.Sm }) {
+        Text('翻页').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).width(48)
+        Text('仿真')
+          .fontSize(AppFont.Caption)
+          .fontColor(this.flipModeIndex === 0 ? '#FFFFFFFF' : $r('sys.color.font_primary'))
+          .layoutWeight(1)
+          .height(36)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(this.flipModeIndex === 0 ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
+          .borderRadius(AppRadius.Sm)
+          .onClick(() => {
+            if (this.flipModeIndex === 0) return;
+            this.flipModeIndex = 0;
+            this.applySetting();
+            void this.persistReaderSettings();
+          })
+        Text('横滑')
+          .fontSize(AppFont.Caption)
+          .fontColor(this.flipModeIndex === 1 ? '#FFFFFFFF' : $r('sys.color.font_primary'))
+          .layoutWeight(1)
+          .height(36)
+          .textAlign(TextAlign.Center)
+          .backgroundColor(this.flipModeIndex === 1 ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
+          .borderRadius(AppRadius.Sm)
+          .onClick(() => {
+            if (this.flipModeIndex === 1) return;
+            this.flipModeIndex = 1;
+            this.applySetting();
+            void this.persistReaderSettings();
+          })
+      }
+      .width('100%')
 
       // 亮度(滑块 + 跟随系统)
       Column({ space: AppSpace.Xs }) {
@@ -1224,7 +1358,7 @@ export struct ReaderPage {
             .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 4, bottom: 4 })
             .borderRadius(AppRadius.Sm)
             .backgroundColor(this.screenBrightness < 0 ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
-            .onClick(() => { this.setBrightnessLive(-1); this.persistReaderSettings(); })
+            .onClick(() => { this.setBrightnessLive(-1); void this.persistReaderSettings(); })
         }.width('100%')
         Row({ space: AppSpace.Sm }) {
           SymbolGlyph($r('sys.symbol.sun_min')).fontSize(18).fontColor([$r('sys.color.font_secondary')])
@@ -1235,32 +1369,45 @@ export struct ReaderPage {
             .trackColor($r('sys.color.comp_background_tertiary'))
             .onChange((value: number, mode: SliderChangeMode) => {
               this.setBrightnessLive(value / 100);
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) this.persistReaderSettings();
+              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) void this.persistReaderSettings();
             })
           SymbolGlyph($r('sys.symbol.sun_max')).fontSize(22).fontColor([$r('sys.color.font_secondary')])
         }.width('100%')
       }.width('100%')
 
       // 主题模式
-      Row({ space: AppSpace.Sm }) {
-        Text('主题').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).width(48)
-        ForEach(READER_THEMES, (t: ReaderTheme, idx: number) => {
-          Text(t.name)
+      Column({ space: AppSpace.Sm }) {
+        // 跟随系统开关(与"亮度→跟随系统"一致的胶囊样式)
+        Row() {
+          Text('主题').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+          Text('跟随系统')
             .fontSize(AppFont.Caption)
-            .fontColor(idx === this.themeIndex ? AppColor.Brand : t.text)
-            .layoutWeight(1)
-            .height(36)
-            .textAlign(TextAlign.Center)
-            .backgroundColor(t.bg)
+            .fontColor(this.followSystem ? '#FFFFFFFF' : $r('sys.color.font_secondary'))
+            .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 4, bottom: 4 })
             .borderRadius(AppRadius.Sm)
-            .border({ width: idx === this.themeIndex ? 2 : 0.5, color: idx === this.themeIndex ? AppColor.Brand : '#22000000' })
-            .onClick(() => {
-              this.themeIndex = idx;
-              this.applyStatusBar();
-              this.applySetting();
-              this.persistReaderSettings();
-            })
-        }, (t: ReaderTheme) => t.name)
+            .backgroundColor(this.followSystem ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
+            .onClick(() => this.enableFollowSystem())
+        }.width('100%')
+
+        // 具体主题色板:手选则关闭跟随系统
+        Row({ space: AppSpace.Sm }) {
+          ForEach(READER_THEMES, (t: ReaderTheme, idx: number) => {
+            Text(t.name)
+              .fontSize(AppFont.Caption)
+              .fontColor(!this.followSystem && idx === this.themeIndex ? AppColor.Brand : t.text)
+              .layoutWeight(1)
+              .height(36)
+              .textAlign(TextAlign.Center)
+              .backgroundColor(t.bg)
+              .borderRadius(AppRadius.Sm)
+              .border({
+                width: !this.followSystem && idx === this.themeIndex ? 2 : 0.5,
+                color: !this.followSystem && idx === this.themeIndex ? AppColor.Brand : '#22000000'
+              })
+              .onClick(() => this.selectTheme(idx))
+          }, (t: ReaderTheme) => t.name)
+        }
+        .width('100%')
       }
       .width('100%')
     }
