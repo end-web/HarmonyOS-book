@@ -171,17 +171,28 @@ export class AudioService {
   }
 
   private syncPlaybackState(): void {
+    this.syncPlaybackStateNow(false);
+  }
+
+  private async syncPlaybackStateNow(forceWidget: boolean): Promise<void> {
     if (!this.state) return;
-    AVSessionService.getInstance().updatePlaybackState(
-      this.state.isPlaying,
-      this.state.progressMs,
-      this.state.speed,
-      this.state.durationMs
-    );
-    WidgetUpdater.updatePlayerCard(this.state).catch((err: Error) => {
+    try {
+      await AVSessionService.getInstance().updatePlaybackState(
+        this.state.isPlaying,
+        this.state.progressMs,
+        this.state.speed,
+        this.state.durationMs
+      );
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'updatePlaybackState failed: %{public}s',
+        (err as Error)?.message ?? JSON.stringify(err));
+    }
+    try {
+      await WidgetUpdater.updatePlayerCard(this.state, forceWidget);
+    } catch (err) {
       hilog.warn(DOMAIN, TAG, 'updatePlayerCard failed: %{public}s',
-        err?.message ?? JSON.stringify(err));
-    });
+        (err as Error)?.message ?? JSON.stringify(err));
+    }
   }
 
   private async ensurePlayer(): Promise<media.AVPlayer> {
@@ -967,7 +978,19 @@ export class AudioService {
 
   async release(): Promise<void> {
     this.cancelExternalMediaWatch();
+    this.cancelSleepTimer();
     this.stopTick();
+    if (this.state) {
+      this.state.isPlaying = false;
+      this.state.isLoading = false;
+      this.state.sleepMinutes = 0;
+      this.state.sleepRemainingMs = 0;
+      // 退出时先走最小卡片更新包,避免完整快照处理封面/取色拖慢"播放中 -> 暂停"状态翻转。
+      try { await WidgetUpdater.optimisticSetPlaying(false); } catch (_e) { /* ignore */ }
+      try { await this.persistHistory(); } catch (_e) { /* ignore */ }
+      PlaybackStore.getInstance().setPlaying(false);
+      await this.syncPlaybackStateNow(true);
+    }
     if (this.player) {
       await this.player.release();
       this.player = null;

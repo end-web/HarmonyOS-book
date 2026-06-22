@@ -207,17 +207,19 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  onDestroy(): void {
+  async onDestroy(): Promise<void> {
     try {
       this.callee.off('play');
       this.callee.off('pause');
       this.callee.off('next');
       this.callee.off('prev');
     } catch (_e) { /* ignore */ }
-    AudioService.getInstance().release().catch((err: Error) => {
+    try {
+      await AudioService.getInstance().release();
+    } catch (err) {
       hilog.error(DOMAIN, TAG, 'AudioService release failed: %{public}s',
-        err?.message ?? JSON.stringify(err));
-    });
+        (err as Error)?.message ?? JSON.stringify(err));
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

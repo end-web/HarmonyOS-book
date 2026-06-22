@@ -161,9 +161,9 @@ export class WidgetUpdater {
   }
 
   /** 把当前 PlayerState 写入快照,并广播给所有听书卡片 */
-  static async updatePlayerCard(state: PlayerState | null): Promise<void> {
+  static async updatePlayerCard(state: PlayerState | null, force: boolean = false): Promise<void> {
     // 乐观更新保护期：如果刚刚执行过 optimisticSetPlaying，跳过本次更新避免覆盖
-    if (Date.now() < WidgetUpdater.optimisticUpdateUntil) {
+    if (!force && Date.now() < WidgetUpdater.optimisticUpdateUntil) {
       return;
     }
     const snap = WidgetUpdater.buildSnapshot(state);
