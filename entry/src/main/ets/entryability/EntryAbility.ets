@@ -117,6 +117,8 @@ export default class EntryAbility extends UIAbility {
       state.currentChapter = chapter;
       state.progressMs = last.progressMs;
       state.durationMs = last.durationMs ?? 0;
+      const progress = await PreferenceService.getProgress(last.bookId);
+      state.speed = this.normalizeSpeed(progress?.speed ?? last.speed);
       state.isPlaying = false;
     } catch (err) {
       const e = err as Error;
@@ -126,6 +128,11 @@ export default class EntryAbility extends UIAbility {
       // 不管 lastPlayed 有没有恢复都要 markReady，否则 callee 会一直等
       AudioService.getInstance().markReady();
     }
+  }
+
+  private normalizeSpeed(speed: number | undefined): number {
+    if (speed === undefined || !Number.isFinite(speed) || speed <= 0) return 1.0;
+    return Math.min(4.0, Math.max(0.125, speed));
   }
 
   private consumeWidgetWant(want: Want): void {

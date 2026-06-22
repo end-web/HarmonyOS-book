@@ -440,7 +440,7 @@ export class AudioService {
       chapterTitle,
       durationMs
     });
-    await PreferenceService.setLastPlayed(book.id, chapterId, progressMs, chapterTitle, durationMs);
+    await PreferenceService.setLastPlayed(book.id, chapterId, progressMs, chapterTitle, durationMs, this.state.speed);
     // 每本书独立的最新进度,切书前 reset AVPlayer 之前必须把这条落盘,
     // 切回旧书时 caller 没传 positionMs 也能从这里 fallback 到上次位置
     const progress: PlayProgress = {

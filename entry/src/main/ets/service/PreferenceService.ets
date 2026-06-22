@@ -56,6 +56,7 @@ export interface LastPlayedItem {
   progressMs: number;
   chapterTitle?: string;
   durationMs?: number;
+  speed?: number;
 }
 
 /**
@@ -293,9 +294,9 @@ export class PreferenceService {
   }
 
   static async setLastPlayed(bookId: string, chapterId: string, progressMs: number = 0,
-    chapterTitle?: string, durationMs?: number): Promise<void> {
+    chapterTitle?: string, durationMs?: number, speed?: number): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    const item: LastPlayedItem = { bookId, chapterId, progressMs, chapterTitle, durationMs };
+    const item: LastPlayedItem = { bookId, chapterId, progressMs, chapterTitle, durationMs, speed };
     await s.put(KEY_LAST_PLAYED, JSON.stringify(item));
     await s.flush();
   }
