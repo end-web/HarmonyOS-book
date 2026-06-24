@@ -25,20 +25,58 @@ interface ReaderTheme {
   glass: string;
 }
 
-/** 索引 0=系统白;1=护眼米(默认,贴合截图纸质风);末位=夜间 */
+/** 索引 0=白;1=黑。跟随系统时按 colorMode 映射 */
 const READER_THEMES: ReaderTheme[] = [
   { name: '白', bg: '#FFFFFFFF', text: '#FF1A1A1A', sub: '#99555555', glass: 'rgba(255, 255, 255, 0.72)' },
-  { name: '米', bg: '#FFFAF3E8', text: '#FF3A332A', sub: '#99746A5A', glass: 'rgba(250, 243, 232, 0.78)' },
-  { name: '绿', bg: '#FFE9F1E7', text: '#FF2A352B', sub: '#99586A5B', glass: 'rgba(233, 241, 231, 0.78)' },
-  { name: '夜', bg: '#FF121212', text: '#FFD8D5CF', sub: '#99999086', glass: 'rgba(18, 18, 18, 0.72)' },
+  { name: '黑', bg: '#FF121212', text: '#FFD8D5CF', sub: '#99999086', glass: 'rgba(18, 18, 18, 0.72)' },
 ];
-const NIGHT_INDEX = 3;
+const NIGHT_INDEX = 1;
 /** 跟随系统的浅色主题:白(索引 0)。深色则映射夜间(NIGHT_INDEX) */
 const FOLLOW_LIGHT_INDEX = 0;
-/** 阅读页首帧默认用夜间底色,防止历史夜间主题进入时暴露系统/组件白底。 */
-const BOOT_THEME_INDEX = NIGHT_INDEX;
+/** 阅读页首帧默认用白色底色(跟随系统时根据实际colorMode立即切换) */
+const BOOT_THEME_INDEX = FOLLOW_LIGHT_INDEX;
 /** 工具栏显隐动画时长(ms),按 UI 规范取 300 */
 const TOOLBAR_ANIM = 300;
+/** 左侧系统返回手势保留区,避免 ReaderKit/正文翻页手势抢边缘返回。 */
+const SYSTEM_BACK_EDGE_VP = 56;
+/** 返回转场结束后再释放 ReaderKit/落盘,避免侧滑退场动画被 I/O 或 releaseBook 卡住。 */
+const LEAVE_CLEANUP_DELAY_MS = 420;
+
+export class ReaderBackInterceptor {
+  private static handler: (() => boolean) | null = null;
+
+  static set(h: (() => boolean) | null): void {
+    ReaderBackInterceptor.handler = h;
+  }
+
+  static clear(h: (() => boolean) | null): void {
+    if (!h || ReaderBackInterceptor.handler === h) {
+      ReaderBackInterceptor.handler = null;
+    }
+  }
+
+  static consume(): boolean {
+    return ReaderBackInterceptor.handler ? ReaderBackInterceptor.handler() : false;
+  }
+}
+
+export class ReaderEntryDecider {
+  private static markLeavingHandler: (() => void) | null = null;
+
+  static setMarkLeaving(h: (() => void) | null): void {
+    ReaderEntryDecider.markLeavingHandler = h;
+  }
+
+  static clearMarkLeaving(h: (() => void) | null): void {
+    if (!h || ReaderEntryDecider.markLeavingHandler === h) {
+      ReaderEntryDecider.markLeavingHandler = null;
+    }
+  }
+
+  static markLeaving(): void {
+    ReaderEntryDecider.markLeavingHandler?.();
+  }
+}
 
 /** #AARRGGBB / #RRGGBB -> #RRGGBB（Reader Kit fontColor 用 6 位 hex，对齐官方示例） */
 function hex6(c: string): string {
@@ -99,8 +137,12 @@ export struct ReaderPage {
   // (多个 bindSheet 链式挂在同一组件上会冲突,导致第二个"设置"打不开)
   @Local sheetOpen: boolean = false;
   @Local sheetMode: number = 0;
-  @Local fontSize: number = 18;
-  @Local lineHeight: number = 1.9;
+  // 字号和行距:读取偏好后固定,避免重绘
+  private fontSize: number = 18;
+  private lineHeight: number = 1.9;
+  // UI显示用的状态(仅在设置面板打开时同步)
+  @Local uiFontSize: number = 18;
+  @Local uiLineHeight: number = 1.9;
   /** 目录搜索关键词 */
   @Local chapterQuery: string = '';
   @Local themeIndex: number = BOOT_THEME_INDEX;
@@ -108,8 +150,6 @@ export struct ReaderPage {
   @Local followSystem: boolean = false;
   @Local flipModeIndex: number = 0; // 0=仿真翻页, 1=平移翻页
   @Local pageFooter: string = '';
-  // 屏幕亮度:-1=跟随系统, [0,1]=覆盖。命名避开组件内置 .brightness() 属性
-  @Local screenBrightness: number = -1;
   @Local hudTime: string = '';
   @Local batteryPercent: number = -1;
   @Local readerThemeSettled: boolean = false;
@@ -151,6 +191,9 @@ export struct ReaderPage {
   private renderSpineIndex: number = 0;
   private renderDomPos: string = '';
   private renderOpenId: number = 0;
+  private leaveCleanupStarted: boolean = false;
+  private backHandler = (): boolean => this.handleBack();
+  private markLeavingHandler = (): void => this.markLeaving();
 
   /**
    * 详情页(由本阅读页进入)点章节:先弹掉详情页让本页回到栈顶,隔帧再把本页替换成目标章的新阅读页实例。
@@ -182,8 +225,10 @@ export struct ReaderPage {
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-    // 偏好异步读取前用夜间底色占位,避免历史夜间主题重进时出现浅色首帧。
-    this.themeIndex = BOOT_THEME_INDEX;
+    ReaderBackInterceptor.set(this.backHandler);
+    ReaderEntryDecider.setMarkLeaving(this.markLeavingHandler);
+    // 偏好异步读取前先按系统深浅色占位,避免手动/历史主题加载前露出反色首帧。
+    this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : BOOT_THEME_INDEX;
     this.applyStatusBar();
     WindowUtils.setStatusBarVisible(false);
     this.startHudTicker();
@@ -193,39 +238,84 @@ export struct ReaderPage {
   }
 
   aboutToDisappear(): void {
-    this.isLeaving = true;
-    // 离开阅读页恢复系统亮度,避免覆盖值影响其他页面
-    WindowUtils.setReaderBrightness(-1);
-    WindowUtils.setStatusBarVisible(true);
+    this.markLeaving();
+    ReaderBackInterceptor.clear(this.backHandler);
+    ReaderEntryDecider.clearMarkLeaving(this.markLeavingHandler);
+    if (this.leaveCleanupStarted) return;
+    this.leaveCleanupStarted = true;
+    const controller = this.readerController;
+    const pageShowBound = this.pageShowBound;
+    // 切章(navigateToChapter→replacePathByName)时本页 switching 仍为 true:
+    // 必须在新章页 startPlay 之前同步释放旧书,否则延迟释放会拆掉 ReaderKit 刚为新章建好的资源,
+    // 表现为"切章正文加载不出"(下一章常被预加载命中缓存秒出页,正好撞上 420ms 延迟释放)。
+    // 普通返回(switching=false)才延迟释放,保侧滑退场动画顺滑。
+    const switchingAway = this.switching;
+    this.pageShowBound = false;
     this.stopHudTicker();
-    void this.persistReaderSettings();
-    this.persistProgress(true);
-    if (this.pageShowBound) {
-      try { this.readerController.off('pageShow'); } catch (_e) { /* ignore */ }
+    if (pageShowBound) {
+      try { controller.off('pageShow'); } catch (_e) { /* ignore */ }
     }
     try { emitter.off(EVT_READER_JUMP_CHAPTER); } catch (_e) { /* ignore */ }
     try { emitter.off(EVT_COLOR_MODE_CHANGED); } catch (_e) { /* ignore */ }
-    try { this.readerController.releaseBook(); } catch (_e) { /* ignore */ }
+    WindowUtils.setStatusBarVisible(true);
+    if (switchingAway) {
+      void this.persistReaderSettings();
+      void this.persistProgress(true);
+      try { controller.releaseBook(); } catch (_e) { /* ignore */ }
+      return;
+    }
+    setTimeout((): void => {
+      void this.persistReaderSettings();
+      void this.persistProgress(true);
+      try { controller.releaseBook(); } catch (_e) { /* ignore */ }
+    }, LEAVE_CLEANUP_DELAY_MS);
+  }
+
+  private markLeaving(): void {
+    if (this.isLeaving) return;
+    this.isLeaving = true;
+    this.stopHudTicker();
+  }
+
+  private handleBack(): boolean {
+    if (this.sheetOpen) {
+      this.sheetOpen = false;
+      this.sheetMode = 0;
+      return true;
+    }
+    if (this.toolbarVisible) {
+      this.toolbarVisible = false;
+      WindowUtils.setStatusBarVisible(false);
+      return true;
+    }
+    return false;
+  }
+
+  private requestBack(): void {
+    this.markLeaving();
+    this.navStack.pop();
   }
 
   /** 先加载持久化的阅读外观设置(覆盖默认),再加载书与章节 */
   private bootstrap(): void {
     PreferenceService.getReaderSettings().then((s: ReaderSettingsItem | null): void => {
       if (s) {
-        if (s.fontSize > 0) this.fontSize = s.fontSize;
-        // 跟随系统(老数据无此字段按 false):主题由系统深浅色推导;否则用手选 themeIndex
-        this.followSystem = s.followSystem === true;
+        if (s.fontSize > 0) {
+          this.fontSize = s.fontSize;
+          this.uiFontSize = s.fontSize;
+        }
+        if (s.lineHeight !== undefined && s.lineHeight >= 1.2 && s.lineHeight <= 2.4) {
+          this.lineHeight = s.lineHeight;
+          this.uiLineHeight = s.lineHeight;
+        }
+        // 跟随系统(老数据无此字段按 true):主题由系统深浅色推导;否则用手选 themeIndex
+        this.followSystem = s.followSystem !== false; // 默认true
         if (this.followSystem) {
           this.themeIndex = WindowUtils.isDarkMode() ? NIGHT_INDEX : FOLLOW_LIGHT_INDEX;
         } else if (s.themeIndex >= 0 && s.themeIndex < READER_THEMES.length) {
           this.themeIndex = s.themeIndex;
         }
         if (s.flipModeIndex === 0 || s.flipModeIndex === 1) this.flipModeIndex = s.flipModeIndex;
-        if (s.lineHeight !== undefined && s.lineHeight >= 1.2 && s.lineHeight <= 2.4) this.lineHeight = s.lineHeight;
-        if (s.brightness !== undefined && s.brightness >= 0 && s.brightness <= 1) {
-          this.screenBrightness = s.brightness;
-          WindowUtils.setReaderBrightness(s.brightness);
-        }
         this.applyStatusBar();
       } else {
         // 全新用户:默认跟随系统深浅色
@@ -277,7 +367,6 @@ export struct ReaderPage {
       fontSize: this.fontSize,
       themeIndex: this.themeIndex,
       flipModeIndex: this.flipModeIndex,
-      brightness: this.screenBrightness,
       lineHeight: this.lineHeight,
       followSystem: this.followSystem
     };
@@ -450,8 +539,8 @@ export struct ReaderPage {
   }
 
   /**
-   * 兜底定时器:在任何 await 之前同步挂起。若超时仍 loading(startPlay 静默未触发 pageShow,
-   * 多为 stale domPos 或组件渲染异常),先从章首重渲染,再不行则停止转圈,绝不无限加载。
+   * ReaderKit 起播后的兜底定时器。若 startPlay 静默未触发 pageShow,
+   * 多为 stale domPos 或组件渲染异常,先从章首重渲染,再不行则停止转圈。
    */
   private armLoadingFailsafe(openId: number): void {
     setTimeout((): void => {
@@ -494,9 +583,8 @@ export struct ReaderPage {
     this.flipBaselineAtLastPage = false;
     this.flipBaselineAtFirstPage = false;
     this.pendingDir = 0;
+    this.pendingRender = false;
     const openId = ++this.openSeq;
-    // 关键:在任何 await 之前挂兜底定时器,避免 startPlay 卡死时永不恢复
-    this.armLoadingFailsafe(openId);
     try {
       const next = index + 1 < this.book.chapters.length ? this.book.chapters[index + 1] : undefined;
       const text = await ReaderService.loadChapterText(this.book, this.currentChapter, next);
@@ -545,11 +633,19 @@ export struct ReaderPage {
    */
   private requestRender(openId: number): void {
     if (this.isLeaving || openId !== this.openSeq) return;
-    if (this.componentReady) {
-      this.doRender(openId);
-    } else {
-      this.pendingRender = true;
-    }
+    this.pendingRender = true;
+    this.tryStartPendingRender(openId);
+  }
+
+  private hasReaderViewport(): boolean {
+    return this.pageViewW > 0 && this.pageViewH > 0;
+  }
+
+  private tryStartPendingRender(openId: number): void {
+    if (!this.pendingRender || this.isLeaving || openId !== this.openSeq || openId !== this.renderOpenId) return;
+    if (!this.componentReady || !this.hasReaderViewport() || !this.renderHandler) return;
+    this.pendingRender = false;
+    this.doRender(openId);
   }
 
   /**
@@ -565,9 +661,11 @@ export struct ReaderPage {
         if (this.isLeaving || openId !== this.openSeq) return;
         this.inited = true;
       }
+      this.lastSettingApplyAt = Date.now();
       this.readerController.setPageConfig(this.buildSetting());
       this.readerController.registerBookParser(this.renderHandler);
       // 不 await:让 pageShow 回调驱动 loading=false(stale domPos 时 await 会永久挂起并阻断兜底)
+      this.armLoadingFailsafe(openId);
       this.readerController.startPlay(this.renderSpineIndex, this.renderDomPos).catch((): void => { /* ignore */ });
     } catch (e) {
       if (this.isLeaving || openId !== this.openSeq) return;
@@ -595,10 +693,7 @@ export struct ReaderPage {
           this.inited = false;
           this.pageShowBound = false;
           this.registerPageShow();
-          if (this.pendingRender) {
-            this.pendingRender = false;
-            this.doRender(this.renderOpenId);
-          }
+          this.tryStartPendingRender(this.renderOpenId);
         } else {
           // 组件初始化失败过去被直接忽略 → componentReady 永为 false → 永不出页 → 黑屏。
           // 直接回填错误态,给用户可见反馈而非干等兜底定时器。
@@ -625,9 +720,14 @@ export struct ReaderPage {
         const w = Math.round((n.width as number) * den);
         const h = Math.round((n.height as number) * den);
         if (w > 0 && h > 0 && (w !== this.pageViewW || h !== this.pageViewH)) {
+          const hadViewport = this.pageViewW > 0 && this.pageViewH > 0;
           this.pageViewW = w;
           this.pageViewH = h;
-          if (this.opened) { this.applySetting(); } // 视口确定后重排,正文铺满不拉伸
+          if (this.pendingRender) {
+            this.tryStartPendingRender(this.renderOpenId);
+          } else if (hadViewport && this.opened) {
+            this.applySetting(); // 横竖屏/窗口尺寸变化后才重排,避免首屏字号/行高二次跳变
+          }
         }
       })
   }
@@ -729,21 +829,8 @@ export struct ReaderPage {
   private applyFirstPageConfigAfterShow(): void {
     if (this.firstPageConfigApplied) return;
     this.firstPageConfigApplied = true;
-    setTimeout((): void => {
-      if (this.isLeaving || !this.opened) return;
-      try {
-        this.lastSettingApplyAt = Date.now();
-        this.readerController.setPageConfig(this.buildSetting());
-        this.waitingThemePageShow = true;
-        setTimeout((): void => {
-          if (this.isLeaving || !this.waitingThemePageShow) return;
-          this.waitingThemePageShow = false;
-          this.readerThemeSettled = true;
-        }, 900);
-      } catch (_e) {
-        this.readerThemeSettled = true;
-      }
-    }, 0);
+    this.readerThemeSettled = true;
+    // 首屏已在 startPlay 前完成 setPageConfig,这里不再二次 setPageConfig,避免字号/行高闪一下。
   }
 
   private settleReaderThemeSoon(delayMs: number): void {
@@ -760,7 +847,9 @@ export struct ReaderPage {
     if (!event || this.loading || this.switching || this.isLeaving || !this.opened) return;
     const offsetX = event.offsetX;
     const offsetY = event.offsetY;
-    if (Math.abs(offsetX) < 48 || Math.abs(offsetX) < Math.abs(offsetY) * 1.4) return;
+    // 排除从左边缘滑动(系统返回手势),避免和返回冲突导致卡顿
+    // 只处理中间区域的左右滑动翻页
+    if (Math.abs(offsetX) < 80 || Math.abs(offsetX) < Math.abs(offsetY) * 1.6) return;
     this.driveFlip(offsetX < 0);
   }
 
@@ -791,14 +880,6 @@ export struct ReaderPage {
     return this.themeIndex === NIGHT_INDEX ? '#FFF3F0EA' : '#FF111111';
   }
 
-
-  // ─────────────── 亮度 ───────────────
-
-  private setBrightnessLive(v: number): void {
-    this.screenBrightness = v;
-    WindowUtils.setReaderBrightness(v);
-  }
-
   // ─────────────── 更多菜单 / 书架 ───────────────
 
   /** 进入本书详情页(顶栏右上角图标) */
@@ -810,7 +891,7 @@ export struct ReaderPage {
   }
 
   /** 回书架主页:清空导航栈回 MainPage,并切到「书架」Tab(index=1) */
-  private goBookshelf(): void {
+  private _goBookshelf(): void {
     try { this.navStack.clear(); } catch (_e) { /* ignore */ }
     emitter.emit(EVT_SWITCH_TAB, { data: { index: 1 } });
   }
@@ -954,12 +1035,12 @@ export struct ReaderPage {
         .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
       Button('返回')
         .fontSize(AppFont.Body)
-        .fontColor('#FFFFFFFF')
+        .fontColor($r('sys.color.font_on_primary'))
         .backgroundColor(AppColor.Brand)
         .borderRadius(22)
         .height(44)
         .padding({ left: AppSpace.Xl, right: AppSpace.Xl })
-        .onClick(() => this.navStack.pop())
+        .onClick(() => this.requestBack())
     }
     .width('100%')
     .height('100%')
@@ -1009,27 +1090,31 @@ export struct ReaderPage {
   @Builder
   buildReaderTouchLayer() {
     Row() {
-      Column()
-        .width('30%')
-        .height('100%')
-        .onClick(() => this.driveFlip(false))
-      Column()
-        .width('40%')
-        .height('100%')
-        .onClick(() => this.toggleToolbar())
-      Column()
-        .width('30%')
-        .height('100%')
-        .onClick(() => this.driveFlip(true))
+      Row() {
+        Column()
+          .width('40%')
+          .height('100%')
+          .onClick(() => this.driveFlip(false))
+        Column()
+          .width('20%')
+          .height('100%')
+          .onClick(() => this.toggleToolbar())
+        Column()
+          .width('40%')
+          .height('100%')
+          .onClick(() => this.driveFlip(true))
+      }
+      .width('100%')
+      .height('100%')
+      .gesture(
+        PanGesture({ direction: PanDirection.Horizontal, distance: 20 })
+          .onActionEnd((event: GestureEvent | undefined) => {
+            this.handleReaderPanEnd(event);
+          })
+      )
     }
     .width('100%')
     .height('100%')
-    .gesture(
-      PanGesture({ direction: PanDirection.Horizontal, distance: 12 })
-        .onActionEnd((event: GestureEvent | undefined) => {
-          this.handleReaderPanEnd(event);
-        })
-    )
   }
 
   /** 唤出菜单时的顶部沉浸式玻璃按钮。 */
@@ -1053,7 +1138,7 @@ export struct ReaderPage {
   buildFloatingActions() {
     Row() {
       Row() {
-        this.floatingAction($r('sys.symbol.chevron_left'), () => this.navStack.pop())
+        this.floatingAction($r('sys.symbol.chevron_left'), () => this.requestBack())
       }
       .width(88)
       .justifyContent(FlexAlign.Start)
@@ -1075,7 +1160,6 @@ export struct ReaderPage {
         .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
 
       Row({ space: 8 }) {
-        this.floatingAction($r('sys.symbol.list_bullet'), () => this.openCatalog())
         this.floatingAction($r('sys.symbol.info_circle'), () => this.gotoDetail())
       }
       .width(88)
@@ -1144,10 +1228,8 @@ export struct ReaderPage {
   @Builder
   readerToolBar() {
     Row() {
-      this.toolBarItem($r('sys.symbol.chevron_left'), '上一页', () => this.driveFlip(false))
       this.toolBarItem($r('sys.symbol.textformat'), '设置', () => this.openSettings())
       this.toolBarItem($r('sys.symbol.list_bullet'), '目录', () => this.openCatalog())
-      this.toolBarItem($r('sys.symbol.chevron_right'), '下一页', () => this.driveFlip(true))
     }
     .width('100%')
     .height(56)
@@ -1180,6 +1262,9 @@ export struct ReaderPage {
   }
 
   private openSettings(): void {
+    // 打开设置面板时同步UI状态
+    this.uiFontSize = this.fontSize;
+    this.uiLineHeight = this.lineHeight;
     this.sheetMode = 2;
     this.sheetOpen = true;
   }
@@ -1278,16 +1363,17 @@ export struct ReaderPage {
       Column({ space: AppSpace.Xs }) {
         Row() {
           Text('字号').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).layoutWeight(1)
-          Text(`${this.fontSize}`).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+          Text(`${this.uiFontSize}`).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
         }.width('100%')
-        Slider({ value: this.fontSize, min: 18, max: 38, step: 1, style: SliderStyle.OutSet })
+        Slider({ value: this.uiFontSize, min: 18, max: 38, step: 1, style: SliderStyle.OutSet })
           .width('100%')
           .blockColor(AppColor.Brand)
           .selectedColor(AppColor.Brand)
           .trackColor($r('sys.color.comp_background_tertiary'))
           .onChange((value: number, mode: SliderChangeMode) => {
-            this.fontSize = Math.round(value); // 数字实时更新
+            this.uiFontSize = Math.round(value); // UI数字实时更新
             if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              this.fontSize = this.uiFontSize; // 松手才写回核心状态
               this.applySetting(); // 重排版较重,松手才应用
               void this.persistReaderSettings();
             }
@@ -1298,16 +1384,17 @@ export struct ReaderPage {
       Column({ space: AppSpace.Xs }) {
         Row() {
           Text('行距').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).layoutWeight(1)
-          Text(this.lineHeight.toFixed(1)).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+          Text(this.uiLineHeight.toFixed(1)).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
         }.width('100%')
-        Slider({ value: this.lineHeight, min: 1.2, max: 2.4, step: 0.1, style: SliderStyle.OutSet })
+        Slider({ value: this.uiLineHeight, min: 1.2, max: 2.4, step: 0.1, style: SliderStyle.OutSet })
           .width('100%')
           .blockColor(AppColor.Brand)
           .selectedColor(AppColor.Brand)
           .trackColor($r('sys.color.comp_background_tertiary'))
           .onChange((value: number, mode: SliderChangeMode) => {
-            this.lineHeight = Math.round(value * 10) / 10; // 数字实时更新
+            this.uiLineHeight = Math.round(value * 10) / 10; // UI数字实时更新
             if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              this.lineHeight = this.uiLineHeight; // 松手才写回核心状态
               this.applySetting(); // 重排版较重,松手才应用
               void this.persistReaderSettings();
             }
@@ -1348,64 +1435,52 @@ export struct ReaderPage {
       }
       .width('100%')
 
-      // 亮度(滑块 + 跟随系统)
-      Column({ space: AppSpace.Xs }) {
-        Row() {
-          Text('亮度').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).layoutWeight(1)
-          Text('跟随系统')
-            .fontSize(AppFont.Caption)
-            .fontColor(this.screenBrightness < 0 ? '#FFFFFFFF' : $r('sys.color.font_secondary'))
-            .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 4, bottom: 4 })
-            .borderRadius(AppRadius.Sm)
-            .backgroundColor(this.screenBrightness < 0 ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
-            .onClick(() => { this.setBrightnessLive(-1); void this.persistReaderSettings(); })
-        }.width('100%')
-        Row({ space: AppSpace.Sm }) {
-          SymbolGlyph($r('sys.symbol.sun_min')).fontSize(18).fontColor([$r('sys.color.font_secondary')])
-          Slider({ value: this.screenBrightness >= 0 ? this.screenBrightness * 100 : 70, min: 0, max: 100, step: 1, style: SliderStyle.OutSet })
-            .layoutWeight(1)
-            .blockColor(AppColor.Brand)
-            .selectedColor(AppColor.Brand)
-            .trackColor($r('sys.color.comp_background_tertiary'))
-            .onChange((value: number, mode: SliderChangeMode) => {
-              this.setBrightnessLive(value / 100);
-              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) void this.persistReaderSettings();
-            })
-          SymbolGlyph($r('sys.symbol.sun_max')).fontSize(22).fontColor([$r('sys.color.font_secondary')])
-        }.width('100%')
-      }.width('100%')
-
-      // 主题模式
+      // 主题模式(精简:白/黑/跟随系统三选项)
       Column({ space: AppSpace.Sm }) {
-        // 跟随系统开关(与"亮度→跟随系统"一致的胶囊样式)
-        Row() {
-          Text('主题').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+        Text('主题').fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).width('100%')
+        Row({ space: AppSpace.Sm }) {
+          // 白色主题
+          Text('白')
+            .fontSize(AppFont.Caption)
+            .fontColor(!this.followSystem && this.themeIndex === 0 ? AppColor.Brand : READER_THEMES[0].text)
+            .layoutWeight(1)
+            .height(36)
+            .textAlign(TextAlign.Center)
+            .backgroundColor(READER_THEMES[0].bg)
+            .borderRadius(AppRadius.Sm)
+            .border({
+              width: !this.followSystem && this.themeIndex === 0 ? 2 : 0.5,
+              color: !this.followSystem && this.themeIndex === 0 ? AppColor.Brand : '#22000000'
+            })
+            .onClick(() => this.selectTheme(0))
+          // 黑色主题
+          Text('黑')
+            .fontSize(AppFont.Caption)
+            .fontColor(!this.followSystem && this.themeIndex === 1 ? AppColor.Brand : READER_THEMES[1].text)
+            .layoutWeight(1)
+            .height(36)
+            .textAlign(TextAlign.Center)
+            .backgroundColor(READER_THEMES[1].bg)
+            .borderRadius(AppRadius.Sm)
+            .border({
+              width: !this.followSystem && this.themeIndex === 1 ? 2 : 0.5,
+              color: !this.followSystem && this.themeIndex === 1 ? AppColor.Brand : '#CCFFFFFF'
+            })
+            .onClick(() => this.selectTheme(1))
+          // 跟随系统
           Text('跟随系统')
             .fontSize(AppFont.Caption)
-            .fontColor(this.followSystem ? '#FFFFFFFF' : $r('sys.color.font_secondary'))
-            .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 4, bottom: 4 })
-            .borderRadius(AppRadius.Sm)
+            .fontColor(this.followSystem ? '#FFFFFFFF' : $r('sys.color.font_primary'))
+            .layoutWeight(1)
+            .height(36)
+            .textAlign(TextAlign.Center)
             .backgroundColor(this.followSystem ? AppColor.Brand : $r('sys.color.comp_background_tertiary'))
+            .borderRadius(AppRadius.Sm)
+            .border({
+              width: this.followSystem ? 2 : 0.5,
+              color: this.followSystem ? AppColor.Brand : '#22000000'
+            })
             .onClick(() => this.enableFollowSystem())
-        }.width('100%')
-
-        // 具体主题色板:手选则关闭跟随系统
-        Row({ space: AppSpace.Sm }) {
-          ForEach(READER_THEMES, (t: ReaderTheme, idx: number) => {
-            Text(t.name)
-              .fontSize(AppFont.Caption)
-              .fontColor(!this.followSystem && idx === this.themeIndex ? AppColor.Brand : t.text)
-              .layoutWeight(1)
-              .height(36)
-              .textAlign(TextAlign.Center)
-              .backgroundColor(t.bg)
-              .borderRadius(AppRadius.Sm)
-              .border({
-                width: !this.followSystem && idx === this.themeIndex ? 2 : 0.5,
-                color: !this.followSystem && idx === this.themeIndex ? AppColor.Brand : '#22000000'
-              })
-              .onClick(() => this.selectTheme(idx))
-          }, (t: ReaderTheme) => t.name)
         }
         .width('100%')
       }

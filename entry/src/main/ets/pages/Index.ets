@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
-import { ReaderPage } from './ReaderPage';
+import { ReaderBackInterceptor, ReaderEntryDecider, ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
@@ -262,9 +262,13 @@ struct Index {
         ReaderPageWrapper({ navStack: this.navStack, param: param as Object })
       }
       .hideTitleBar(true)
-      // 对齐官方 ReaderKit Demo:阅读页关闭系统转场,避免夜间主题重进时先露浅色首帧。
       .backgroundColor('#121212')
-      .systemTransition(NavigationSystemTransitionType.NONE)
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+      .onBackPressed((): boolean => {
+        if (ReaderBackInterceptor.consume()) return true;
+        ReaderEntryDecider.markLeaving();
+        return false;
+      })
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })

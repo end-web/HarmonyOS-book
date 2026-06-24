@@ -9,6 +9,7 @@ import { BuiltInSourceRegistry } from './BuiltInSourceRegistry';
 
 import { TingYouFM } from './sources/TingYouFM';
 import { Maoyan } from './sources/Maoyan';
+import { Api69TextBuiltInSource } from './sources/Api69TextBuiltInSource';
 
 let registered = false;
 
@@ -21,5 +22,6 @@ export function registerBuiltInSources(): void {
   // 天下书音(m.shuyinfm.com)线路已失效,改用听友FM(www.tingyou.fm)
   BuiltInSourceRegistry.register(TingYouFM);
   BuiltInSourceRegistry.register(Maoyan);
+  BuiltInSourceRegistry.register(new Api69TextBuiltInSource());
 
 }
