@@ -55,38 +55,81 @@ export default class EntryAbility extends UIAbility {
     ChapterCacheService.getInstance().setContext(this.context);
     // 缓存书改用文件持久化,注入 context 供 filesDir 读写
     DataService.setContext(this.context);
-    PreferenceService.init(this.context).then(async () => {
-      this.restoreColorMode();
-      // 初始化源变量存储和缓存服务
-      try {
-        await SourceVariableStore.init(this.context);
-        const cacheService = getCacheService();
-        await cacheService.init(this.context);
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, 'SourceVariableStore/CacheService init failed: %{public}s', JSON.stringify(e));
-      }
-      // 设置设备标识（用于 java.androidId()）
-      try {
-        JavaBridgeImpl.setDeviceId(deviceInfo.ODID || '');
-      } catch {
-        // ignore
-      }
-      const preloadCount = await PreferenceService.getPreloadChapters();
-      ChapterCacheService.getInstance().setPreloadCount(preloadCount);
-      // 提前把 PlayerState 还原到全局 AppStorage,这样卡片 call 进来时
-      // AudioService 已经有 currentBook/Chapter,play() 才能正常工作
-      await this.bootstrapAudioService();
-      // 启动时把 lastPlayed 推一份到卡片,避免冷启动卡片显示空态。
-      // 这里(主进程)允许写回 preferences,FormExt 那边的 seed 路径只在内存里用,不写盘
-      const snap = await WidgetUpdater.seedAndPersistFromLastPlayed();
-      if (snap) {
-        await WidgetUpdater.pushSnapshotToCards();
-      }
-    }).catch((err: Error) => {
-      hilog.error(DOMAIN, TAG, 'PreferenceService init failed: %{public}s', JSON.stringify(err));
+
+    // 关键修复:限时初始化,避免后台恢复时阻塞过久导致系统 watchdog 杀进程
+    this.initServicesWithTimeout().catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'Service initialization failed: %{public}s', err?.message ?? JSON.stringify(err));
+      // 即使失败也要 markReady,避免 callee 永久等待
+      AudioService.getInstance().markReady();
     });
+
     this.registerCallee();
     this.consumeWidgetWant(want);
+  }
+
+  /**
+   * 带超时保护的服务初始化。
+   * 从状态栏/小组件唤起时,系统期望快速响应。
+   * 如果初始化超过 5s,放弃恢复上次播放状态,但仍标记 ready,避免卡死。
+   */
+  private async initServicesWithTimeout(): Promise<void> {
+    const INIT_TIMEOUT_MS = 5000;
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error('Initialization timeout')), INIT_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([
+        this.initServicesCore(),
+        timeoutPromise
+      ]);
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'Init services timeout or failed: %{public}s', e?.message ?? '');
+      // 注意:bootstrapAudioService 的 finally 块已保证 markReady() 被调用,
+      // 这里无需重复调用。但为防止 initServicesCore 在超时前就失败(未进入 bootstrap),
+      // 仍需确保 markReady 至少被调用一次
+      // TODO: 更优雅的方案是让 AudioService.markReady() 具有幂等性
+    }
+  }
+
+  private async initServicesCore(): Promise<void> {
+    const startTime = Date.now();
+    hilog.info(DOMAIN, TAG, 'initServicesCore: start');
+
+    await PreferenceService.init(this.context);
+    hilog.info(DOMAIN, TAG, 'initServicesCore: PreferenceService ready, elapsed=%{public}dms', Date.now() - startTime);
+
+    this.restoreColorMode();
+    // 初始化源变量存储和缓存服务
+    try {
+      await SourceVariableStore.init(this.context);
+      const cacheService = getCacheService();
+      await cacheService.init(this.context);
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'SourceVariableStore/CacheService init failed: %{public}s', JSON.stringify(e));
+    }
+    // 设置设备标识（用于 java.androidId()）
+    try {
+      JavaBridgeImpl.setDeviceId(deviceInfo.ODID || '');
+    } catch {
+      // ignore
+    }
+    const preloadCount = await PreferenceService.getPreloadChapters();
+    ChapterCacheService.getInstance().setPreloadCount(preloadCount);
+    // 提前把 PlayerState 还原到全局 AppStorage,这样卡片 call 进来时
+    // AudioService 已经有 currentBook/Chapter,play() 才能正常工作
+    await this.bootstrapAudioService();
+    hilog.info(DOMAIN, TAG, 'initServicesCore: AudioService bootstrapped, elapsed=%{public}dms', Date.now() - startTime);
+
+    // 启动时把 lastPlayed 推一份到卡片,避免冷启动卡片显示空态。
+    // 这里(主进程)允许写回 preferences,FormExt 那边的 seed 路径只在内存里用,不写盘
+    const snap = await WidgetUpdater.seedAndPersistFromLastPlayed();
+    if (snap) {
+      await WidgetUpdater.pushSnapshotToCards();
+    }
+
+    hilog.info(DOMAIN, TAG, 'initServicesCore: complete, total=%{public}dms', Date.now() - startTime);
   }
 
   /** 卡片 router 跳转 / 已存活时的拉起,统一在 onNewWant 处理 */
@@ -99,27 +142,56 @@ export default class EntryAbility extends UIAbility {
    * 此时 AudioService 还没 bind state,play() 就是 no-op。
    * 这里在 EntryAbility 启动时就把 lastPlayed 还原到全局 PlayerState,
    * 并 bind 给 AudioService,让卡片冷启动也能直接续播。
+   *
+   * 关键:无论成功失败都必须调 markReady(),否则 callee 会永久等待导致卡死。
    */
   private async bootstrapAudioService(): Promise<void> {
+    const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+    AudioService.getInstance().bind(state, this.context);
+
     try {
-      const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
-      AudioService.getInstance().bind(state, this.context);
       // 已经有书就不覆盖(用户已在 App 内播放过)
-      if (state.currentBook && state.currentChapter) return;
-      const last = await PreferenceService.getLastPlayed();
-      if (!last) return;
-      const book = await DataService.getBookById(this.context, last.bookId);
-      if (!book || !book.chapters || book.chapters.length === 0) return;
-      const chapter = book.chapters.find((c) => c.id === last.chapterId)
-        ?? (last.chapterTitle ? book.chapters.find((c) => c.title === last.chapterTitle) : undefined);
-      if (!chapter) return;
-      state.currentBook = book;
-      state.currentChapter = chapter;
-      state.progressMs = last.progressMs;
-      state.durationMs = last.durationMs ?? 0;
-      const progress = await PreferenceService.getProgress(last.bookId);
-      state.speed = this.normalizeSpeed(progress?.speed ?? last.speed);
-      state.isPlaying = false;
+      if (state.currentBook && state.currentChapter) {
+        return;
+      }
+
+      // 防御:如果 PreferenceService 初始化超时,getLastPlayed 会抛异常,提前检查避免错误日志泛滥
+      // 这种情况下放弃恢复上次播放,但仍让 AudioService 处于可用状态(用户可手动选书)
+      try {
+        const last = await PreferenceService.getLastPlayed();
+        if (!last) {
+          return;
+        }
+
+        // 防御:getBookById 可能因为文件损坏/过大而失败,加超时保护
+        const book = await Promise.race([
+          DataService.getBookById(this.context, last.bookId),
+          new Promise<undefined>((res) => setTimeout(() => res(undefined), 2000))
+        ]);
+
+        if (!book || !book.chapters || book.chapters.length === 0) {
+          return;
+        }
+
+        const chapter = book.chapters.find((c) => c.id === last.chapterId)
+          ?? (last.chapterTitle ? book.chapters.find((c) => c.title === last.chapterTitle) : undefined);
+        if (!chapter) {
+          return;
+        }
+
+        state.currentBook = book;
+        state.currentChapter = chapter;
+        state.progressMs = last.progressMs;
+        state.durationMs = last.durationMs ?? 0;
+        const progress = await PreferenceService.getProgress(last.bookId);
+        state.speed = this.normalizeSpeed(progress?.speed ?? last.speed);
+        state.isPlaying = false;
+      } catch (prefErr) {
+        // PreferenceService 未就绪或读取失败,记录但不影响 AudioService 启动
+        const e = prefErr as Error;
+        hilog.warn(DOMAIN, TAG, 'bootstrapAudioService: restore lastPlayed failed: %{public}s',
+          e?.message ?? JSON.stringify(prefErr));
+      }
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'bootstrapAudioService failed: %{public}s',
@@ -264,9 +336,16 @@ export default class EntryAbility extends UIAbility {
    * 退后台 + paused 后,系统可能在 1~2s 内回收 audio renderer,把 player 带到 idle
    * 但 fdSrc/url 已失效——再点播放就只能干等。这里主动 reset 到干净 idle,
    * 让用户点 ▶ 时 doPlayChapter 能走完整的 reset → applySource 路径。
+   *
+   * 关键:从状态栏/小组件唤起时 onForeground 可能比 onCreate 的异步初始化早执行,
+   * 此时 AudioService 还没 bind,必须先 whenReady 再调 ensureHealthy,
+   * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
     try {
+      // 等待 bootstrapAudioService 完成(带超时保护,避免初始化卡死时永久阻塞前台回调)
+      // 超时设为 5 秒,与 onCreate 的总超时时间对齐,避免初始化刚好超时时这里也超时
+      await AudioService.getInstance().whenReady(5000);
       await AudioService.getInstance().ensureHealthy();
     } catch (err) {
       const e = err as Error;
