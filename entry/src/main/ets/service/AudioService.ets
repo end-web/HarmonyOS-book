@@ -56,6 +56,10 @@ export class AudioService {
    *  但 progressMs 是 @Trace,会触发全局 V2 级联重渲染,降到 500ms 一次足够 UI 用 */
   private lastProgressWriteAt: number = 0;
   private static readonly PROGRESS_WRITE_INTERVAL_MS: number = 500;
+  /** 节流持久化的最近一次时间戳。正常播放依靠 timeUpdate 稀疏持久化(5s 一次),
+   *  避免依赖 tick 频繁落盘,配合低功耗渲染器长休眠周期 */
+  private lastPersistAt: number = 0;
+  private static readonly PERSIST_INTERVAL_MS: number = 5000;
   /** 续播 seek 目标(ms)。>0 表示正在等待 seek 生效:
    *  此期间 AVPlayer 可能先回调一个接近 0 的旧 timeUpdate,会把 progressMs 打回起点。
    *  守卫:位置尚未追上目标前忽略这些偏小的旧值,到达目标附近才解除。 */
@@ -203,6 +207,19 @@ export class AudioService {
     p.on('stateChange', (newState: media.AVPlayerState) => {
       if (!this.state) return;
       if (newState === 'initialized') {
+        // 听书内容声明为 AUDIOBOOK 流,系统据此挂载低功耗音频渲染器:
+        // 亮屏缓存最大 1s、熄屏缓存最大 10s,主处理器可长时间休眠,
+        // 后台/熄屏播放功耗显著下降。setter 仅在 initialized 状态合法。
+        try {
+          p.audioRendererInfo = {
+            usage: audio.StreamUsage.STREAM_USAGE_AUDIOBOOK,
+            rendererFlags: 0
+          };
+        } catch (err) {
+          const e = err as Error;
+          hilog.warn(DOMAIN, TAG, 'set audioRendererInfo failed: %{public}s',
+            e?.message ?? JSON.stringify(err));
+        }
         p.prepare();
       } else if (newState === 'prepared') {
         // 此时 player 已进入合法状态,补一次焦点模式 setter(ensurePlayer 阶段不能设)
@@ -285,6 +302,12 @@ export class AudioService {
       if (force || now - this.lastProgressWriteAt >= AudioService.PROGRESS_WRITE_INTERVAL_MS) {
         this.state.progressMs = ms;
         this.lastProgressWriteAt = now;
+      }
+      // 稀疏持久化:正常播放期间每 5s 落盘一次,避免杀进程丢失大段进度。
+      // 与 tick 的 15s 持久化错开:这里管播放中兜底,tick 管 Widget 同步兜底。
+      if (this.state.isPlaying && now - this.lastPersistAt >= AudioService.PERSIST_INTERVAL_MS) {
+        this.persistHistory().catch(() => { /* ignore */ });
+        this.lastPersistAt = now;
       }
     });
     p.on('error', (err: object) => {
@@ -422,9 +445,12 @@ export class AudioService {
       this.persistHistory();
       // 同步给 widget:稳态播放期间 stateChange 不再翻转,卡片那边的 FormExt 进程
       // 缓存又跟主进程隔离,系统触发 onUpdateForm 时容易读到陈旧的 isPlaying。
-      // 主进程每 5s 强推一次最新状态,卡片至多滞后 5s 即可纠正。
+      // 主进程定期强推一次最新状态,卡片至多滞后该间隔即可纠正。
+      // 间隔 15s:低功耗渲染器熄屏缓存最大 10s,过短的 tick 会每周期唤醒主处理器,
+      // 抵消 AUDIOBOOK 流的省电收益。toggle/pause/release/seek 都有即时同步,
+      // 这里只是兜底。
       this.syncPlaybackState();
-    }, 5000);
+    }, 15000);
   }
 
   private stopTick(): void {
