@@ -258,6 +258,8 @@ export struct MainPage {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
         },
+        // 沉浸光感颜色:暖黄色光晕(替代默认白色)
+        lightColor: '#66FFC15C',
         // 智感握持:左右手自动跟手
         adaptToHandedness: true,
         // 迷你栏配置:HdsTabs 会自动管理折叠/展开

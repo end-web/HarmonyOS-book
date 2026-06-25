@@ -39,6 +39,9 @@ struct Index {
   @Local homeScale: number = 1;
   @Local homeRadius: number = 0;
   @Local homeBrightness: number = 1;
+  // detail 路由自定义转场:缩放淡入,无方向位移
+  @Local detailScale: number = 1;
+  @Local detailOpacity: number = 1;
   private widgetSubscribed: boolean = false;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
@@ -193,7 +196,43 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+      // 关闭系统默认转场,用 customTransition 做缩放淡入,无位移方向感
+      .systemTransition(NavigationSystemTransitionType.NONE)
+      .scale({ x: this.detailScale, y: this.detailScale })
+      .opacity(this.detailOpacity)
+      .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
+        if (op === NavigationOperation.PUSH && isEnter) {
+          // 进:从 0.94 放大到 1.0,透明度 0→1,减速曲线
+          this.detailScale = 0.94;
+          this.detailOpacity = 0;
+          return [{
+            duration: 320,
+            curve: Curve.LinearOutSlowIn,
+            event: () => {
+              this.detailScale = 1;
+              this.detailOpacity = 1;
+            },
+            onTransitionEnd: () => {}
+          }];
+        } else if (op === NavigationOperation.POP && !isEnter) {
+          // 出:缩到 0.94 + 淡出,加速曲线(开始稍快)
+          this.detailScale = 1;
+          this.detailOpacity = 1;
+          return [{
+            duration: 240,
+            curve: Curve.FastOutLinearIn,
+            event: () => {
+              this.detailScale = 0.94;
+              this.detailOpacity = 0;
+            },
+            onTransitionEnd: () => {
+              this.detailScale = 1;
+              this.detailOpacity = 1;
+            }
+          }];
+        }
+        return undefined;
+      })
     } else if (name === 'player') {
       NavDestination() {
         PlayerPageWrapper({ navStack: this.navStack, param: param as Object })

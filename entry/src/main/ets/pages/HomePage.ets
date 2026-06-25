@@ -101,7 +101,7 @@ export struct HomePage {
   @Local searchingSource: string = '';
   @Local hasSearched: boolean = false;
   @Local sourceCount: number = 0;
-  @Local viewMode: number = 1; // 0=grid, 1=list (默认列表模式)
+  @Local viewMode: number = 0; // 0=grid, 1=list (默认表格模式)
   @Local searchType: number = 0; // 0=有声书, 1=电子书
   @Local pendingCount: number = 0;
   @Local audioCount: number = 0;
@@ -573,13 +573,14 @@ export struct HomePage {
 
       if (this.hasSearched) {
         Row() {
-          Row({ space: 4 }) {
+          Row({ space: 6 }) {
             this.searchTypeTab('有声书', 0)
             this.searchTypeTab('电子书', 1)
           }
-          .padding(3)
+          .padding(1)
           .borderRadius(18)
-          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          .backgroundColor('rgba(255,255,255,0.3)')
           if (this.searching) {
             LoadingProgress()
               .width(18).height(18)
@@ -594,7 +595,8 @@ export struct HomePage {
             .fontColor([$r('sys.color.font_primary')])
             .padding(8)
             .borderRadius(18)
-            .backgroundColor($r('sys.color.comp_background_tertiary'))
+            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+            .backgroundColor('rgba(255,255,255,0.3)')
             .onClick(() => {
               this.getUIContext()?.animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard },
                 () => { this.viewMode = this.viewMode === 0 ? 1 : 0; });
@@ -602,7 +604,7 @@ export struct HomePage {
         }
         .width('100%')
         .height(HEADER_TOOLBAR_HEIGHT)
-        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+        .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Xs })
         .alignItems(VerticalAlign.Center)
       }
     }
@@ -848,7 +850,8 @@ export struct HomePage {
       .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
       .textAlign(TextAlign.Center)
       .borderRadius(15)
-      .backgroundColor(this.searchType === type ? $r('sys.color.comp_background_primary') : Color.Transparent)
+      .backgroundBlurStyle(this.searchType === type ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .backgroundColor(this.searchType === type ? 'rgba(255,255,255,0.85)' : Color.Transparent)
       .onClick(() => {
         this.searchType = type;
       })

@@ -24,9 +24,9 @@ export struct BookCard {
       return;
     }
     BookCard.shownIds.add(this.book.id);
-    // 仅前几个卡片有交错入场动画，后续直接显示，避免滑动时大量动画叠加掉帧
-    if (this.indexHint < 6) {
-      const delay = this.indexHint * 40;
+    // 仅前12个卡片有交错入场动画，后续直接显示，避免滑动时大量动画叠加掉帧
+    if (this.indexHint < 12) {
+      const delay = this.indexHint * 50;
       setTimeout(() => { this.appeared = true; }, delay);
     } else {
       this.appeared = true;
@@ -118,9 +118,13 @@ export struct BookCard {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
     }
-    .scale({ x: this.pressed ? 0.96 : 1, y: this.pressed ? 0.96 : 1 })
+    .scale({
+      x: this.pressed ? 0.96 : (this.appeared ? 1 : 0.92),
+      y: this.pressed ? 0.96 : (this.appeared ? 1 : 0.92)
+    })
     .opacity(this.appeared ? 1 : 0)
-    .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
+    .translate({ y: this.appeared ? 0 : 20 })
+    .animation({ duration: AppMotion.Base, curve: AppCurve.Emphasized })
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.97 })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) this.pressed = true;
