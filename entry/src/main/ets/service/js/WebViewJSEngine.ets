@@ -12,6 +12,7 @@
 import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { JSExecutor } from './JSExecutor';
+import { WebEngineGate } from '../WebEngineGate';
 
 // ──────────── 类型定义 ────────────
 
@@ -352,6 +353,9 @@ export class WebViewJSEngine {
       code = patchedJsLib + '\n' + code;
     }
 
+    // 首次需要 JS 引擎:触发隐藏 Web 宿主挂载(MainPage 据此条件渲染创建)。
+    // ensureReady 自带 8s 超时:即便宿主异常挂不上也会超时抛错,由 JSExecutor 降级,不会卡死。
+    WebEngineGate.instance.needJsEngine = true;
     await this.ensureReady();
     if (!this.controller) {
       throw new Error('WebView controller 未初始化');
@@ -420,10 +424,22 @@ export class WebViewJSEngine {
     }
   }
 
-  private ensureReady(): Promise<void> {
+  private ensureReady(timeoutMs: number = 8000): Promise<void> {
     if (this.isReady) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      this.readyCallbacks.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timer: number = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`WebView JS 引擎挂载超时 (${timeoutMs}ms)`));
+      }, timeoutMs);
+      // markReady() 会回调该闭包:清掉超时、resolve。若先超时,settled 守卫使后续回调成空操作。
+      this.readyCallbacks.push(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      });
     });
   }
 }

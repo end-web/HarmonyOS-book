@@ -18,6 +18,7 @@
 
 import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { WebEngineGate } from '../WebEngineGate';
 
 interface ExtractTask {
   url: string;
@@ -50,9 +51,47 @@ export class WebViewAudioExtractor {
   private taskQueue: ExtractTask[] = [];
   private busy: boolean = false;
   private timeoutMs: number = 25000;
+  /** 懒挂载:首个 extract 触发宿主挂载,等待 controller 就绪的 deferred */
+  private controllerReady: Promise<void> | null = null;
+  private resolveControllerReady: (() => void) | null = null;
 
   setController(c: webview.WebviewController): void {
     this.controller = c;
+    // host aboutToAppear 时 resolve 所有等待挂载的 extract
+    if (this.resolveControllerReady) {
+      this.resolveControllerReady();
+      this.resolveControllerReady = null;
+    }
+  }
+
+  /**
+   * 确保隐藏 Web 宿主已挂载且 controller 就绪。
+   * 首次调用置门控触发 MainPage 条件渲染挂载 Host;多个并发 extract 复用同一 deferred。
+   * 自带 8s 超时:宿主异常挂不上时 reject,由调用方降级(用原始 chapterUrl),不会永久挂起。
+   */
+  private ensureController(timeoutMs: number = 8000): Promise<void> {
+    if (this.controller) return Promise.resolve();
+    if (!this.controllerReady) {
+      this.controllerReady = new Promise<void>((resolve) => {
+        this.resolveControllerReady = resolve;
+      });
+      WebEngineGate.instance.needAudioExtractor = true;
+    }
+    const ready: Promise<void> = this.controllerReady;
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timer: number = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`WebViewAudioExtractor 挂载超时 (${timeoutMs}ms)`));
+      }, timeoutMs);
+      ready.then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   /**
@@ -188,12 +227,11 @@ export class WebViewAudioExtractor {
    * @param settleMs    页面 onPageEnd 后再等多久再执行 JS（默认 1500ms）
    * @param sourceRegex 网络嗅探正则（如 `.*\.(mp3|mp4).*`），命中的请求 URL 直接作为结果
    */
-  extract(url: string, jsExpr: string, settleMs: number = 1500, sourceRegex: string = ''): Promise<string> {
+  async extract(url: string, jsExpr: string, settleMs: number = 1500, sourceRegex: string = ''): Promise<string> {
+    // 懒挂载:触发宿主挂载并等 controller 就绪(8s 超时);挂不上则抛出,调用方降级为原始 chapterUrl。
+    // task 入队与 25s 超时都在 await 之后,确保 runNext 里 controller 非空断言安全。
+    await this.ensureController();
     return new Promise<string>((resolve, reject) => {
-      if (!this.controller) {
-        reject(new Error('WebViewAudioExtractor 尚未就绪：请确保 MainPage 中已放置 WebViewAudioExtractorHost'));
-        return;
-      }
       const timerId = setTimeout(() => {
         // 找到并失败掉这个任务
         const idx = this.taskQueue.findIndex(t => t.timerId === timerId);
@@ -233,12 +271,10 @@ export class WebViewAudioExtractor {
     });
   }
 
-  extractHtml(url: string, jsExpr: string, settleMs: number = 2000): Promise<string> {
+  async extractHtml(url: string, jsExpr: string, settleMs: number = 2000): Promise<string> {
+    // 懒挂载:同 extract,先确保宿主就绪再入队
+    await this.ensureController();
     return new Promise<string>((resolve, reject) => {
-      if (!this.controller) {
-        reject(new Error('WebViewAudioExtractor 尚未就绪：请确保 MainPage 中已放置 WebViewAudioExtractorHost'));
-        return;
-      }
       const timerId = setTimeout(() => {
         const idx = this.taskQueue.findIndex(t => t.timerId === timerId);
         if (idx >= 0) {

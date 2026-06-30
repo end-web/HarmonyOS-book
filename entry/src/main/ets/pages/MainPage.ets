@@ -18,6 +18,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
+import { WebEngineGate } from '../service/WebEngineGate';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -41,6 +42,8 @@ export struct MainPage {
   /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
   @Local miniBarCollapsed: boolean = false;
 
+  /** 隐藏 Web 宿主的按需挂载门控:引擎首次被调用时置位,据此条件渲染对应 Host */
+  private gate: WebEngineGate = WebEngineGate.instance;
   private tabController: HdsTabsController = new HdsTabsController();
   private context: common.UIAbilityContext | null = null;
   private switchTabHandler: (e: emitter.EventData) => void = (e) => this.onSwitchTabEvent(e);
@@ -308,8 +311,13 @@ export struct MainPage {
       .backgroundColor('#FFF5F5F5')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      WebViewJSEngineHost()
-      WebViewAudioExtractorHost()
+      // 按需挂载:仅在引擎首次需要时才创建对应隐藏 Web,纯 CSS/JSONPath 用户永不初始化 ArkWeb
+      if (this.gate.needJsEngine) {
+        WebViewJSEngineHost()
+      }
+      if (this.gate.needAudioExtractor) {
+        WebViewAudioExtractorHost()
+      }
     }
     .width('100%')
     .height('100%')
