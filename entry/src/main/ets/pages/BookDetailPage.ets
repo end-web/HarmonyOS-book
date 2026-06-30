@@ -347,9 +347,11 @@ export struct BookDetailPage {
     }
 
     SearchCache.put(this.book);
-    // ★ 当前在播的就是同书:直接 push player 不带 chapter 参数,PlayerPage 复用 live state,
-    //   避免 tryResumePlay 触发 playChapterAndSeek 重置
-    if (PlaybackStore.getInstance().isCurrentBook(this.book.id)) {
+    // ★ 当前在播的就是同书「且就是当前这一章」:直接 push player 不带 chapter 参数,
+    //   PlayerPage 复用 live state,避免 tryResumePlay 触发 playChapterAndSeek 重置。
+    //   若用户点的是别的章(target 非当前章),则走下面带 chapterId 的分支,播放选中的章。
+    if (PlaybackStore.getInstance().isCurrentBook(this.book.id)
+      && PlaybackStore.getInstance().isCurrentChapter(this.book.id, target.id)) {
       // 详情页入口,清理栈避免重复 player
       this.cleanStackBeforePushPlayer();
       this.navStack.pushPathByName('player', this.bookId);
