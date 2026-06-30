@@ -83,7 +83,7 @@ export class ColorPickerUtils {
     const left = ColorPickerUtils.normalizeAmbientColor(palette.left);
     const right = ColorPickerUtils.normalizeAmbientColor(palette.right);
     const center = ColorPickerUtils.normalizeAmbientColor(palette.center);
-    const darkBase = ColorPickerUtils.blend(bottom, main, 0.35);
+    const darkBase = ColorPickerUtils.blend(bottom, main, 0.45);
     return {
       main: ColorPickerUtils.toHex(main),
       top: ColorPickerUtils.toHex(top),
@@ -91,7 +91,7 @@ export class ColorPickerUtils {
       left: ColorPickerUtils.toHex(left),
       right: ColorPickerUtils.toHex(right),
       center: ColorPickerUtils.toHex(center),
-      dark: ColorPickerUtils.toHex(ColorPickerUtils.darken(darkBase, 0.58))
+      dark: ColorPickerUtils.toHex(ColorPickerUtils.darken(darkBase, 0.42))
     };
   }
 
@@ -348,11 +348,11 @@ export class ColorPickerUtils {
     let normalized = ColorPickerUtils.sanitizeColor(c);
     const lum = ColorPickerUtils.luminance(normalized);
     if (lum > 178) {
-      normalized = ColorPickerUtils.blend(normalized, { r: 36, g: 36, b: 40 }, 0.34);
+      normalized = ColorPickerUtils.blend(normalized, { r: 48, g: 48, b: 54 }, 0.24);
     } else if (lum < 38) {
-      normalized = ColorPickerUtils.blend(normalized, { r: 88, g: 88, b: 94 }, 0.36);
+      normalized = ColorPickerUtils.blend(normalized, { r: 106, g: 108, b: 116 }, 0.42);
     } else {
-      normalized = ColorPickerUtils.blend(normalized, { r: 20, g: 20, b: 24 }, 0.12);
+      normalized = ColorPickerUtils.blend(normalized, { r: 24, g: 24, b: 28 }, 0.06);
     }
     return normalized;
   }

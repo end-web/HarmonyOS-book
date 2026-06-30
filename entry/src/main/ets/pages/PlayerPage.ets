@@ -577,19 +577,19 @@ export struct PlayerPage {
         .linearGradient({
           angle: 162,
           colors: this.playerState.hasAmbientColor
-            ? [[this.playerState.ambientTopColor, 0], [this.playerState.ambientMainColor, 0.46], [this.playerState.ambientDarkColor, 1]]
-            : [['#2A2A2A', 0], ['#202328', 0.48], ['#111315', 1]]
+            ? [[this.playerState.ambientTopColor, 0], [this.playerState.ambientMainColor, 0.58], [this.playerState.ambientDarkColor, 1]]
+            : [['#3B4650', 0], ['#303942', 0.58], ['#252B32', 1]]
         })
 
       Column() {
         Column()
           .width('100%')
-          .height('42%')
+          .height('62%')
           .linearGradient({
             angle: 180,
             colors: this.playerState.hasAmbientColor
-              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientTopColor, 'CC'), 0], ['#00000000', 1]]
-              : [['#332A2A2A', 0], ['#00000000', 1]]
+              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientTopColor, '7A'), 0], ['#00000000', 1]]
+              : [['#334F5963', 0], ['#00000000', 1]]
           })
         Blank()
       }
@@ -600,12 +600,12 @@ export struct PlayerPage {
         Blank()
         Column()
           .width('100%')
-          .height('48%')
+          .height('62%')
           .linearGradient({
             angle: 0,
             colors: this.playerState.hasAmbientColor
-              ? [['#00000000', 0], [ColorPickerUtils.withAlpha(this.playerState.ambientBottomColor, 'D9'), 1]]
-              : [['#00000000', 0], ['#CC111315', 1]]
+              ? [['#00000000', 0], [ColorPickerUtils.withAlpha(this.playerState.ambientBottomColor, '8A'), 1]]
+              : [['#00000000', 0], ['#66303842', 1]]
           })
       }
       .width('100%')
@@ -618,8 +618,8 @@ export struct PlayerPage {
           .linearGradient({
             angle: 90,
             colors: this.playerState.hasAmbientColor
-              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientLeftColor, '88'), 0], ['#00000000', 1]]
-              : [['#222A2A2A', 0], ['#00000000', 1]]
+              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientLeftColor, '66'), 0], ['#00000000', 1]]
+              : [['#264F5963', 0], ['#00000000', 1]]
           })
 
         Blank()
@@ -630,8 +630,8 @@ export struct PlayerPage {
           .linearGradient({
             angle: 270,
             colors: this.playerState.hasAmbientColor
-              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientRightColor, '88'), 0], ['#00000000', 1]]
-              : [['#222A2A2A', 0], ['#00000000', 1]]
+              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientRightColor, '66'), 0], ['#00000000', 1]]
+              : [['#26454D57', 0], ['#00000000', 1]]
           })
       }
       .width('100%')
@@ -642,7 +642,7 @@ export struct PlayerPage {
         .height('100%')
         .linearGradient({
           angle: 180,
-          colors: [['#33000000', 0], ['#14000000', 0.45], ['#73000000', 1]]
+          colors: [['#14000000', 0], ['#08000000', 0.52], ['#4D000000', 1]]
         })
     }
     .width('100%')
