@@ -207,6 +207,11 @@ export class AnalyzeRule {
   }
 
   private isPureTemplate(rule: string): boolean {
+    if (AnalyzeRule.isDirectAttrKeyword(rule.trim())) return false;
+    if (!(/@get:\{[^}]+\}/.test(rule) || /@put:\{[^}]+\}/.test(rule)
+      || /\{\{[\s\S]+?\}\}/.test(rule) || /\{\$\.[^}]+\}/.test(rule))) {
+      return false;
+    }
     const stripped = rule
       .replace(/@get:\{[^}]+\}/g, '')
       .replace(/@put:\{[^}]+\}/g, '')
@@ -872,12 +877,18 @@ export class AnalyzeRule {
 
     if (parts.length === 0) return null;
 
+    const directAttr = AnalyzeRule.normalizeDirectAttrRule(parts);
+    if (directAttr) {
+      const value = this.extractDirectAttr(html, directAttr);
+      return value && value.length > 0 ? value : null;
+    }
+
     if (parts.length === 1) {
       const elements = SimpleCSSSelector.querySelectorAll(root, parts[0]);
       if (elements.length === 0) return null;
       // 单段：先取 text，没有时 fallback 到把规则末尾段当 attr name。
       // 例：'a' 规则若没文本，尝试当 a 标签直接取（保持现状行为）
-      const texts = elements.map((el) => SimpleCSSSelector.getText(el)).filter((t) => t.length > 0);
+      const texts = elements.map((el) => AnalyzeRule.extractReadableText(el)).filter((t) => t.length > 0);
       if (texts.length > 0) return texts.length === 1 ? texts[0] : texts;
       return null;
     }
@@ -922,6 +933,49 @@ export class AnalyzeRule {
     return results.length === 1 ? results[0] : results;
   }
 
+  private static normalizeDirectAttrRule(parts: string[]): string {
+    if (parts.length === 1) {
+      const part = parts[0].trim();
+      if (AnalyzeRule.isDirectAttrKeyword(part)) return part;
+      return '';
+    }
+    if (parts.length === 2 && parts[0].length === 0 && AnalyzeRule.isDirectAttrKeyword(parts[1])) {
+      return parts[1];
+    }
+    return '';
+  }
+
+  private static isDirectAttrKeyword(s: string): boolean {
+    const lower = s.toLowerCase().trim();
+    if (/^attr\(.+\)$/i.test(lower)) return true;
+    switch (lower) {
+      case 'text':
+      case 'textnodes':
+      case 'html':
+      case 'outerhtml':
+      case 'owntext':
+      case 'all':
+      case 'src':
+      case 'href':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private static extractReadableText(el: HTMLElement): string {
+    const lines = SimpleCSSSelector.getTextNodes(el);
+    if (lines.length > 1) return lines.join('\n');
+    if (lines.length === 1) return lines[0];
+    return SimpleCSSSelector.getText(el);
+  }
+
+  private extractDirectAttr(html: string, attr: string): string | null {
+    const root = SimpleCSSSelector.parseHTML(html);
+    const target = root.children.length === 1 ? root.children[0] : root;
+    return this.extractByAttr(target, attr);
+  }
+
   /** 末段是否是 Legado 内置 attr 关键字（text/textNodes/html/outerHtml/ownText/all/src/href/...） */
   private static isAttrKeyword(s: string): boolean {
     const lower = s.toLowerCase().trim();
@@ -934,7 +988,7 @@ export class AnalyzeRule {
   private extractByAttr(el: HTMLElement, attr: string): string | null {
     switch (attr.toLowerCase()) {
       case 'text':
-        return SimpleCSSSelector.getText(el);
+        return AnalyzeRule.extractReadableText(el);
       case 'textnodes':
         return SimpleCSSSelector.getTextNodes(el).join('\n');
       case 'html':

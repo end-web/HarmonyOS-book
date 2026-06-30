@@ -23,6 +23,13 @@ interface BrowserPageParams {
   title: string;
 }
 
+interface LoginRouteParams {
+  loginUrl: string;
+  serverHost: string;
+  sourceUrl?: string;
+  title: string;
+}
+
 interface WidgetRouteEvent {
   target: string;
   bookId: string;
@@ -56,10 +63,10 @@ struct Index {
     // 监听聚合源登录事件
     emitter.on(EVT_OPEN_LOGIN, () => {
       try {
-        const params: Record<string, string> = {
-          'loginUrl': 'https://v1.gyks.cf/login',
-          'serverHost': 'https://v1.gyks.cf',
-          'title': '登录聚合源',
+        const params: LoginRouteParams = {
+          loginUrl: 'https://v1.gyks.cf/login',
+          serverHost: 'https://v1.gyks.cf',
+          title: '登录聚合源',
         };
         this.navStack.pushPathByName('login', params);
       } catch (e) {
@@ -354,9 +361,10 @@ struct Index {
       NavDestination() {
         LoginPage({
           navStack: this.navStack,
-          loginUrl: ((param as Record<string, string>)?.['loginUrl']) || 'https://v1.gyks.cf/login',
-          serverHost: ((param as Record<string, string>)?.['serverHost']) || 'https://v1.gyks.cf',
-          title: ((param as Record<string, string>)?.['title']) || '登录聚合源',
+          loginUrl: ((param as LoginRouteParams)?.loginUrl) || 'https://v1.gyks.cf/login',
+          serverHost: ((param as LoginRouteParams)?.serverHost) || 'https://v1.gyks.cf',
+          sourceUrl: ((param as LoginRouteParams)?.sourceUrl) || '',
+          title: ((param as LoginRouteParams)?.title) || '登录聚合源',
         })
       }
       .hideTitleBar(true)

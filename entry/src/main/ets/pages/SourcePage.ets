@@ -11,6 +11,8 @@ import { picker } from '@kit.CoreFileKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { util } from '@kit.ArkTS';
+import { scanCore, scanBarcode } from '@kit.ScanKit';
+import { SourceUrlResolver } from '@listenbook/source-runtime';
 
 export const EVT_SOURCES_CHANGED = 'app.sources.changed';
 
@@ -20,7 +22,8 @@ function emitSourcesChanged(): void {
 
 enum ImportMethod {
   Network = 0,
-  LocalFile = 1
+  LocalFile = 1,
+  ScanCode = 2
 }
 
 interface ImportResult {
@@ -105,6 +108,30 @@ export struct SourcePage {
     }
   }
 
+  private getSubscriptionUrlCandidates(url?: string): string[] {
+    const trimmed = (url || '').trim();
+    if (!trimmed) return [];
+    const candidates: string[] = [];
+    for (const candidate of SourceUrlResolver.resolveCandidates(trimmed)) {
+      if (!candidates.includes(candidate)) candidates.push(candidate);
+    }
+    return candidates;
+  }
+
+  private isSameSubscriptionUrl(left?: string, right?: string): boolean {
+    const leftCandidates = this.getSubscriptionUrlCandidates(left);
+    const rightCandidates = this.getSubscriptionUrlCandidates(right);
+    if (leftCandidates.length === 0 || rightCandidates.length === 0) return false;
+    for (const candidate of leftCandidates) {
+      if (rightCandidates.includes(candidate)) return true;
+    }
+    return false;
+  }
+
+  private isSourceFromSubscription(source: BookSource, subscriptionUrl: string): boolean {
+    return this.isSameSubscriptionUrl(source.subscriptionUrl, subscriptionUrl);
+  }
+
   /**
    * 下拉刷新:批量重拉所有订阅源 → 替换 allSources。
    * 顺序遍历(避免一次性发 N 个并发请求把对方服务打瘫),失败的订阅保持旧数据。
@@ -119,9 +146,9 @@ export struct SourcePage {
     let failCount = 0;
     // 先拿当前所有书源,等会拿"非订阅源"那部分留住(本地导入的不要被刷掉)
     const currentAll = await SourceDataService.getSources();
-    const subUrlSet = new Set(this.subscriptions.map((s: SourceSubscription): string => s.url));
     const nonSubscribed = currentAll.filter((s: BookSource): boolean =>
-      !s.subscriptionUrl || !subUrlSet.has(s.subscriptionUrl));
+      !s.subscriptionUrl || !this.subscriptions.some((sub: SourceSubscription): boolean =>
+        this.isSourceFromSubscription(s, sub.url)));
 
     const refreshed: BookSource[] = [];
     for (let i = 0; i < this.subscriptions.length; i++) {
@@ -143,7 +170,7 @@ export struct SourcePage {
         okCount++;
       } catch (_e) {
         // 失败:保留这条订阅源原有的书源(从 currentAll 里挑出来)
-        const old = currentAll.filter((s: BookSource): boolean => s.subscriptionUrl === sub.url);
+        const old = currentAll.filter((s: BookSource): boolean => this.isSourceFromSubscription(s, sub.url));
         refreshed.push(...old);
         failCount++;
       }
@@ -230,10 +257,81 @@ export struct SourcePage {
     await SourceDataService.saveSubscriptions(this.subscriptions);
   }
 
+  private extractSourceUrlFromScan(raw: string): string {
+    const text = raw.trim();
+    if (!text) return '';
+    if (/^https?:\/\/.+/i.test(text)) return text;
+
+    const paramNames: string[] = ['url', 'src', 'source', 'bookSource', 'bookSourceUrl'];
+    for (const name of paramNames) {
+      const pattern = new RegExp(`[?&]${name}=([^&#]+)`, 'i');
+      const match = pattern.exec(text);
+      if (!match) continue;
+      try {
+        const value = decodeURIComponent(match[1]).trim();
+        if (/^https?:\/\/.+/i.test(value)) return value;
+      } catch (_e) {
+        const value = match[1].trim();
+        if (/^https?:\/\/.+/i.test(value)) return value;
+      }
+    }
+    return '';
+  }
+
+  private async importSourcesFromJsonContent(content: string): Promise<boolean> {
+    let sources: BookSource[] = BookSourceService.parseSourcesFromJson(content);
+    sources = await BookSourceService.expandAggregateSources(sources);
+    if (sources.length === 0) return false;
+    this.previewSources = sources;
+    this.selectedPreviewIds = new Set(sources.map((s: BookSource): string => s.bookSourceUrl));
+    this.showPreview = true;
+    this.showAddSheet = true;
+    return true;
+  }
+
+  private async startScanImport(): Promise<void> {
+    try {
+      if (!this.context) return;
+      const options: scanBarcode.ScanOptions = {
+        scanTypes: [scanCore.ScanType.QR_CODE]
+      };
+      const result = await scanBarcode.startScanForResult(this.context, options);
+      const raw = (result.originalValue || '').trim();
+      if (!raw) {
+        this.toast('未识别到书源');
+        return;
+      }
+
+      const scannedUrl = this.extractSourceUrlFromScan(raw);
+      if (scannedUrl) {
+        this.inputUrl = scannedUrl;
+        this.inputName = '';
+        this.importMethod = ImportMethod.Network;
+        this.showAddSheet = true;
+        this.statusMessage = '已识别书源链接,正在导入...';
+        await this.addSource();
+        return;
+      }
+
+      this.isLoading = true;
+      this.statusMessage = '正在解析扫码内容...';
+      const ok = await this.importSourcesFromJsonContent(raw);
+      this.isLoading = false;
+      if (!ok) {
+        this.statusMessage = '未识别到书源链接或 JSON 内容';
+        this.toast(this.statusMessage);
+      }
+    } catch (_e) {
+      this.isLoading = false;
+      this.statusMessage = '扫码已取消或失败';
+      this.toast(this.statusMessage);
+    }
+  }
+
   private async addSource(): Promise<void> {
     const url = this.inputUrl.trim();
     if (!url) return;
-    if (this.subscriptions.some((s: SourceSubscription): boolean => s.url === url)) {
+    if (this.subscriptions.some((s: SourceSubscription): boolean => this.isSameSubscriptionUrl(s.url, url))) {
       this.toast('该书源已存在');
       return;
     }
@@ -313,7 +411,7 @@ export struct SourcePage {
 
       const file = await fileIo.open(uris[0], fileIo.OpenMode.READ_ONLY);
       const stat = await fileIo.stat(file.fd);
-      const size = Math.min(stat.size, 5 * 1024 * 1024);
+      const size = stat.size;
       const buf = new ArrayBuffer(size);
       await fileIo.read(file.fd, buf);
       await fileIo.close(file);
@@ -418,7 +516,7 @@ export struct SourcePage {
         }
         // 获取当前所有书源，删除该订阅源的旧书源
         const allSources = await SourceDataService.getSources();
-        const otherSources = allSources.filter((s: BookSource) => s.subscriptionUrl !== sub.url);
+        const otherSources = allSources.filter((s: BookSource): boolean => !this.isSourceFromSubscription(s, sub.url));
         // 合并：其他订阅源的书源 + 刚刷新的书源
         const merged = otherSources.concat(sources);
         await SourceDataService.saveSources(merged);
@@ -437,12 +535,13 @@ export struct SourcePage {
     await this.saveSubscriptions();
     if (!sub) return;
     // 同步删除该订阅源下的所有书源
-    const remaining = this.allSources.filter((s: BookSource): boolean =>
-      s.subscriptionUrl !== sub.url);
-    const removed = this.allSources.length - remaining.length;
+    const allSources = await SourceDataService.getSources();
+    const remaining = allSources.filter((s: BookSource): boolean =>
+      !this.isSourceFromSubscription(s, sub.url));
+    const removed = allSources.length - remaining.length;
     if (removed > 0) {
       await SourceDataService.saveSources(remaining);
-      this.allSources = remaining;
+      this.allSources = await SourceDataService.getSources();
       this.applySourceFilter();
       emitSourcesChanged();
       this.toast(`已删除订阅及其下 ${removed} 个书源`);
@@ -457,6 +556,7 @@ export struct SourcePage {
     // 关键：不要调用 applySourceFilter()。它会 onDataReloaded() 全量重建 LazyForEach，
     // 在滑动中切换开关会把列表"拽回去"造成乱跳；开关视图本身已绑定 source.enabled，无需重建。
     await SourceDataService.saveSources(this.allSources);
+    this.allSources = await SourceDataService.getSources();
     emitSourcesChanged();
   }
 
@@ -645,6 +745,10 @@ export struct SourcePage {
                   .onClick(() => {
                     this.toast('长按书源可进入批量管理模式');
                   })
+                SymbolGlyph($r('sys.symbol.qrcode'))
+                  .fontSize(22)
+                  .fontColor([AppColor.Brand])
+                  .onClick(() => this.startScanImport())
                 SymbolGlyph($r('sys.symbol.plus_circle'))
                   .fontSize(22)
                   .fontColor([AppColor.Brand])
@@ -972,13 +1076,16 @@ export struct SourcePage {
       Row({ space: AppSpace.Sm }) {
         this.buildMethodCard('网络导入', '输入远程链接', $r('sys.symbol.link'), ImportMethod.Network)
         this.buildMethodCard('本地文件', '从文件管理选择', $r('sys.symbol.doc'), ImportMethod.LocalFile)
+        this.buildMethodCard('扫码导入', '扫描二维码', $r('sys.symbol.qrcode'), ImportMethod.ScanCode)
       }
       .width('100%')
 
       if (this.importMethod === ImportMethod.Network) {
         this.buildNetworkImport()
-      } else {
+      } else if (this.importMethod === ImportMethod.LocalFile) {
         this.buildLocalFileImport()
+      } else {
+        this.buildScanCodeImport()
       }
 
       if (this.statusMessage) {
@@ -1109,6 +1216,44 @@ export struct SourcePage {
         .borderRadius(AppRadius.Md)
         .enabled(!this.isLoading)
         .onClick(() => this.pickLocalFile())
+    }
+    .width('100%')
+    .padding({ top: AppSpace.Sm })
+  }
+
+  @Builder
+  buildScanCodeImport() {
+    Column({ space: AppSpace.Md }) {
+      Column({ space: AppSpace.Xs }) {
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.qrcode'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_tertiary')])
+          Text('扫描包含书源链接或书源 JSON 的二维码')
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_triangle'))
+            .fontSize(16)
+            .fontColor(['#FF9500'])
+          Text('请勿导入来源不明的书源')
+            .fontSize(AppFont.Body)
+            .fontColor('#FF9500')
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+
+      Button(this.isLoading ? '解析中...' : '开始扫码')
+        .width('100%')
+        .height(48)
+        .backgroundColor(AppColor.Brand)
+        .fontColor(Color.White)
+        .fontSize(AppFont.BodyL)
+        .borderRadius(AppRadius.Md)
+        .enabled(!this.isLoading)
+        .onClick(() => this.startScanImport())
     }
     .width('100%')
     .padding({ top: AppSpace.Sm })

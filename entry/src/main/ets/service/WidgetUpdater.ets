@@ -260,6 +260,7 @@ export class WidgetUpdater {
   static async seedAndPersistFromLastPlayed(): Promise<WidgetPlayerSnapshot | null> {
     const snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
     if (snap) {
+      await WidgetUpdater.ensureBgColor(snap);
       await PreferenceService.setWidgetPlayerSnapshot(snap);
     }
     return snap;
@@ -329,6 +330,11 @@ export class WidgetUpdater {
         'chapterTitle': snap.chapterTitle,
         'isPlaying': isPlaying ? 1 : 0,
         'bgColor': snap.bgColor || '',
+        'bgTopColor': snap.bgTopColor || '',
+        'bgBottomColor': snap.bgBottomColor || '',
+        'bgLeftColor': snap.bgLeftColor || '',
+        'bgRightColor': snap.bgRightColor || '',
+        'bgDarkColor': snap.bgDarkColor || '',
       };
       const binding = formBindingData.createFormBindingData(data);
 
@@ -350,45 +356,82 @@ export class WidgetUpdater {
   }
 
   static buildSnapshot(state: PlayerState | null): WidgetPlayerSnapshot {
-    const book: Book | null = state?.currentBook ?? null;
-    const chapter: Chapter | null = state?.currentChapter ?? null;
+    const book: Book | null = state ? state.currentBook : null;
+    const chapter: Chapter | null = state ? state.currentChapter : null;
     let bgColor = '';
-    if (book?.cover) {
-      const rgb = ColorPickerUtils.getCached(book.cover);
-      if (rgb) {
-        bgColor = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.05));
+    let bgTopColor = '';
+    let bgBottomColor = '';
+    let bgLeftColor = '';
+    let bgRightColor = '';
+    let bgDarkColor = '';
+    if (state && state.hasAmbientColor) {
+      bgColor = state.ambientCenterColor;
+      bgTopColor = state.ambientTopColor;
+      bgBottomColor = state.ambientBottomColor;
+      bgLeftColor = state.ambientLeftColor;
+      bgRightColor = state.ambientRightColor;
+      bgDarkColor = state.ambientDarkColor;
+    }
+    if (!bgColor && book && book.cover) {
+      const palette = ColorPickerUtils.getPaletteCached(book.cover);
+      if (palette) {
+        const theme = ColorPickerUtils.toAmbientTheme(palette);
+        bgColor = theme.center;
+        bgTopColor = theme.top;
+        bgBottomColor = theme.bottom;
+        bgLeftColor = theme.left;
+        bgRightColor = theme.right;
+        bgDarkColor = theme.dark;
       }
     }
     return {
-      bookId: book?.id ?? '',
-      bookTitle: book?.title ?? '',
-      author: book?.author ?? '',
-      cover: book?.cover ?? '',
-      chapterId: chapter?.id ?? '',
-      chapterTitle: chapter?.title ?? '',
-      progressMs: state?.progressMs ?? 0,
-      durationMs: state?.durationMs ?? 0,
-      isPlaying: state?.isPlaying ?? false,
+      bookId: book ? book.id : '',
+      bookTitle: book ? book.title : '',
+      author: book ? book.author : '',
+      cover: book ? book.cover : '',
+      chapterId: chapter ? chapter.id : '',
+      chapterTitle: chapter ? chapter.title : '',
+      progressMs: state ? state.progressMs : 0,
+      durationMs: state ? state.durationMs : 0,
+      isPlaying: state ? state.isPlaying : false,
       updatedAt: Date.now(),
       bgColor: bgColor,
+      bgTopColor: bgTopColor,
+      bgBottomColor: bgBottomColor,
+      bgLeftColor: bgLeftColor,
+      bgRightColor: bgRightColor,
+      bgDarkColor: bgDarkColor,
     };
   }
 
   /** 异步提取封面色并补充到快照中（缓存 miss 时主动提取） */
   private static async ensureBgColor(snap: WidgetPlayerSnapshot): Promise<void> {
-    if (snap.bgColor && snap.bgColor.length > 0) return;
+    if (snap.bgColor && snap.bgColor.length > 0
+      && snap.bgTopColor && snap.bgTopColor.length > 0
+      && snap.bgBottomColor && snap.bgBottomColor.length > 0
+      && snap.bgLeftColor && snap.bgLeftColor.length > 0
+      && snap.bgRightColor && snap.bgRightColor.length > 0
+      && snap.bgDarkColor && snap.bgDarkColor.length > 0) {
+      return;
+    }
     if (!snap.cover) return;
     try {
-      let rgb = ColorPickerUtils.getCached(snap.cover);
-      if (!rgb) {
+      let palette = ColorPickerUtils.getPaletteCached(snap.cover);
+      if (!palette) {
         if (snap.cover.startsWith('http')) {
-          rgb = await ColorPickerUtils.pickFromUrl(snap.cover);
+          palette = await ColorPickerUtils.pickPaletteFromUrl(snap.cover);
         } else if (snap.cover.startsWith('/')) {
-          rgb = await ColorPickerUtils.pickFromFile(snap.cover);
+          palette = await ColorPickerUtils.pickPaletteFromFile(snap.cover);
         }
       }
-      if (rgb) {
-        snap.bgColor = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.05));
+      if (palette) {
+        const theme = ColorPickerUtils.toAmbientTheme(palette);
+        snap.bgColor = theme.center;
+        snap.bgTopColor = theme.top;
+        snap.bgBottomColor = theme.bottom;
+        snap.bgLeftColor = theme.left;
+        snap.bgRightColor = theme.right;
+        snap.bgDarkColor = theme.dark;
       }
     } catch (_e) { /* ignore */ }
   }
@@ -403,6 +446,11 @@ export class WidgetUpdater {
       'chapterTitle': snap.chapterTitle || '点击挑一本',
       'isPlaying': snap.isPlaying ? 1 : 0,
       'bgColor': snap.bgColor || '',
+      'bgTopColor': snap.bgTopColor || '',
+      'bgBottomColor': snap.bgBottomColor || '',
+      'bgLeftColor': snap.bgLeftColor || '',
+      'bgRightColor': snap.bgRightColor || '',
+      'bgDarkColor': snap.bgDarkColor || '',
     };
   }
 }

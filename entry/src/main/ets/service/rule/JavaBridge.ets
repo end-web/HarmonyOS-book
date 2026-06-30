@@ -169,12 +169,17 @@ export class JavaBridgeImpl {
   }
 
   /**
-   * java.get(url, headers) — Jsoup 风格 GET 请求（Legado 兼容）
-   * 返回响应体字符串
+   * java.get(key) 读取规则变量；java.get(url, headers) 发起 GET 请求。
+   * Legado 中两种语义共用一个方法名，只有传入 HTTP URL 时才走网络。
    */
   async get(url: string, headers?: Record<string, string>): Promise<string> {
     try {
-      let actualUrl = url;
+      const trimmed = (url || '').trim();
+      if (!headers && !JavaBridgeImpl.looksLikeHttpUrl(trimmed)) {
+        return this.getVar(trimmed);
+      }
+
+      let actualUrl = trimmed;
       let reqHeaders: Record<string, string> = headers || {};
 
       // 处理 Legado ",{config}" 语法
@@ -1221,6 +1226,12 @@ export class JavaBridgeImpl {
 
   getVariables(): Record<string, string> {
     return this.variables;
+  }
+
+  private static looksLikeHttpUrl(url: string): boolean {
+    const lower = url.toLowerCase();
+    return lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('//')
+      || lower.startsWith('data:');
   }
 
   // ──────────── 对称加密（Legado java.createSymmetricCrypto 兼容） ────────────

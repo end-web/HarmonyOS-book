@@ -331,7 +331,7 @@ export class JSExecutor {
     const javaGetMatch = code.match(/^java\.get\(['"](.+)['"]\)$/);
     if (javaGetMatch) {
       const javaBridge = getJavaBridge();
-      return javaBridge.get(javaGetMatch[1]);
+      return javaBridge.getVar(javaGetMatch[1]);
     }
 
     // source.key / source.name / source.type - 书源信息访问
@@ -1069,7 +1069,7 @@ export class JSExecutor {
       const keyVal = await this.evalExprAsync(getMatch[1], vars);
       if (keyVal === undefined) return undefined;
       const javaBridge = getJavaBridge();
-      return javaBridge.get(String(keyVal));
+      return await javaBridge.get(String(keyVal));
     }
 
     // java.log(arg)

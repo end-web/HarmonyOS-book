@@ -62,15 +62,20 @@ interface TemplateContext {
   _sourceVar?: string;
 }
 
+interface LooseParseState {
+  text: string;
+  pos: number;
+}
+
 export class AnalyzeUrl {
   private ruleUrl: string;
   private context: TemplateContext;
-  private sourceHeaders: Record<string, string>;
+  private sourceHeader: string;
 
   constructor(ruleUrl: string, context: TemplateContext = {}, sourceHeader?: string, variables?: Record<string, string>) {
     this.ruleUrl = ruleUrl;
     this.context = context;
-    this.sourceHeaders = sourceHeader ? AnalyzeUrl.parseHeaderStr(sourceHeader) : {};
+    this.sourceHeader = sourceHeader || '';
     // JavaBridge 使用全局单例
     if (variables) {
       const javaBridge = getJavaBridge();
@@ -97,24 +102,30 @@ export class AnalyzeUrl {
     // 3.6 POST：body 先替换模板变量（{{key}}/{{page}}/{{js}}，按 charset percent-encode），
     //     再按 charset 重编码剩余非 ASCII value（encodeIfNeeded 会保留已编码的 %XX，不会双重编码）
     let bodyOut = option.body;
+    const bodyLooksJson = bodyOut ? AnalyzeUrl.isJsonBody(bodyOut, option.headers) : false;
     if (bodyOut) {
-      bodyOut = await this.replaceTemplateVars(bodyOut, charset);
-      if ((option.method || 'GET').toUpperCase() === 'POST' && bodyOut.indexOf('=') > 0) {
+      bodyOut = await this.replaceTemplateVars(bodyOut, charset, !bodyLooksJson);
+      if (!bodyLooksJson && (option.method || 'GET').toUpperCase() === 'POST' && bodyOut.indexOf('=') > 0) {
         bodyOut = AnalyzeUrl.reencodeFormBody(bodyOut, charset);
       }
     }
 
     // 4. 合并 headers
     const headers: Record<string, string> = {};
-    const srcKeys = Object.keys(this.sourceHeaders);
+    const sourceHeaders = await this.parseHeaderRule(this.sourceHeader);
+    const srcKeys = Object.keys(sourceHeaders);
     for (const sk of srcKeys) {
-      headers[sk] = this.sourceHeaders[sk];
+      headers[sk] = sourceHeaders[sk];
     }
     if (option.headers) {
       const keys = Object.keys(option.headers);
       for (const k of keys) {
         headers[k] = option.headers[k];
       }
+    }
+    if ((option.method || 'GET').toUpperCase() === 'POST' && bodyOut && bodyLooksJson
+      && !AnalyzeUrl.hasHeader(headers, 'content-type')) {
+      headers['Content-Type'] = 'application/json';
     }
 
     // 5. 剥离 ## 源分组标记
@@ -133,34 +144,8 @@ export class AnalyzeUrl {
   }
 
   private splitConfig(url: string): UrlSplit {
-    const configIdx = this.findConfigStart(url);
-    let baseUrl: string;
-    let option: UrlOption = { method: 'GET' };
-
-    if (configIdx > 0) {
-      baseUrl = url.substring(0, configIdx).trim();
-      const configStr = url.substring(configIdx + 1).trim();
-      try {
-        const parsed = JSON.parse(configStr) as Record<string, Object>;
-        option = {
-          method: ((parsed['method'] as string) || 'GET').toUpperCase(),
-          charset: parsed['charset'] as string,
-          headers: parsed['headers'] as Record<string, string>,
-          body: typeof parsed['body'] === 'string' ? parsed['body'] as string
-            : parsed['body'] ? JSON.stringify(parsed['body']) : undefined,
-          webView: parsed['webView'] as boolean,
-          webJs: parsed['webJs'] as string,
-          retry: (parsed['retry'] as number) || 0,
-          type: parsed['type'] as string,
-          js: parsed['js'] as string,
-        };
-      } catch {
-        baseUrl = url;
-      }
-    } else {
-      baseUrl = url.trim();
-    }
-    const result: UrlSplit = { baseUrl, option };
+    const split = AnalyzeUrl.splitUrlConfig(url);
+    const result: UrlSplit = { baseUrl: split.url, option: split.config };
     return result;
   }
 
@@ -186,11 +171,11 @@ export class AnalyzeUrl {
     return result;
   }
 
-  private async replaceTemplateVars(url: string, charset?: string): Promise<string> {
+  private async replaceTemplateVars(url: string, charset?: string, encodeVars: boolean = true): Promise<string> {
     let result = url;
     const page = this.context.page || 1;
     const key = this.context.key || '';
-    const enc = (s: string): string => CharsetCodec.encodeUriForCharset(s, charset);
+    const enc = (s: string): string => encodeVars ? CharsetCodec.encodeUriForCharset(s, charset) : s;
 
     // <page1,page2,page3> 分页语法
     result = result.replace(/<([^>]+)>/g, (_match: string, inner: string): string => {
@@ -230,23 +215,7 @@ export class AnalyzeUrl {
   }
 
   private findConfigStart(url: string): number {
-    // 找到不在引号内的 ,{ 位置
-    let inStr: string | null = null;
-    for (let i = 0; i < url.length - 1; i++) {
-      const c = url[i];
-      if (inStr) {
-        if (c === inStr) inStr = null;
-        continue;
-      }
-      if (c === '"' || c === "'") {
-        inStr = c;
-        continue;
-      }
-      if (c === ',' && url[i + 1] === '{') {
-        return i;
-      }
-    }
-    return -1;
+    return AnalyzeUrl.findConfigIdx(url);
   }
 
   private async evalJs(code: string): Promise<string> {
@@ -274,6 +243,49 @@ export class AnalyzeUrl {
     }
   }
 
+  private async parseHeaderRule(header: string): Promise<Record<string, string>> {
+    const trimmed = (header || '').trim();
+    if (!trimmed) return {};
+    let analyzed = trimmed;
+    if (/^@?js:/i.test(analyzed) || /<js>[\s\S]+?<\/js>/i.test(analyzed)) {
+      const directHeaders = this.parseHeaderJsLocally(analyzed);
+      if (directHeaders) return directHeaders;
+      analyzed = await this.analyzeJs(analyzed);
+    }
+    analyzed = await this.replaceTemplateVars(analyzed, undefined, false);
+    return AnalyzeUrl.parseHeaderStr(analyzed);
+  }
+
+  private parseHeaderJsLocally(header: string): Record<string, string> | null {
+    const code = header.trim()
+      .replace(/^@?js:/i, '')
+      .replace(/^<js>/i, '')
+      .replace(/<\/js>$/i, '')
+      .trim();
+    const match = code.match(/^JSON\.stringify\(([\s\S]+)\)\s*;?$/);
+    if (!match) return null;
+    const obj = AnalyzeUrl.parseLooseObject(match[1]);
+    if (!obj) return null;
+    const headers: Record<string, string> = {};
+    for (const key of Object.keys(obj)) {
+      const raw = obj[key];
+      if (raw === undefined || raw === null) continue;
+      const text = String(raw);
+      headers[key] = this.replaceSimpleContextVars(text);
+    }
+    return headers;
+  }
+
+  private replaceSimpleContextVars(text: string): string {
+    if (text === 'baseUrl') return this.context.baseUrl || '';
+    if (text === 'key') return this.context.key || '';
+    if (text === 'page') return String(this.context.page || 1);
+    return text
+      .replace(/\bbaseUrl\b/g, this.context.baseUrl || '')
+      .replace(/\bkey\b/g, this.context.key || '')
+      .replace(/\bpage\b/g, String(this.context.page || 1));
+  }
+
   // ──────────── 静态工具方法 ────────────
 
   static parseHeaderStr(header: string): Record<string, string> {
@@ -281,7 +293,8 @@ export class AnalyzeUrl {
     try {
       return JSON.parse(header) as Record<string, string>;
     } catch {
-      return {};
+      const loose = AnalyzeUrl.parseLooseObject(header);
+      return loose ? (AnalyzeUrl.normalizeHeaders(loose) || {}) : {};
     }
   }
 
@@ -370,6 +383,11 @@ export class AnalyzeUrl {
     if (!relative) return '';
     const trimmed = relative.replace(/[\r\n\t]/g, '').trim();
     if (!trimmed) return '';
+    const split = AnalyzeUrl.splitUrlConfig(trimmed);
+    if (split.url !== trimmed) {
+      const resolved = AnalyzeUrl.resolveUrl(base, split.url);
+      return resolved ? resolved + trimmed.substring(split.url.length) : '';
+    }
     // Legado: javascript: 协议直接返回空（NetworkUtils.getAbsoluteURL）
     if (trimmed.toLowerCase().startsWith('javascript:')) return '';
     // data: URL 直接透传（代理书源的中间路由机制）
@@ -405,39 +423,14 @@ export class AnalyzeUrl {
     }
     const baseUrl = urlWithConfig.substring(0, idx).trim();
     const configStr = urlWithConfig.substring(idx + 1).trim();
-    try {
-      // 尝试标准 JSON 解析，失败则修复非标准格式（Legado 允许无引号 key + 中文引号）
-      let jsonStr = configStr;
-      // 先把中文引号 U+201C/U+201D 替换成英文引号
-      jsonStr = jsonStr.replace(/[“”]/g, '"');
-      // 中文单引号 U+2018/U+2019 也替换
-      jsonStr = jsonStr.replace(/[‘’]/g, "'");
-      try {
-        JSON.parse(jsonStr);
-      } catch {
-        // 给无引号的 key 加双引号: {webView:"true"} → {"webView":"true"}
-        jsonStr = jsonStr.replace(/([{,]\s*)([a-zA-Z_]\w*)\s*:/g, '$1"$2":');
-      }
-      const parsed = JSON.parse(jsonStr) as Record<string, Object>;
-      const config: UrlOption = {
-        method: ((parsed['method'] as string) || 'GET').toUpperCase(),
-        charset: parsed['charset'] as string,
-        headers: parsed['headers'] as Record<string, string>,
-        body: typeof parsed['body'] === 'string' ? parsed['body'] as string
-          : parsed['body'] ? JSON.stringify(parsed['body']) : undefined,
-        webView: parsed['webView'] as boolean,
-        webJs: parsed['webJs'] as string,
-        retry: (parsed['retry'] as number) || 0,
-        type: parsed['type'] as string,
-        js: parsed['js'] as string,
-      };
+    const config = AnalyzeUrl.parseOptionConfig(configStr);
+    if (config) {
       const result: SplitUrlResult = { url: baseUrl, config };
       return result;
-    } catch {
-      const fallbackConfig: UrlOption = { method: 'GET' };
-      const result: SplitUrlResult = { url: urlWithConfig.trim(), config: fallbackConfig };
-      return result;
     }
+    const fallbackConfig: UrlOption = { method: 'GET' };
+    const result: SplitUrlResult = { url: urlWithConfig.trim(), config: fallbackConfig };
+    return result;
   }
 
   /** 静态版 findConfigStart，找到不在引号内的 ,{ 位置 */
@@ -446,6 +439,10 @@ export class AnalyzeUrl {
     for (let i = 0; i < url.length - 1; i++) {
       const c = url[i];
       if (inStr) {
+        if (c === '\\' && i + 1 < url.length) {
+          i++;
+          continue;
+        }
         if (c === inStr) inStr = null;
         continue;
       }
@@ -453,11 +450,234 @@ export class AnalyzeUrl {
         inStr = c;
         continue;
       }
-      if (c === ',' && url[i + 1] === '{') {
-        return i;
+      if (c === ',') {
+        let j = i + 1;
+        while (j < url.length && /\s/.test(url[j])) j++;
+        if (j < url.length && url[j] === '{') {
+          return i;
+        }
       }
     }
     return -1;
+  }
+
+  private static parseOptionConfig(configStr: string): UrlOption | null {
+    let text = (configStr || '').trim()
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'");
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text) as Record<string, Object>;
+      return AnalyzeUrl.normalizeOption(parsed);
+    } catch { /* try loose object literal */ }
+
+    const loose = AnalyzeUrl.parseLooseObject(text);
+    return loose ? AnalyzeUrl.normalizeOption(loose) : null;
+  }
+
+  private static normalizeOption(parsed: Record<string, Object>): UrlOption {
+    const method = AnalyzeUrl.valueToString(parsed['method']) || 'GET';
+    const option: UrlOption = {
+      method: method.toUpperCase(),
+      charset: AnalyzeUrl.valueToString(parsed['charset']) || undefined,
+      headers: AnalyzeUrl.normalizeHeaders(parsed['headers']),
+      body: AnalyzeUrl.normalizeBody(parsed['body']),
+      webView: AnalyzeUrl.valueToBool(parsed['webView']),
+      webJs: AnalyzeUrl.valueToString(parsed['webJs']) || undefined,
+      retry: AnalyzeUrl.valueToNumber(parsed['retry']),
+      type: AnalyzeUrl.valueToString(parsed['type']) || undefined,
+      js: AnalyzeUrl.valueToString(parsed['js']) || undefined,
+    };
+    return option;
+  }
+
+  private static normalizeBody(value: Object | undefined): string | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'string') return value as string;
+    return JSON.stringify(value);
+  }
+
+  private static normalizeHeaders(value: Object | undefined): Record<string, string> | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const input = value as Record<string, Object>;
+    const headers: Record<string, string> = {};
+    for (const k of Object.keys(input)) {
+      const v = input[k];
+      if (v !== undefined && v !== null) headers[k] = String(v);
+    }
+    return headers;
+  }
+
+  private static valueToString(value: Object | undefined): string {
+    if (value === undefined || value === null) return '';
+    return String(value);
+  }
+
+  private static valueToBool(value: Object | undefined): boolean | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value === 'boolean') return value as boolean;
+    const s = String(value).toLowerCase().trim();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+    return undefined;
+  }
+
+  private static valueToNumber(value: Object | undefined): number {
+    if (value === undefined || value === null) return 0;
+    const n = Number(value);
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  private static isJsonBody(body: string, headers?: Record<string, string>): boolean {
+    const trimmed = (body || '').trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) return true;
+    if (!headers) return false;
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === 'content-type') {
+        return (headers[k] || '').toLowerCase().includes('application/json');
+      }
+    }
+    return false;
+  }
+
+  private static hasHeader(headers: Record<string, string>, name: string): boolean {
+    const lower = name.toLowerCase();
+    for (const k of Object.keys(headers)) {
+      if (k.toLowerCase() === lower) return true;
+    }
+    return false;
+  }
+
+  private static parseLooseObject(text: string): Record<string, Object> | null {
+    const state: LooseParseState = { text: text.trim(), pos: 0 };
+    try {
+      AnalyzeUrl.skipWs(state);
+      const value = AnalyzeUrl.readLooseValue(state);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      return value as Record<string, Object>;
+    } catch {
+      return null;
+    }
+  }
+
+  private static readLooseValue(state: LooseParseState): Object {
+    AnalyzeUrl.skipWs(state);
+    const c = state.text[state.pos];
+    if (c === '{') return AnalyzeUrl.readLooseObject(state) as Object;
+    if (c === '[') return AnalyzeUrl.readLooseArray(state) as Object;
+    if (c === '"' || c === "'") return AnalyzeUrl.readLooseString(state) as Object;
+    return AnalyzeUrl.readLooseBare(state) as Object;
+  }
+
+  private static readLooseObject(state: LooseParseState): Record<string, Object> {
+    const out: Record<string, Object> = {};
+    state.pos++;
+    while (state.pos < state.text.length) {
+      AnalyzeUrl.skipWs(state);
+      if (state.text[state.pos] === '}') {
+        state.pos++;
+        break;
+      }
+      const key = AnalyzeUrl.readLooseKey(state);
+      AnalyzeUrl.skipWs(state);
+      if (state.text[state.pos] !== ':') throw new Error('Expected colon');
+      state.pos++;
+      const value = AnalyzeUrl.readLooseValue(state);
+      out[key] = value;
+      AnalyzeUrl.skipWs(state);
+      if (state.text[state.pos] === ',') {
+        state.pos++;
+        continue;
+      }
+      if (state.text[state.pos] === '}') {
+        state.pos++;
+        break;
+      }
+    }
+    return out;
+  }
+
+  private static readLooseArray(state: LooseParseState): Object[] {
+    const out: Object[] = [];
+    state.pos++;
+    while (state.pos < state.text.length) {
+      AnalyzeUrl.skipWs(state);
+      if (state.text[state.pos] === ']') {
+        state.pos++;
+        break;
+      }
+      out.push(AnalyzeUrl.readLooseValue(state));
+      AnalyzeUrl.skipWs(state);
+      if (state.text[state.pos] === ',') {
+        state.pos++;
+        continue;
+      }
+      if (state.text[state.pos] === ']') {
+        state.pos++;
+        break;
+      }
+    }
+    return out;
+  }
+
+  private static readLooseKey(state: LooseParseState): string {
+    AnalyzeUrl.skipWs(state);
+    const c = state.text[state.pos];
+    if (c === '"' || c === "'") return AnalyzeUrl.readLooseString(state);
+    const start = state.pos;
+    while (state.pos < state.text.length) {
+      const ch = state.text[state.pos];
+      if (ch === ':' || /\s/.test(ch)) break;
+      state.pos++;
+    }
+    return state.text.substring(start, state.pos).trim();
+  }
+
+  private static readLooseString(state: LooseParseState): string {
+    const quote = state.text[state.pos];
+    state.pos++;
+    let out = '';
+    while (state.pos < state.text.length) {
+      const c = state.text[state.pos];
+      if (c === '\\' && state.pos + 1 < state.text.length) {
+        const n = state.text[state.pos + 1];
+        if (n === 'n') out += '\n';
+        else if (n === 'r') out += '\r';
+        else if (n === 't') out += '\t';
+        else out += n;
+        state.pos += 2;
+        continue;
+      }
+      if (c === quote) {
+        state.pos++;
+        break;
+      }
+      out += c;
+      state.pos++;
+    }
+    return out;
+  }
+
+  private static readLooseBare(state: LooseParseState): Object {
+    const start = state.pos;
+    while (state.pos < state.text.length) {
+      const c = state.text[state.pos];
+      if (c === ',' || c === '}' || c === ']') break;
+      state.pos++;
+    }
+    const raw = state.text.substring(start, state.pos).trim();
+    if (raw === 'true') return true as Object;
+    if (raw === 'false') return false as Object;
+    if (raw === 'null') return '';
+    const n = Number(raw);
+    if (raw.length > 0 && !Number.isNaN(n)) return n as Object;
+    return raw as Object;
+  }
+
+  private static skipWs(state: LooseParseState): void {
+    while (state.pos < state.text.length && /\s/.test(state.text[state.pos])) {
+      state.pos++;
+    }
   }
 
   static mergeHeaders(sourceHeader: string | undefined, extra?: Record<string, string>): Record<string, string> {

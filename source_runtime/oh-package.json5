@@ -1,0 +1,9 @@
+{
+  "name": "@listenbook/source-runtime",
+  "version": "1.0.0",
+  "description": "ListenBook book source runtime contracts and import helpers.",
+  "main": "Index.ets",
+  "author": "ylwang",
+  "license": "MIT",
+  "dependencies": {}
+}

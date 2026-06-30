@@ -67,6 +67,19 @@
   },
   "modules": [
     {
+      "name": "source_runtime",
+      "srcPath": "./source_runtime",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default",
+            "release"
+          ]
+        }
+      ]
+    },
+    {
       "name": "entry",
       "srcPath": "./entry",
       "targets": [

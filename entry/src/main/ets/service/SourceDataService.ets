@@ -8,6 +8,7 @@
 import { BookSource, SourceSubscription } from '../model/BookSource';
 import { PreferenceService } from './PreferenceService';
 import { BuiltInSourceRegistry } from './builtin/BuiltInSourceRegistry';
+import { SourceImportParser } from '@listenbook/source-runtime';
 
 export class SourceDataService {
   private static cache: BookSource[] | null = null;
@@ -41,7 +42,8 @@ export class SourceDataService {
     for (const s of userSources) {
       if (!s || typeof s.bookSourceUrl !== 'string' || s.bookSourceUrl.length === 0) continue;
       if (BuiltInSourceRegistry.isBuiltIn(s.bookSourceUrl)) continue;
-      filtered.push(s);
+      const normalized = SourceImportParser.normalizeSource(s as Object);
+      if (normalized) filtered.push(normalized);
     }
     const builtIn = BuiltInSourceRegistry.materialize();
     SourceDataService.cache = filtered.concat(builtIn);
@@ -62,7 +64,8 @@ export class SourceDataService {
           builtinDisabled.push(id);
         }
       } else {
-        userOnly.push(s);
+        const normalized = SourceImportParser.normalizeSource(s as Object);
+        if (normalized) userOnly.push(normalized);
       }
     }
     await PreferenceService.saveBookSources(JSON.stringify(userOnly));

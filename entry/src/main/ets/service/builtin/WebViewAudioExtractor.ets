@@ -23,6 +23,7 @@ interface ExtractTask {
   url: string;
   jsExpr: string;
   settleMs: number;
+  type: string;
   /** 可选：匹配到的请求 URL 直接作为结果返回（网络嗅探路径） */
   sourceRegex: RegExp | null;
   resolve: (audioUrl: string) => void;
@@ -55,6 +56,26 @@ export class WebViewAudioExtractor {
   }
 
   /**
+   * 将原生 CookieJar 中保存的登录态同步回 ArkWeb。
+   * ArkWeb 的 configCookieSync 一次只设置一个 name=value，所以这里拆开逐个写。
+   */
+  syncCookies(urls: string[], cookieHeader: string): void {
+    const pairs = this.cookiePairs(cookieHeader);
+    if (pairs.length === 0) return;
+    const targets = this.cookieTargets(urls);
+    for (const url of targets) {
+      for (const pair of pairs) {
+        try {
+          webview.WebCookieManager.configCookieSync(url, pair);
+        } catch (_e) { /* ignore invalid cookie for this target */ }
+      }
+    }
+    try {
+      webview.WebCookieManager.saveCookieAsync().catch(() => {});
+    } catch (_e) { /* ignore */ }
+  }
+
+  /**
    * 取消所有未完成任务（保留正在跑的那个，避免 controller 状态被污染）。
    * 用于 AudioService 切换章节时，把后台还在排队的旧 extract 全部丢弃，让新章节的 extract 尽快上场。
    */
@@ -71,7 +92,14 @@ export class WebViewAudioExtractor {
   /** 通知当前页加载完成 - 由 Host onPageEnd 调用 */
   onPageEnd(url: string): void {
     const task = this.taskQueue[0];
-    if (!task || task.loaded) return;
+    if (!task || (task.loaded && task.type !== 'html')) return;
+    if (task.type === 'html') {
+      task.loaded = true;
+      task.settleTimer = setTimeout(() => {
+        this.evaluate();
+      }, task.settleMs);
+      return;
+    }
     task.loaded = true;
     // 页面加载完后立即注入防护 JS：
     // 1. 禁用 disable-devtool（避免反调试脚本检测到隐藏 WebView 并阻断 JS）
@@ -191,9 +219,50 @@ export class WebViewAudioExtractor {
 
       const task: ExtractTask = {
         url, jsExpr, settleMs,
+        type: 'audio',
         sourceRegex: regex,
         resolve, reject,
         loaded: false, evaluated: false, resolved: false,
+        timerId,
+        settleTimer: 0,
+      };
+      this.taskQueue.push(task);
+      if (!this.busy) {
+        this.runNext();
+      }
+    });
+  }
+
+  extractHtml(url: string, jsExpr: string, settleMs: number = 2000): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      if (!this.controller) {
+        reject(new Error('WebViewAudioExtractor 尚未就绪：请确保 MainPage 中已放置 WebViewAudioExtractorHost'));
+        return;
+      }
+      const timerId = setTimeout(() => {
+        const idx = this.taskQueue.findIndex(t => t.timerId === timerId);
+        if (idx >= 0) {
+          const t = this.taskQueue[idx];
+          this.taskQueue.splice(idx, 1);
+          t.reject(new Error('WebView 提取 HTML 超时'));
+          if (idx === 0) {
+            this.busy = false;
+            this.runNext();
+          }
+        }
+      }, this.timeoutMs);
+
+      const task: ExtractTask = {
+        url,
+        jsExpr,
+        settleMs,
+        type: 'html',
+        sourceRegex: null,
+        resolve,
+        reject,
+        loaded: false,
+        evaluated: false,
+        resolved: false,
         timerId,
         settleTimer: 0,
       };
@@ -253,6 +322,10 @@ export class WebViewAudioExtractor {
           v = JSON.parse(v) as string;
         } catch { /* ignore */ }
       }
+      if (task.type === 'html' && v === '__WAIT__') {
+        task.evaluated = false;
+        return;
+      }
       task.resolved = true;
       task.resolve(v || '');
       this.finishTask();
@@ -273,6 +346,42 @@ export class WebViewAudioExtractor {
     this.busy = false;
     // 让出一帧再起下个，避免 WebView 状态没完全切干净
     setTimeout(() => this.runNext(), 80);
+  }
+
+  private cookiePairs(cookieHeader: string): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const parts = (cookieHeader || '').split(';');
+    for (const raw of parts) {
+      const pair = raw.trim();
+      if (!pair) continue;
+      const eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      const name = pair.substring(0, eq).trim();
+      if (!name || this.isCookieAttribute(name)) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      out.push(name + '=' + pair.substring(eq + 1).trim());
+    }
+    return out;
+  }
+
+  private isCookieAttribute(name: string): boolean {
+    const lower = name.toLowerCase();
+    return lower === 'path' || lower === 'domain' || lower === 'expires' ||
+      lower === 'max-age' || lower === 'samesite' || lower === 'secure' || lower === 'httponly';
+  }
+
+  private cookieTargets(urls: string[]): string[] {
+    const out: string[] = [];
+    for (const raw of urls) {
+      const url = (raw || '').trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) continue;
+      if (!out.includes(url)) out.push(url);
+      const match = url.match(/^(https?:\/\/[^/]+)/);
+      if (match && !out.includes(match[1])) out.push(match[1]);
+    }
+    return out;
   }
 }
 

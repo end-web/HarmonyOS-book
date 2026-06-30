@@ -60,7 +60,7 @@ export class HttpClient {
     const jarCookie = cookieJar.getCookieHeader(url);
     if (jarCookie) {
       const existing = accum.get('cookie') || '';
-      accum.set('cookie', existing ? existing + '; ' + jarCookie : jarCookie);
+      accum.set('cookie', HttpClient.mergeCookieHeader(existing, jarCookie));
     }
 
     const charset = (options.charset || '').toLowerCase();
@@ -142,6 +142,28 @@ export class HttpClient {
       if (!p) return p;
       return p.charAt(0).toUpperCase() + p.substring(1);
     }).join('-');
+  }
+
+  private static mergeCookieHeader(left: string, right: string): string {
+    const items: Map<string, string> = new Map();
+    HttpClient.appendCookiePairs(items, left);
+    HttpClient.appendCookiePairs(items, right);
+    const out: string[] = [];
+    for (const item of items.entries()) {
+      out.push(`${item[0]}=${item[1]}`);
+    }
+    return out.join('; ');
+  }
+
+  private static appendCookiePairs(items: Map<string, string>, cookie: string): void {
+    if (!cookie) return;
+    for (const part of cookie.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq <= 0) continue;
+      const name = part.substring(0, eq).trim();
+      const value = part.substring(eq + 1).trim();
+      if (name) items.set(name, value);
+    }
   }
 
   /** 自动探测响应编码：Content-Type 头 → HTML meta(前2KB) → 默认 utf-8 */

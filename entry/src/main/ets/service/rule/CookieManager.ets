@@ -156,7 +156,19 @@ class CookieManagerImpl {
     const domain = this.extractDomain(url);
     const path = this.extractPath(url);
     const now = Date.now();
-    const items: string[] = [];
+    const items: Map<string, string> = new Map();
+
+    for (const host of this.rawCookies.keys()) {
+      if (!this.hostMatches(domain, host)) continue;
+      const raw = this.rawCookies.get(host) || '';
+      for (const part of raw.split(';')) {
+        const eq = part.indexOf('=');
+        if (eq <= 0) continue;
+        const name = part.substring(0, eq).trim();
+        const value = part.substring(eq + 1).trim();
+        if (name) items.set(name, value);
+      }
+    }
 
     // 当前域 + 父域（subdomain 共享）
     for (const host of this.jar.keys()) {
@@ -166,10 +178,14 @@ class CookieManagerImpl {
       for (const entry of map.values()) {
         if (entry.expiresAt > 0 && entry.expiresAt < now) continue;
         if (!path.startsWith(entry.path || '/')) continue;
-        items.push(`${entry.name}=${entry.value}`);
+        items.set(entry.name, entry.value);
       }
     }
-    return items.join('; ');
+    const out: string[] = [];
+    for (const item of items.entries()) {
+      out.push(`${item[0]}=${item[1]}`);
+    }
+    return out.join('; ');
   }
 
   /** 响应后：把响应头里的 Set-Cookie 解析进 jar。支持多 cookie（鸿蒙 header 会用 \n 或逗号拼接） */

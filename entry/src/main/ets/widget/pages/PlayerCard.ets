@@ -14,6 +14,11 @@ struct PlayerCard {
   @LocalStorageProp('chapterTitle') chapterTitle: string = '';
   @LocalStorageProp('isPlaying') isPlaying: number = 0;
   @LocalStorageProp('bgColor') bgColor: string = '';
+  @LocalStorageProp('bgTopColor') bgTopColor: string = '';
+  @LocalStorageProp('bgBottomColor') bgBottomColor: string = '';
+  @LocalStorageProp('bgLeftColor') bgLeftColor: string = '';
+  @LocalStorageProp('bgRightColor') bgRightColor: string = '';
+  @LocalStorageProp('bgDarkColor') bgDarkColor: string = '';
 
   private postCall(method: string): void {
     postCardAction(this, {
@@ -48,11 +53,55 @@ struct PlayerCard {
     return 'memory://' + this.imgName;
   }
 
+  private hasPalette(): boolean {
+    return this.bgColor.length > 0 && this.bgTopColor.length > 0
+      && this.bgBottomColor.length > 0 && this.bgLeftColor.length > 0
+      && this.bgRightColor.length > 0 && this.bgDarkColor.length > 0;
+  }
+
   build() {
     Stack() {
       // 背景层：有染色时用融合色渐变，否则封面铺底或默认渐变
       // 不加 borderRadius，由最外层 Stack 统一 clip，避免多层裁剪产生毛边
-      if (this.bgColor.length > 0) {
+      if (this.hasPalette()) {
+        Stack() {
+          Column()
+            .width('100%')
+            .height('100%')
+            .linearGradient({
+              angle: 160,
+              colors: [[this.bgTopColor, 0], [this.bgColor, 0.5], [this.bgDarkColor, 1]]
+            })
+          Row() {
+            Column()
+              .width('55%')
+              .height('100%')
+              .linearGradient({
+                angle: 90,
+                colors: [[this.bgLeftColor, 0], ['#00000000', 1]]
+              })
+            Blank()
+            Column()
+              .width('55%')
+              .height('100%')
+              .linearGradient({
+                angle: 270,
+                colors: [[this.bgRightColor, 0], ['#00000000', 1]]
+              })
+          }
+          .width('100%')
+          .height('100%')
+          Column()
+            .width('100%')
+            .height('100%')
+            .linearGradient({
+              angle: 180,
+              colors: [['#33000000', 0], ['#66000000', 1]]
+            })
+        }
+        .width('100%')
+        .height('100%')
+      } else if (this.bgColor.length > 0) {
         Column()
           .width('100%')
           .height('100%')

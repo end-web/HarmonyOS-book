@@ -31,7 +31,12 @@ export default class PlayerFormAbility extends FormExtensionAbility {
       'imgName': '',
       'chapterTitle': '点击挑一本',
       'isPlaying': 0,
-      'bgColor': ''
+      'bgColor': '',
+      'bgTopColor': '',
+      'bgBottomColor': '',
+      'bgLeftColor': '',
+      'bgRightColor': '',
+      'bgDarkColor': ''
     };
     return formBindingData.createFormBindingData(empty);
   }

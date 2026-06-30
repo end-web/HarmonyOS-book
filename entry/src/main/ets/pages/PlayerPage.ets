@@ -12,7 +12,7 @@ import { PreferenceService } from '../service/PreferenceService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
-import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
+import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
 import { ChapterCacheService, EVT_CHAPTER_DURATION_UPDATED } from '../service/ChapterCacheService';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 
@@ -86,11 +86,6 @@ export struct PlayerPage {
   @Local skipOutroValue: number = 0;
   /** 倍速滑块当前值(拖动时实时显示,松手才真正下发到 AudioService) */
   @Local speedValue: number = 1.0;
-  @Local blurColor: string = 'rgba(42,42,42,0)';
-  @Local themeColorHex: string = '';
-  @Local themeColorDarkHex: string = '';
-  @Local hasThemeColor: boolean = false;
-  @Local renderBlur: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;;
   @Local seeking: boolean = false;
   @Local seekValueMs: number = 0;
@@ -137,7 +132,6 @@ export struct PlayerPage {
     setTimeout(() => { this.contentVisible = true; }, 16);
     this.deferredLoadTimerId = setTimeout(() => {
       this.deferredLoadTimerId = -1;
-      this.renderBlur = true;
       this.loadBook();
     }, AppMotion.Page);
   }
@@ -152,17 +146,14 @@ export struct PlayerPage {
     this.book = b;
     if (!b.cover) return;
 
-    const rgb = ColorPickerUtils.getCached(b.cover);
-    if (!rgb) {
-      // 取色缓存未命中:不设置 lastCoverKey，让后续 extractCoverColor 正常执行
+    const palette = ColorPickerUtils.getPaletteCached(b.cover);
+    if (!palette) {
+      // 分区取色缓存未命中:不设置 lastCoverKey，让后续 extractCoverColor 正常执行
       return;
     }
 
     // 缓存命中:立即同步设置融合色,避免灰色过渡
-    this.blurColor = ColorPickerUtils.toBlurColor(rgb);
-    this.themeColorHex = ColorPickerUtils.toHex(rgb);
-    this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.4));
-    this.hasThemeColor = true;
+    this.applyCoverPalette(palette, b.cover);
     this.lastCoverKey = b.cover;
   }
 
@@ -474,17 +465,28 @@ export struct PlayerPage {
     return this.playerState.playMode === PlayMode.Sequence ? '#FFFFFF' : '#FFD480';
   }
 
+  private applyCoverPalette(palette: CoverColorPalette, cover: string): void {
+    const theme = ColorPickerUtils.toAmbientTheme(palette);
+    this.playerState.accentColor = theme.center;
+    this.playerState.ambientCover = cover;
+    this.playerState.ambientMainColor = theme.main;
+    this.playerState.ambientTopColor = theme.top;
+    this.playerState.ambientBottomColor = theme.bottom;
+    this.playerState.ambientLeftColor = theme.left;
+    this.playerState.ambientRightColor = theme.right;
+    this.playerState.ambientCenterColor = theme.center;
+    this.playerState.ambientDarkColor = theme.dark;
+    this.playerState.hasAmbientColor = true;
+  }
+
   private async extractCoverColor(cover: string): Promise<void> {
     // 已成功取过色 / 正在取这张图 → 跳过
     if (!cover || cover === this.lastCoverKey || cover === this.pickingCover) return;
 
     // 缓存命中:立即同步设置融合色,不走 setTimeout
-    const cachedRgb = ColorPickerUtils.getCached(cover);
-    if (cachedRgb) {
-      this.blurColor = ColorPickerUtils.toBlurColor(cachedRgb);
-      this.themeColorHex = ColorPickerUtils.toHex(cachedRgb);
-      this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(cachedRgb, 0.4));
-      this.hasThemeColor = true;
+    const cachedPalette = ColorPickerUtils.getPaletteCached(cover);
+    if (cachedPalette) {
+      this.applyCoverPalette(cachedPalette, cover);
       this.lastCoverKey = cover;
       return;
     }
@@ -492,31 +494,28 @@ export struct PlayerPage {
     // 缓存未命中:异步取色
     this.pickingCover = cover;
     setTimeout(async () => {
-      let rgb: RgbColor | null = null;
+      let palette: CoverColorPalette | null = null;
       try {
         if (cover.startsWith('http')) {
-          rgb = await ColorPickerUtils.pickFromUrl(cover);
+          palette = await ColorPickerUtils.pickPaletteFromUrl(cover);
         } else if (cover.startsWith('/')) {
-          rgb = await ColorPickerUtils.pickFromFile(cover);
+          palette = await ColorPickerUtils.pickPaletteFromFile(cover);
         } else {
-          rgb = await ColorPickerUtils.pickFromRawfile(this.context!, cover);
+          palette = await ColorPickerUtils.pickPaletteFromRawfile(this.context!, cover);
         }
       } catch (e) {
         console.error('[PlayerPage] extractCoverColor failed: ' + JSON.stringify(e));
       }
 
       // 取色失败:释放占位,允许后续重试(不写 lastCoverKey)
-      if (!rgb) {
+      if (!palette) {
         if (this.pickingCover === cover) this.pickingCover = '';
         return;
       }
       // 取色期间封面已切换 → 丢弃旧结果
       if (cover !== this.pickingCover) return;
 
-      this.blurColor = ColorPickerUtils.toBlurColor(rgb);
-      this.themeColorHex = ColorPickerUtils.toHex(rgb);
-      this.themeColorDarkHex = ColorPickerUtils.toHex(ColorPickerUtils.darken(rgb, 0.4));
-      this.hasThemeColor = true;
+      this.applyCoverPalette(palette, cover);
       this.lastCoverKey = cover;   // ★ 成功后才标记,失败可重试
       this.pickingCover = '';
     }, 100);
@@ -524,21 +523,7 @@ export struct PlayerPage {
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 背景层：统一用渐变，未取色时用深灰色过渡，取色后渐变到主色
-      Stack() {
-        Column()
-          .width('100%')
-          .height('100%')
-          .linearGradient({
-            angle: 160,
-            colors: this.hasThemeColor
-              ? [[this.themeColorHex, 0], [this.themeColorDarkHex, 1]]
-              : [['#2A2A2A', 0], ['#1A1A1A', 1]]
-          })
-          .animation({ duration: 600, curve: Curve.EaseOut })
-      }
-      .width('100%')
-      .height('100%')
+      this.buildAmbientBackground()
 
       // 内容层
       Column() {
@@ -581,6 +566,88 @@ export struct PlayerPage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  buildAmbientBackground() {
+    Stack() {
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 162,
+          colors: this.playerState.hasAmbientColor
+            ? [[this.playerState.ambientTopColor, 0], [this.playerState.ambientMainColor, 0.46], [this.playerState.ambientDarkColor, 1]]
+            : [['#2A2A2A', 0], ['#202328', 0.48], ['#111315', 1]]
+        })
+
+      Column() {
+        Column()
+          .width('100%')
+          .height('42%')
+          .linearGradient({
+            angle: 180,
+            colors: this.playerState.hasAmbientColor
+              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientTopColor, 'CC'), 0], ['#00000000', 1]]
+              : [['#332A2A2A', 0], ['#00000000', 1]]
+          })
+        Blank()
+      }
+      .width('100%')
+      .height('100%')
+
+      Column() {
+        Blank()
+        Column()
+          .width('100%')
+          .height('48%')
+          .linearGradient({
+            angle: 0,
+            colors: this.playerState.hasAmbientColor
+              ? [['#00000000', 0], [ColorPickerUtils.withAlpha(this.playerState.ambientBottomColor, 'D9'), 1]]
+              : [['#00000000', 0], ['#CC111315', 1]]
+          })
+      }
+      .width('100%')
+      .height('100%')
+
+      Row() {
+        Column()
+          .width('54%')
+          .height('100%')
+          .linearGradient({
+            angle: 90,
+            colors: this.playerState.hasAmbientColor
+              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientLeftColor, '88'), 0], ['#00000000', 1]]
+              : [['#222A2A2A', 0], ['#00000000', 1]]
+          })
+
+        Blank()
+
+        Column()
+          .width('54%')
+          .height('100%')
+          .linearGradient({
+            angle: 270,
+            colors: this.playerState.hasAmbientColor
+              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientRightColor, '88'), 0], ['#00000000', 1]]
+              : [['#222A2A2A', 0], ['#00000000', 1]]
+          })
+      }
+      .width('100%')
+      .height('100%')
+
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [['#33000000', 0], ['#14000000', 0.45], ['#73000000', 1]]
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .animation({ duration: 650, curve: Curve.EaseOut })
   }
 
   @Builder
@@ -772,12 +839,12 @@ export struct PlayerPage {
           LoadingProgress()
             .width(36)
             .height(36)
-            .color(this.hasThemeColor ? this.themeColorDarkHex : '#333333')
+            .color(this.playerState.hasAmbientColor ? this.playerState.ambientDarkColor : '#333333')
         } else {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
             .fontSize(30)
-            .fontColor([this.hasThemeColor ? this.themeColorDarkHex : '#333333'])
+            .fontColor([this.playerState.hasAmbientColor ? this.playerState.ambientDarkColor : '#333333'])
         }
       }
       .width(64)

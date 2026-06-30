@@ -58,6 +58,13 @@ const TAB_TOC = 4;
 const TAB_CONTENT = 5;
 const TAB_NAMES: string[] = ['基本', '搜索', '发现', '详情', '目录', '正文'];
 
+interface LoginRouteParams {
+  loginUrl: string;
+  serverHost: string;
+  sourceUrl: string;
+  title: string;
+}
+
 @ComponentV2
 export struct SourceEditPage {
   @Param navStack: NavPathStack = new NavPathStack();
@@ -120,6 +127,8 @@ export struct SourceEditPage {
     ));
     basic.push(EditEntity.of('concurrentRate', '并发控制', s.concurrentRate, 'text', '1/s'));
     basic.push(EditEntity.of('loginUrl', '登录 URL', s.loginUrl, 'text', ''));
+    basic.push(EditEntity.of('loginUi', '登录 UI', s.loginUi, 'textarea', ''));
+    basic.push(EditEntity.of('variableComment', '源变量说明', s.variableComment, 'textarea', ''));
     basic.push(EditEntity.of('loginCheckJs', '登录检测 JS', s.loginCheckJs, 'textarea', '@js:...'));
     basic.push(EditEntity.of('jsLib', 'jsLib (全局函数)', s.jsLib, 'textarea', 'function helper(){...}'));
     this.basicEntities = basic;
@@ -230,8 +239,14 @@ export struct SourceEditPage {
       exploreUrl: SourceEditPage.val(ex, 'exploreUrl'),
       header: SourceEditPage.val(b, 'header'),
       loginUrl: SourceEditPage.val(b, 'loginUrl'),
+      loginUi: SourceEditPage.val(b, 'loginUi'),
       loginCheckJs: SourceEditPage.val(b, 'loginCheckJs'),
+      variableComment: SourceEditPage.val(b, 'variableComment'),
       jsLib: SourceEditPage.val(b, 'jsLib'),
+      customButton: base.customButton,
+      eventListener: base.eventListener,
+      exploreScreen: base.exploreScreen,
+      coverDecodeJs: base.coverDecodeJs,
       concurrentRate: SourceEditPage.val(b, 'concurrentRate'),
       respondTime: base.respondTime,
       customOrder: base.customOrder,
@@ -288,6 +303,7 @@ export struct SourceEditPage {
         nextContentUrl: SourceEditPage.val(c, 'nextContentUrl'),
         replaceRegex: SourceEditPage.val(c, 'replaceRegex'),
       },
+      ruleReview: base.ruleReview,
       lastUpdateTime: Date.now(),
     };
     return result;
@@ -299,6 +315,43 @@ export struct SourceEditPage {
     } catch (_e) { /* ignore */ }
   }
 
+  private openWebLogin(): void {
+    if (!this.source) return;
+    const current = this.collectSource();
+    const sourceUrl = (current.bookSourceUrl || this.sourceUrl || '').trim();
+    const loginUrl = this.resolveWebLoginUrl(current.loginUrl || '', sourceUrl);
+    if (!sourceUrl || !loginUrl) {
+      this.toast('请先填写书源地址');
+      this.activeTab = TAB_BASIC;
+      return;
+    }
+    const serverHost = SourceEditPage.extractOrigin(sourceUrl) || SourceEditPage.extractOrigin(loginUrl) || sourceUrl;
+    const sourceName = current.bookSourceName || '书源';
+    const params: LoginRouteParams = {
+      loginUrl,
+      serverHost,
+      sourceUrl,
+      title: sourceName + ' 登录',
+    };
+    this.navStack.pushPathByName('login', params);
+  }
+
+  private resolveWebLoginUrl(loginUrl: string, sourceUrl: string): string {
+    const login = (loginUrl || '').trim();
+    if (login.startsWith('http://') || login.startsWith('https://')) return login;
+    if (login.startsWith('/')) {
+      const origin = SourceEditPage.extractOrigin(sourceUrl);
+      return origin ? origin + login : '';
+    }
+    return sourceUrl;
+  }
+
+  private static extractOrigin(url: string): string {
+    const text = (url || '').trim();
+    const match = text.match(/^(https?:\/\/[^/]+)/);
+    return match ? match[1] : '';
+  }
+
   private async save(): Promise<void> {
     if (this.readonly || !this.source) return;
     const collected = this.collectSource();
@@ -307,12 +360,15 @@ export struct SourceEditPage {
       this.activeTab = TAB_BASIC;
       return;
     }
-    // header 若填了，校验 JSON 合法性（容错：空串放过）
-    if (collected.header && collected.header.length > 0) {
+    // header 若填了，校验 JSON 合法性；Legado 动态 header（@js:/<js>）放行。
+    const header = (collected.header || '').trim();
+    const headerLower = header.toLowerCase();
+    if (header.length > 0 && !headerLower.startsWith('@js:') && !headerLower.startsWith('js:')
+      && !headerLower.startsWith('<js>')) {
       try {
-        JSON.parse(collected.header);
+        JSON.parse(header);
       } catch (_e) {
-        this.toast('请求头不是合法 JSON');
+        this.toast('请求头不是合法 JSON 或 @js 脚本');
         this.activeTab = TAB_BASIC;
         return;
       }
@@ -372,6 +428,12 @@ export struct SourceEditPage {
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
         if (!this.readonly) {
+          Text('网页登录')
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+            .fontWeight(FontWeight.Medium)
+            .padding({ left: AppSpace.Xs, right: AppSpace.Xs })
+            .onClick(() => this.openWebLogin())
           if (this.saving) {
             LoadingProgress().width(24).height(24).color(AppColor.Brand)
           } else {

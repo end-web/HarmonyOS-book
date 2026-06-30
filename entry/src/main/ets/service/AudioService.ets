@@ -18,7 +18,7 @@ import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
-import { ColorPickerUtils } from '../utils/ColorPickerUtils';
+import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
@@ -606,22 +606,53 @@ export class AudioService {
   /** 封面变化时预取融合色并缓存,让播放页入场时瞬时显示而非灰色过渡 */
   private preFetchCoverColor(cover: string): void {
     if (!this.context) return;
-    // 缓存命中直接返回
-    if (ColorPickerUtils.getCached(cover)) return;
+    if (this.applyCachedCoverColor(cover)) return;
     // 异步取色不阻塞播放,立即启动
     (async () => {
+      let palette: CoverColorPalette | null = null;
       try {
         if (cover.startsWith('http')) {
-          await ColorPickerUtils.pickFromUrl(cover);
+          palette = await ColorPickerUtils.pickPaletteFromUrl(cover);
         } else if (cover.startsWith('/')) {
-          await ColorPickerUtils.pickFromFile(cover);
+          palette = await ColorPickerUtils.pickPaletteFromFile(cover);
         } else {
-          await ColorPickerUtils.pickFromRawfile(this.context!, cover);
+          palette = await ColorPickerUtils.pickPaletteFromRawfile(this.context!, cover);
         }
       } catch (e) {
         // 取色失败不影响播放,静默
       }
+      if (palette && this.state && this.state.currentBook && this.state.currentBook.cover === cover) {
+        this.applyCoverPalette(cover, palette);
+        try {
+          await WidgetUpdater.updatePlayerCard(this.state, true);
+        } catch (_e) { /* 取色后的卡片刷新失败不影响播放 */ }
+      }
     })();
+  }
+
+  private applyCachedCoverColor(cover: string): boolean {
+    if (!cover || !this.state) return false;
+    const palette = ColorPickerUtils.getPaletteCached(cover);
+    if (palette) {
+      this.applyCoverPalette(cover, palette);
+      return true;
+    }
+    return false;
+  }
+
+  private applyCoverPalette(cover: string, palette: CoverColorPalette): void {
+    if (!this.state) return;
+    const theme = ColorPickerUtils.toAmbientTheme(palette);
+    this.state.accentColor = theme.center;
+    this.state.ambientCover = cover;
+    this.state.ambientMainColor = theme.main;
+    this.state.ambientTopColor = theme.top;
+    this.state.ambientBottomColor = theme.bottom;
+    this.state.ambientLeftColor = theme.left;
+    this.state.ambientRightColor = theme.right;
+    this.state.ambientCenterColor = theme.center;
+    this.state.ambientDarkColor = theme.dark;
+    this.state.hasAmbientColor = true;
   }
 
   /**
@@ -707,6 +738,7 @@ export class AudioService {
       this.state.progressMs = seekMs;
       this.state.durationMs = 0;
       this.state.isPlaying = false;
+      this.applyCachedCoverColor(book.cover);
       // 快路径:不显示 loading,UI 直接用 savedDurationMs + progressMs 撑住,
       // 等 prepared 回调把 durationMs/playing 翻新即可,观感"瞬间切换"
       this.state.isLoading = !fastPath;

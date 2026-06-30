@@ -142,6 +142,10 @@ export struct HomePage {
   private homeGen: number = 0;
   private sourcesChangedHandler: () => void = () => {
     this.loadSourceCount();
+    if (this.hasSearched) {
+      this.doSearch();
+      return;
+    }
     this.loadHomeBlocks();
   };
   private refreshHandler: () => void = () => this.refreshHomeData();
@@ -500,6 +504,9 @@ export struct HomePage {
             if (this.pendingCount <= 0) {
               this.searching = false;
               this.searchingSource = '';
+              if (this.audioCount === 0 && this.textCount > 0) {
+                this.searchType = 1;
+              }
             }
           });
       }
