@@ -306,6 +306,18 @@ export struct PlayerPage {
 
   private async toggleFavorite(): Promise<void> {
     if (!this.book) return;
+    // 收藏 id 还在但本地快照已丢失:补回快照、保留收藏,而不是把仅存的收藏 id 也 toggle 掉
+    if (this.isFavorite && this.context) {
+      const snap = await DataService.getBookById(this.context!, this.book.id);
+      if (!snap) {
+        await DataService.upsertCachedBook(this.book);
+        this.isFavorite = true;
+        try {
+          this.getUIContext().getPromptAction().showToast({ message: '已重新加入书架' });
+        } catch (_e) { /* ignore */ }
+        return;
+      }
+    }
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
     if (this.isFavorite) {
       await DataService.upsertCachedBook(this.book);

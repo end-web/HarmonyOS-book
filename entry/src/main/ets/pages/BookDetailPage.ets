@@ -270,6 +270,25 @@ export struct BookDetailPage {
       } catch (_e) { /* ignore */ }
       return;
     }
+    // 收藏 id 还在、但本地快照已彻底丢失(书架占位卡场景):这一下应"补回快照、保留收藏",
+    // 而不是把仅存的收藏 id 也 toggle 掉 —— 否则用户重搜后点心形,体感是"重新加入书架没用"。
+    if (this.isFavorite && !this.bookId.startsWith('import_')) {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const snap = await DataService.getBookById(ctx, this.book.id);
+      if (!snap) {
+        const needToc = (!this.book.chapters || this.book.chapters.length === 0)
+          && !!this.book.bookUrl && !!this.book.sourceUrl;
+        if (needToc) {
+          await this.loadTocFromSource(this.book);
+        }
+        await DataService.upsertCachedBook(this.book);
+        this.isFavorite = true;
+        try {
+          this.getUIContext().getPromptAction().showToast({ message: '已重新加入书架' });
+        } catch (_e) { /* ignore */ }
+        return;
+      }
+    }
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
     if (this.isFavorite) {
       // 在线书:章节还没拉到就先把 toc 拉齐再写缓存,避免书架点击时拿到空 chapters

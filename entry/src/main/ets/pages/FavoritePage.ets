@@ -504,6 +504,13 @@ export struct FavoritePage {
     return m ? m[0] : ch.title;
   }
 
+  /** 从章节标题里提取"第N章/集/回/话"短标签;取不到返回空(交由调用方退化处理) */
+  private chapterLabelFromTitle(title: string): string {
+    if (!title) return '';
+    const m = title.match(/^第\s*\d+\s*[章集回话]/);
+    return m ? m[0] : '';
+  }
+
   private getProgressText(book: Book): string {
     if (this.isMissingCachedBook(book)) {
       return '缓存缺失 · 重新搜索后加入';
@@ -520,6 +527,9 @@ export struct FavoritePage {
         if (label) return `${label} · ${chapterCount}${unit}`;
         return `${idx + 1}${unit}/${chapterCount}${unit}`;
       }
+      // 章节尚未加载(壳书,章节在 sidecar 懒加载)→ 用历史里的章节标题提取章号,避免退化成"共N集"
+      const histLabel = h.chapterTitle ? this.chapterLabelFromTitle(h.chapterTitle) : '';
+      if (histLabel) return `${histLabel} · ${chapterCount}${unit}`;
       return `共${chapterCount}${unit}`;
     }
     if (chapterCount > 0) {
@@ -582,9 +592,30 @@ export struct FavoritePage {
     if (this.resolvingTocId) return;
     this.resolvingTocId = book.id;
     try {
-      this.getUIContext().getPromptAction().showToast({ message: '加载章节中...' });
-    } catch (_e) { /* ignore */ }
-    try {
+      // 1) 先用本地缓存的章节目录(sidecar):瞬时、无网络、不弹"加载章节"
+      const localToc = await DataService.getChaptersForBook(book.id);
+      if (localToc.length > 0) {
+        book.chapters = localToc;
+        book.chapterCount = localToc.length;
+        const localIdx = DataService.resolveChapterIndex(book, history.chapterId, history.chapterTitle);
+        if (localIdx >= 0) {
+          this.chapterIdxMap[book.id] = localIdx;
+          SearchCache.put(book);
+          const resolvedLocal = book.chapters[localIdx];
+          const localParams: Record<string, Object> = {
+            'bookId': book.id as Object,
+            'chapterId': resolvedLocal.id as Object,
+            'progressMs': history.progressMs as Object
+          };
+          this.navStack.pushPathByName(this.isText(book) ? 'reader' : 'player', localParams, onPop);
+          return;
+        }
+        // 本地目录命中但定位不到章节(可能已下架/重排)→ 落到下面联网重拉刷新
+      }
+      // 2) 本地没有 → 联网拉取(此时才提示"加载章节")
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '加载章节中...' });
+      } catch (_e) { /* ignore */ }
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
       if (!source) {

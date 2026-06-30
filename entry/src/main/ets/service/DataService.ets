@@ -1,24 +1,50 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
-import { Book } from '../model/Book';
+import { Book, Chapter } from '../model/Book';
 import { PreferenceService } from './PreferenceService';
 
+/** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
 const CACHED_BOOKS_FILE = 'cached_books_v1.json';
+/** 每本书的章节目录(sidecar):cached_toc/<id>.json,按需懒加载,命中即瞬时无网络 */
+const CACHED_TOC_DIR = 'cached_toc';
 /** 旧 preferences 缓存超过此字节数即判定含整章 TOC 巨值,合并进文件后压成元数据壳 */
 const LEGACY_SLIM_THRESHOLD = 100 * 1024;
+/** 缓存书上限 */
+const MAX_CACHED_BOOKS = 200;
+
+interface CacheRead {
+  json: string;
+  /** 文件是否存在 */
+  existed: boolean;
+  /** 读取是否成功(false = 文件在但读 IO 失败) */
+  ok: boolean;
+}
 
 /**
  * 数据服务:承载本地导入的书 + 来自搜索的"缓存书"快照。
  * 缓存书让搜索得到的书也能被收藏 / 出现在书架 / 历史里。
  *
- * 缓存书改用「文件」持久化(filesDir),不再放 preferences:
- * preferences 默认 XML 模式不支持多进程并发(本应用有卡片 FormExtension 进程),
- * 大数据(整章目录)并发读写会损坏文件 → 冷启动收藏丢失。文件单进程写,稳。
+ * 存储分层(都在主进程内写,卡片 FormExtension 进程只读 preferences、不碰这些文件):
+ *  - 索引 cached_books_v1.json:全部缓存书的"元数据壳"(无 chapters),冷启动一次性读入内存,小而快。
+ *  - sidecar cached_toc/<id>.json:每本书的整章目录,单独一个小文件,打开某本书时才懒加载(瞬时,无网络)。
+ *  这样"全部书的章节都本地缓存"与"冷启动不卡"二者兼得 —— 不再像单一大文件那样把几 MB 的整章
+ *  TOC 在启动时全部读+解析(卡顿),也不像"瘦身丢章节"那样让旧书每次点开都要联网重拉。
+ *
+ * 文件写入三重保护:
+ *  1) 串行化:所有写经 writeChain 排队,杜绝并发 TRUNC 交错损坏(冷启动收藏丢失的元凶)。
+ *  2) 原子替换:先写 .tmp 再 moveFile 覆盖,进程被杀/崩溃也不会留半截文件。
+ *  3) 读失败保护:区分 不存在(合法空)/ 读 IO 失败(本会话禁写,防冲掉好数据)/ 解析损坏(可重建)。
  */
 export class DataService {
   private static cache: Book[] | null = null;
   private static cachedBooksMem: Book[] | null = null;
   private static ctx: common.Context | null = null;
+  /** 写串行化链:每次写都接在上一个之后,避免并发写交错损坏文件 */
+  private static writeChain: Promise<void> = Promise.resolve();
+  /** 现有索引文件读 IO 失败过 → 本会话禁止覆盖写,防止把可能完好的磁盘数据冲成空 */
+  private static persistUnsafe: boolean = false;
+  /** sidecar 目录是否已确保存在(避免每次写都 mkdir) */
+  private static tocDirReady: boolean = false;
 
   /** 由 EntryAbility 启动时注入,用于缓存书文件读写 */
   static setContext(c: common.Context): void {
@@ -29,28 +55,136 @@ export class DataService {
     return DataService.ctx ? `${DataService.ctx.filesDir}/${CACHED_BOOKS_FILE}` : null;
   }
 
-  private static async readCachedFile(): Promise<string> {
-    const path = DataService.cachedFilePath();
-    if (!path) return '';
+  private static tocDirPath(): string | null {
+    return DataService.ctx ? `${DataService.ctx.filesDir}/${CACHED_TOC_DIR}` : null;
+  }
+
+  private static tocPath(id: string): string | null {
+    const dir = DataService.tocDirPath();
+    if (!dir || !id) return null;
+    // id 一般是 search_audio_<hash> 等安全字符,仍兜底过滤掉路径分隔符等
+    const safe = id.replace(/[^A-Za-z0-9_.-]/g, '_');
+    return `${dir}/${safe}.json`;
+  }
+
+  // ───────────────────────── 底层文件读写(串行 + 原子) ─────────────────────────
+
+  /**
+   * 安全读取:区分"不存在 / 读成功 / 读 IO 失败"。
+   * 不能像旧实现那样把所有异常吞成空字符串 —— 那会让"读挂了"和"本来就空"无法区分,
+   * 进而导致下一次写用空内容把磁盘上的完好数据覆盖掉。
+   */
+  private static async readFileSafe(path: string | null): Promise<CacheRead> {
+    if (!path) return { json: '', existed: false, ok: true };
+    let existed = false;
     try {
-      return await fileIo.readText(path);
+      existed = await fileIo.access(path);
     } catch (_e) {
-      return ''; // 文件不存在/读失败
+      existed = false; // access 异常按"不存在"处理
+    }
+    if (!existed) return { json: '', existed: false, ok: true };
+    try {
+      const json = await fileIo.readText(path);
+      return { json, existed: true, ok: true };
+    } catch (_e) {
+      return { json: '', existed: true, ok: false }; // 文件在但读失败
     }
   }
 
-  private static async writeCachedFile(json: string): Promise<void> {
-    const path = DataService.cachedFilePath();
-    if (!path) return;
+  /** 串行 + 原子写。persistUnsafe 时只更新内存、跳过落盘以保护磁盘上的好数据。 */
+  private static writeFileSerial(path: string | null, json: string): Promise<void> {
+    if (DataService.persistUnsafe || !path) {
+      return Promise.resolve();
+    }
+    const task = DataService.writeChain.then(() => DataService.atomicWrite(path, json));
+    // 链不能因单次失败而断:用 then(ok, err) 都吞掉,后续写仍能排队执行
+    DataService.writeChain = task.then(() => {}, () => {});
+    // 返回给调用方的也吞掉错误:写失败不应让上层的读/加载流程崩(数据仍在内存,下次重试,旧文件保持完整)
+    return task.catch(() => {});
+  }
+
+  private static async atomicWrite(finalPath: string, json: string): Promise<void> {
+    const tmp = finalPath + '.tmp';
     let f: fileIo.File | null = null;
     try {
-      f = await fileIo.open(path, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      f = await fileIo.open(tmp, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
       await fileIo.write(f.fd, json);
+      try { await fileIo.fsync(f.fd); } catch (_e) { /* 部分文件系统不支持,忽略 */ }
     } finally {
       if (f) {
         try { await fileIo.close(f); } catch (_e) { /* ignore */ }
       }
     }
+    // moveFile 默认 mode=0 = 覆盖目标(官方文档明确语义)。同目录内为原子替换:
+    // 读者要么看到旧的完整文件,要么看到新的完整文件,不会读到半截。
+    await fileIo.moveFile(tmp, finalPath);
+  }
+
+  private static async ensureTocDir(): Promise<void> {
+    if (DataService.tocDirReady) return;
+    const dir = DataService.tocDirPath();
+    if (!dir) return;
+    try { await fileIo.mkdir(dir); } catch (_e) { /* 已存在 */ }
+    DataService.tocDirReady = true;
+  }
+
+  // ───────────────────────── sidecar 章节目录 ─────────────────────────
+
+  /** 读取某本书的本地章节目录(瞬时,无网络)。没有则返回空数组。 */
+  static async getChaptersForBook(id: string): Promise<Chapter[]> {
+    const read = await DataService.readFileSafe(DataService.tocPath(id));
+    if (!read.ok || !read.json) return [];
+    try {
+      const parsed: Object = JSON.parse(read.json) as Object;
+      return Array.isArray(parsed) ? parsed as Chapter[] : [];
+    } catch (_e) {
+      return [];
+    }
+  }
+
+  private static async writeToc(id: string, chapters: Chapter[]): Promise<void> {
+    const path = DataService.tocPath(id);
+    if (!path) return;
+    await DataService.ensureTocDir();
+    await DataService.writeFileSerial(path, JSON.stringify(chapters));
+  }
+
+  private static async deleteToc(id: string): Promise<void> {
+    const path = DataService.tocPath(id);
+    if (!path) return;
+    try { await fileIo.unlink(path); } catch (_e) { /* ignore */ }
+    try { await fileIo.unlink(path + '.tmp'); } catch (_e) { /* ignore */ }
+  }
+
+  /** 给所有带章节的书各写一份 sidecar(迁移 / 恢复用) */
+  private static async persistChaptersForBooks(books: Book[]): Promise<void> {
+    for (const b of books) {
+      if (b && b.id && !b.id.startsWith('import_') && b.chapters && b.chapters.length > 0) {
+        await DataService.writeToc(b.id, b.chapters);
+      }
+    }
+  }
+
+  // ───────────────────────── 索引(元数据壳) ─────────────────────────
+
+  /** 索引落盘:统一写成元数据壳(去 chapters/intro),章节单独走 sidecar */
+  private static writeIndex(books: Book[]): Promise<void> {
+    const slim: Book[] = books.map((b: Book): Book => DataService.slimBook(b));
+    return DataService.writeFileSerial(DataService.cachedFilePath(), JSON.stringify(slim));
+  }
+
+  /**
+   * 旧格式(章节内联在索引大文件里)→ 一次性拆分到 sidecar 并把索引瘦身。
+   * 迁移后内存仍保留完整数据,仅磁盘索引变小,后续冷启动飞快。
+   */
+  private static async migrateInlineChaptersIfAny(books: Book[]): Promise<void> {
+    let hasInline = false;
+    for (const b of books) {
+      if (b && b.chapters && b.chapters.length > 0) { hasInline = true; break; }
+    }
+    if (!hasInline) return;
+    await DataService.persistChaptersForBooks(books);
+    await DataService.writeIndex(books);
   }
 
   private static async load(): Promise<Book[]> {
@@ -61,18 +195,27 @@ export class DataService {
 
   private static async loadCachedBooks(): Promise<Book[]> {
     if (DataService.cachedBooksMem) return DataService.cachedBooksMem;
-    // 1) 优先从文件读
-    let json = await DataService.readCachedFile();
-    let fileBooks = DataService.parseBookList(json);
+
+    const read = await DataService.readFileSafe(DataService.cachedFilePath());
+    let fileBooks = DataService.parseBookList(read.json);
+
+    // 现有索引存在但读 IO 失败:本会话禁止覆盖写,避免把可能完好的磁盘数据冲掉。
+    if (read.existed && !read.ok) {
+      DataService.persistUnsafe = true;
+    }
+    // 读到内容但解析为空、且原文不是合法空数组 → 文件损坏(旧版本并发写遗留)。
+    const corrupt = read.existed && read.ok &&
+      read.json.length > 0 && read.json.trim() !== '[]' && fileBooks.length === 0;
+
     const favoriteIds = await DataService.safeFavoriteIds();
-    if (json && fileBooks.length > 0 && DataService.containsAll(fileBooks, favoriteIds)) {
+    if (read.ok && !corrupt && fileBooks.length > 0 && DataService.containsAll(fileBooks, favoriteIds)) {
       DataService.cachedBooksMem = fileBooks;
+      // 旧格式(章节内联)→ 拆 sidecar + 瘦身索引(一次性)
+      await DataService.migrateInlineChaptersIfAny(fileBooks);
       return DataService.cachedBooksMem;
     }
 
-    // 2) 文件还没有 → 从旧的 preferences 迁移一次,迁完落文件
-    //    文件已有但缺少收藏书时,也从旧缓存补齐。之前只在文件不存在时迁移,
-    //    导致已生成的 1 本文件缓存挡住旧 preferences 里的完整书架缓存。
+    // 从旧 preferences 迁移 / 在文件损坏时据此重建。
     let legacyRaw = '';
     let legacyBooks: Book[] = [];
     try {
@@ -82,23 +225,26 @@ export class DataService {
 
     if (legacyBooks.length > 0) {
       const merged = DataService.mergeBookLists(fileBooks, legacyBooks);
-      if (merged.length !== fileBooks.length) {
+      if (merged.length !== fileBooks.length || corrupt) {
         fileBooks = merged;
-        await DataService.writeCachedFile(JSON.stringify(fileBooks));
+        await DataService.persistChaptersForBooks(fileBooks); // 带章节的写 sidecar
+        await DataService.writeIndex(fileBooks);              // 索引瘦身
       }
-      // 一次性根治:旧 preferences 缓存把整章 TOC 攒成了 ~23MB 巨值。
-      // preferences XML 模式每次 flush 都会全量重写整个 store(24MB) → 主进程 + 卡片
-      // FormExtension 并发写时极易损坏,把幸存的收藏/进度一并带走(这正是收藏丢失的元凶)。
-      // 确认这些书已并入文件缓存后,把 preferences 里的值压成"仅元数据壳"(去掉 chapters):
-      // 体积降到几十 KB,既消除并发损坏隐患,又保留卡片冷启动兜底所需的标题/封面。
+      // 一次性根治旧 preferences 巨值:并入后压成壳,体积降到几十 KB(消并发损坏隐患,留卡片兜底标题/封面)。
       if (legacyRaw.length > LEGACY_SLIM_THRESHOLD) {
         try {
           const slim: Book[] = legacyBooks.map((b: Book): Book => DataService.slimBook(b));
           await PreferenceService.putCachedBookJson(JSON.stringify(slim));
         } catch (_e) { /* 压缩失败保持原值,下次冷启动重试 */ }
       }
+    } else if (corrupt) {
+      // 文件损坏且无可恢复来源:用合法空数组原子覆盖,清掉坏文件。收藏 id 仍在 → 书架占位卡,重搜即自愈。
+      await DataService.writeIndex([]);
+      fileBooks = [];
     }
+
     DataService.cachedBooksMem = fileBooks;
+    await DataService.migrateInlineChaptersIfAny(fileBooks);
     return DataService.cachedBooksMem;
   }
 
@@ -149,7 +295,7 @@ export class DataService {
     return merged;
   }
 
-  /** 元数据壳:卡片冷启动兜底只用 id/标题/作者/封面,去掉 chapters + intro 砍掉绝大部分体积 */
+  /** 元数据壳:索引/卡片兜底只用 id/标题/作者/封面/章数,去掉 chapters + intro 砍掉绝大部分体积 */
   private static slimBook(b: Book): Book {
     return {
       id: b.id,
@@ -173,7 +319,7 @@ export class DataService {
     };
   }
 
-  /** 返回:本地导入书 + 缓存书(去重,本地优先) */
+  /** 返回:本地导入书 + 缓存书(去重,本地优先)。缓存书为元数据壳,章节按需用 getChaptersForBook 懒加载。 */
   static async getBooks(_context: common.UIAbilityContext): Promise<Book[]> {
     const local = await DataService.load();
     const cached = await DataService.loadCachedBooks();
@@ -194,12 +340,23 @@ export class DataService {
     return merged;
   }
 
+  /** 按 id 取书,并补齐章节:本地导入书自带章节;缓存书章节缺失时从 sidecar 懒加载(瞬时,无网络)。 */
   static async getBookById(_context: common.UIAbilityContext, id: string): Promise<Book | undefined> {
     const local = await DataService.load();
     const fromLocal = local.find((b) => b.id === id);
     if (fromLocal) return fromLocal;
     const cached = await DataService.loadCachedBooks();
-    return cached.find((b) => b.id === id);
+    const book = cached.find((b) => b.id === id);
+    if (!book) return undefined;
+    if (!book.chapters || book.chapters.length === 0) {
+      const toc = await DataService.getChaptersForBook(id);
+      if (toc.length > 0) {
+        // 回填到内存对象(引用持有,后续访问直接命中,不再读 sidecar)
+        book.chapters = toc;
+        if (!book.chapterCount || book.chapterCount < toc.length) book.chapterCount = toc.length;
+      }
+    }
+    return book;
   }
 
   static async getImportedBooks(): Promise<Book[]> {
@@ -226,7 +383,7 @@ export class DataService {
     DataService.cache = filtered;
   }
 
-  /** 把搜索 / 在线源的书写入缓存池(去重,新数据覆盖旧的;最多 200 本) */
+  /** 把搜索 / 在线源的书写入缓存池(去重,新数据覆盖旧的;最多 200 本)。索引存壳,章节存 sidecar。 */
   static async upsertCachedBook(book: Book): Promise<void> {
     if (!book || !book.id) return;
     if (book.id.startsWith('import_')) return;
@@ -235,28 +392,43 @@ export class DataService {
     if (idx >= 0) {
       list.splice(idx, 1);
     }
-    list.unshift(book);
-    if (list.length > 200) {
-      list.length = 200;
+    list.unshift(book); // 内存保留完整书(含章节),本会话内访问瞬时
+    if (list.length > MAX_CACHED_BOOKS) {
+      const removed = list.splice(MAX_CACHED_BOOKS, list.length - MAX_CACHED_BOOKS);
+      for (const r of removed) {
+        if (r && r.id) await DataService.deleteToc(r.id); // 淘汰的书清掉其 sidecar,避免孤儿文件
+      }
     }
     DataService.cachedBooksMem = list;
-    await DataService.writeCachedFile(JSON.stringify(list));
+    await DataService.writeIndex(list);
+    // 仅在确有章节时写 sidecar:空章节的 upsert(如时长回写前)不覆盖已存的好目录
+    if (book.chapters && book.chapters.length > 0) {
+      await DataService.writeToc(book.id, book.chapters);
+    }
   }
 
-  /** 清空缓存书池(文件 + 内存),用于"清空书架"。 */
+  /** 清空缓存书池(索引 + sidecar 目录 + 内存),用于"清空书架"。 */
   static async clearCachedBooks(): Promise<void> {
     DataService.cachedBooksMem = [];
+    DataService.persistUnsafe = false; // 用户主动清空,解除读失败保护
     const path = DataService.cachedFilePath();
     if (path) {
       try { await fileIo.unlink(path); } catch (_e) { /* ignore */ }
+      try { await fileIo.unlink(path + '.tmp'); } catch (_e) { /* ignore */ }
     }
+    const dir = DataService.tocDirPath();
+    if (dir) {
+      try { await fileIo.rmdir(dir); } catch (_e) { /* ignore */ }
+    }
+    DataService.tocDirReady = false;
   }
 
   static async removeCachedBook(bookId: string): Promise<void> {
     const list = await DataService.loadCachedBooks();
     const filtered = list.filter((b) => b.id !== bookId);
     DataService.cachedBooksMem = filtered;
-    await DataService.writeCachedFile(JSON.stringify(filtered));
+    await DataService.writeIndex(filtered);
+    await DataService.deleteToc(bookId);
   }
 
   /**
