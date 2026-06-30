@@ -9,6 +9,7 @@ import { AudioService } from '../service/AudioService';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { DataService } from '../service/DataService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
+import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
 import { SourceVariableStore } from '../service/SourceVariableStore';
@@ -99,6 +100,12 @@ export default class EntryAbility extends UIAbility {
 
     await PreferenceService.init(this.context);
     hilog.info(DOMAIN, TAG, 'initServicesCore: PreferenceService ready, elapsed=%{public}dms', Date.now() - startTime);
+
+    try {
+      await StatsService.init(this.context);
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'StatsService init failed: %{public}s', JSON.stringify(e));
+    }
 
     this.restoreColorMode();
     // 初始化源变量存储和缓存服务

@@ -344,6 +344,16 @@ export class WebViewAudioExtractor {
       if (task.settleTimer) clearTimeout(task.settleTimer);
     }
     this.busy = false;
+    if (this.taskQueue.length === 0) {
+      // 队列清空：把隐藏 WebView 退回 about:blank，释放上一个远程章节页驻留的
+      // DOM/网图/JS。嗅探页常带整页脚本与图片，停在最后一页会把整页内容常驻内存
+      // （实测瞬时 PSS 顶到 ~990MB）。退回空白页让 ArkWeb 回收掉这部分。
+      try {
+        this.controller?.loadUrl('about:blank');
+        this.currentUrl = 'about:blank';
+      } catch (_e) { /* ignore */ }
+      return;
+    }
     // 让出一帧再起下个，避免 WebView 状态没完全切干净
     setTimeout(() => this.runNext(), 80);
   }

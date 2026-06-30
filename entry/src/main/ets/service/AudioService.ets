@@ -16,6 +16,7 @@ import { BackgroundTaskService } from './BackgroundTaskService';
 import { ChapterCacheService } from './ChapterCacheService';
 import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
+import { StatsService } from './StatsService';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
 import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
@@ -60,6 +61,8 @@ export class AudioService {
    *  避免依赖 tick 频繁落盘,配合低功耗渲染器长休眠周期 */
   private lastPersistAt: number = 0;
   private static readonly PERSIST_INTERVAL_MS: number = 5000;
+  private static readonly USAGE_TICK_SECONDS: number = 15;
+  private static readonly USAGE_TICK_MS: number = 15000;
   /** 续播 seek 目标(ms)。>0 表示正在等待 seek 生效:
    *  此期间 AVPlayer 可能先回调一个接近 0 的旧 timeUpdate,会把 progressMs 打回起点。
    *  守卫:位置尚未追上目标前忽略这些偏小的旧值,到达目标附近才解除。 */
@@ -443,6 +446,7 @@ export class AudioService {
     this.stopTick();
     this.timer = setInterval(() => {
       this.persistHistory();
+      this.recordListenUsage();
       // 同步给 widget:稳态播放期间 stateChange 不再翻转,卡片那边的 FormExt 进程
       // 缓存又跟主进程隔离,系统触发 onUpdateForm 时容易读到陈旧的 isPlaying。
       // 主进程定期强推一次最新状态,卡片至多滞后该间隔即可纠正。
@@ -450,7 +454,7 @@ export class AudioService {
       // 抵消 AUDIOBOOK 流的省电收益。toggle/pause/release/seek 都有即时同步,
       // 这里只是兜底。
       this.syncPlaybackState();
-    }, 15000);
+    }, AudioService.USAGE_TICK_MS);
   }
 
   private stopTick(): void {
@@ -458,6 +462,13 @@ export class AudioService {
       clearInterval(this.timer);
       this.timer = -1;
     }
+  }
+
+  private recordListenUsage(): void {
+    if (!this.state || !this.state.isPlaying || !this.state.currentBook || !this.state.currentChapter) return;
+    StatsService.addListenSeconds(AudioService.USAGE_TICK_SECONDS).catch((err: Error) => {
+      hilog.warn(DOMAIN, TAG, 'recordListenUsage failed: %{public}s', err?.message ?? JSON.stringify(err));
+    });
   }
 
   private async persistHistory(): Promise<void> {

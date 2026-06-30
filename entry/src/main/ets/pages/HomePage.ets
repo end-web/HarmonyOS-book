@@ -827,7 +827,7 @@ export struct HomePage {
       .width('100%')
       .height('100%')
       .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.None) // 下拉不动:顶部不回弹
+      .edgeEffect(EdgeEffect.Spring)
       .cachedCount(5)
       .clip(false) // 允许内容穿透到固定搜索栏下方产生毛玻璃透出
       .backgroundColor(Color.Transparent) // 让 L0 暖色渐变透出
@@ -997,6 +997,7 @@ export struct HomePage {
           .height(100)
           .borderRadius(AppRadius.Sm)
           .objectFit(ImageFit.Cover)
+          .sourceSize({ width: 300, height: 400 })
       } else {
         Stack() {
           Column().width('100%').height('100%').backgroundColor($r('sys.color.brand'))
@@ -1111,6 +1112,7 @@ export struct HomePage {
             .aspectRatio(0.7)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
         } else {
           Stack() {
             Column()

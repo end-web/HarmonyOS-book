@@ -56,6 +56,8 @@ export struct BookCard {
             .aspectRatio(0.75)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
+            // 按封面卡显示尺寸解码，避免原图(常 800×1200+)整张解码进内存
+            .sourceSize({ width: 300, height: 400 })
             .alt($r('app.media.app_icon_legacy'))
             .onError(() => {
               this.imageLoadFailed = true;
@@ -66,6 +68,7 @@ export struct BookCard {
             .aspectRatio(0.75)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
             .onError(() => { this.imageLoadFailed = true; })
         } else if (this.book.cover && !this.book.cover.startsWith('http') && !this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image($rawfile(this.book.cover))

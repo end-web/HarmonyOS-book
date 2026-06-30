@@ -6,6 +6,7 @@ import { ReaderBackInterceptor, ReaderEntryDecider, ReaderPage } from './ReaderP
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { ImportPage } from './ImportPage';
+import { ReadingStatsPage } from './ReadingStatsPage';
 import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
 import { BrowserPage } from './BrowserPage';
@@ -332,6 +333,13 @@ struct Index {
     } else if (name === 'import') {
       NavDestination() {
         ImportPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'stats') {
+      NavDestination() {
+        ReadingStatsPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))

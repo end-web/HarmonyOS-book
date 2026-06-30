@@ -18,7 +18,6 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
-import { AppMotion, AppCurve } from '../theme/Theme';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -41,9 +40,6 @@ export struct MainPage {
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
   @Local miniBarCollapsed: boolean = false;
-  /** Tab 内容入场动画状态:缩放 + 透明度(切 Tab 时新页缩放淡入) */
-  @Local contentOpacity: number = 1;
-  @Local contentScale: number = 1;
 
   private tabController: HdsTabsController = new HdsTabsController();
   private context: common.UIAbilityContext | null = null;
@@ -128,8 +124,7 @@ export struct MainPage {
     const idx = v as number;
     if (idx < 0 || idx > 3) return;
     setTimeout(() => {
-      this.currentTab = idx;
-      this.tabController.changeIndex(idx);
+      this.changeTab(idx);
     }, 60);
   }
 
@@ -137,23 +132,16 @@ export struct MainPage {
     const idx = await PreferenceService.getDefaultTab();
     if (idx <= 0 || idx > 3) return;
     setTimeout(() => {
-      this.currentTab = idx;
-      this.tabController.changeIndex(idx);
+      this.changeTab(idx);
     }, 50);
   }
 
   /**
-   * Tab 内容入场动画:新页面缩放淡入(0.94→1 + 透明度 0→1),
-   * 与详情页「缩放淡入转场」保持一致。HdsTabs 瞬间切走旧页,这里只为新页补一段入场,
-   * 柔化原本生硬的直切。曲线用入场减速 token,时长用 Slow(350ms)。
+   * 统一切 Tab 入口,让外部事件、默认页恢复、页面内跳转都走 HdsTabs 原生切换。
    */
-  private animateTabIn(): void {
-    this.contentOpacity = 0;
-    this.contentScale = 0.94;
-    this.getUIContext()?.animateTo({ duration: AppMotion.Slow, curve: AppCurve.Decelerate }, () => {
-      this.contentOpacity = 1;
-      this.contentScale = 1;
-    });
+  private changeTab(index: number): void {
+    if (index < 0 || index > 3 || index === this.currentTab) return;
+    this.tabController.changeIndex(index);
   }
 
   private async restoreLastPlayed(): Promise<void> {
@@ -236,8 +224,6 @@ export struct MainPage {
               this.openCategory(sourceUrl, sourceName, title, url),
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(0, scroller); }
           })
-            .opacity(this.contentOpacity)
-            .scale({ x: this.contentScale, y: this.contentScale })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.house'), $r('sys.symbol.house_fill'), '首页'))
 
@@ -246,11 +232,9 @@ export struct MainPage {
             visible: this.currentTab === 1,
             navStack: this.navStack,
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
-            onGotoStore: () => this.tabController.changeIndex(0),
+            onGotoStore: () => this.changeTab(0),
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(1, scroller); }
           })
-            .opacity(this.contentOpacity)
-            .scale({ x: this.contentScale, y: this.contentScale })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.archivebox'), $r('sys.symbol.archivebox_fill'), '书架'))
 
@@ -259,8 +243,6 @@ export struct MainPage {
             navStack: this.navStack,
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(2, scroller); }
           })
-            .opacity(this.contentOpacity)
-            .scale({ x: this.contentScale, y: this.contentScale })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.folder'), $r('sys.symbol.folder_fill'), '书源'))
 
@@ -269,8 +251,6 @@ export struct MainPage {
             navStack: this.navStack,
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(3, scroller); }
           })
-            .opacity(this.contentOpacity)
-            .scale({ x: this.contentScale, y: this.contentScale })
         }
         .tabBar(this.buildTabBar($r('sys.symbol.person'), $r('sys.symbol.person_fill'), '我的'))
       }
@@ -321,8 +301,8 @@ export struct MainPage {
       })
       .onChange((index: number) => {
         this.currentTab = index;
-        this.animateTabIn();
       })
+      .animationDuration(300)
       .width('100%')
       .height('100%')
       .backgroundColor('#FFF5F5F5')

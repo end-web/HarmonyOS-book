@@ -56,6 +56,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .sourceSize({ width: 300, height: 400 })
           .rotate({ angle: this.coverAngle })
           .id('mini-cover-img')
       } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
@@ -63,6 +64,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .sourceSize({ width: 300, height: 400 })
           .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
           .animation({
             duration: this.playerState.isPlaying ? 20000 : 300,

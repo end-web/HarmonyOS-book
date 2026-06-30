@@ -100,6 +100,7 @@ export struct ResumeCard {
         .height(60)
         .borderRadius(6)
         .objectFit(ImageFit.Cover)
+        .sourceSize({ width: 150, height: 200 })
     } else {
       Stack() {
         Column().width('100%').height('100%').backgroundColor(HomeTheme.Accent)

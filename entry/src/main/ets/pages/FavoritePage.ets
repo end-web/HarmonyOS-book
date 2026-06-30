@@ -914,6 +914,7 @@ export struct FavoritePage {
             .aspectRatio(0.72)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
             .alt($r('app.media.app_icon_legacy'))
             .draggable(false)
             .hitTestBehavior(HitTestMode.Transparent)
@@ -923,6 +924,7 @@ export struct FavoritePage {
             .aspectRatio(0.72)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
             .draggable(false)
             .hitTestBehavior(HitTestMode.Transparent)
         } else if (book.cover) {
@@ -1032,6 +1034,7 @@ export struct FavoritePage {
             .height(100)
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
             .draggable(false)
             .hitTestBehavior(HitTestMode.Transparent)
         } else if (book.cover && (book.cover.startsWith('/data/') || book.cover.startsWith('file://'))) {
@@ -1040,6 +1043,7 @@ export struct FavoritePage {
             .height(100)
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
             .draggable(false)
             .hitTestBehavior(HitTestMode.Transparent)
         } else {

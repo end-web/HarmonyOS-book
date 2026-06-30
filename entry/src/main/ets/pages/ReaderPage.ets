@@ -6,6 +6,7 @@ import { AppColor, AppFont, AppRadius, AppSpace, AppCurve } from '../theme/Theme
 import { Book, Chapter } from '../model/Book';
 import { PreferenceService, ReaderSettingsItem } from '../service/PreferenceService';
 import { ReaderService } from '../service/ReaderService';
+import { StatsService } from '../service/StatsService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { SearchCache } from '../utils/SearchCache';
@@ -41,6 +42,8 @@ const TOOLBAR_ANIM = 300;
 const SYSTEM_BACK_EDGE_VP = 56;
 /** 返回转场结束后再释放 ReaderKit/落盘,避免侧滑退场动画被 I/O 或 releaseBook 卡住。 */
 const LEAVE_CLEANUP_DELAY_MS = 420;
+const READING_STATS_INTERVAL_MS = 15000;
+const READING_STATS_TICK_SECONDS = 15;
 
 export class ReaderBackInterceptor {
   private static handler: (() => boolean) | null = null;
@@ -181,6 +184,7 @@ export struct ReaderPage {
   private pageViewW: number = 0;
   private pageViewH: number = 0;
   private hudTimerId: number = -1;
+  private readingStatsTimer: number = -1;
   private isLastPage: boolean = false;
   private isFirstPage: boolean = false;
   // ReadPageComponent 必须先就绪(readerCallback 触发),否则排版引擎(textTpl)未挂载,
@@ -252,6 +256,7 @@ export struct ReaderPage {
     const switchingAway = this.switching;
     this.pageShowBound = false;
     this.stopHudTicker();
+    this.stopReadingStatsTicker();
     if (pageShowBound) {
       try { controller.off('pageShow'); } catch (_e) { /* ignore */ }
     }
@@ -275,6 +280,7 @@ export struct ReaderPage {
     if (this.isLeaving) return;
     this.isLeaving = true;
     this.stopHudTicker();
+    this.stopReadingStatsTicker();
   }
 
   private handleBack(): boolean {
@@ -401,6 +407,7 @@ export struct ReaderPage {
           this.pageFooter = footer;
           this.updatePageBounds(footer);
           this.persistProgress(false);
+          this.startReadingStatsTicker();
           if (this.waitingThemePageShow) {
             this.waitingThemePageShow = false;
             this.settleReaderThemeSoon(120);
@@ -410,6 +417,7 @@ export struct ReaderPage {
         } else if (data.state === readerCore.PageState.OPEN_BOOK_FAIL) {
           this.loading = false;
           this.errorMsg = '打开本章失败';
+          this.stopReadingStatsTicker();
         }
       });
       this.pageShowBound = true;
@@ -565,6 +573,7 @@ export struct ReaderPage {
     if (this.isLeaving || this.switching) return;
     this.switching = true;
     this.persistProgress(true);
+    this.stopReadingStatsTicker();
     // 切章释放旧书要延后到 doRender:先把新章节正文和 parser 准备好,
     // 再在 registerBookParser 前立即 releaseBook,避免旧 parser 继续显示上一章。
     this.loading = true;
@@ -593,6 +602,7 @@ export struct ReaderPage {
         this.errorMsg = '正文为空';
         this.loading = false;
         this.switching = false;
+        this.stopReadingStatsTicker();
         return;
       }
       const path = await ReaderService.writeChapterTxt(this.context!, this.book, this.currentChapter, text);
@@ -624,6 +634,7 @@ export struct ReaderPage {
         this.errorMsg = (be && be.message) ? be.message : String(e);
       }
       this.loading = false;
+      this.stopReadingStatsTicker();
     }
   }
 
@@ -925,6 +936,34 @@ export struct ReaderPage {
     if (this.hudTimerId < 0) return;
     clearInterval(this.hudTimerId);
     this.hudTimerId = -1;
+  }
+
+  private startReadingStatsTicker(): void {
+    if (this.readingStatsTimer >= 0) return;
+    this.readingStatsTimer = setInterval((): void => {
+      if (!this.isReadingStatsActive()) return;
+      StatsService.addReadSeconds(READING_STATS_TICK_SECONDS).catch((err: Error) => {
+        console.warn(`[ReaderPage] record read usage failed: ${err?.message ?? JSON.stringify(err)}`);
+      });
+    }, READING_STATS_INTERVAL_MS);
+  }
+
+  private stopReadingStatsTicker(): void {
+    if (this.readingStatsTimer < 0) return;
+    clearInterval(this.readingStatsTimer);
+    this.readingStatsTimer = -1;
+  }
+
+  private isReadingStatsActive(): boolean {
+    return this.opened
+      && !this.loading
+      && !this.errorMsg
+      && !this.toolbarVisible
+      && !this.sheetOpen
+      && !this.switching
+      && !this.isLeaving
+      && !!this.book
+      && !!this.currentChapter;
   }
 
   build() {
