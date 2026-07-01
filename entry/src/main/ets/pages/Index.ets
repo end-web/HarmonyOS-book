@@ -5,6 +5,7 @@ import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerP
 import { ReaderBackInterceptor, ReaderEntryDecider, ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
+import { GuidePage } from './GuidePage';
 import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
 import { PrivacyPage } from './PrivacyPage';
@@ -327,6 +328,13 @@ struct Index {
     } else if (name === 'about') {
       NavDestination() {
         AboutPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'guide') {
+      NavDestination() {
+        GuidePage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))

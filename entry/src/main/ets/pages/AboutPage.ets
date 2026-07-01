@@ -1,9 +1,106 @@
 import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
+import { common } from '@kit.AbilityKit';
+import { UpdateService, UpdateInfo } from '../service/UpdateService';
 
 @ComponentV2
 export struct AboutPage {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Local appVersion: string = '0.0.0';
+  @Local checking: boolean = false;
+  /** 已知的可更新信息(缓存或本次检查),用于行内红点与二次点击 */
+  @Local latestInfo: UpdateInfo | null = null;
+
+  aboutToAppear(): void {
+    this.appVersion = UpdateService.getCurrentVersion();
+    const ctx = this.getUIContext().getHostContext() as common.BaseContext;
+    UpdateService.getCachedInfo(ctx).then((info: UpdateInfo | null) => {
+      if (info && info.hasUpdate) {
+        this.latestInfo = info;
+      }
+    });
+  }
+
+  private toast(msg: string): void {
+    this.getUIContext().getPromptAction().showToast({ message: msg, duration: 2000 });
+  }
+
+  private async doCheckUpdate(): Promise<void> {
+    if (this.checking) return;
+    this.checking = true;
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const info = await UpdateService.checkUpdate(ctx);
+    this.checking = false;
+    if (!info) {
+      this.toast('检查失败,请检查网络后重试');
+      return;
+    }
+    this.latestInfo = info.hasUpdate ? info : null;
+    if (info.hasUpdate) {
+      this.showUpdateDialog(ctx, info);
+    } else {
+      this.toast(`当前已是最新版本 v${info.currentVersion}`);
+    }
+  }
+
+  private showUpdateDialog(ctx: common.UIAbilityContext, info: UpdateInfo): void {
+    let notes = info.notes.trim();
+    if (notes.length > 300) notes = notes.substring(0, 300) + '…';
+    const message = `最新版本 v${info.latestVersion}（当前 v${info.currentVersion}）`
+      + (notes ? `\n\n${notes}` : '');
+    this.getUIContext().showAlertDialog({
+      title: '发现新版本',
+      message,
+      primaryButton: {
+        value: '前往下载',
+        action: () => {
+          UpdateService.openReleasePage(ctx, info.releaseUrl).catch(() => {
+            this.toast('无法打开浏览器');
+          });
+        }
+      },
+      secondaryButton: {
+        value: '稍后',
+        action: () => {}
+      },
+      alignment: DialogAlignment.Center,
+    });
+  }
+
+  @Builder
+  checkUpdateTrailing(): void {
+    if (this.checking) {
+      LoadingProgress()
+        .width(18)
+        .height(18)
+        .color($r('sys.color.font_tertiary'))
+    } else if (this.latestInfo && this.latestInfo.hasUpdate) {
+      Row({ space: 4 }) {
+        Column()
+          .width(6)
+          .height(6)
+          .borderRadius(3)
+          .backgroundColor('#FF3B30')
+        Text(`新版 v${this.latestInfo.latestVersion}`)
+          .fontSize(AppFont.Body)
+          .fontColor('#FF6B3D')
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(16)
+          .fontColor([$r('sys.color.font_tertiary')])
+      }
+      .alignItems(VerticalAlign.Center)
+    } else {
+      Row({ space: 4 }) {
+        Text(`v${this.appVersion}`)
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_tertiary'))
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(16)
+          .fontColor([$r('sys.color.font_tertiary')])
+      }
+      .alignItems(VerticalAlign.Center)
+    }
+  }
 
   build() {
     Column() {
@@ -38,7 +135,7 @@ export struct AboutPage {
             .fontSize(AppFont.TitleL)
             .fontColor($r('sys.color.font_primary'))
             .fontWeight(FontWeight.Bold)
-          Text('v1.0.0')
+          Text(`v${this.appVersion}`)
             .fontSize(AppFont.Body)
             .fontColor($r('sys.color.font_tertiary'))
         }
@@ -85,6 +182,34 @@ export struct AboutPage {
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+
+          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row() {
+            Text('检查更新')
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_secondary'))
+            Blank()
+            this.checkUpdateTrailing()
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+          .onClick(() => this.doCheckUpdate())
+
+          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row() {
+            Text('使用说明')
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_secondary'))
+            Blank()
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(16)
+              .fontColor([$r('sys.color.font_tertiary')])
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+          .onClick(() => this.navStack.pushPathByName('guide', ''))
 
           Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
 

@@ -19,6 +19,7 @@ import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
 import { WebEngineGate } from '../service/WebEngineGate';
+import { UpdateService } from '../service/UpdateService';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -61,6 +62,10 @@ export struct MainPage {
     this.restoreDefaultTab();
     emitter.on(EVT_SWITCH_TAB, this.switchTabHandler);
     emitter.on(EVT_NAVIGATE_TO_BOOK, this.navigateBookHandler);
+    // 启动静默检查更新(24h 节流,失败静默),不阻塞首帧
+    if (this.context) {
+      UpdateService.silentCheck(this.context);
+    }
   }
 
   aboutToDisappear(): void {

@@ -18,6 +18,7 @@ const CONTENT_ITEMS: ProfileItem[] = [
 const SYSTEM_ITEMS: ProfileItem[] = [
   { icon: $r('sys.symbol.gearshape'), label: '设置', id: 'settings', iconBg: '#8E8E93' },
   { icon: $r('sys.symbol.doc_text'), label: '书源管理', id: 'sourceManage', iconBg: '#FF9500' },
+  { icon: $r('sys.symbol.questionmark_circle'), label: '使用说明', id: 'guide', iconBg: '#5AC8FA' },
   { icon: $r('sys.symbol.info_circle'), label: '关于', id: 'about', iconBg: '#0A59F7' }
 ];
 
@@ -97,6 +98,8 @@ export struct ProfilePage {
       this.navStack.pushPathByName('settings', '');
     } else if (id === 'sourceManage') {
       this.navStack.pushPathByName('sourceManage', '');
+    } else if (id === 'guide') {
+      this.navStack.pushPathByName('guide', '');
     } else if (id === 'about') {
       this.navStack.pushPathByName('about', '');
     }
