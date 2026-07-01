@@ -91,9 +91,9 @@ export struct ReadingStatsPage {
 
   private statCells(): StatCell[] {
     return [
-      { icon: $r('sys.symbol.calendar'), label: '近7天', value: this.formatCompactHours(this.summary.weekSeconds) },
-      { icon: $r('sys.symbol.calendar_badge_clock'), label: '近30天', value: this.formatCompactHours(this.summary.monthSeconds) },
-      { icon: $r('sys.symbol.clock_fill'), label: '累计', value: this.formatCompactHours(this.summary.totalSeconds) }
+      { icon: $r('sys.symbol.clock_fill'), label: '累计时长', value: this.formatCompactHours(this.totalListen() + this.totalRead()) },
+      { icon: $r('sys.symbol.book'), label: '阅听书籍', value: `${this.records.length}本` },
+      { icon: $r('sys.symbol.flame'), label: '连续收听', value: `${this.streak}天` }
     ];
   }
 
@@ -241,24 +241,6 @@ export struct ReadingStatsPage {
         .alignItems(HorizontalAlign.Start)
 
         Blank()
-
-        // 连续打卡 chip
-        Column({ space: 2 }) {
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.flame'))
-              .fontSize(18)
-              .fontColor([Color.White])
-            Text(`${this.streak}`)
-              .fontSize(26)
-              .fontColor(Color.White)
-              .fontWeight(FontWeight.Bold)
-          }
-          .alignItems(VerticalAlign.Center)
-          Text('连续天数')
-            .fontSize(AppFont.Caption)
-            .fontColor('#F5E4DA')
-        }
-        .alignItems(HorizontalAlign.End)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
