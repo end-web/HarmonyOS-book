@@ -11,6 +11,7 @@ import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
 import { BrowserPage } from './BrowserPage';
 import { LoginPage } from './LoginPage';
+import { SourcePage } from './SourcePage';
 import { SourceDebugPage } from './SourceDebugPage';
 import { SourceEditPage } from './SourceEditPage';
 import { emitter } from '@kit.BasicServicesKit';
@@ -381,6 +382,13 @@ struct Index {
     } else if (name === 'sourceDebug') {
       NavDestination() {
         SourceDebugPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'sourceManage') {
+      NavDestination() {
+        SourcePage({ navStack: this.navStack, showBackButton: true })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))

@@ -56,6 +56,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .syncLoad(true)
           .rotate({ angle: this.coverAngle })
           .id('mini-cover-img')
       } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
@@ -63,6 +64,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .syncLoad(true)
           .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
           .animation({
             duration: this.playerState.isPlaying ? 20000 : 300,
@@ -76,6 +78,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .syncLoad(true)
           .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
           .animation({
             duration: this.playerState.isPlaying ? 20000 : 300,
@@ -90,6 +93,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .syncLoad(true)
           .id('mini-cover-img-fallback')
       }
     }
@@ -97,24 +101,24 @@ export struct MiniPlayer {
 
   build() {
     if (this.playerState.currentBook) {
-      if (this.collapsed) {
+      Row({ space: this.collapsed ? 0 : AppSpace.Sm }) {
         Stack() {
           this.coverImageBuilder()
         }
-        .width('100%')
-        .height('100%')
-        .onClick(() => this.onExpand())
-      } else {
-        Row({ space: AppSpace.Sm }) {
-          Stack() {
-            this.coverImageBuilder()
+        .width(this.collapsed ? '100%' : 44)
+        .height(this.collapsed ? '100%' : 44)
+        .borderRadius(this.collapsed ? 999 : 22)
+        .backgroundColor($r('sys.color.comp_background_tertiary'))
+        .clip(true)
+        .onClick(() => {
+          if (this.collapsed) {
+            this.onExpand();
+          } else {
+            this.onTapBody();
           }
-          .width(44)
-          .height(44)
-          .borderRadius(22)
-          .clip(true)
-          .onClick(() => this.onTapBody())
+        })
 
+        if (!this.collapsed) {
           Column({ space: 2 }) {
             Text(this.playerState.currentBook.title)
               .fontSize(AppFont.Body)
@@ -149,10 +153,13 @@ export struct MiniPlayer {
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
             .onClick(() => this.onNext())
         }
-        .width('100%')
-        .height('100%')
-        .padding({ left: AppSpace.Xs, right: AppSpace.Md })
       }
+      .width('100%')
+      .height('100%')
+      .padding({
+        left: this.collapsed ? 0 : AppSpace.Xs,
+        right: this.collapsed ? 0 : AppSpace.Md
+      })
     }
   }
 }

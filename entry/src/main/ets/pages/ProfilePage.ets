@@ -12,12 +12,12 @@ interface ProfileItem {
 }
 
 const CONTENT_ITEMS: ProfileItem[] = [
-  { icon: $r('sys.symbol.arrow_down_circle'), label: '本地导入', id: 'import', iconBg: '#34C759' },
-  { icon: $r('sys.symbol.clock'), label: '听读统计', id: 'stats', iconBg: '#2F7DF6' }
+  { icon: $r('sys.symbol.arrow_down_circle'), label: '本地导入', id: 'import', iconBg: '#34C759' }
 ];
 
 const SYSTEM_ITEMS: ProfileItem[] = [
   { icon: $r('sys.symbol.gearshape'), label: '设置', id: 'settings', iconBg: '#8E8E93' },
+  { icon: $r('sys.symbol.doc_text'), label: '书源管理', id: 'sourceManage', iconBg: '#FF9500' },
   { icon: $r('sys.symbol.info_circle'), label: '关于', id: 'about', iconBg: '#0A59F7' }
 ];
 
@@ -93,10 +93,10 @@ export struct ProfilePage {
   private onItemTap(id: string): void {
     if (id === 'import') {
       this.navStack.pushPathByName('import', '');
-    } else if (id === 'stats') {
-      this.navStack.pushPathByName('stats', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');
+    } else if (id === 'sourceManage') {
+      this.navStack.pushPathByName('sourceManage', '');
     } else if (id === 'about') {
       this.navStack.pushPathByName('about', '');
     }

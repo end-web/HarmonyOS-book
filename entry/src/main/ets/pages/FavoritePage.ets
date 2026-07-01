@@ -15,6 +15,8 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 
+const BOOKSHELF_COVER_RATIO: number = 0.75;
+
 interface BookUpdateInfo {
   title: string;
   oldCount: number;
@@ -905,13 +907,13 @@ export struct FavoritePage {
               .margin({ top: 48 })
           }
           .width('100%')
-          .aspectRatio(0.72)
+          .aspectRatio(BOOKSHELF_COVER_RATIO)
           .borderRadius(AppRadius.Md)
           .clip(true)
         } else if (book.cover && book.cover.startsWith('http')) {
           Image(book.cover)
             .width('100%')
-            .aspectRatio(0.72)
+            .aspectRatio(BOOKSHELF_COVER_RATIO)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .sourceSize({ width: 300, height: 400 })
@@ -921,7 +923,7 @@ export struct FavoritePage {
         } else if (book.cover && (book.cover.startsWith('/data/') || book.cover.startsWith('file://'))) {
           Image('file://' + book.cover.replace(/^file:\/\//, ''))
             .width('100%')
-            .aspectRatio(0.72)
+            .aspectRatio(BOOKSHELF_COVER_RATIO)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .sourceSize({ width: 300, height: 400 })
@@ -930,7 +932,7 @@ export struct FavoritePage {
         } else if (book.cover) {
           Image($rawfile(book.cover))
             .width('100%')
-            .aspectRatio(0.72)
+            .aspectRatio(BOOKSHELF_COVER_RATIO)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .draggable(false)
@@ -939,7 +941,7 @@ export struct FavoritePage {
           // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
           Image($r('app.media.app_icon_legacy'))
             .width('100%')
-            .aspectRatio(0.72)
+            .aspectRatio(BOOKSHELF_COVER_RATIO)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }
@@ -1126,7 +1128,7 @@ export struct FavoritePage {
           .margin({ top: AppSpace.Xs })
       }
       .width('100%')
-      .aspectRatio(0.72)
+      .aspectRatio(BOOKSHELF_COVER_RATIO)
       .borderRadius(AppRadius.Md)
       .justifyContent(FlexAlign.Center)
       .backgroundColor($r('sys.color.comp_background_secondary'))

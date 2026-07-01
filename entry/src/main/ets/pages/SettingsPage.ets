@@ -31,7 +31,7 @@ const THEME_OPTIONS: ThemeOption[] = [
 const TAB_OPTIONS: TabOption[] = [
   { idx: 0, label: '首页' },
   { idx: 1, label: '书架' },
-  { idx: 2, label: '书源' },
+  { idx: 2, label: '记录' },
   { idx: 3, label: '我的' }
 ];
 

@@ -3,9 +3,33 @@ import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 
 const STORE_NAME = 'listenbook_stats';
-const KEY_DAILY_STATS = 'daily_usage_stats_v1';
+const KEY_BOOK_USAGE = 'book_usage_records_v2';
 
 export const EVT_USAGE_STATS_UPDATED = 'app.usageStats.updated';
+
+export interface BookUsageInput {
+  bookId: string;
+  title: string;
+  author?: string;
+  cover?: string;
+}
+
+export interface BookUsageDay {
+  day: string;
+  listenSeconds: number;
+  readSeconds: number;
+}
+
+export interface BookUsageStats {
+  bookId: string;
+  title: string;
+  author: string;
+  cover: string;
+  listenSeconds: number;
+  readSeconds: number;
+  updatedAt: number;
+  days: BookUsageDay[];
+}
 
 export interface DailyUsageStats {
   day: string;
@@ -24,6 +48,11 @@ export interface UsageStatsSummary {
   weekSeconds: number;
   monthSeconds: number;
   totalSeconds: number;
+}
+
+export interface HeatPoint {
+  day: string;
+  seconds: number;
 }
 
 export class StatsService {
@@ -50,57 +79,104 @@ export class StatsService {
     return StatsService.store;
   }
 
-  static async addListenSeconds(seconds: number): Promise<void> {
-    await StatsService.addSeconds(seconds, true);
+  static async addListenSeconds(seconds: number, book: BookUsageInput): Promise<void> {
+    await StatsService.addSeconds(seconds, true, book);
   }
 
-  static async addReadSeconds(seconds: number): Promise<void> {
-    await StatsService.addSeconds(seconds, false);
+  static async addReadSeconds(seconds: number, book: BookUsageInput): Promise<void> {
+    await StatsService.addSeconds(seconds, false, book);
   }
 
-  private static async addSeconds(seconds: number, isListen: boolean): Promise<void> {
+  private static async addSeconds(seconds: number, isListen: boolean, book: BookUsageInput): Promise<void> {
     const delta = Math.floor(seconds);
-    if (delta <= 0) return;
+    if (delta <= 0 || !book.bookId) return;
     const s = await StatsService.ensureStore();
-    const stats = await StatsService.getAllDailyStats();
+    const records = await StatsService.getBookStats();
     const day = StatsService.formatDay(new Date());
-    let item = stats.find((it) => it.day === day);
-    if (!item) {
-      item = { day, listenSeconds: 0, readSeconds: 0 };
-      stats.push(item);
+    let rec = records.find((item) => item.bookId === book.bookId);
+    if (!rec) {
+      rec = {
+        bookId: book.bookId,
+        title: book.title || '未知书籍',
+        author: book.author || '',
+        cover: book.cover || '',
+        listenSeconds: 0,
+        readSeconds: 0,
+        updatedAt: Date.now(),
+        days: []
+      };
+      records.push(rec);
+    }
+
+    rec.title = book.title || rec.title;
+    rec.author = book.author || rec.author;
+    rec.cover = book.cover || rec.cover;
+    rec.updatedAt = Date.now();
+    let dayItem = rec.days.find((item) => item.day === day);
+    if (!dayItem) {
+      dayItem = { day, listenSeconds: 0, readSeconds: 0 };
+      rec.days.push(dayItem);
     }
     if (isListen) {
-      item.listenSeconds += delta;
+      rec.listenSeconds += delta;
+      dayItem.listenSeconds += delta;
     } else {
-      item.readSeconds += delta;
+      rec.readSeconds += delta;
+      dayItem.readSeconds += delta;
     }
-    StatsService.trimStats(stats);
-    await s.put(KEY_DAILY_STATS, JSON.stringify(stats));
+    rec.days = StatsService.trimDays(rec.days);
+    records.sort((a, b) => b.updatedAt - a.updatedAt);
+    await s.put(KEY_BOOK_USAGE, JSON.stringify(records));
     await s.flush();
-    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day } });
+    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day, bookId: book.bookId } });
   }
 
-  static async getAllDailyStats(): Promise<DailyUsageStats[]> {
+  static async getBookStats(): Promise<BookUsageStats[]> {
     const s = await StatsService.ensureStore();
-    const raw = await s.get(KEY_DAILY_STATS, '[]') as string;
+    const raw = await s.get(KEY_BOOK_USAGE, '[]') as string;
     try {
-      const list = JSON.parse(raw) as DailyUsageStats[];
+      const list = JSON.parse(raw) as BookUsageStats[];
       if (!Array.isArray(list)) return [];
-      const out: DailyUsageStats[] = [];
-      for (const it of list) {
-        if (!it || !it.day) continue;
-        const listenSeconds = it.listenSeconds !== undefined ? it.listenSeconds : 0;
-        const readSeconds = it.readSeconds !== undefined ? it.readSeconds : 0;
-        out.push({
-          day: it.day,
-          listenSeconds: Math.max(0, Math.floor(listenSeconds)),
-          readSeconds: Math.max(0, Math.floor(readSeconds))
-        });
-      }
-      return out;
+      return list
+        .filter((item) => !!item && !!item.bookId)
+        .map((item): BookUsageStats => {
+          const days = Array.isArray(item.days) ? item.days : [];
+          return {
+            bookId: item.bookId,
+            title: item.title || '未知书籍',
+            author: item.author || '',
+            cover: item.cover || '',
+            listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0)),
+            readSeconds: Math.max(0, Math.floor(item.readSeconds || 0)),
+            updatedAt: item.updatedAt || 0,
+            days: StatsService.trimDays(days)
+          };
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt);
     } catch (_e) {
       return [];
     }
+  }
+
+  static async removeBookStats(bookIds: string[]): Promise<void> {
+    if (bookIds.length === 0) return;
+    const s = await StatsService.ensureStore();
+    const deleted = new Set(bookIds);
+    const next = (await StatsService.getBookStats()).filter((item) => !deleted.has(item.bookId));
+    await s.put(KEY_BOOK_USAGE, JSON.stringify(next));
+    await s.flush();
+    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
+  }
+
+  static async clearBookStats(): Promise<void> {
+    const s = await StatsService.ensureStore();
+    await s.put(KEY_BOOK_USAGE, '[]');
+    await s.flush();
+    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
+  }
+
+  static async getAllDailyStats(): Promise<DailyUsageStats[]> {
+    return StatsService.aggregateDaily(await StatsService.getBookStats());
   }
 
   static async getRecentDays(days: number): Promise<UsageStatsBucket[]> {
@@ -119,6 +195,42 @@ export class StatsService {
       });
     }
     return out;
+  }
+
+  /** 连续 N 天的每日总时长（含 0 值），chronological（旧→新，末位为今天） */
+  static async getDailyTotals(days: number): Promise<HeatPoint[]> {
+    const count = Math.max(1, days);
+    const stats = await StatsService.getAllDailyStats();
+    const map = StatsService.toMap(stats);
+    const out: HeatPoint[] = [];
+    for (let i = count - 1; i >= 0; i--) {
+      const date = StatsService.addDays(new Date(), -i);
+      const day = StatsService.formatDay(date);
+      const item = map.get(day);
+      out.push({ day, seconds: (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0) });
+    }
+    return out;
+  }
+
+  /** 截至今天的连续打卡天数（当天时长>0 才计入今天） */
+  static async getStreakDays(): Promise<number> {
+    const stats = await StatsService.getAllDailyStats();
+    const map = StatsService.toMap(stats);
+    let streak = 0;
+    for (let i = 0; i < 730; i++) {
+      const day = StatsService.formatDay(StatsService.addDays(new Date(), -i));
+      const item = map.get(day);
+      const seconds = (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0);
+      if (seconds > 0) {
+        streak++;
+      } else if (i === 0) {
+        // 今天还没听读，从昨天继续算
+        continue;
+      } else {
+        break;
+      }
+    }
+    return streak;
   }
 
   static async getYearMonths(year: number): Promise<UsageStatsBucket[]> {
@@ -140,25 +252,42 @@ export class StatsService {
   static async getSummary(): Promise<UsageStatsSummary> {
     const stats = await StatsService.getAllDailyStats();
     const today = StatsService.formatDay(new Date());
-    const todaySeconds = StatsService.sum(stats.filter((it) => it.day === today));
     const weekStart = StatsService.formatDay(StatsService.addDays(new Date(), -6));
     const monthStart = StatsService.formatDay(StatsService.addDays(new Date(), -29));
     return {
-      todaySeconds,
-      weekSeconds: StatsService.sum(stats.filter((it) => it.day >= weekStart)),
-      monthSeconds: StatsService.sum(stats.filter((it) => it.day >= monthStart)),
+      todaySeconds: StatsService.sum(stats.filter((item) => item.day === today)),
+      weekSeconds: StatsService.sum(stats.filter((item) => item.day >= weekStart)),
+      monthSeconds: StatsService.sum(stats.filter((item) => item.day >= monthStart)),
       totalSeconds: StatsService.sum(stats)
     };
   }
 
-  private static trimStats(stats: DailyUsageStats[]): void {
-    const start = StatsService.formatDay(StatsService.addDays(new Date(), -730));
-    for (let i = stats.length - 1; i >= 0; i--) {
-      if (stats[i].day < start) {
-        stats.splice(i, 1);
+  private static aggregateDaily(records: BookUsageStats[]): DailyUsageStats[] {
+    const map = new Map<string, DailyUsageStats>();
+    for (const record of records) {
+      for (const day of record.days) {
+        let item = map.get(day.day);
+        if (!item) {
+          item = { day: day.day, listenSeconds: 0, readSeconds: 0 };
+          map.set(day.day, item);
+        }
+        item.listenSeconds += Math.max(0, Math.floor(day.listenSeconds || 0));
+        item.readSeconds += Math.max(0, Math.floor(day.readSeconds || 0));
       }
     }
-    stats.sort((a, b) => a.day.localeCompare(b.day));
+    return Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day));
+  }
+
+  private static trimDays(days: BookUsageDay[]): BookUsageDay[] {
+    const start = StatsService.formatDay(StatsService.addDays(new Date(), -730));
+    return days
+      .filter((item) => item && item.day >= start)
+      .map((item): BookUsageDay => ({
+        day: item.day,
+        listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0)),
+        readSeconds: Math.max(0, Math.floor(item.readSeconds || 0))
+      }))
+      .sort((a, b) => a.day.localeCompare(b.day));
   }
 
   private static toMap(stats: DailyUsageStats[]): Map<string, DailyUsageStats> {

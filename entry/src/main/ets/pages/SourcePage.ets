@@ -36,6 +36,7 @@ interface ImportResult {
 @ComponentV2
 export struct SourcePage {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Param showBackButton: boolean = false;
   @Local subscriptions: SourceSubscription[] = [];
   @Local allSources: BookSource[] = [];
   @Local showAddSheet: boolean = false;
@@ -711,6 +712,13 @@ export struct SourcePage {
       Column() {
         Column() {
           Row() {
+            if (this.showBackButton) {
+              SymbolGlyph($r('sys.symbol.chevron_left'))
+                .fontSize(24)
+                .fontColor([$r('sys.color.font_primary')])
+                .margin({ right: AppSpace.Sm })
+                .onClick(() => this.navStack.pop())
+            }
             Text('书源管理')
               .fontSize(AppFont.TitleL)
               .fontColor($r('sys.color.font_primary'))
@@ -774,8 +782,8 @@ export struct SourcePage {
         .clip(true)
 
         Row() {
-          this.buildTabItem('订阅源', 0)
-          this.buildTabItem('全部书源', 1)
+          this.buildTabItem('全部书源', 0)
+          this.buildTabItem('订阅源', 1)
           Blank()
           if (this.isSelectMode) {
             Text(`已选 ${this.getSelectedCount()}`)
@@ -793,19 +801,19 @@ export struct SourcePage {
       Stack({ alignContent: Alignment.TopStart }) {
         Tabs({ index: this.activeTab, barPosition: BarPosition.Start }) {
           TabContent() {
-            this.buildSubscriptionList()
+            this.buildSourceList()
           }
 
           TabContent() {
-            this.buildSourceList()
+            this.buildSubscriptionList()
           }
         }
         .barHeight(0)
-        .scrollable(true)
+        .scrollable(false)
         .animationDuration(220)
         .onChange((index: number) => {
           this.activeTab = index;
-          if (this.isSelectMode && index !== 1) {
+          if (this.isSelectMode && index !== 0) {
             this.exitSelectMode();
           }
         })

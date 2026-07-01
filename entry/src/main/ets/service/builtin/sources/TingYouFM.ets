@@ -28,6 +28,7 @@ const CDN_BASES: string[] = [
   'https://json.hgeuz.cn/tyfm/json_v1',
   'https://json.fmfm.pro/tyfm/json_v1',
 ];
+const THRILLER_CATEGORY_URL = 'types/14/comprehensive/p1';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 /** 章节播放标识：tingyou://play/<albumId>/<chapterIdx> */
 const PLAY_SCHEME = 'tingyou://play/';
@@ -228,7 +229,11 @@ class TingYouFMClass implements IBuiltInSource {
     if (!data) return [];
     const blocks: HomeBlock[] = [];
     const recommends = parseBookArray(data.getArr('recommends'));
-    if (recommends.length > 0) blocks.push(new HomeBlock('精品推荐', recommends, '', 'grid'));
+    if (recommends.length > 0) blocks.push(new HomeBlock('精品推荐', recommends, '', 'horizontal'));
+    const thriller = await this.getCategoryList(THRILLER_CATEGORY_URL);
+    if (thriller.books.length > 0) {
+      blocks.push(new HomeBlock('恐怖惊悚', thriller.books.slice(0, 12), THRILLER_CATEGORY_URL, 'horizontal'));
+    }
     const recent = parseBookArray(data.getArr('recent_updates'));
     if (recent.length > 0) blocks.push(new HomeBlock('最近更新', recent, '', 'horizontal'));
     return blocks;

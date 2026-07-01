@@ -11,7 +11,8 @@ interface TabItem {
 const TABS: TabItem[] = [
   { id: 0, label: '首页', symbol: $r('sys.symbol.house'), symbolFill: $r('sys.symbol.house_fill') },
   { id: 1, label: '书架', symbol: $r('sys.symbol.heart'), symbolFill: $r('sys.symbol.heart_fill') },
-  { id: 2, label: '我的', symbol: $r('sys.symbol.person'), symbolFill: $r('sys.symbol.person_fill') }
+  { id: 2, label: '记录', symbol: $r('sys.symbol.clock'), symbolFill: $r('sys.symbol.clock_fill') },
+  { id: 3, label: '我的', symbol: $r('sys.symbol.person'), symbolFill: $r('sys.symbol.person_fill') }
 ];
 
 @ComponentV2

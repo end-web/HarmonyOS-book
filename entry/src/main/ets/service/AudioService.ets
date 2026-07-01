@@ -466,7 +466,13 @@ export class AudioService {
 
   private recordListenUsage(): void {
     if (!this.state || !this.state.isPlaying || !this.state.currentBook || !this.state.currentChapter) return;
-    StatsService.addListenSeconds(AudioService.USAGE_TICK_SECONDS).catch((err: Error) => {
+    const book = this.state.currentBook;
+    StatsService.addListenSeconds(AudioService.USAGE_TICK_SECONDS, {
+      bookId: book.id,
+      title: book.title,
+      author: book.author || book.narrator || '',
+      cover: book.cover || ''
+    }).catch((err: Error) => {
       hilog.warn(DOMAIN, TAG, 'recordListenUsage failed: %{public}s', err?.message ?? JSON.stringify(err));
     });
   }

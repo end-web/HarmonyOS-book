@@ -942,7 +942,13 @@ export struct ReaderPage {
     if (this.readingStatsTimer >= 0) return;
     this.readingStatsTimer = setInterval((): void => {
       if (!this.isReadingStatsActive()) return;
-      StatsService.addReadSeconds(READING_STATS_TICK_SECONDS).catch((err: Error) => {
+      const book = this.book!;
+      StatsService.addReadSeconds(READING_STATS_TICK_SECONDS, {
+        bookId: book.id,
+        title: book.title,
+        author: book.author || '',
+        cover: book.cover || ''
+      }).catch((err: Error) => {
         console.warn(`[ReaderPage] record read usage failed: ${err?.message ?? JSON.stringify(err)}`);
       });
     }, READING_STATS_INTERVAL_MS);

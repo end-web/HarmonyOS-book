@@ -6,7 +6,7 @@ import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { HomePage, EVT_REFRESH_HOME } from './HomePage';
 import { HomeBlockSection } from '../model/BookSource';
 import { FavoritePage } from './FavoritePage';
-import { SourcePage } from './SourcePage';
+import { ReadingStatsPage } from './ReadingStatsPage';
 import { ProfilePage } from './ProfilePage';
 import { MiniPlayer } from '../components/MiniPlayer';
 import { AudioService } from '../service/AudioService';
@@ -242,12 +242,13 @@ export struct MainPage {
         .tabBar(this.buildTabBar($r('sys.symbol.archivebox'), $r('sys.symbol.archivebox_fill'), '书架'))
 
         TabContent() {
-          SourcePage({
+          ReadingStatsPage({
             navStack: this.navStack,
+            inTab: true,
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(2, scroller); }
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.folder'), $r('sys.symbol.folder_fill'), '书源'))
+        .tabBar(this.buildTabBar($r('sys.symbol.calendar'), $r('sys.symbol.calendar_fill'), '记录'))
 
         TabContent() {
           ProfilePage({
