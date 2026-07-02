@@ -100,6 +100,11 @@ export class ColorPickerUtils {
     return `rgba(${c.r},${c.g},${c.b},0)`;
   }
 
+  /** 把取到的主色压进适合做白字背景的亮度区间（白色系封面主色直接铺背景会让白字不可读） */
+  static normalizeAmbient(c: RgbColor): RgbColor {
+    return ColorPickerUtils.normalizeAmbientColor(c);
+  }
+
   /** 同步读取已缓存的封面色（http URL / rawfile path / 沙箱绝对路径）。命中时可避免首帧默认色闪烁。 */
   static getCached(cover: string): RgbColor | null {
     if (!cover) return null;

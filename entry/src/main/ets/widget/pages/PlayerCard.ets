@@ -53,61 +53,29 @@ struct PlayerCard {
     return 'memory://' + this.imgName;
   }
 
-  private hasPalette(): boolean {
-    return this.bgColor.length > 0 && this.bgTopColor.length > 0
-      && this.bgBottomColor.length > 0 && this.bgLeftColor.length > 0
-      && this.bgRightColor.length > 0 && this.bgDarkColor.length > 0;
+  /** '#RRGGBB' → '#00RRGGBB'：主色向下消散渐变的透明终点 */
+  private toTransparent(hex: string): string {
+    if (hex.length === 7) return '#00' + hex.substring(1);
+    if (hex.length === 9) return '#00' + hex.substring(3);
+    return hex;
   }
 
   build() {
     Stack() {
-      // 背景层：有染色时用融合色渐变，否则封面铺底或默认渐变
+      // 背景层：优先"深底 + 封面主色从顶部消散"(背景跟随主题色)；
+      // 取色未就绪时用糊化封面兜底；都没有则默认渐变
       // 不加 borderRadius，由最外层 Stack 统一 clip，避免多层裁剪产生毛边
-      if (this.hasPalette()) {
-        Stack() {
-          Column()
-            .width('100%')
-            .height('100%')
-            .linearGradient({
-              angle: 160,
-              colors: [[this.bgTopColor, 0], [this.bgColor, 0.5], [this.bgDarkColor, 1]]
-            })
-          Row() {
-            Column()
-              .width('55%')
-              .height('100%')
-              .linearGradient({
-                angle: 90,
-                colors: [[this.bgLeftColor, 0], ['#00000000', 1]]
-              })
-            Blank()
-            Column()
-              .width('55%')
-              .height('100%')
-              .linearGradient({
-                angle: 270,
-                colors: [[this.bgRightColor, 0], ['#00000000', 1]]
-              })
-          }
+      if (this.bgColor.length > 0) {
+        Column()
           .width('100%')
           .height('100%')
-          Column()
-            .width('100%')
-            .height('100%')
-            .linearGradient({
-              angle: 180,
-              colors: [['#33000000', 0], ['#66000000', 1]]
-            })
-        }
-        .width('100%')
-        .height('100%')
-      } else if (this.bgColor.length > 0) {
+          .backgroundColor('#15171B')
         Column()
           .width('100%')
           .height('100%')
           .linearGradient({
-            angle: 160,
-            colors: [[this.bgColor, 0], ['#FF0F0F0F', 1]]
+            angle: 180,
+            colors: [[this.bgColor, 0], [this.toTransparent(this.bgColor), 0.85]]
           })
       } else if (this.hasCover()) {
         Image(this.coverSrc())
@@ -115,10 +83,17 @@ struct PlayerCard {
           .height('100%')
           .objectFit(ImageFit.Cover)
           .syncLoad(true)
+          // 背景只要颜色不要细节:96px 微缩解码省内存,比例变形被糊化完全掩盖
+          .sourceSize({ width: 96, height: 96 })
+          .blur(40)
+          .scale({ x: 1.25, y: 1.25 })
         Column()
           .width('100%')
           .height('100%')
-          .backgroundColor('#99000000')
+          .linearGradient({
+            angle: 180,
+            colors: [['#40000000', 0], ['#73000000', 1]]
+          })
       } else {
         Column()
           .width('100%')
@@ -239,6 +214,7 @@ struct PlayerCard {
     }
     .width('100%')
     .height('100%')
+    .clip(true)
   }
 
   /** 左右按钮:无背景圆圈,纯图标 */

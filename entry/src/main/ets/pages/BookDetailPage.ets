@@ -102,10 +102,15 @@ export struct BookDetailPage {
 
   /** 一次性应用封面色，避免多次状态更新触发多次重绘 */
   private applyCoverColor(rgb: RgbColor): void {
-    const dark = ColorPickerUtils.darken(rgb, 0.3);
-    this.bgColor = ColorPickerUtils.toHex(rgb);
-    this.bgColorDark = ColorPickerUtils.toHex(dark);
-    this.hasThemeColor = true;
+    // 压亮度:白色系封面的主色直接铺背景会让白字不可读
+    const safe = ColorPickerUtils.normalizeAmbient(rgb);
+    const dark = ColorPickerUtils.darken(safe, 0.3);
+    // 颜色变化包进 animateTo:背景主色随封面就绪/切换平滑过渡,而不是硬跳
+    this.getUIContext().animateTo({ duration: 500, curve: Curve.Linear }, () => {
+      this.bgColor = ColorPickerUtils.toHex(safe);
+      this.bgColorDark = ColorPickerUtils.toHex(dark);
+      this.hasThemeColor = true;
+    });
   }
 
   private async findBookById(id: string): Promise<Book | null> {
@@ -473,7 +478,7 @@ export struct BookDetailPage {
     Column() {
       if (this.book) {
         Stack({ alignContent: Alignment.TopStart }) {
-          // 沉浸式背景
+          // 沉浸式背景:封面主色→深色纵向渐变,与下方正文底色保持明确分界(用户定调:不做消散融合)
           Column()
             .width('100%')
             .height(320)

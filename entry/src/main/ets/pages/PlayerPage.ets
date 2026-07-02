@@ -470,16 +470,19 @@ export struct PlayerPage {
 
   private applyCoverPalette(palette: CoverColorPalette, cover: string): void {
     const theme = ColorPickerUtils.toAmbientTheme(palette);
-    this.playerState.accentColor = theme.center;
-    this.playerState.ambientCover = cover;
-    this.playerState.ambientMainColor = theme.main;
-    this.playerState.ambientTopColor = theme.top;
-    this.playerState.ambientBottomColor = theme.bottom;
-    this.playerState.ambientLeftColor = theme.left;
-    this.playerState.ambientRightColor = theme.right;
-    this.playerState.ambientCenterColor = theme.center;
-    this.playerState.ambientDarkColor = theme.dark;
-    this.playerState.hasAmbientColor = true;
+    // 颜色状态变化包进 animateTo:背景主色渐变随封面切换平滑过渡,而不是硬跳
+    this.getUIContext().animateTo({ duration: 500, curve: Curve.Linear }, () => {
+      this.playerState.accentColor = theme.center;
+      this.playerState.ambientCover = cover;
+      this.playerState.ambientMainColor = theme.main;
+      this.playerState.ambientTopColor = theme.top;
+      this.playerState.ambientBottomColor = theme.bottom;
+      this.playerState.ambientLeftColor = theme.left;
+      this.playerState.ambientRightColor = theme.right;
+      this.playerState.ambientCenterColor = theme.center;
+      this.playerState.ambientDarkColor = theme.dark;
+      this.playerState.hasAmbientColor = true;
+    });
   }
 
   private async extractCoverColor(cover: string): Promise<void> {
@@ -574,83 +577,27 @@ export struct PlayerPage {
   @Builder
   buildAmbientBackground() {
     Stack() {
+      // 深色安静底:全屏白字/白控件的可读性基座
       Column()
         .width('100%')
         .height('100%')
-        .linearGradient({
-          angle: 162,
-          colors: this.playerState.hasAmbientColor
-            ? [[this.playerState.ambientTopColor, 0], [this.playerState.ambientMainColor, 0.58], [this.playerState.ambientDarkColor, 1]]
-            : [['#3B4650', 0], ['#303942', 0.58], ['#252B32', 1]]
-        })
+        .backgroundColor('#15171B')
 
-      Column() {
-        Column()
-          .width('100%')
-          .height('62%')
-          .linearGradient({
-            angle: 180,
-            colors: this.playerState.hasAmbientColor
-              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientTopColor, '7A'), 0], ['#00000000', 1]]
-              : [['#334F5963', 0], ['#00000000', 1]]
-          })
-        Blank()
-      }
-      .width('100%')
-      .height('100%')
-
-      Column() {
-        Blank()
-        Column()
-          .width('100%')
-          .height('62%')
-          .linearGradient({
-            angle: 0,
-            colors: this.playerState.hasAmbientColor
-              ? [['#00000000', 0], [ColorPickerUtils.withAlpha(this.playerState.ambientBottomColor, '8A'), 1]]
-              : [['#00000000', 0], ['#66303842', 1]]
-          })
-      }
-      .width('100%')
-      .height('100%')
-
-      Row() {
-        Column()
-          .width('54%')
-          .height('100%')
-          .linearGradient({
-            angle: 90,
-            colors: this.playerState.hasAmbientColor
-              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientLeftColor, '66'), 0], ['#00000000', 1]]
-              : [['#264F5963', 0], ['#00000000', 1]]
-          })
-
-        Blank()
-
-        Column()
-          .width('54%')
-          .height('100%')
-          .linearGradient({
-            angle: 270,
-            colors: this.playerState.hasAmbientColor
-              ? [[ColorPickerUtils.withAlpha(this.playerState.ambientRightColor, '66'), 0], ['#00000000', 1]]
-              : [['#26454D57', 0], ['#00000000', 1]]
-          })
-      }
-      .width('100%')
-      .height('100%')
-
+      // 封面主色从顶部向下 alpha 消散融入深底:背景跟随封面主题色,换书由 animateTo 平滑过渡
       Column()
         .width('100%')
         .height('100%')
         .linearGradient({
           angle: 180,
-          colors: [['#14000000', 0], ['#08000000', 0.52], ['#4D000000', 1]]
+          colors: this.playerState.hasAmbientColor
+            ? [[this.playerState.ambientMainColor, 0],
+               [ColorPickerUtils.withAlpha(this.playerState.ambientMainColor, '73'), 0.42],
+               [ColorPickerUtils.withAlpha(this.playerState.ambientMainColor, '00'), 0.88]]
+            : [['#3B4650', 0], ['#733B4650', 0.42], ['#003B4650', 0.88]]
         })
     }
     .width('100%')
     .height('100%')
-    .animation({ duration: 650, curve: Curve.EaseOut })
   }
 
   @Builder
