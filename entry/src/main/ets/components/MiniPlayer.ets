@@ -56,13 +56,20 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          // 与书架/收藏/首页列表统一 sourceSize,命中同一份已解码缓存,切换 minibar 不再重新加载
+          .sourceSize({ width: 300, height: 400 })
           .rotate({ angle: this.coverAngle })
           .id('mini-cover-img')
-      } else if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('/')) {
-        Image('file://' + this.playerState.currentBook.cover)
+      } else if (this.playerState.currentBook.cover
+        && (this.playerState.currentBook.cover.startsWith('/') || this.playerState.currentBook.cover.startsWith('file://'))) {
+        // 判断条件与 BookCard.isLocalFile 对齐:file:// 前缀的本地封面不能掉进 $rawfile 分支
+        Image('file://' + this.playerState.currentBook.cover.replace(/^file:\/\//, ''))
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
+          .sourceSize({ width: 300, height: 400 })
+          // 本地文件解码快,同步加载消除重挂时的闪烁(官方推荐做法)
+          .syncLoad(true)
           .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
           .animation({
             duration: this.playerState.isPlaying ? 20000 : 300,
@@ -72,6 +79,7 @@ export struct MiniPlayer {
           })
           .id('mini-cover-img-file')
       } else if (this.playerState.currentBook.cover) {
+        // rawfile 分支不设 sourceSize:列表(BookCard/FavoritePage)的 rawfile 分支也没设,保持缓存一致
         Image($rawfile(this.playerState.currentBook.cover))
           .width('100%')
           .height('100%')

@@ -55,6 +55,14 @@ export interface HeatPoint {
   seconds: number;
 }
 
+/** 一次读盘算全部指标的整包快照,避免页面分多次读 store 时被并发写撕裂成不一致状态 */
+export interface StatsBundle {
+  records: BookUsageStats[];
+  summary: UsageStatsSummary;
+  streak: number;
+  heatDays: HeatPoint[];
+}
+
 export class StatsService {
   private static store: preferences.Preferences | null = null;
   private static initPromise: Promise<void> | null = null;
@@ -260,6 +268,70 @@ export class StatsService {
       monthSeconds: StatsService.sum(stats.filter((item) => item.day >= monthStart)),
       totalSeconds: StatsService.sum(stats)
     };
+  }
+
+  /**
+   * 一次读盘 → 从同一份 records 快照算出所有指标。
+   * 页面用这个替代分散的 getBookStats/getSummary/getStreakDays/getDailyTotals 多次读盘,
+   * 保证 6 个展示值内部一致(不会出现"今日有值但累计/本数/连续为 0"的撕裂)。
+   */
+  static async getStatsBundle(heatmapDays: number): Promise<StatsBundle> {
+    const records = await StatsService.getBookStats();
+    const daily = StatsService.aggregateDaily(records);
+    const map = StatsService.toMap(daily);
+    return {
+      records,
+      summary: StatsService.computeSummary(map),
+      streak: StatsService.computeStreak(map),
+      heatDays: StatsService.computeHeatDays(map, heatmapDays)
+    };
+  }
+
+  private static computeSummary(map: Map<string, DailyUsageStats>): UsageStatsSummary {
+    const today = StatsService.formatDay(new Date());
+    const weekStart = StatsService.formatDay(StatsService.addDays(new Date(), -6));
+    const monthStart = StatsService.formatDay(StatsService.addDays(new Date(), -29));
+    let todaySeconds = 0;
+    let weekSeconds = 0;
+    let monthSeconds = 0;
+    let totalSeconds = 0;
+    for (const item of map.values()) {
+      const secs = item.listenSeconds + item.readSeconds;
+      totalSeconds += secs;
+      if (item.day === today) todaySeconds += secs;
+      if (item.day >= weekStart) weekSeconds += secs;
+      if (item.day >= monthStart) monthSeconds += secs;
+    }
+    return { todaySeconds, weekSeconds, monthSeconds, totalSeconds };
+  }
+
+  private static computeStreak(map: Map<string, DailyUsageStats>): number {
+    let streak = 0;
+    for (let i = 0; i < 730; i++) {
+      const day = StatsService.formatDay(StatsService.addDays(new Date(), -i));
+      const item = map.get(day);
+      const seconds = (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0);
+      if (seconds > 0) {
+        streak++;
+      } else if (i === 0) {
+        continue;
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }
+
+  private static computeHeatDays(map: Map<string, DailyUsageStats>, days: number): HeatPoint[] {
+    const count = Math.max(1, days);
+    const out: HeatPoint[] = [];
+    for (let i = count - 1; i >= 0; i--) {
+      const date = StatsService.addDays(new Date(), -i);
+      const day = StatsService.formatDay(date);
+      const item = map.get(day);
+      out.push({ day, seconds: (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0) });
+    }
+    return out;
   }
 
   private static aggregateDaily(records: BookUsageStats[]): DailyUsageStats[] {

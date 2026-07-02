@@ -186,6 +186,9 @@ export default class EntryAbility extends UIAbility {
           return;
         }
 
+        // 独立 KV 为权威:贴回跳过头尾,纠正冷启动缓存书壳可能丢失的 skip
+        // (放在赋值前,让 checkSkipOutro / skipIntro 首次起播就用到正确值)
+        await PreferenceService.applySkipConfig(book);
         state.currentBook = book;
         state.currentChapter = chapter;
         state.progressMs = last.progressMs;

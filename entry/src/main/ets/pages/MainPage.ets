@@ -161,6 +161,8 @@ export struct MainPage {
     const idx = DataService.resolveChapterIndex(book, last.chapterId, last.chapterTitle);
     if (idx < 0) return;
     const chapter = book.chapters[idx];
+    // 独立 KV 为权威:贴回跳过头尾,纠正缓存书壳可能丢失的 skip
+    await PreferenceService.applySkipConfig(book);
     this.playerState.currentBook = book;
     this.playerState.currentChapter = chapter;
     this.playerState.progressMs = last.progressMs;

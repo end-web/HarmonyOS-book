@@ -7,6 +7,7 @@ import {
   BookUsageStats,
   EVT_USAGE_STATS_UPDATED,
   HeatPoint,
+  StatsBundle,
   StatsService,
   UsageStatsSummary
 } from '../service/StatsService';
@@ -36,6 +37,10 @@ export struct ReadingStatsPage {
   @Local selectedIds: Set<string> = new Set();
 
   private scroller: Scroller = new Scroller();
+  /** loadStats 重入保护:播放中每 15s 一次统计写会 emit 事件触发重载,
+   *  并发的多次 loadStats 各自分段读盘会把 @Local 撕裂成不一致快照。 */
+  private loadingStats: boolean = false;
+  private reloadPending: boolean = false;
   private statsHandler = (_evt: emitter.EventData): void => {
     this.loadStats();
   };
@@ -56,13 +61,22 @@ export struct ReadingStatsPage {
   }
 
   private async loadStats(): Promise<void> {
+    // 重入保护:已有加载在跑时,只记一个 pending,等当前这次结束再补一次,
+    // 避免并发 loadStats 交错赋值把 6 个指标撕成不同快照。
+    if (this.loadingStats) {
+      this.reloadPending = true;
+      return;
+    }
+    this.loadingStats = true;
     const ctx = this.getUIContext().getHostContext() as common.Context;
     try {
       await StatsService.init(ctx);
-      this.heatDays = await StatsService.getDailyTotals(HEATMAP_DAYS);
-      this.streak = await StatsService.getStreakDays();
-      this.summary = await StatsService.getSummary();
-      this.records = await StatsService.getBookStats();
+      // 一次读盘出整包:所有指标从同一份 records 快照算,保证内部一致
+      const bundle: StatsBundle = await StatsService.getStatsBundle(HEATMAP_DAYS);
+      this.heatDays = bundle.heatDays;
+      this.streak = bundle.streak;
+      this.summary = bundle.summary;
+      this.records = bundle.records;
       this.chartVersion += 1;
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
@@ -71,6 +85,11 @@ export struct ReadingStatsPage {
       console.error(`[ReadingStatsPage] load stats failed: ${JSON.stringify(e)}`);
     } finally {
       this.loading = false;
+      this.loadingStats = false;
+      if (this.reloadPending) {
+        this.reloadPending = false;
+        this.loadStats();
+      }
     }
   }
 
@@ -264,10 +283,34 @@ export struct ReadingStatsPage {
   @Builder
   buildRatioBar() {
     Column({ space: AppSpace.Xs }) {
+      // 注意:时长文本必须直接引用 this 的状态。原来经 @Builder 按值传参,
+      // 参数不建立响应依赖,records 更新后标签恒显首帧的 0(占比条却在动)
       Row() {
-        this.buildRatioTag('听书', this.formatCompactHours(this.totalListen()), '#FFFFFF')
+        Row({ space: 6 }) {
+          Column().width(8).height(8).borderRadius(4).backgroundColor('#FFFFFF')
+          Text('听书')
+            .fontSize(AppFont.Caption)
+            .fontColor('#F5E4DA')
+          Text(this.formatCompactHours(this.totalListen()))
+            .fontSize(AppFont.Caption)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Bold)
+        }
+        .alignItems(VerticalAlign.Center)
+
         Blank()
-        this.buildRatioTag('阅读', this.formatCompactHours(this.totalRead()), '#FFE0CF')
+
+        Row({ space: 6 }) {
+          Column().width(8).height(8).borderRadius(4).backgroundColor('#FFE0CF')
+          Text('阅读')
+            .fontSize(AppFont.Caption)
+            .fontColor('#F5E4DA')
+          Text(this.formatCompactHours(this.totalRead()))
+            .fontSize(AppFont.Caption)
+            .fontColor(Color.White)
+            .fontWeight(FontWeight.Bold)
+        }
+        .alignItems(VerticalAlign.Center)
       }
       .width('100%')
 
@@ -291,21 +334,6 @@ export struct ReadingStatsPage {
   }
 
   @Builder
-  buildRatioTag(label: string, value: string, dot: string) {
-    Row({ space: 6 }) {
-      Column().width(8).height(8).borderRadius(4).backgroundColor(dot)
-      Text(label)
-        .fontSize(AppFont.Caption)
-        .fontColor('#F5E4DA')
-      Text(value)
-        .fontSize(AppFont.Caption)
-        .fontColor(Color.White)
-        .fontWeight(FontWeight.Bold)
-    }
-    .alignItems(VerticalAlign.Center)
-  }
-
-  @Builder
   buildStatCells() {
     Row({ space: AppSpace.Sm }) {
       ForEach(this.statCells(), (item: StatCell) => {
@@ -325,7 +353,7 @@ export struct ReadingStatsPage {
         .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
         .backgroundColor($r('sys.color.comp_background_primary'))
         .borderRadius(AppRadius.Lg)
-      }, (item: StatCell) => item.label)
+      }, (item: StatCell) => `${item.label}|${item.value}`) // key 必须含 value:纯 label 作 key 时数据更新后 ForEach 不重渲染,三格恒显首帧的 0
     }
     .width('100%')
     .opacity(this.appeared ? 1 : 0)
@@ -420,7 +448,7 @@ export struct ReadingStatsPage {
       Column({ space: AppSpace.Sm }) {
         ForEach(this.records, (item: BookUsageStats) => {
           this.buildRecordItem(item)
-        }, (item: BookUsageStats) => item.bookId)
+        }, (item: BookUsageStats) => `${item.bookId}|${item.listenSeconds}|${item.readSeconds}`) // key 含时长:纯 bookId 时播放中统计更新,列表项时长不刷新
       }
       .width('100%')
       .opacity(this.appeared ? 1 : 0)
@@ -444,6 +472,8 @@ export struct ReadingStatsPage {
           .height(58)
           .borderRadius(AppRadius.Sm)
           .objectFit(ImageFit.Cover)
+          // 与列表统一解码尺寸,共享同一份解码缓存
+          .sourceSize({ width: 300, height: 400 })
       } else {
         Stack() {
           Text(item.title ? item.title.substring(0, 1) : '?')

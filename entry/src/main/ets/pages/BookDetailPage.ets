@@ -65,6 +65,8 @@ export struct BookDetailPage {
   private async loadBook(): Promise<void> {
     const b = await this.findBookById(this.bookId);
     if (b) {
+      // 独立 KV 为权威:贴回跳过头尾,详情页起播也带上正确 skip(否则会用无 skip 对象喂 AudioService)
+      await PreferenceService.applySkipConfig(b);
       // 先快速渲染基础信息
       this.book = b;
       this.chapterDataSource.setChapters(b.chapters);
@@ -183,7 +185,10 @@ export struct BookDetailPage {
           bookUrl: book.bookUrl,
           sourceUrl: book.sourceUrl,
           contentType: book.contentType,
-          variables: Object.keys(mergedVars).length > 0 ? mergedVars : book.variables
+          variables: Object.keys(mergedVars).length > 0 ? mergedVars : book.variables,
+          // 保留 skip:否则 upsertCachedBook(cloned) 会把缓存索引里的旧 skip 清掉
+          skipIntro: book.skipIntro,
+          skipOutro: book.skipOutro
         };
         this.book = cloned;
         this.chapterDataSource.setChapters(cloned.chapters);
@@ -535,13 +540,17 @@ export struct BookDetailPage {
             .height(130)
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
+            // 与列表统一解码尺寸,复用同一份解码缓存(100x130vp 显示足够清晰)
+            .sourceSize({ width: 300, height: 400 })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
-        } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-          Image('file://' + this.book!.cover)
+        } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
+          // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
+          Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
             .width(100)
             .height(130)
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 300, height: 400 })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else if (this.book!.cover) {
           Image($rawfile(this.book!.cover))

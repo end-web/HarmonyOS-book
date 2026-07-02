@@ -1,6 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
+import { Book } from '../model/Book';
 
 /** 书架收藏变化事件:加入/移出书架后触发,书架页据此自动刷新 */
 export const EVT_FAVORITES_CHANGED = 'app.favorites.changed';
@@ -32,6 +33,9 @@ const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 const KEY_WIDGET_FORM_IDS = 'widget_form_ids_v1';
 /** 每本书独立的最新播放进度,key = `${KEY_PROGRESS_PREFIX}${bookId}` */
 const KEY_PROGRESS_PREFIX = 'progress_v1_';
+/** 每本书独立的跳过头尾设置,key = `${KEY_SKIP_PREFIX}${bookId}`。
+ *  独立小 KV,不再搭车缓存书索引——避免冷启动走 legacy/persistUnsafe 兜底分支时把 skip 丢掉。 */
+const KEY_SKIP_PREFIX = 'skip_v1_';
 /** 订阅源发现导航缓存,key = `${KEY_EXPLORE_NAV_PREFIX}${sourceUrlHash}` */
 const KEY_EXPLORE_NAV_PREFIX = 'explore_nav_v1_';
 /** 华为账号登录身份标识(UnionID/OpenID),JSON 持久化 */
@@ -57,6 +61,12 @@ export interface LastPlayedItem {
   chapterTitle?: string;
   durationMs?: number;
   speed?: number;
+}
+
+/** 每本书独立的跳过头尾设置(秒) */
+export interface SkipConfig {
+  skipIntro: number;
+  skipOutro: number;
 }
 
 /**
@@ -360,6 +370,63 @@ export class PreferenceService {
     await s.flush();
   }
 
+  /**
+   * 跳过头尾(每本书独立)。独立 KV 存储,不依赖缓存书索引。
+   * 内存缓存命中同步返回,supports 冷启动恢复时贴回 currentBook。
+   */
+  private static skipMemo: Map<string, SkipConfig> = new Map();
+
+  static async getSkipConfig(bookId: string): Promise<SkipConfig | null> {
+    if (!bookId) return null;
+    const memo = PreferenceService.skipMemo.get(bookId);
+    if (memo) return memo;
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_SKIP_PREFIX + bookId, '') as string;
+    if (!raw) return null;
+    try {
+      const cfg = JSON.parse(raw) as SkipConfig;
+      PreferenceService.skipMemo.set(bookId, cfg);
+      return cfg;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  static async saveSkipConfig(bookId: string, skipIntro: number, skipOutro: number): Promise<void> {
+    if (!bookId) return;
+    const cfg: SkipConfig = { skipIntro: skipIntro || 0, skipOutro: skipOutro || 0 };
+    PreferenceService.skipMemo.set(bookId, cfg);
+    const s = await PreferenceService.ensureStore();
+    // 全 0 视为清除:删掉 key 保持 store 干净,读回落 null → 不覆盖
+    if (cfg.skipIntro <= 0 && cfg.skipOutro <= 0) {
+      await s.delete(KEY_SKIP_PREFIX + bookId);
+    } else {
+      await s.put(KEY_SKIP_PREFIX + bookId, JSON.stringify(cfg));
+    }
+    await s.flush();
+  }
+
+  /**
+   * 把独立存储里的跳过头尾贴回 book 对象(store 有记录则以 store 为准)。
+   * 冷启动恢复 currentBook / PlayerPage 载入书时调用,消除缓存书索引丢 skip 的影响。
+   */
+  static async applySkipConfig(book: Book | null | undefined): Promise<void> {
+    if (!book || !book.id) return;
+    const cfg = await PreferenceService.getSkipConfig(book.id);
+    if (cfg) {
+      book.skipIntro = cfg.skipIntro;
+      book.skipOutro = cfg.skipOutro;
+      return;
+    }
+    // store 无记录:若 book 自带非零 skip(旧方案存在缓存书壳里),一次性迁移进独立 store,
+    // 让老用户无需重新设置,下次冷启动即从权威 store 读回。
+    const bi = book.skipIntro ?? 0;
+    const bo = book.skipOutro ?? 0;
+    if (bi > 0 || bo > 0) {
+      await PreferenceService.saveSkipConfig(book.id, bi, bo);
+    }
+  }
+
   static async getColorMode(): Promise<number> {
     const s = await PreferenceService.ensureStore();
     return await s.get(KEY_COLOR_MODE, ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) as number;
@@ -569,16 +636,17 @@ export class PreferenceService {
     await s.delete(KEY_LAST_PLAYED);
     await s.delete(KEY_WIDGET_PLAYER_SNAPSHOT);
     await s.delete(KEY_CACHED_BOOKS);
-    // 逐本进度 progress_v1_*:枚举全部 key,前缀匹配删除
+    // 逐本进度 progress_v1_* + 逐本跳过头尾 skip_v1_*:枚举全部 key,前缀匹配删除
     try {
       const all = await s.getAll() as Record<string, Object>;
       for (const key of Object.keys(all)) {
-        if (key.startsWith(KEY_PROGRESS_PREFIX)) {
+        if (key.startsWith(KEY_PROGRESS_PREFIX) || key.startsWith(KEY_SKIP_PREFIX)) {
           await s.delete(key);
         }
       }
     } catch (_e) { /* ignore */ }
     PreferenceService.progressMemo.clear();
+    PreferenceService.skipMemo.clear();
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
     PreferenceService.notifyHistoryChanged();

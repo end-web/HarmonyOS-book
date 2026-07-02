@@ -100,7 +100,17 @@ export struct ResumeCard {
         .height(60)
         .borderRadius(6)
         .objectFit(ImageFit.Cover)
-        .sourceSize({ width: 150, height: 200 })
+        // 与列表统一 300x400,共享同一份解码缓存(原 150x200 会独立解码一份)
+        .sourceSize({ width: 300, height: 400 })
+    } else if (this.book?.cover && (this.book.cover.startsWith('/') || this.book.cover.startsWith('file://'))) {
+      // 本地导入书的封面此前落到首字占位,补齐本地文件分支(判断与 BookCard.isLocalFile 对齐)
+      Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
+        .width(44)
+        .height(60)
+        .borderRadius(6)
+        .objectFit(ImageFit.Cover)
+        .sourceSize({ width: 300, height: 400 })
+        .syncLoad(true)
     } else {
       Stack() {
         Column().width('100%').height('100%').backgroundColor(HomeTheme.Accent)

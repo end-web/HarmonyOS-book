@@ -221,6 +221,9 @@ export struct PlayerPage {
       this.navStack.pop();
       return;
     }
+    // 独立 KV 为权威:贴回 skip,纠正冷启动缓存书壳可能丢失的跳过头尾
+    await PreferenceService.applySkipConfig(b);
+    if (this.isLeaving) return;
     this.book = b;
     this.isFavorite = await PreferenceService.isFavorite(b.id);
     if (this.isLeaving) return;
@@ -687,8 +690,10 @@ export struct PlayerPage {
         .onError(() => {
           console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
         })
-    } else if (this.book!.cover && this.book!.cover.startsWith('/')) {
-      Image('file://' + this.book!.cover)
+    } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
+      // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
+      // 大封面不设 sourceSize:全屏展示需要原图清晰度
+      Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Cover)
@@ -936,8 +941,7 @@ export struct PlayerPage {
       .gesture(LongPressGesture().onAction(() => {
         if (this.hasSkipConfig()) {
           this.hapticTick();
-          this.setSkipValue('intro', 0);
-          this.setSkipValue('outro', 0);
+          this.persistSkip(0, 0);
           this.skipIntroValue = 0;
           this.skipOutroValue = 0;
         }
@@ -1316,11 +1320,14 @@ export struct PlayerPage {
 
   private async setSkipValue(type: string, seconds: number): Promise<void> {
     if (!this.book) return;
-    if (type === 'intro') {
-      this.book.skipIntro = seconds;
-    } else {
-      this.book.skipOutro = seconds;
-    }
+    const intro = type === 'intro' ? seconds : (this.book.skipIntro ?? 0);
+    const outro = type === 'outro' ? seconds : (this.book.skipOutro ?? 0);
+    await this.persistSkip(intro, outro);
+  }
+
+  /** 原子写片头+片尾:一次 saveSkipConfig,避免长按清空时两次异步各写各的留半状态 */
+  private async persistSkip(intro: number, outro: number): Promise<void> {
+    if (!this.book) return;
     const b = this.book;
     const cloned: Book = {
       id: b.id, title: b.title, author: b.author, narrator: b.narrator,
@@ -1328,9 +1335,11 @@ export struct PlayerPage {
       totalDuration: b.totalDuration, chapterCount: b.chapterCount,
       rating: b.rating, tags: b.tags, chapters: b.chapters,
       bookUrl: b.bookUrl, sourceUrl: b.sourceUrl,
-      variables: b.variables, skipIntro: b.skipIntro, skipOutro: b.skipOutro
+      variables: b.variables, skipIntro: intro, skipOutro: outro
     };
     this.book = cloned;
+    // 独立 KV 落盘(权威来源):冷启动恢复不依赖缓存书索引,避免走 legacy/persistUnsafe 兜底时丢 skip
+    await PreferenceService.saveSkipConfig(cloned.id, intro, outro);
     await DataService.upsertCachedBook(cloned);
     SearchCache.put(cloned);
     if (this.playerState.currentBook?.id === b.id) {
