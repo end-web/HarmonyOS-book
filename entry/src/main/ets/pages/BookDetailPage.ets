@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2 } from '@kit.ArkUI';
+import { AppStorageV2, curves } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
@@ -34,6 +34,8 @@ export struct BookDetailPage {
   @Local debugInfo: string = '';
   /** 章节搜索关键词(对齐阅读页目录搜索) */
   @Local chapterQuery: string = '';
+  /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
+  @Local listOffsetFromCurrent: number = 0;
   private chapterListScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
 
@@ -228,20 +230,37 @@ export struct BookDetailPage {
     this.applyCoverColor(rgb);
   }
 
-  private scrollToCurrentChapter(): void {
-    if (!this.book) return;
-    // 1) 正在播放本书:定位到播放章
+  /**
+   * 当前章节在完整章节列表中的索引。
+   * 1) 正在播放本书:取播放章;
+   * 2) 否则用最近阅读/播放历史(文本书从阅读页进来时对应正在读的章)。
+   */
+  private currentChapterIndex(): number {
+    if (!this.book) return -1;
     if (this.playerState.currentBook && this.playerState.currentChapter
         && this.playerState.currentBook.id === this.bookId) {
-      const pIdx = this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
-      this.scrollChapterListToIndex(pIdx);
-      return;
+      return this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
     }
-    // 2) 否则用最近阅读/播放历史定位(文本书从阅读页进来时定位到正在读的章)
     if (this.lastHistory) {
-      const hIdx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
-      if (hIdx >= 0) this.scrollChapterListToIndex(hIdx);
+      return DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
     }
+    return -1;
+  }
+
+  private scrollToCurrentChapter(): void {
+    this.scrollChapterListToIndex(this.currentChapterIndex());
+  }
+
+  /** "回到当前章节"按钮:居中滚到当前章节 */
+  private jumpToCurrentChapter(): void {
+    this.scrollToCurrentChapter();
+    this.listOffsetFromCurrent = 0;
+  }
+
+  /** 是否需要显示"回到当前章节"浮动按钮:列表滚动距离当前章节超过 200vp(搜索过滤时不显示,同播放页) */
+  private shouldShowJumpButton(): boolean {
+    return this.chapterQuery.trim().length === 0
+      && Math.abs(this.listOffsetFromCurrent) > 200;
   }
 
   /**
@@ -815,19 +834,53 @@ export struct BookDetailPage {
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else {
-        List({ space: 0, scroller: this.chapterListScroller }) {
-          LazyForEach(this.chapterDataSource, (ch: Chapter) => {
-            ListItem() {
-              this.buildChapterItem(ch)
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          List({ space: 0, scroller: this.chapterListScroller }) {
+            LazyForEach(this.chapterDataSource, (ch: Chapter) => {
+              ListItem() {
+                this.buildChapterItem(ch)
+              }
+            }, (ch: Chapter) => ch.id)
+          }
+          .width('100%')
+          .height('100%')
+          .cachedCount(5)
+          .scrollBar(BarState.Auto)
+          .edgeEffect(EdgeEffect.Spring)
+          .divider({ strokeWidth: 0.5, color: AppColor.Divider, startMargin: AppSpace.Lg, endMargin: AppSpace.Lg })
+          .onScrollIndex((firstIndex: number, lastIndex: number) => {
+            // 用首尾可见 index 与当前章节 index 计算偏离
+            // 行高约 64vp(BodyL+Caption+上下 14 padding),用 (center - idx) * 64 估算
+            const idx = this.currentChapterIndex();
+            if (idx < 0) return;
+            const center = (firstIndex + lastIndex) / 2;
+            this.listOffsetFromCurrent = (center - idx) * 64;
+          })
+
+          // "回到当前章节"浮动按钮:列表滚远时显示(同播放页章节抽屉)
+          if (this.shouldShowJumpButton()) {
+            Row({ space: AppSpace.Xs }) {
+              SymbolGlyph($r('sys.symbol.scope'))
+                .fontSize(16)
+                .fontColor(['#FFFFFF'])
+              Text('回到当前章节')
+                .fontSize(AppFont.Caption)
+                .fontColor('#FFFFFF')
+                .fontWeight(FontWeight.Medium)
             }
-          }, (ch: Chapter) => ch.id)
+            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+            .borderRadius(22)
+            .backgroundColor(AppColor.Brand)
+            .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+            .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
+            .onClick(() => this.jumpToCurrentChapter())
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
+              .animation({ curve: curves.springMotion(0.4, 0.9) }))
+          }
         }
         .width('100%')
         .layoutWeight(1)
-        .cachedCount(5)
-        .scrollBar(BarState.Auto)
-        .edgeEffect(EdgeEffect.Spring)
-        .divider({ strokeWidth: 0.5, color: AppColor.Divider, startMargin: AppSpace.Lg, endMargin: AppSpace.Lg })
       }
     }
     .layoutWeight(1)
