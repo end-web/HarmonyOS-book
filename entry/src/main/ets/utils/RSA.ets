@@ -7,6 +7,48 @@
 
 import { BigInteger } from './BigInt';
 import { util } from '@kit.ArkTS';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+
+/**
+ * 生成密码学安全的随机非零字节（用于 PKCS1 v1.5 padding）
+ * 使用 HarmonyOS cryptoFramework，失败时回退到 Math.random（仅极端情况）
+ */
+function secureRandomNonZero(length: number): number[] {
+  const result: number[] = [];
+  try {
+    const random = cryptoFramework.createRandom();
+    // 多请求一倍字节，过滤零字节后通常足够
+    const blob: cryptoFramework.DataBlob = random.generateRandomSync(length * 2);
+    const data: Uint8Array = blob.data;
+    for (let i = 0; i < data.length && result.length < length; i++) {
+      const b: number = data[i] & 0xFF;
+      if (b !== 0) {
+        result.push(b);
+      }
+    }
+    // 极端情况：零字节太多导致不够，再补一轮
+    while (result.length < length) {
+      const extra: cryptoFramework.DataBlob = random.generateRandomSync(length);
+      const edata: Uint8Array = extra.data;
+      for (let i = 0; i < edata.length && result.length < length; i++) {
+        const b: number = edata[i] & 0xFF;
+        if (b !== 0) {
+          result.push(b);
+        }
+      }
+    }
+  } catch (e) {
+    // 回退：cryptoFramework 不可用时（不应发生），用 Math.random 兜底
+    for (let i = 0; i < length; i++) {
+      let rnd: number;
+      do {
+        rnd = Math.floor(Math.random() * 256);
+      } while (rnd === 0);
+      result.push(rnd);
+    }
+  }
+  return result;
+}
 
 interface RSAKey {
   n: BigInteger; // modulus
@@ -40,14 +82,11 @@ export function rsaEncrypt(data: string, keyModulus: string, keyExponent?: strin
   padded.push(0x00);
   padded.push(0x02); // Block type 2 (encryption)
 
-  // 随机填充（非零字节）
+  // 随机填充（非零字节，使用密码学安全随机数）
   const padLen = keyLen - dataBytes.length - 3;
+  const randomBytes = secureRandomNonZero(padLen);
   for (let i = 0; i < padLen; i++) {
-    let rnd: number;
-    do {
-      rnd = Math.floor(Math.random() * 256);
-    } while (rnd === 0);
-    padded.push(rnd);
+    padded.push(randomBytes[i]);
   }
 
   padded.push(0x00);

@@ -70,13 +70,7 @@ export struct MiniPlayer {
           .sourceSize({ width: 300, height: 400 })
           // 本地文件解码快,同步加载消除重挂时的闪烁(官方推荐做法)
           .syncLoad(true)
-          .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
-          .animation({
-            duration: this.playerState.isPlaying ? 20000 : 300,
-            curve: this.playerState.isPlaying ? Curve.Linear : Curve.Friction,
-            iterations: this.playerState.isPlaying ? -1 : 1,
-            expectedFrameRateRange: { min: 30, max: 120, expected: 60 }
-          })
+          .rotate({ angle: this.coverAngle })
           .id('mini-cover-img-file')
       } else if (this.playerState.currentBook.cover) {
         // rawfile 分支不设 sourceSize:列表(BookCard/FavoritePage)的 rawfile 分支也没设,保持缓存一致
@@ -84,13 +78,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
-          .rotate({ angle: this.playerState.isPlaying ? 360 : 0 })
-          .animation({
-            duration: this.playerState.isPlaying ? 20000 : 300,
-            curve: this.playerState.isPlaying ? Curve.Linear : Curve.Friction,
-            iterations: this.playerState.isPlaying ? -1 : 1,
-            expectedFrameRateRange: { min: 30, max: 120, expected: 60 }
-          })
+          .rotate({ angle: this.coverAngle })
           .id('mini-cover-img-raw')
       } else {
         // 无封面:用 app 图标占位(替代旧的绿色书形占位)

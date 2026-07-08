@@ -12,14 +12,21 @@ import { SourceImportParser } from '@listenbook/source-runtime';
 
 export class SourceDataService {
   private static cache: BookSource[] | null = null;
+  private static cachePromise: Promise<BookSource[]> | null = null;
   private static disabledLoaded: boolean = false;
 
   /**
    * 获取所有书源（用户订阅 + 内置）
+   * 使用 Promise 缓存防止并发重复加载
    */
-  static async getSources(): Promise<BookSource[]> {
-    if (SourceDataService.cache) return SourceDataService.cache;
+  static getSources(): Promise<BookSource[]> {
+    if (SourceDataService.cache) return Promise.resolve(SourceDataService.cache);
+    if (SourceDataService.cachePromise) return SourceDataService.cachePromise;
+    SourceDataService.cachePromise = SourceDataService.loadSources();
+    return SourceDataService.cachePromise;
+  }
 
+  private static async loadSources(): Promise<BookSource[]> {
     // 启动后第一次读，先把内置源的禁用状态注入到 Registry
     if (!SourceDataService.disabledLoaded) {
       try {
@@ -34,7 +41,9 @@ export class SourceDataService {
       const json = await PreferenceService.getBookSources();
       const data: Object = JSON.parse(json) as Object;
       userSources = Array.isArray(data) ? data as BookSource[] : [];
-    } catch {
+    } catch (e) {
+      // JSON 损坏时记录警告而非完全静默
+      console.warn('[SourceDataService] Failed to parse book sources: ' + (e as Error)?.message);
       userSources = [];
     }
     // 过滤掉历史可能写入的 builtin 条目，避免重复；同时丢掉 bookSourceUrl 为空的脏数据
@@ -47,6 +56,7 @@ export class SourceDataService {
     }
     const builtIn = BuiltInSourceRegistry.materialize();
     SourceDataService.cache = filtered.concat(builtIn);
+    SourceDataService.cachePromise = null;
     return SourceDataService.cache;
   }
 
@@ -74,6 +84,7 @@ export class SourceDataService {
     // 重新拼缓存（用最新的 disabled 状态）
     const builtIn = BuiltInSourceRegistry.materialize();
     SourceDataService.cache = userOnly.concat(builtIn);
+    SourceDataService.cachePromise = null;
   }
 
   /**

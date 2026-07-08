@@ -93,7 +93,35 @@ class HomeBlockImpl implements HomeBlockSection {
   }
 }
 
+/**
+ * 简单异步互斥锁 — 保护全局 SourceContext / JavaBridge 的并发访问。
+ * 多源并行搜索/首页聚合时，prepareSourceContext 会覆盖全局单例状态，
+ * 此锁确保 "设置上下文 → JS 求值 → 规则解析" 的临界区不被其他源打断。
+ */
+class AsyncMutex {
+  private locked: boolean = false;
+  private waiters: Array<() => void> = [];
+
+  async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.locked) {
+      await new Promise<void>((resolve: () => void): void => {
+        this.waiters.push(resolve);
+      });
+    }
+    this.locked = true;
+    try {
+      return await fn();
+    } finally {
+      this.locked = false;
+      const next = this.waiters.shift();
+      if (next) next();
+    }
+  }
+}
+
 export class BookSourceService {
+  /** 保护 SourceContext 并发访问的互斥锁 */
+  private static contextLock: AsyncMutex = new AsyncMutex();
   // ──────────────────── 辅助方法 ────────────────────
 
   private static isMaoyanSource(source: BookSource): boolean {
@@ -624,22 +652,24 @@ export class BookSourceService {
     key?: string,
     baseUrl?: string,
   ): Promise<AnalyzedUrl> {
-    BookSourceService.prepareSourceContext(source, variables);
-    const analyzeUrl = new AnalyzeUrl(rawUrl, {
-      key,
-      page,
-      baseUrl: baseUrl || source.bookSourceUrl,
-      _jsLib: source.jsLib || '',
-      _sourceVar: BookSourceService.getSourceVarJson(source),
-    }, source.header, variables);
-    const analyzed = await analyzeUrl.getUrl();
-    BookSourceService.mergeLoginHeaders(source, analyzed.headers);
-    BookSourceService.patchKnownSearchRequest(source, analyzed);
-    if (!analyzed.charset) {
-      const inferred = BookSourceService.inferCharset(source);
-      if (inferred) analyzed.charset = inferred;
-    }
-    return analyzed;
+    return BookSourceService.contextLock.withLock(async (): Promise<AnalyzedUrl> => {
+      BookSourceService.prepareSourceContext(source, variables);
+      const analyzeUrl = new AnalyzeUrl(rawUrl, {
+        key,
+        page,
+        baseUrl: baseUrl || source.bookSourceUrl,
+        _jsLib: source.jsLib || '',
+        _sourceVar: BookSourceService.getSourceVarJson(source),
+      }, source.header, variables);
+      const analyzed = await analyzeUrl.getUrl();
+      BookSourceService.mergeLoginHeaders(source, analyzed.headers);
+      BookSourceService.patchKnownSearchRequest(source, analyzed);
+      if (!analyzed.charset) {
+        const inferred = BookSourceService.inferCharset(source);
+        if (inferred) analyzed.charset = inferred;
+      }
+      return analyzed;
+    });
   }
 
   private static patchKnownSearchRequest(source: BookSource, analyzed: AnalyzedUrl): void {
@@ -867,7 +897,6 @@ export class BookSourceService {
     try {
       if (!source.searchUrl) return [];
 
-      BookSourceService.prepareSourceContext(source);
       const searchUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, source.searchUrl);
       const analyzed = await BookSourceService.analyzeRequestUrl(source, searchUrl, undefined, page, keyword);
       let analyzedUrl = analyzed.url;
@@ -1950,12 +1979,14 @@ export class BookSourceService {
         return BookSourceService.getMaoyanExploreBooksByUrl(source, categoryUrl, page);
       }
 
-      const resolvedCategoryUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, categoryUrl);
-      const analyzeUrl = new AnalyzeUrl(resolvedCategoryUrl, {
-        page, baseUrl: source.bookSourceUrl,
-        _jsLib: source.jsLib || '',
-      }, source.header);
-      const analyzed = await analyzeUrl.getUrl();
+      return await BookSourceService.contextLock.withLock(async (): Promise<ExploreFetchResult> => {
+        BookSourceService.prepareSourceContext(source);
+        const resolvedCategoryUrl = AnalyzeUrl.resolveUrl(source.bookSourceUrl, categoryUrl);
+        const analyzeUrl = new AnalyzeUrl(resolvedCategoryUrl, {
+          page, baseUrl: source.bookSourceUrl,
+          _jsLib: source.jsLib || '',
+        }, source.header);
+        const analyzed = await analyzeUrl.getUrl();
       if (!analyzed.charset) {
         const inferred = BookSourceService.inferCharset(source);
         if (inferred) analyzed.charset = inferred;
@@ -2015,6 +2046,7 @@ export class BookSourceService {
       }
       const ret: ExploreFetchResult = { books: results, nextUrl, nextPage: page + 1 };
       return ret;
+      }); // close contextLock.withLock
     } catch (e) {
       console.error(`[${TAG}] getExploreBooksByUrl error: ${e}`);
       return empty;

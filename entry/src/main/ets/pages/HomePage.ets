@@ -137,6 +137,7 @@ export struct HomePage {
   private contentScroller: Scroller = new Scroller();
   private audioDataSource: BookDataSource = new BookDataSource();
   private textDataSource: BookDataSource = new BookDataSource();
+  private categoryDS: BookDataSource = new BookDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private searchGen: number = 0;
   private homeGen: number = 0;
@@ -301,6 +302,7 @@ export struct HomePage {
     if (index === -1) {
       // 切回推荐
       this.categoryBooks = [];
+      this.categoryDS.setBooks([]);
       return;
     }
 
@@ -309,6 +311,7 @@ export struct HomePage {
     if (!cat) return;
 
     this.categoryBooks = [];
+    this.categoryDS.setBooks([]);
     this.categoryLoading = true;
     this.categoryError = '';
     this.categoryHasMore = true;
@@ -349,6 +352,7 @@ export struct HomePage {
       }
 
       this.categoryBooks = books;
+      this.categoryDS.setBooks(books);
       this.categoryNextUrl = nextUrl;
       this.categoryHasMore = nextUrl.length > 0;
       this.categoryLoading = false;
@@ -799,7 +803,7 @@ export struct HomePage {
             } else if (this.categoryBooks.length > 0) {
               ListItem() {
                 Grid() {
-                  ForEach(this.categoryBooks, (book: Book, idx: number) => {
+                  LazyForEach(this.categoryDS, (book: Book, idx: number) => {
                     GridItem() {
                       BookCard({
                         book: book,

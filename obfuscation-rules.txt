@@ -1,20 +1,127 @@
 # HarmonyOS 代码混淆规则
 
-# 保留全局名称和属性名称
--keep-global-name
--keep-property-name
-
-# 不混淆文件名
--keep-file-name
-
-# 启用名称缓存
--enable-name-cache
-
-# 启用属性混淆
+# ─── 启用混淆 ───
 -enable-property-obfuscation
-
-# 启用顶层混淆
 -enable-toplevel-obfuscation
+-enable-filename-obfuscation
+-enable-export-obfuscation
 
-# 混淆日志输出
+# 名称缓存（增量构建）
+-enable-name-cache
 -print-namecache obfuscation-cache.json
+
+# ─── 保留 JSON 序列化/反序列化的属性名 ───
+# 这些属性来自外部 JSON（Legado 书源格式）或本地持久化，
+# 通过 JSON.parse / JSON.stringify 访问，混淆器无法静态追踪，必须显式保留。
+-keep-property-name
+  # BookSource
+  bookSourceUrl
+  bookSourceName
+  bookSourceType
+  bookSourceGroup
+  bookSourceComment
+  enabled
+  enabledExplore
+  enabledCookieJar
+  searchUrl
+  exploreUrl
+  header
+  loginUrl
+  loginUi
+  loginCheckJs
+  bookUrlPattern
+  variableComment
+  jsLib
+  customButton
+  eventListener
+  exploreScreen
+  coverDecodeJs
+  respondTime
+  customOrder
+  weight
+  concurrentRate
+  ruleSearch
+  ruleToc
+  ruleContent
+  ruleBookInfo
+  ruleExplore
+  ruleReview
+  lastUpdateTime
+  subscriptionUrl
+  # SearchRule / ExploreRule
+  bookList
+  coverUrl
+  bookUrl
+  intro
+  kind
+  lastChapter
+  wordCount
+  checkKeyWord
+  updateTime
+  # TocRule
+  chapterList
+  chapterName
+  chapterUrl
+  nextTocUrl
+  isVip
+  isPay
+  isVolume
+  duration
+  preUpdateJs
+  formatJs
+  # ContentRule
+  content
+  audioUrl
+  nextContentUrl
+  replaceRegex
+  sourceRegex
+  webJs
+  # BookInfoRule
+  init
+  canReName
+  downloadUrls
+  tocUrl
+  # ReviewRule
+  reviewList
+  avatar
+  reviewUrl
+  # Book
+  id
+  contentType
+  title
+  author
+  narrator
+  cover
+  category
+  totalDuration
+  chapterCount
+  rating
+  tags
+  chapters
+  sourceUrl
+  variables
+  skipIntro
+  skipOutro
+  # Chapter
+  index
+  source
+  originSourceValue
+  # AudioSource
+  type
+  value
+  # SearchResult
+  sourceName
+  # HomeBlockSection
+  books
+  moreUrl
+  layout
+  # SourceSubscription
+  count
+  lastUpdate
+  # TocItem
+  url
+  name
+
+# ─── 保留文件名（避免资源路径问题） ───
+# 注：-enable-filename-obfuscation 已启用，但 resources/rawfile 等资源引用
+# 在代码中以字符串出现，混淆器可处理。如遇问题可注释掉 -enable-filename-obfuscation。

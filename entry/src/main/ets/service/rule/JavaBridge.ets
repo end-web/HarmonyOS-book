@@ -27,6 +27,7 @@ import { parseTTFont } from '../../utils/TTFontParser';
 import { rsaEncrypt, rsaDecrypt, parsePublicKeyPEM } from '../../utils/RSA';
 import { getZipStringContent, getZipByteArrayContent, listZipFiles } from '../../utils/ZipParser';
 import { getRarStringContent, getRarByteArrayContent, listRarFiles } from '../../utils/RarParser';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { get7zStringContent, get7zByteArrayContent, list7zFiles } from '../../utils/SevenZipParser';
 import { getWebViewAudioExtractor } from '../builtin/WebViewAudioExtractor';
 
@@ -1213,7 +1214,15 @@ export class JavaBridgeImpl {
 
   randomUUID(): string {
     const bytes: number[] = [];
-    for (let i = 0; i < 16; i++) bytes.push(Math.floor(Math.random() * 256));
+    try {
+      const rand = cryptoFramework.createRandom();
+      const blob: cryptoFramework.DataBlob = rand.generateRandomSync(16);
+      const data: Uint8Array = blob.data;
+      for (let i = 0; i < 16; i++) bytes.push(data[i] & 0xFF);
+    } catch (e) {
+      // 回退：cryptoFramework 不可用时
+      for (let i = 0; i < 16; i++) bytes.push(Math.floor(Math.random() * 256));
+    }
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
     const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');

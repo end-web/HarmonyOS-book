@@ -239,7 +239,11 @@ export struct BookDetailPage {
     if (!this.book) return -1;
     if (this.playerState.currentBook && this.playerState.currentChapter
         && this.playerState.currentBook.id === this.bookId) {
-      return this.book.chapters.findIndex(ch => ch.id === this.playerState.currentChapter!.id);
+      return DataService.resolveChapterIndex(
+        this.book,
+        this.playerState.currentChapter.id,
+        this.playerState.currentChapter.title
+      );
     }
     if (this.lastHistory) {
       return DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
@@ -462,7 +466,7 @@ export struct BookDetailPage {
 
   private getPlayProgress(ch: Chapter): number {
     if (!this.playerState.currentBook || !this.playerState.currentChapter) return 0;
-    if (this.playerState.currentBook.id === this.bookId && this.playerState.currentChapter.id === ch.id) {
+    if (this.isCurrentPlaybackChapter(ch)) {
       if (this.playerState.durationMs > 0) {
         return Math.round(this.playerState.progressMs / this.playerState.durationMs * 100);
       }
@@ -471,8 +475,19 @@ export struct BookDetailPage {
   }
 
   private isPlayingChapter(ch: Chapter): boolean {
-    if (!this.playerState.currentBook || !this.playerState.currentChapter) return false;
-    return this.playerState.currentBook.id === this.bookId && this.playerState.currentChapter.id === ch.id;
+    return this.isCurrentPlaybackChapter(ch);
+  }
+
+  private isCurrentPlaybackChapter(ch: Chapter): boolean {
+    if (!this.book || !this.playerState.currentBook || !this.playerState.currentChapter) return false;
+    if (this.playerState.currentBook.id !== this.bookId) return false;
+    if (this.playerState.currentChapter.id === ch.id) return true;
+    const idx = DataService.resolveChapterIndex(
+      this.book,
+      this.playerState.currentChapter.id,
+      this.playerState.currentChapter.title
+    );
+    return idx >= 0 && this.book.chapters[idx].id === ch.id;
   }
 
   private isReadingChapter(ch: Chapter): boolean {

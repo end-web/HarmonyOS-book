@@ -67,6 +67,16 @@ interface LooseParseState {
   pos: number;
 }
 
+interface JsBlock {
+  placeholder: string;
+  code: string;
+}
+
+interface EvalBlock {
+  placeholder: string;
+  expr: string;
+}
+
 export class AnalyzeUrl {
   private ruleUrl: string;
   private context: TemplateContext;
@@ -150,16 +160,22 @@ export class AnalyzeUrl {
   }
 
   private async analyzeJs(url: string): Promise<string> {
-    // <js>...</js> 块
+    // <js>...</js> 块 — 先收集所有匹配，再用占位符替换，避免 evalJs 返回值含 <js> 导致无限循环
     const jsTagRegex = /<js>([\s\S]+?)<\/js>/gi;
+    const jsBlocks: JsBlock[] = [];
     let result = url;
     let match = jsTagRegex.exec(result);
+    let blockIdx = 0;
     while (match !== null) {
-      const code = match[1];
-      const jsResult = await this.evalJs(code);
-      result = result.replace(match[0], jsResult);
-      jsTagRegex.lastIndex = 0;
+      const placeholder = `\x00JSBLK${blockIdx}\x00`;
+      jsBlocks.push({ placeholder, code: match[1] });
+      result = result.replace(match[0], placeholder);
+      blockIdx++;
       match = jsTagRegex.exec(result);
+    }
+    for (const blk of jsBlocks) {
+      const jsResult = await this.evalJs(blk.code);
+      result = result.replace(blk.placeholder, jsResult);
     }
 
     // @js:code（整个 URL 是 JS）
@@ -197,18 +213,25 @@ export class AnalyzeUrl {
     result = result.replace(/\{\{searchPage\}\}/g, String(page));
     result = result.replace(/\{\{pageSize\}\}/g, '20');
 
-    // {{js_expression}} 内嵌 JS
+    // {{js_expression}} 内嵌 JS — 先收集所有匹配再用占位符替换，避免 evalJs 返回值含 {{}} 导致无限循环
     const evalPattern = /\{\{([\s\S]+?)\}\}/g;
+    const evalBlocks: EvalBlock[] = [];
     let evalMatch = evalPattern.exec(result);
+    let evalIdx = 0;
     while (evalMatch !== null) {
       const expr = evalMatch[1].trim();
       // 跳过已替换的纯数字/已编码内容
       if (!/^(key|keyword|searchKey|page|searchPage|pageSize)$/.test(expr)) {
-        const jsResult = await this.evalJs(expr);
-        result = result.replace(evalMatch[0], jsResult);
-        evalPattern.lastIndex = 0;
+        const placeholder = `\x00EVAL${evalIdx}\x00`;
+        evalBlocks.push({ placeholder, expr });
+        result = result.replace(evalMatch[0], placeholder);
+        evalIdx++;
       }
       evalMatch = evalPattern.exec(result);
+    }
+    for (const eb of evalBlocks) {
+      const jsResult = await this.evalJs(eb.expr);
+      result = result.replace(eb.placeholder, jsResult);
     }
 
     return result;

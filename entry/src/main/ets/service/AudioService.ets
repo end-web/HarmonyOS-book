@@ -485,7 +485,7 @@ export class AudioService {
     const chapterTitle = chapter.title;
     const progressMs = this.state.progressMs;
     const durationMs = this.state.durationMs;
-    const chapterIndex = book.chapters.findIndex((c) => c.id === chapter.id);
+    const chapterIndex = this.findChapterIndex(book, chapter);
     await PreferenceService.upsertHistory({
       bookId: book.id,
       chapterId,
@@ -590,6 +590,8 @@ export class AudioService {
     if (!this.state) return;
     const p = this.player;
     if (!p) return;
+    // toggle() 可能在调用前设了 isLoading=true，复用章节不需要 loading 圈
+    this.state.isLoading = false;
     const skipIntroMs = (this.state.currentBook?.skipIntro ?? 0) * 1000;
     this.state.progressMs = skipIntroMs;
     if (p.state === 'completed' || p.state === 'paused' || p.state === 'prepared') {
@@ -601,6 +603,7 @@ export class AudioService {
         const e = err as Error;
         hilog.error(DOMAIN, TAG, 'replaySameChapterFromStart failed: %{public}s',
           e?.message ?? JSON.stringify(err));
+        this.state.isPlaying = false;
       }
     } else if (p.state === 'playing') {
       try {
@@ -720,11 +723,11 @@ export class AudioService {
    * 命中时切书过程整体 ~300-600ms 就能 prepared,UI 不必显示 loading 圈,
    * 给用户"瞬间切换"的观感。
    */
-  private isFastSwitchPath(chapter: Chapter): boolean {
+  private isFastSwitchPath(book: Book, chapter: Chapter): boolean {
     if (chapter.source.type === 'file' || chapter.source.type === 'rawfile') return true;
     const cache = ChapterCacheService.getInstance();
     const pageUrl = chapter.originSourceValue || chapter.source.value;
-    if (cache.getAudioFilePath(chapter.id, pageUrl)) return true;
+    if (cache.getAudioFilePath(book.id, chapter.id, pageUrl)) return true;
     if (cache.getAudioUrl(chapter.id)) return true;
     return false;
   }
@@ -732,9 +735,13 @@ export class AudioService {
   private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
     if (!this.state || !this.context) return;
     const myGen = ++this.playGen;
-    try { getWebViewAudioExtractor().cancelPending(); } catch (_e) { /* ignore */ }
     // ★ 缓存命中→快路径,UI 不显示 loading 圈;否则常规路径,显示加载状态
-    const fastPath = this.isFastSwitchPath(chapter);
+    const fastPath = this.isFastSwitchPath(book, chapter);
+    // 快路径不需要 WebView 嗅探，不调 cancelPending——避免把预加载正在跑的嗅探取消掉，
+    // 导致后续慢路径章节的 URL 解析也被波及（WebView extractor 串行，cancel 会丢队列中的任务）。
+    if (!fastPath) {
+      try { getWebViewAudioExtractor().cancelPending(); } catch (_e) { /* ignore */ }
+    }
     this.isApplying = true;
     try {
       // 0) 先停旧 player(避免新 URL 嗅探的几秒内旧音频还在响 + 旧 timeUpdate 污染 progressMs)
@@ -747,7 +754,10 @@ export class AudioService {
           await cur.reset();
         }
       } catch (_e) { /* ignore */ }
-      if (myGen !== this.playGen) return;
+      if (myGen !== this.playGen) {
+        // 被新 playChapter 抢占，不清 isLoading——新的 doPlayChapter 会自己设
+        return;
+      }
 
       // 1) 翻 UI 状态
       this.state.currentBook = book;
@@ -763,19 +773,34 @@ export class AudioService {
       // 早写 PlaybackStore:让正在等待的页面立刻看到"当前书已切换"
       PlaybackStore.getInstance().update(
         book.id, chapter.id,
-        book.chapters.findIndex((c) => c.id === chapter.id),
+        this.findChapterIndex(book, chapter),
         chapter.source?.value ?? '', false
       );
 
       // 2) 解析音频 URL
       await this.resolveAudioUrl(book, chapter);
       if (myGen !== this.playGen) {
+        // 被抢占:如果新 gen 走的也是慢路径,它的 isLoading 已经是 true;
+        // 如果新 gen 走快路径,它的 isLoading 已经是 false。
+        // 这里不碰 isLoading,交给新 gen 管理。
+        return;
+      }
+      // URL 解析失败兜底：cancelPending 可能把正在跑的 WebView 嗅探取消掉，
+      // resolveAudioUrl 内部 catch 后不抛异常，chapter.source 仍是原始页面 URL。
+      // 此时不能把页面 URL 当音频 URL 喂给 AVPlayer——player 会无限卡在 loading。
+      if (chapter.source.type === 'url' && chapter.originSourceValue
+        && chapter.source.value === chapter.originSourceValue) {
+        hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed (source unchanged), aborting playback');
+        this.state.isLoading = false;
+        this.state.isPlaying = false;
         return;
       }
 
       // 3) 装载
       const p = await this.ensurePlayer();
-      if (myGen !== this.playGen) return;
+      if (myGen !== this.playGen) {
+        return;
+      }
       if (seekMs > 0) {
         this.pendingSeek = seekMs;
         this.resumeTargetMs = seekMs;
@@ -808,7 +833,7 @@ export class AudioService {
     }
     const cache = ChapterCacheService.getInstance();
     // 1) 优先看本地音频文件缓存（已下载到沙箱），最快路径，离线也能播
-    const filePath = cache.getAudioFilePath(chapter.id, chapter.originSourceValue);
+    const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
     if (filePath) {
       chapter.source = { type: 'file', value: filePath };
       return;
@@ -1067,6 +1092,11 @@ export class AudioService {
       await this.syncPlaybackStateNow(true);
     }
     if (this.player) {
+      // 先移除事件监听器，避免 release 过程中回调触发对已释放资源的访问
+      try { this.player.off('stateChange'); } catch (_e) { /* ignore */ }
+      try { this.player.off('timeUpdate'); } catch (_e) { /* ignore */ }
+      try { this.player.off('error'); } catch (_e) { /* ignore */ }
+      try { this.player.off('audioInterrupt'); } catch (_e) { /* ignore */ }
       await this.player.release();
       this.player = null;
     }
@@ -1097,7 +1127,7 @@ export class AudioService {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const mode = this.state.playMode;
     const chapters = this.state.currentBook.chapters;
-    const idx = chapters.findIndex((c) => c.id === this.state!.currentChapter!.id);
+    const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
     if (idx < 0) return;
 
     if (mode === PlayMode.SingleLoop) {
@@ -1160,16 +1190,21 @@ export class AudioService {
   }
 
   private triggerPreload(book: Book, chapter: Chapter): void {
-    const idx = book.chapters.findIndex((c) => c.id === chapter.id);
+    const idx = this.findChapterIndex(book, chapter);
     if (idx < 0) return;
     ChapterCacheService.getInstance().preloadAudioChapters(book, idx);
+  }
+
+  private findChapterIndex(book: Book, chapter: Chapter | null): number {
+    if (!book || !chapter) return -1;
+    return DataService.resolveChapterIndex(book, chapter.id, chapter.title);
   }
 
   /** 公开:供 AVSession / 卡片 callee 调用 */
   async playNext(): Promise<void> {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const chapters = this.state.currentBook.chapters;
-    const idx = chapters.findIndex((c) => c.id === this.state!.currentChapter!.id);
+    const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
     if (idx >= 0 && idx < chapters.length - 1) {
       await this.playChapter(this.state.currentBook, chapters[idx + 1]);
     } else if (this.state.playMode === PlayMode.ListLoop && chapters.length > 0) {
@@ -1181,7 +1216,7 @@ export class AudioService {
   async playPrevious(): Promise<void> {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const chapters = this.state.currentBook.chapters;
-    const idx = chapters.findIndex((c) => c.id === this.state!.currentChapter!.id);
+    const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
     if (idx > 0) {
       await this.playChapter(this.state.currentBook, chapters[idx - 1]);
     }

@@ -10,6 +10,7 @@ import { StatsService } from '../service/StatsService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { EVT_HISTORY_UPDATED } from '../service/AudioService';
 import { SearchCache } from '../utils/SearchCache';
+import { ChapterRowDataSource, ChapterRow } from '../utils/ChapterDataSource';
 import { WindowUtils, EVT_COLOR_MODE_CHANGED } from '../utils/WindowUtils';
 import { DataService } from '../service/DataService';
 import { EVT_SWITCH_TAB } from './ImportPage';
@@ -89,12 +90,6 @@ function hex6(c: string): string {
   return c;
 }
 
-/** 目录搜索结果行:章节 + 在完整目录中的原始索引 */
-interface ChapterRow {
-  ch: Chapter;
-  idx: number;
-}
-
 interface PageBounds {
   parsed: boolean;
   current: number;
@@ -160,6 +155,7 @@ export struct ReaderPage {
 
   private context: common.UIAbilityContext | null = null;
   private chapterScroller: Scroller = new Scroller();
+  private chapterDS: ChapterRowDataSource = new ChapterRowDataSource();
   private readerController: readerCore.ReaderComponentController = new readerCore.ReaderComponentController();
   private inited: boolean = false;
   private opened: boolean = false;
@@ -507,6 +503,7 @@ export struct ReaderPage {
       const loaded: Book = await ReaderService.ensureChapters(book);
       if (this.isLeaving) return;
       this.book = loaded;
+      this.refreshChapterDS();
       if (!loaded.chapters || loaded.chapters.length === 0) {
         this.errorMsg = '暂无章节';
         this.loading = false;
@@ -1326,8 +1323,14 @@ export struct ReaderPage {
     }, 120);
   }
 
-  /** 按关键词过滤目录,保留章节在完整目录中的原始索引(供跳转/高亮用) */
-  private filterChapters(): ChapterRow[] {
+  /** 章节搜索关键词变化时刷新数据源 */
+  @Monitor('chapterQuery')
+  onChapterQueryChange(): void {
+    this.refreshChapterDS();
+  }
+
+  /** 按关键词过滤目录,更新 LazyForEach 数据源 */
+  private refreshChapterDS(): void {
     const list = this.book?.chapters ?? [];
     const q = this.chapterQuery.trim();
     const out: ChapterRow[] = [];
@@ -1336,7 +1339,7 @@ export struct ReaderPage {
         out.push({ ch: list[i], idx: i });
       }
     }
-    return out;
+    this.chapterDS.setRows(out);
   }
 
   @Builder
@@ -1359,7 +1362,7 @@ export struct ReaderPage {
       .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Lg, bottom: AppSpace.Md })
 
       List({ scroller: this.chapterScroller }) {
-        ForEach(this.filterChapters(), (row: ChapterRow) => {
+        LazyForEach(this.chapterDS, (row: ChapterRow) => {
           ListItem() {
             Row() {
               Text(row.ch.title)

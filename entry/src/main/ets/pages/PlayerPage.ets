@@ -281,7 +281,7 @@ export struct PlayerPage {
 
   private async playPrev(): Promise<void> {
     if (!this.book || !this.playerState.currentChapter) return;
-    const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
+    const idx = this.currentChapterIndex();
     if (idx > 0) {
       const ch = this.book.chapters[idx - 1];
       // AudioService 内部会查缓存/解析 URL，这里不用再做
@@ -291,7 +291,7 @@ export struct PlayerPage {
 
   private async playNext(): Promise<void> {
     if (!this.book || !this.playerState.currentChapter) return;
-    const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
+    const idx = this.currentChapterIndex();
     if (idx >= 0 && idx < this.book.chapters.length - 1) {
       const ch = this.book.chapters[idx + 1];
       await AudioService.getInstance().playChapter(this.book, ch);
@@ -331,7 +331,11 @@ export struct PlayerPage {
   }
 
   private isCurrentChapter(ch: Chapter): boolean {
-    return this.playerState.currentChapter !== null && this.playerState.currentChapter.id === ch.id;
+    if (!this.playerState.currentChapter) return false;
+    if (this.playerState.currentChapter.id === ch.id) return true;
+    if (!this.book) return false;
+    const idx = this.currentChapterIndex();
+    return idx >= 0 && this.book.chapters[idx].id === ch.id;
   }
 
   private formatDuration(seconds: number): string {
@@ -396,7 +400,7 @@ export struct PlayerPage {
 
   private scrollToCurrentChapter(): void {
     if (!this.book || !this.playerState.currentChapter) return;
-    const idx = this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
+    const idx = this.currentChapterIndex();
     this.scrollChapterListToIndex(idx);
   }
 
@@ -425,7 +429,11 @@ export struct PlayerPage {
   /** 当前播放章节在列表中的索引 */
   private currentChapterIndex(): number {
     if (!this.book || !this.playerState.currentChapter) return -1;
-    return this.book.chapters.findIndex((c) => c.id === this.playerState.currentChapter!.id);
+    return DataService.resolveChapterIndex(
+      this.book,
+      this.playerState.currentChapter.id,
+      this.playerState.currentChapter.title
+    );
   }
 
   /** 是否需要显示"回到当前章节"浮动按钮:列表滚动距离当前章节超过 200vp（搜索过滤时不显示） */
@@ -1000,7 +1008,7 @@ export struct PlayerPage {
                   .fontColor([AppColor.Brand])
               }
             } else if (this.chapterCacheTick >= 0
-              && !ChapterCacheService.getInstance().isChapterCached(ch.id)) {
+              && !ChapterCacheService.getInstance().isAudioChapterCached(this.book!, ch)) {
               SymbolGlyph($r('sys.symbol.cloud'))
                 .fontSize(16)
                 .fontColor([$r('sys.color.font_tertiary')])

@@ -83,6 +83,11 @@ export class ChapterCacheService {
     return this.audioCache.has(chapterId) || this.fileCache.has(chapterId) || this.textCache.has(chapterId);
   }
 
+  isAudioChapterCached(book: Book, chapter: Chapter): boolean {
+    if (chapter.source.type === 'file' || chapter.source.type === 'rawfile') return true;
+    return this.audioCache.has(chapter.id) || this.fileCache.has(chapter.id);
+  }
+
   /** 已解析的章节真实时长（秒）。仅在音频文件下载完成后才有值。 */
   getChapterDuration(chapterId: string): number {
     return this.durationCache.get(chapterId) ?? 0;
@@ -144,13 +149,25 @@ export class ChapterCacheService {
     return entry ? entry.resolvedUrl : null;
   }
 
-  /** 章节是否已经有完整音频文件落盘，命中后 AudioService 直接 file:// 播放 */
-  getAudioFilePath(chapterId: string, pageUrl: string): string | null {
+  /** 章节是否已经有完整音频文件落盘，命中后 AudioService 直接 fdSrc 播放 */
+  getAudioFilePath(bookId: string, chapterId: string, pageUrl: string): string | null {
+    const safePageUrl = pageUrl || '';
     const entry = this.fileCache.get(chapterId);
-    if (!entry) return null;
-    // pageUrl 不一致说明缓存对应的章节不同（书源 toc 重排过），失效
-    if (entry.pageUrl !== pageUrl) return null;
-    return entry.filePath;
+    if (entry) {
+      // pageUrl 不一致说明缓存对应的章节不同（书源 toc 重排过），失效
+      if (entry.pageUrl === safePageUrl && this.isUsableFile(entry.filePath)) {
+        return entry.filePath;
+      }
+      this.fileCache.delete(chapterId);
+    }
+
+    const stablePath = this.audioFilePath(bookId, safePageUrl);
+    const restored = this.restoreFileCacheEntry(chapterId, safePageUrl, stablePath);
+    if (restored) return restored;
+
+    // 兼容旧版本已经下载到磁盘的 chap_<hash(bookId|chapterId)>.mp3。
+    const legacyPath = this.legacyAudioFilePath(bookId, chapterId);
+    return this.restoreFileCacheEntry(chapterId, safePageUrl, legacyPath);
   }
 
   getTextContent(chapterId: string, pageUrl?: string): string | null {
@@ -174,7 +191,8 @@ export class ChapterCacheService {
       if (i === currentIndex) continue;
       const ch = book.chapters[i];
       if (ch.source.type !== 'url') continue;
-      if (this.fileCache.has(ch.id)) continue;
+      const pageUrl = ch.originSourceValue || ch.source.value;
+      if (this.getAudioFilePath(book.id, ch.id, pageUrl)) continue;
       // 1) URL 解析
       if (!this.audioCache.has(ch.id) && !this.pendingTasks.has(`audio_${ch.id}`)) {
         this.enqueue(() => this.resolveAudioAndDownload(book, ch));
@@ -235,7 +253,8 @@ export class ChapterCacheService {
   /** 主动给某个章节下载文件（AudioService 在 playChapter 时调用，让当前章节也能落盘） */
   ensureFileCached(book: Book, chapter: Chapter, resolvedUrl: string): void {
     if (!resolvedUrl || !resolvedUrl.startsWith('http')) return;
-    if (this.fileCache.has(chapter.id)) return;
+    const pageUrl = chapter.originSourceValue || chapter.source.value;
+    if (this.getAudioFilePath(book.id, chapter.id, pageUrl)) return;
     if (this.pendingTasks.has(`file_${chapter.id}`)) return;
     this.enqueueFile(() => this.downloadFile(book, chapter, resolvedUrl));
   }
@@ -313,24 +332,16 @@ export class ChapterCacheService {
     let httpClient: http.HttpRequest | null = null;
     let f: fileIo.File | null = null;
     try {
-      const cacheDir = this.appContext.cacheDir;
-      const fileName = `chap_${this.hash(book.id + '|' + chapter.id)}.mp3`;
-      const filePath = `${cacheDir}/${fileName}`;
+      const pageUrl = chapter.originSourceValue || chapter.source.value;
+      const filePath = this.audioFilePath(book.id, pageUrl);
+      if (!filePath) return;
       // 已存在直接复用（避免重复下）
-      try {
-        const stat = await fileIo.stat(filePath);
-        if (stat.size > 1024) {
-          this.fileCache.set(chapter.id, {
-            filePath,
-            pageUrl: chapter.originSourceValue || chapter.source.value,
-            bytes: stat.size,
-            timestamp: Date.now(),
-          });
-          this.evictFileCache();
-          this.extractDuration(chapter, filePath);
-          return;
-        }
-      } catch (_e) { /* 不存在，下载 */ }
+      const restored = this.restoreFileCacheEntry(chapter.id, pageUrl, filePath)
+        ?? this.restoreFileCacheEntry(chapter.id, pageUrl, this.legacyAudioFilePath(book.id, chapter.id));
+      if (restored) {
+        this.extractDuration(chapter, restored);
+        return;
+      }
 
       httpClient = http.createHttp();
       const resp = await httpClient.request(audioUrl, {
@@ -350,7 +361,7 @@ export class ChapterCacheService {
       f = null;
       this.fileCache.set(chapter.id, {
         filePath,
-        pageUrl: chapter.originSourceValue || chapter.source.value,
+        pageUrl,
         bytes: buf.byteLength,
         timestamp: Date.now(),
       });
@@ -419,6 +430,42 @@ export class ChapterCacheService {
     try {
       fileIo.unlink(path).catch(() => { /* ignore */ });
     } catch (_e) { /* ignore */ }
+  }
+
+  private audioFilePath(bookId: string, pageUrl: string): string | null {
+    if (!this.appContext || !bookId || !pageUrl) return null;
+    return `${this.appContext.cacheDir}/chap_${this.hash(bookId + '|' + pageUrl)}.mp3`;
+  }
+
+  private legacyAudioFilePath(bookId: string, chapterId: string): string | null {
+    if (!this.appContext || !bookId || !chapterId) return null;
+    return `${this.appContext.cacheDir}/chap_${this.hash(bookId + '|' + chapterId)}.mp3`;
+  }
+
+  private restoreFileCacheEntry(chapterId: string, pageUrl: string, filePath: string | null): string | null {
+    if (!filePath || !this.isUsableFile(filePath)) return null;
+    let bytes = 0;
+    try {
+      bytes = fileIo.statSync(filePath).size;
+    } catch (_e) {
+      bytes = 0;
+    }
+    this.fileCache.set(chapterId, {
+      filePath,
+      pageUrl,
+      bytes,
+      timestamp: Date.now(),
+    });
+    this.evictFileCache();
+    return filePath;
+  }
+
+  private isUsableFile(filePath: string): boolean {
+    try {
+      return fileIo.statSync(filePath).size > 1024;
+    } catch (_e) {
+      return false;
+    }
   }
 
   /** 解析音频文件的元数据时长（秒），写入 durationCache 并广播事件让 UI 刷新 */

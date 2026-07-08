@@ -180,8 +180,8 @@ export default class EntryAbility extends UIAbility {
           return;
         }
 
-        const chapter = book.chapters.find((c) => c.id === last.chapterId)
-          ?? (last.chapterTitle ? book.chapters.find((c) => c.title === last.chapterTitle) : undefined);
+        const chapterIndex = DataService.resolveChapterIndex(book, last.chapterId, last.chapterTitle);
+        const chapter = chapterIndex >= 0 ? book.chapters[chapterIndex] : undefined;
         if (!chapter) {
           return;
         }
