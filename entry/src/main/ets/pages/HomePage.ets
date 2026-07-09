@@ -12,6 +12,7 @@ import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { DataService } from '../service/DataService';
+import { SimpleSemaphore } from '../service/ConcurrentRateLimiter';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { ResumeCard, ResumeCardMode } from '../components/ResumeCard';
@@ -476,10 +477,18 @@ export struct HomePage {
         return;
       }
 
+      // 限制并发数：书源数量多时避免一次性发起过多网络请求打满连接池
+      const MAX_SEARCH_CONCURRENCY = 6;
+      const semaphore = new SimpleSemaphore(MAX_SEARCH_CONCURRENCY);
+
       for (const job of searchJobs) {
         const source = job.source;
         const contentType = job.contentType;
-        BookSourceService.searchBooks(source, this.keyword.trim())
+        semaphore.acquire()
+          .then(() => {
+            if (gen !== this.searchGen) return [] as SearchResult[];
+            return BookSourceService.searchBooks(source, this.keyword.trim());
+          })
           .then((r: SearchResult[]) => {
             if (gen !== this.searchGen) return;
             this.searchingSource = source.bookSourceName;
@@ -503,6 +512,7 @@ export struct HomePage {
             console.error(`[Search] ${source.bookSourceName} error: ${msg}`);
           })
           .finally(() => {
+            semaphore.release();
             if (gen !== this.searchGen) return;
             this.pendingCount--;
             if (this.pendingCount <= 0) {

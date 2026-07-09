@@ -13,6 +13,8 @@ import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
 import { SourceVariableStore } from '../service/SourceVariableStore';
+import { resetJSExecutor } from '../service/js/JSExecutor';
+import { resetWebViewJSEngine } from '../service/js/WebViewJSEngine';
 import { getCacheService } from '../service/CacheService';
 import { JavaBridgeImpl } from '../service/rule/JavaBridge';
 import { deviceInfo } from '@kit.BasicServicesKit';
@@ -302,6 +304,9 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'AudioService release failed: %{public}s',
         (err as Error)?.message ?? JSON.stringify(err));
     }
+    // 重置 JS 引擎单例，避免 Ability 重建后 proxyAvailable/pendingTasks 等状态残留
+    try { resetJSExecutor(); } catch (_e) { /* ignore */ }
+    try { resetWebViewJSEngine(); } catch (_e) { /* ignore */ }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

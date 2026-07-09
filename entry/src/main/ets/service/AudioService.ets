@@ -1105,6 +1105,18 @@ export class AudioService {
       await BackgroundTaskService.stop(this.context);
     }
     await AVSessionService.getInstance().destroy();
+    // 重置单例：让下次 getInstance() 创建全新实例，避免 readyPromise/playGen 等状态残留
+    this.state = null;
+    this.context = null;
+    this.playGen = 0;
+    this.isApplying = false;
+    this.pendingSeek = 0;
+    this.resumeTargetMs = 0;
+    this.pausedByFocus = false;
+    this.pausedByExternalMedia = false;
+    this.lastProgressWriteAt = 0;
+    this.lastPersistAt = 0;
+    AudioService.instance = null;
   }
 
   /** 片尾跳过：检测当前播放位置是否到达片尾区域，到达则自动跳下一章 */

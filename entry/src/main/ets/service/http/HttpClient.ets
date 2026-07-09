@@ -21,6 +21,8 @@ export interface HttpRequestOptions {
   timeout?: number;
   /** 响应字符集，默认 utf-8。GBK/GB2312 站点必须显式传入。 */
   charset?: string;
+  /** 最大重试次数（仅对网络错误/5xx/429 重试），默认 0（不重试） */
+  retry?: number;
 }
 
 export interface HttpResponse {
@@ -99,7 +101,33 @@ export class HttpClient {
       },
     };
 
-    const response = await session.fetch(req);
+    const maxRetry = options.retry ?? 0;
+    let response: rcp.Response | null = null;
+    let lastErr: Error | null = null;
+    for (let attempt = 0; attempt <= maxRetry; attempt++) {
+      try {
+        response = await session.fetch(req);
+        // 5xx 和 429 可重试
+        if (response.statusCode >= 500 || response.statusCode === 429) {
+          lastErr = new Error(`HTTP ${response.statusCode}`);
+          if (attempt < maxRetry) {
+            await HttpClient.delay(attempt);
+            continue;
+          }
+        }
+        break; // 2xx/3xx/4xx(非429) 直接到结果
+      } catch (err) {
+        lastErr = err as Error;
+        if (attempt < maxRetry) {
+          await HttpClient.delay(attempt);
+          continue;
+        }
+        throw new Error(lastErr?.message ?? 'HTTP request failed');
+      }
+    }
+    if (!response) {
+      throw new Error(lastErr?.message ?? 'HTTP request failed with no response');
+    }
 
     // 始终按原始字节解码：显式 charset 优先，否则按 Content-Type / HTML meta 自动探测，默认 UTF-8
     const respHeaders = HttpClient.toHeaderRecord(response.headers);
@@ -203,5 +231,13 @@ export class HttpClient {
       sharedSession.close();
       sharedSession = null;
     }
+  }
+
+  /** 指数退避延迟：attempt=0→500ms, 1→1000ms, 2→2000ms, 加 ±20% 随机抖动 */
+  private static delay(attempt: number): Promise<void> {
+    const base = 500 * Math.pow(2, attempt);
+    const jitter = base * 0.2 * (Math.random() * 2 - 1);
+    const ms = Math.max(100, base + jitter);
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 }

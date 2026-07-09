@@ -353,5 +353,17 @@ export class AVSessionService {
       pm.release();
     });
     this.coverCache.clear();
+    // 重置单例状态，让下次 getInstance() 创建全新实例
+    this.context = null;
+    this.initPromise = null;
+    this.currentBook = null;
+    this.currentChapter = null;
+    this.currentMediaImage = undefined;
+    this.onPlay = null;
+    this.onPause = null;
+    this.onPlayNext = null;
+    this.onPlayPrevious = null;
+    this.onSeek = null;
+    AVSessionService.instance = null;
   }
 }

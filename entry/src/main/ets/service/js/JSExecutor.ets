@@ -1903,6 +1903,11 @@ export function getJSExecutor(config?: JSExecutorConfig): JSExecutor {
   return globalExecutor;
 }
 
+/** 重置全局 JSExecutor 单例，让下次 getJSExecutor() 创建全新实例 */
+export function resetJSExecutor(): void {
+  globalExecutor = null;
+}
+
 /**
  * DOM Shim Document - 简化的 document 对象
  */

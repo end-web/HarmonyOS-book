@@ -93,3 +93,40 @@ function parseRateConfig(config: string): RateLimiterConfig | null {
 
   return null;
 }
+
+/**
+ * 简单并发信号量 — 限制同时进行的异步操作数量。
+ * 用于多源搜索等场景，防止一次性发起过多网络请求。
+ *
+ * 用法：
+ *   const sem = new SimpleSemaphore(6);
+ *   await sem.acquire();
+ *   try { ... } finally { sem.release(); }
+ */
+export class SimpleSemaphore {
+  private permits: number;
+  private waiters: Array<() => void> = [];
+
+  constructor(maxConcurrency: number) {
+    this.permits = maxConcurrency;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.permits > 0) {
+      this.permits--;
+      return;
+    }
+    await new Promise<void>((resolve: () => void): void => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      next();
+    } else {
+      this.permits++;
+    }
+  }
+}

@@ -2182,8 +2182,9 @@ export class BookSourceService {
         return sections;
       })();
 
+      let timerId: number = -1;
       const timeout = new Promise<HomeBlockSection[]>((resolve) => {
-        setTimeout(() => {
+        timerId = setTimeout(() => {
           console.warn(`[${TAG}] streamAllHomeBlocks: ${source.bookSourceName} TIMEOUT`);
           resolve([] as HomeBlockSection[]);
         }, PER_SOURCE_TIMEOUT_MS);
@@ -2191,8 +2192,10 @@ export class BookSourceService {
 
       try {
         const blocks = await Promise.race([work, timeout]);
+        if (timerId >= 0) clearTimeout(timerId);
         if (blocks.length > 0) onSource(blocks, source);
       } catch (e) {
+        if (timerId >= 0) clearTimeout(timerId);
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[${TAG}] streamAllHomeBlocks: ${source.bookSourceName} error ${msg}`);
       }
@@ -2215,10 +2218,17 @@ export class BookSourceService {
   // ──────────────────── HTTP 工具 ────────────────────
 
   private static async fetch(analyzed: AnalyzedUrl): Promise<string> {
+    const retry = analyzed.retry > 0 ? analyzed.retry : 0;
     if (analyzed.method === 'POST') {
-      return HttpClient.post(analyzed.url, analyzed.body || '', analyzed.headers, analyzed.charset);
+      const resp = await HttpClient.request(analyzed.url, {
+        method: 'POST', body: analyzed.body || '', headers: analyzed.headers, charset: analyzed.charset, retry,
+      });
+      return resp.body;
     }
-    return HttpClient.get(analyzed.url, analyzed.headers, analyzed.charset);
+    const resp = await HttpClient.request(analyzed.url, {
+      method: 'GET', headers: analyzed.headers, charset: analyzed.charset, retry,
+    });
+    return resp.body;
   }
 
   /**

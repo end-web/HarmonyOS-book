@@ -48,6 +48,14 @@ export function getWebViewJSEngine(): WebViewJSEngine {
   return globalEngine;
 }
 
+/** 重置全局 WebViewJSEngine 单例，清理 pending tasks，让下次 getWebViewJSEngine() 创建全新实例 */
+export function resetWebViewJSEngine(): void {
+  if (globalEngine) {
+    globalEngine.reset();
+  }
+  globalEngine = null;
+}
+
 // ──────────── 桥接 HTML（内嵌 JS 运行时） ────────────
 
 const BRIDGE_SCRIPT = `
@@ -335,6 +343,21 @@ export class WebViewJSEngine {
     this.readyCallbacks = [];
   }
 
+  /** 清理内部状态，供 resetWebViewJSEngine() 调用 */
+  reset(): void {
+    // reject 所有 pending tasks
+    this.pendingTasks.forEach((task: EvalTask) => {
+      try {
+        if (task.timerId) clearTimeout(task.timerId);
+        task.reject(new Error('engine reset'));
+      } catch (_e) { /* ignore */ }
+    });
+    this.pendingTasks.clear();
+    this.readyCallbacks = [];
+    this.isReady = false;
+    this.controller = null;
+    this.nextId = 1;
+  }
   /**
    * 执行 JS 代码
    * @param code JS 代码字符串
