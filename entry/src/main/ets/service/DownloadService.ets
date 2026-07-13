@@ -12,6 +12,7 @@ import { DownloadFailureCode, DownloadPolicy } from './DownloadPolicy';
 import { DownloadBookRecord, DownloadChapterRecord, DownloadStore } from './DownloadStore';
 import { SourceDataService } from './SourceDataService';
 import { DownloadNotificationService, DownloadNotificationSummary } from './DownloadNotificationService';
+import { BackgroundTaskService } from './BackgroundTaskService';
 
 const DOMAIN = 0x0001;
 const TAG = 'DownloadService';
@@ -146,6 +147,7 @@ export class DownloadService {
       await DownloadStore.saveBook(record);
       this.emitUpdate(bookId);
     }
+    this.stopBackgroundTransferIfIdle();
   }
 
   async resumeBook(bookId: string): Promise<void> {
@@ -187,6 +189,7 @@ export class DownloadService {
     this.removePendingBookKeys(bookId);
     this.emitRawUpdate(bookId, undefined, 'deleted', 0, 0, 0);
     this.refreshNotification(true).catch((_e: Error): void => {});
+    this.stopBackgroundTransferIfIdle();
   }
 
   async deleteChapterDownload(bookId: string, chapterId: string, pageUrl: string = ''): Promise<void> {
@@ -216,6 +219,7 @@ export class DownloadService {
     this.activeProgress.delete(deletedKey);
     this.lastProgressEmitAt.delete(deletedKey);
     this.emitUpdate(bookId, chapterId);
+    this.stopBackgroundTransferIfIdle();
   }
 
   async clearAllDownloads(): Promise<void> {
@@ -234,6 +238,7 @@ export class DownloadService {
     await DownloadStore.clearAll();
     this.emitRawUpdate('', undefined, 'cleared', 0, 0, 0);
     await DownloadNotificationService.cancel();
+    this.stopBackgroundTransferIfIdle();
   }
 
   getBookStatus(bookId: string): DownloadBookRecord | null {
@@ -362,6 +367,7 @@ export class DownloadService {
       this.resolveQueue.push(item);
     }
     this.notificationBookIds.add(book.id);
+    await this.startBackgroundTransfer();
     this.emitUpdate(book.id);
     this.drainResolve();
     return candidates.length;
@@ -374,9 +380,11 @@ export class DownloadService {
       this.resolveAndQueueFile(item).then(() => {
         this.resolveRunningCount--;
         this.drainResolve();
+        this.stopBackgroundTransferIfIdle();
       }).catch(() => {
         this.resolveRunningCount--;
         this.drainResolve();
+        this.stopBackgroundTransferIfIdle();
       });
     }
   }
@@ -388,9 +396,11 @@ export class DownloadService {
       this.downloadFile(item).then(() => {
         this.fileRunningCount--;
         this.drainFile();
+        this.stopBackgroundTransferIfIdle();
       }).catch(() => {
         this.fileRunningCount--;
         this.drainFile();
+        this.stopBackgroundTransferIfIdle();
       });
     }
   }
@@ -713,6 +723,21 @@ export class DownloadService {
     if (this.pendingKeys.get(key) === this.itemToken(item)) this.pendingKeys.delete(key);
     this.activeProgress.delete(key);
     this.lastProgressEmitAt.delete(key);
+  }
+
+  private async startBackgroundTransfer(): Promise<void> {
+    if (!this.ctx) return;
+    await BackgroundTaskService.startDataTransfer(this.ctx as common.UIAbilityContext);
+  }
+
+  private stopBackgroundTransferIfIdle(): void {
+    if (this.resolveQueue.length > 0 || this.fileQueue.length > 0
+      || this.resolveRunningCount > 0 || this.fileRunningCount > 0 || this.pendingKeys.size > 0) return;
+    if (!this.ctx) return;
+    BackgroundTaskService.stopDataTransfer(this.ctx as common.UIAbilityContext).catch((err: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'stop background transfer failed: %{public}s',
+        err?.message ?? JSON.stringify(err));
+    });
   }
 
   private taskKey(bookId: string, pageUrl: string): string {

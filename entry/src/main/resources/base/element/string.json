@@ -14,7 +14,7 @@
     },
     {
       "name": "keep_background_running_reason",
-      "value": "用于后台播放音频"
+      "value": "用于后台播放音频及离线下载"
     },
     {
       "name": "read_pasteboard_reason",
