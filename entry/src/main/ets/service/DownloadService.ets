@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { media } from '@kit.MediaKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Book, Chapter } from '../model/Book';
 import { BookInfo, TocItem } from '../model/BookSource';
@@ -10,6 +11,7 @@ import { DataService } from './DataService';
 import { DownloadFailureCode, DownloadPolicy } from './DownloadPolicy';
 import { DownloadBookRecord, DownloadChapterRecord, DownloadStore } from './DownloadStore';
 import { SourceDataService } from './SourceDataService';
+import { DownloadNotificationService, DownloadNotificationSummary } from './DownloadNotificationService';
 
 const DOMAIN = 0x0001;
 const TAG = 'DownloadService';
@@ -27,6 +29,23 @@ interface DownloadQueueItem {
   requestInfo?: AudioRequestInfo;
 }
 
+interface ActiveDownloadProgress {
+  bookId: string;
+  chapterId: string;
+  chapterTitle: string;
+  receivedBytes: number;
+  totalBytes: number;
+}
+
+export interface DownloadProgressSnapshot {
+  progressPercent: number;
+  receivedBytes: number;
+  expectedBytes: number;
+  indeterminate: boolean;
+  currentChapterTitle: string;
+  totalCount: number;
+}
+
 export interface DownloadUpdatePayload {
   bookId: string;
   chapterId?: string;
@@ -34,6 +53,12 @@ export interface DownloadUpdatePayload {
   downloadedCount: number;
   failedCount: number;
   totalCount: number;
+  progressPercent: number;
+  receivedBytes: number;
+  expectedBytes: number;
+  indeterminate: boolean;
+  currentChapterTitle: string;
+  progressOnly: boolean;
 }
 
 export class DownloadService {
@@ -52,6 +77,11 @@ export class DownloadService {
   private globalGeneration: number = 0;
   private bookGenerations: Map<string, number> = new Map();
   private chapterGenerations: Map<string, number> = new Map();
+  private activeProgress: Map<string, ActiveDownloadProgress> = new Map();
+  private lastProgressEmitAt: Map<string, number> = new Map();
+  private durationHydrationBooks: Set<string> = new Set();
+  private notificationBookIds: Set<string> = new Set();
+  private lastNotificationAt: number = 0;
 
   static getInstance(): DownloadService {
     if (!DownloadService.instance) {
@@ -62,6 +92,7 @@ export class DownloadService {
 
   async init(ctx: common.Context): Promise<void> {
     this.ctx = ctx;
+    DownloadNotificationService.setContext(ctx);
     await DownloadStore.init(ctx);
   }
 
@@ -72,24 +103,29 @@ export class DownloadService {
   setContext(ctx: common.Context): void {
     this.ctx = ctx;
     DownloadStore.setContext(ctx);
+    DownloadNotificationService.setContext(ctx);
   }
 
   async downloadBook(book: Book): Promise<number> {
+    await DownloadNotificationService.requestPermission();
     return this.enqueueChapters(book, book.chapters);
   }
 
   async downloadNextChapters(book: Book, startIndex: number, count: number): Promise<number> {
+    await DownloadNotificationService.requestPermission();
     const safeStart = Math.max(0, Math.min(startIndex, Math.max(0, book.chapters.length - 1)));
     const safeEnd = Math.min(book.chapters.length, safeStart + Math.max(1, count));
     return this.enqueueChapters(book, book.chapters.slice(safeStart, safeEnd));
   }
 
   async downloadIncremental(book: Book): Promise<number> {
+    await DownloadNotificationService.requestPermission();
     const refreshed = await this.refreshBookToc(book);
     return this.enqueueChapters(refreshed, refreshed.chapters);
   }
 
   async downloadChapter(book: Book, chapter: Chapter): Promise<number> {
+    await DownloadNotificationService.requestPermission();
     return this.enqueueChapters(book, [chapter]);
   }
 
@@ -100,6 +136,7 @@ export class DownloadService {
     this.resolveQueue = this.resolveQueue.filter((item: DownloadQueueItem) => item.book.id !== bookId);
     this.fileQueue = this.fileQueue.filter((item: DownloadQueueItem) => item.book.id !== bookId);
     this.removePendingBookKeys(bookId);
+    this.clearBookProgress(bookId);
     const record = await DownloadStore.getBook(bookId);
     if (record) {
       for (const chapter of record.chapters) {
@@ -112,6 +149,7 @@ export class DownloadService {
   }
 
   async resumeBook(bookId: string): Promise<void> {
+    await DownloadNotificationService.requestPermission();
     this.pausedBooks.delete(bookId);
     this.deletedBooks.delete(bookId);
     const record = await DownloadStore.getBook(bookId);
@@ -133,6 +171,8 @@ export class DownloadService {
     this.cancelBookTransports(bookId);
     this.resolveQueue = this.resolveQueue.filter((item: DownloadQueueItem) => item.book.id !== bookId);
     this.fileQueue = this.fileQueue.filter((item: DownloadQueueItem) => item.book.id !== bookId);
+    this.clearBookProgress(bookId);
+    this.notificationBookIds.delete(bookId);
     const record = await DownloadStore.getBook(bookId);
     if (record) {
       for (const chapter of record.chapters) {
@@ -144,6 +184,7 @@ export class DownloadService {
     await DownloadStore.removeBook(bookId);
     this.removePendingBookKeys(bookId);
     this.emitRawUpdate(bookId, undefined, 'deleted', 0, 0, 0);
+    this.refreshNotification(true).catch((_e: Error): void => {});
   }
 
   async deleteChapterDownload(bookId: string, chapterId: string, pageUrl: string = ''): Promise<void> {
@@ -170,6 +211,8 @@ export class DownloadService {
     chapter.updatedAt = Date.now();
     await DownloadStore.saveBook(record);
     this.pendingKeys.delete(deletedKey);
+    this.activeProgress.delete(deletedKey);
+    this.lastProgressEmitAt.delete(deletedKey);
     this.emitUpdate(bookId, chapterId);
   }
 
@@ -181,10 +224,14 @@ export class DownloadService {
     this.resolveQueue = [];
     this.fileQueue = [];
     this.pendingKeys.clear();
+    this.activeProgress.clear();
+    this.lastProgressEmitAt.clear();
+    this.notificationBookIds.clear();
     const root = DownloadStore.getAudioRootPath();
     if (root) await this.deleteDirChildren(root, false);
     await DownloadStore.clearAll();
     this.emitRawUpdate('', undefined, 'cleared', 0, 0, 0);
+    await DownloadNotificationService.cancel();
   }
 
   getBookStatus(bookId: string): DownloadBookRecord | null {
@@ -193,6 +240,43 @@ export class DownloadService {
 
   getAllBookStatuses(): DownloadBookRecord[] {
     return DownloadStore.getBooksSync();
+  }
+
+  getBookProgress(bookId: string): DownloadProgressSnapshot {
+    const record = DownloadStore.getBookSync(bookId);
+    if (!record) return this.emptyProgress();
+    const chapters = record.chapters.filter((item: DownloadChapterRecord) => item.status !== 'deleted');
+    const totalCount = chapters.length;
+    if (totalCount === 0) return this.emptyProgress();
+    let completedUnits = 0;
+    let receivedBytes = 0;
+    let expectedBytes = 0;
+    let indeterminate = false;
+    let currentChapterTitle = '';
+    for (const chapter of chapters) {
+      if (chapter.status === 'completed') {
+        completedUnits++;
+        continue;
+      }
+      const progress = this.activeProgress.get(this.taskKey(bookId, chapter.pageUrl));
+      if (!progress) continue;
+      receivedBytes += progress.receivedBytes;
+      if (progress.totalBytes > 0) {
+        expectedBytes += progress.totalBytes;
+        completedUnits += Math.min(1, progress.receivedBytes / progress.totalBytes);
+      } else {
+        indeterminate = true;
+      }
+      if (!currentChapterTitle) currentChapterTitle = progress.chapterTitle;
+    }
+    return {
+      progressPercent: Math.max(0, Math.min(100, completedUnits / totalCount * 100)),
+      receivedBytes,
+      expectedBytes,
+      indeterminate,
+      currentChapterTitle,
+      totalCount
+    };
   }
 
   getChapterStatus(bookId: string, chapter: Chapter): DownloadChapterRecord | null {
@@ -206,6 +290,32 @@ export class DownloadService {
     if (!record || record.status !== 'completed') return null;
     if (DownloadStore.isExpectedFile(record.filePath, record.bytes)) return record.filePath;
     return null;
+  }
+
+  async hydrateBookDurations(bookId: string): Promise<void> {
+    if (!bookId || this.durationHydrationBooks.has(bookId)) return;
+    this.durationHydrationBooks.add(bookId);
+    try {
+      const record = await DownloadStore.getBook(bookId);
+      if (!record) return;
+      let changed = false;
+      for (const chapter of record.chapters) {
+        if (chapter.status !== 'completed' || (chapter.durationSec ?? 0) > 0
+          || !DownloadStore.isExpectedFile(chapter.filePath, chapter.bytes)) continue;
+        const durationSec = await this.extractAudioDuration(chapter.filePath);
+        if (durationSec <= 0) continue;
+        chapter.durationSec = durationSec;
+        changed = true;
+      }
+      if (changed) {
+        await DownloadStore.saveBook(record);
+        const progress = this.getBookProgress(bookId);
+        this.emitRawUpdate(bookId, undefined, record.status, record.downloadedCount, record.failedCount,
+          progress.totalCount, progress);
+      }
+    } finally {
+      this.durationHydrationBooks.delete(bookId);
+    }
   }
 
   hasAnyDownload(bookId: string): boolean {
@@ -249,6 +359,7 @@ export class DownloadService {
       this.pendingKeys.set(key, this.itemToken(item));
       this.resolveQueue.push(item);
     }
+    this.notificationBookIds.add(book.id);
     this.emitUpdate(book.id);
     this.drainResolve();
     return candidates.length;
@@ -334,6 +445,7 @@ export class DownloadService {
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       if (DownloadStore.isExpectedFile(filePath, record?.bytes ?? 0)) {
         const size = fileIo.statSync(filePath).size;
+        await this.ensureChapterDuration(item, filePath, record?.durationSec ?? 0);
         await DownloadStore.upsertChapter(item.book, item.chapter, 'completed', audioUrl, filePath, size, '',
           (): boolean => this.isItemCurrent(item));
         if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
@@ -350,12 +462,17 @@ export class DownloadService {
       const bytes = await transport.download({
         url: audioUrl,
         headers: item.requestInfo?.headers || {},
-        finalPath: filePath
+        finalPath: filePath,
+        onProgress: (receivedBytes: number, totalBytes: number): void => {
+          this.handleProgress(item, receivedBytes, totalBytes);
+        }
       });
       if (!this.isItemCurrent(item)) {
         if (this.isItemDeleted(item)) await DownloadStore.deleteFileSafely(filePath);
         return this.discardStaleItem(item);
       }
+      await this.ensureChapterDuration(item, filePath);
+      if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       await DownloadStore.upsertChapter(item.book, item.chapter, 'completed', audioUrl, filePath, bytes, '',
         (): boolean => this.isItemCurrent(item));
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
@@ -383,6 +500,43 @@ export class DownloadService {
     if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
     this.clearPendingItem(item);
     this.emitUpdate(item.book.id, item.chapter.id);
+  }
+
+  private async ensureChapterDuration(item: DownloadQueueItem, filePath: string,
+    knownDurationSec: number = 0): Promise<void> {
+    let durationSec = item.chapter.duration > 0 ? item.chapter.duration : knownDurationSec;
+    if (durationSec <= 0) durationSec = await this.extractAudioDuration(filePath);
+    if (durationSec <= 0) return;
+    item.chapter.duration = durationSec;
+    const pageUrl = this.chapterPageUrl(item.chapter);
+    const original = item.book.chapters.find((chapter: Chapter) => chapter.id === item.chapter.id
+      || this.chapterPageUrl(chapter) === pageUrl);
+    if (original) original.duration = durationSec;
+  }
+
+  private async extractAudioDuration(filePath: string): Promise<number> {
+    let extractor: media.AVMetadataExtractor | null = null;
+    let file: fileIo.File | null = null;
+    try {
+      file = await fileIo.open(filePath, fileIo.OpenMode.READ_ONLY);
+      const stat = await fileIo.stat(filePath);
+      extractor = await media.createAVMetadataExtractor();
+      extractor.fdSrc = { fd: file.fd, offset: 0, length: stat.size };
+      const metadata = await extractor.fetchMetadata();
+      const durationMs = parseInt(metadata.duration ?? '0', 10);
+      return Number.isFinite(durationMs) && durationMs > 0 ? Math.round(durationMs / 1000) : 0;
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'extract duration failed: %{public}s', e?.message ?? JSON.stringify(err));
+      return 0;
+    } finally {
+      if (extractor) {
+        try { await extractor.release(); } catch (_e) { /* ignore */ }
+      }
+      if (file) {
+        try { await fileIo.close(file); } catch (_e) { /* ignore */ }
+      }
+    }
   }
 
   private async refreshBookToc(book: Book): Promise<Book> {
@@ -555,23 +709,67 @@ export class DownloadService {
   private clearPendingItem(item: DownloadQueueItem): void {
     const key = this.itemKey(item);
     if (this.pendingKeys.get(key) === this.itemToken(item)) this.pendingKeys.delete(key);
+    this.activeProgress.delete(key);
+    this.lastProgressEmitAt.delete(key);
   }
 
   private taskKey(bookId: string, pageUrl: string): string {
     return DownloadPolicy.taskKey(bookId, pageUrl);
   }
 
-  private emitUpdate(bookId: string, chapterId?: string): void {
+  private handleProgress(item: DownloadQueueItem, receivedBytes: number, totalBytes: number): void {
+    if (!this.isItemCurrent(item)) return;
+    const key = this.itemKey(item);
+    this.activeProgress.set(key, {
+      bookId: item.book.id,
+      chapterId: item.chapter.id,
+      chapterTitle: item.chapter.title,
+      receivedBytes,
+      totalBytes
+    });
+    const now = Date.now();
+    const last = this.lastProgressEmitAt.get(key) ?? 0;
+    if (now - last < 500) return;
+    this.lastProgressEmitAt.set(key, now);
+    this.emitUpdate(item.book.id, item.chapter.id, false);
+  }
+
+  private emptyProgress(): DownloadProgressSnapshot {
+    return {
+      progressPercent: 0,
+      receivedBytes: 0,
+      expectedBytes: 0,
+      indeterminate: false,
+      currentChapterTitle: '',
+      totalCount: 0
+    };
+  }
+
+  private clearBookProgress(bookId: string): void {
+    const prefix = `${bookId}|`;
+    for (const key of this.activeProgress.keys()) {
+      if (key.startsWith(prefix)) this.activeProgress.delete(key);
+    }
+    for (const key of this.lastProgressEmitAt.keys()) {
+      if (key.startsWith(prefix)) this.lastProgressEmitAt.delete(key);
+    }
+  }
+
+  private emitUpdate(bookId: string, chapterId?: string, forceNotification: boolean = true): void {
     const record = DownloadStore.getBookSync(bookId);
     if (!record) {
       this.emitRawUpdate(bookId, chapterId, 'idle', 0, 0, 0);
       return;
     }
-    this.emitRawUpdate(bookId, chapterId, record.status, record.downloadedCount, record.failedCount, record.chapterCount);
+    const progress = this.getBookProgress(bookId);
+    this.emitRawUpdate(bookId, chapterId, record.status, record.downloadedCount, record.failedCount,
+      progress.totalCount, progress, !forceNotification);
+    this.refreshNotification(forceNotification).catch((_e: Error): void => {});
   }
 
   private emitRawUpdate(bookId: string, chapterId: string | undefined, status: string,
-    downloadedCount: number, failedCount: number, totalCount: number): void {
+    downloadedCount: number, failedCount: number, totalCount: number,
+    progress: DownloadProgressSnapshot = this.emptyProgress(), progressOnly: boolean = false): void {
     emitter.emit(EVT_DOWNLOAD_UPDATED, {
       data: {
         bookId,
@@ -579,9 +777,61 @@ export class DownloadService {
         status,
         downloadedCount,
         failedCount,
-        totalCount
+        totalCount,
+        progressPercent: progress.progressPercent,
+        receivedBytes: progress.receivedBytes,
+        expectedBytes: progress.expectedBytes,
+        indeterminate: progress.indeterminate,
+        currentChapterTitle: progress.currentChapterTitle,
+        progressOnly
       } as DownloadUpdatePayload
     });
+  }
+
+  private async refreshNotification(force: boolean): Promise<void> {
+    const now = Date.now();
+    const records: DownloadBookRecord[] = [];
+    for (const bookId of this.notificationBookIds) {
+      const record = DownloadStore.getBookSync(bookId);
+      if (record) records.push(record);
+    }
+    if (records.length === 0) {
+      await DownloadNotificationService.cancel();
+      return;
+    }
+    const active = records.filter((item: DownloadBookRecord) => item.status === 'downloading'
+      || item.status === 'queued');
+    const paused = records.filter((item: DownloadBookRecord) => item.status === 'paused');
+    const status = active.length > 0 ? 'downloading'
+      : paused.length > 0 ? 'paused'
+        : records.some((item: DownloadBookRecord) => item.failedCount > 0) ? 'failed' : 'completed';
+    if ((!force || status === 'downloading') && now - this.lastNotificationAt < 1000) return;
+    this.lastNotificationAt = now;
+    const summary = this.notificationSummary(records, status);
+    await DownloadNotificationService.publish(summary);
+    if (summary.status === 'completed' || summary.status === 'failed') this.notificationBookIds.clear();
+  }
+
+  private notificationSummary(records: DownloadBookRecord[], status: 'downloading' | 'paused'
+    | 'completed' | 'failed'): DownloadNotificationSummary {
+    let totalCount = 0;
+    let downloadedCount = 0;
+    let weightedProgress = 0;
+    for (const record of records) {
+      const progress = this.getBookProgress(record.bookId);
+      totalCount += progress.totalCount;
+      downloadedCount += record.downloadedCount;
+      weightedProgress += progress.progressPercent * progress.totalCount;
+    }
+    const progressPercent = totalCount > 0 ? weightedProgress / totalCount : 0;
+    let title = records.length === 1 ? records[0].title : `正在下载 ${records.length} 本书`;
+    if (status === 'paused') title = records.length === 1 ? `${records[0].title} · 已暂停` : '下载已暂停';
+    if (status === 'completed') title = '离线下载完成';
+    if (status === 'failed') title = '离线下载结束';
+    const failedCount = records.reduce((sum: number, item: DownloadBookRecord) => sum + item.failedCount, 0);
+    const detail = status === 'failed' ? `已完成 ${downloadedCount}/${totalCount} 章，失败 ${failedCount} 章`
+      : `已完成 ${downloadedCount}/${totalCount} 章`;
+    return { title, detail, progressPercent, status };
   }
 
   private cloneBook(book: Book): Book {
@@ -643,7 +893,7 @@ export class DownloadService {
       id: record.chapterId,
       index: record.chapterIndex,
       title: record.title,
-      duration: 0,
+      duration: record.durationSec ?? 0,
       source: { type: 'url', value: record.pageUrl },
       originSourceValue: record.pageUrl
     };

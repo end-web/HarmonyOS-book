@@ -10,6 +10,7 @@ export interface AudioDownloadRequest {
   url: string;
   headers: Record<string, string>;
   finalPath: string;
+  onProgress?: (receivedBytes: number, totalBytes: number) => void;
 }
 
 export class AudioDownloadTransport {
@@ -65,6 +66,10 @@ export class AudioDownloadTransport {
             throw new Error(`音频文件写入不完整 ${count}/${chunk.byteLength}`);
           }
           writtenBytes += count;
+          if (options.onProgress) {
+            const totalBytes = Number(AudioDownloadTransport.getHeader(responseHeaders, 'content-length'));
+            options.onProgress(writtenBytes, totalBytes > 0 ? totalBytes : 0);
+          }
         }).catch((err: Error): void => {
           writeErrorMessage = err.message;
           if (this.request) this.request.destroy();

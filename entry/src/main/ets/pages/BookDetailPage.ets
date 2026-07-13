@@ -11,7 +11,7 @@ import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService
 import { SourceDataService } from '../service/SourceDataService';
 import { AudioService } from '../service/AudioService';
 import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
-import { DownloadBookRecord } from '../service/DownloadStore';
+import { DownloadBookRecord, DownloadChapterRecord } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
@@ -38,6 +38,7 @@ export struct BookDetailPage {
   /** 章节搜索关键词(对齐阅读页目录搜索) */
   @Local chapterQuery: string = '';
   @Local downloadTick: number = 0;
+  @Local chapterDownloadTick: number = 0;
   /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
   private chapterListScroller: Scroller = new Scroller();
@@ -46,12 +47,15 @@ export struct BookDetailPage {
     const data = evt.data as DownloadUpdatePayload;
     if (!data || data.bookId !== this.bookId) return;
     this.downloadTick = this.downloadTick + 1;
+    if (!data.progressOnly) this.chapterDownloadTick = this.chapterDownloadTick + 1;
   };
 
   aboutToAppear(): void {
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
     // 收藏状态 / TOC 拉取 / 取色等重活推迟到转场动画结束后,避免抢主线程
     this.primeBookFromCache();
+    this.downloadTick = this.downloadTick + 1;
+    this.chapterDownloadTick = this.chapterDownloadTick + 1;
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(true);
     setTimeout(() => { this.loadBook(); }, AppMotion.Page);
@@ -83,6 +87,7 @@ export struct BookDetailPage {
       // 先快速渲染基础信息
       this.book = b;
       this.chapterDataSource.setChapters(b.chapters);
+      DownloadService.getInstance().hydrateBookDurations(b.id).catch((_e: Error): void => {});
       this.isFavorite = await PreferenceService.isFavorite(b.id);
       // 加载播放/阅读历史，用于"继续播放"入口
       this.loadHistory(b.id);
@@ -361,13 +366,42 @@ export struct BookDetailPage {
     return DownloadService.getInstance().getBookStatus(this.bookId);
   }
 
+  private chapterDownloadRecord(chapter: Chapter): DownloadChapterRecord | null {
+    if (this.chapterDownloadTick < 0) return null;
+    return DownloadService.getInstance().getChapterStatus(this.bookId, chapter);
+  }
+
+  private chapterDuration(chapter: Chapter): number {
+    if (chapter.duration > 0) return chapter.duration;
+    return this.chapterDownloadRecord(chapter)?.durationSec ?? 0;
+  }
+
+  private isChapterDownloaded(chapter: Chapter): boolean {
+    return this.chapterDownloadRecord(chapter)?.status === 'completed';
+  }
+
+  private isChapterDownloading(chapter: Chapter): boolean {
+    const status = this.chapterDownloadRecord(chapter)?.status;
+    return status === 'pending' || status === 'resolving' || status === 'downloading';
+  }
+
+  private isChapterDownloadFailed(chapter: Chapter): boolean {
+    return this.chapterDownloadRecord(chapter)?.status === 'failed';
+  }
+
+  private downloadProgress(): number {
+    if (this.downloadTick < 0) return 0;
+    return DownloadService.getInstance().getBookProgress(this.bookId).progressPercent;
+  }
+
   private downloadStatusText(): string {
     const record = this.downloadRecord();
     if (!record || record.chapters.length === 0) return '未下载';
-    const total = Math.max(record.chapterCount, record.chapters.length);
+    const total = record.chapters.filter((item) => item.status !== 'deleted').length;
     if (record.status === 'completed') return `已下载 ${record.downloadedCount}/${total}`;
     if (record.status === 'downloading' || record.status === 'queued') {
-      return `下载中 ${record.downloadedCount}/${total}${record.failedCount > 0 ? ` · 失败 ${record.failedCount}` : ''}`;
+      return `下载中 ${record.downloadedCount}/${total} · ${Math.round(this.downloadProgress())}%`
+        + `${record.failedCount > 0 ? ` · 失败 ${record.failedCount}` : ''}`;
     }
     if (record.status === 'paused') return `已暂停 ${record.downloadedCount}/${total}`;
     if (record.failedCount > 0) {
@@ -576,6 +610,13 @@ export struct BookDetailPage {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
   private formatPlayCount(count: number): string {
@@ -930,6 +971,14 @@ export struct BookDetailPage {
       .width('100%')
       .alignItems(VerticalAlign.Center)
 
+      if (this.downloadRecord() && this.downloadRecord()!.chapters.length > 0) {
+        Progress({ value: this.downloadProgress(), total: 100, type: ProgressType.Linear })
+          .width('100%')
+          .height(6)
+          .color(AppColor.Brand)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+      }
+
       Row({ space: AppSpace.Xs }) {
         this.buildDownloadChip($r('app.string.download_all'), $r('sys.symbol.arrow_down_circle'),
           () => this.downloadWholeBook(), false)
@@ -1046,7 +1095,7 @@ export struct BookDetailPage {
               ListItem() {
                 this.buildChapterItem(ch)
               }
-            }, (ch: Chapter) => ch.id)
+            }, (ch: Chapter) => `${ch.id}:${this.chapterDownloadTick}`)
           }
           .width('100%')
           .height('100%')
@@ -1105,8 +1154,13 @@ export struct BookDetailPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         Row({ space: AppSpace.Xs }) {
-          if (ch.duration > 0) {
-            Text(this.formatDuration(ch.duration))
+          if (this.chapterDuration(ch) > 0) {
+            Text(this.formatDuration(this.chapterDuration(ch)))
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
+          if (this.isChapterDownloaded(ch) && (this.chapterDownloadRecord(ch)?.bytes ?? 0) > 0) {
+            Text(this.formatBytes(this.chapterDownloadRecord(ch)?.bytes ?? 0))
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
           }
@@ -1120,16 +1174,40 @@ export struct BookDetailPage {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
-      if (this.isPlayingChapter(ch)) {
-        SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
-          .fontSize(18).fontColor(['#D4380D'])
-      } else if (this.isReadingTextChapter(ch)) {
-        Text('在读')
-          .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF')
-          .backgroundColor(AppColor.Brand)
-          .borderRadius(AppRadius.Xs)
-          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+      Row({ space: AppSpace.Xs }) {
+        if (this.isChapterDownloaded(ch)) {
+          Text($r('app.string.chapter_downloaded'))
+            .fontSize(AppFont.Caption)
+            .fontColor('#248A3D')
+            .backgroundColor('#14248A3D')
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        } else if (this.isChapterDownloading(ch)) {
+          Text($r('app.string.chapter_downloading'))
+            .fontSize(AppFont.Caption)
+            .fontColor(AppColor.Brand)
+            .backgroundColor('#140A84FF')
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        } else if (this.isChapterDownloadFailed(ch)) {
+          Text($r('app.string.chapter_download_failed'))
+            .fontSize(AppFont.Caption)
+            .fontColor('#D03050')
+            .backgroundColor('#14D03050')
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        }
+        if (this.isPlayingChapter(ch)) {
+          SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
+            .fontSize(18).fontColor(['#D4380D'])
+        } else if (this.isReadingTextChapter(ch)) {
+          Text('在读')
+            .fontSize(AppFont.Caption)
+            .fontColor('#FFFFFF')
+            .backgroundColor(AppColor.Brand)
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        }
       }
     }
     .width('100%')

@@ -1,5 +1,5 @@
 import { emitter } from '@kit.BasicServicesKit';
-import { DownloadService, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
+import { DownloadProgressSnapshot, DownloadService, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
 import { DownloadBookRecord } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
 import { AppFont, AppRadius, AppSpace } from '../theme/Theme';
@@ -15,6 +15,7 @@ export struct DownloadManagerPage {
   };
 
   aboutToAppear(): void {
+    this.refreshTick = this.refreshTick + 1;
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
   }
 
@@ -33,6 +34,11 @@ export struct DownloadManagerPage {
     return this.records().reduce((sum: number, item: DownloadBookRecord) => sum + item.totalBytes, 0);
   }
 
+  private progress(record: DownloadBookRecord): DownloadProgressSnapshot {
+    if (this.refreshTick < 0) return DownloadService.getInstance().getBookProgress('');
+    return DownloadService.getInstance().getBookProgress(record.bookId);
+  }
+
   private formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -41,10 +47,10 @@ export struct DownloadManagerPage {
   }
 
   private statusText(record: DownloadBookRecord): string {
-    const total = Math.max(record.chapterCount, record.chapters.length);
+    const total = record.chapters.filter((item) => item.status !== 'deleted').length;
     if (record.status === 'paused') return `已暂停 · ${record.downloadedCount}/${total}`;
     if (record.status === 'downloading' || record.status === 'queued') {
-      return `下载中 · ${record.downloadedCount}/${total}`;
+      return `下载中 · ${record.downloadedCount}/${total} · ${Math.round(this.progress(record).progressPercent)}%`;
     }
     if (record.failedCount > 0) {
       const failed = record.chapters.find((item) => item.status === 'failed');
@@ -105,7 +111,7 @@ export struct DownloadManagerPage {
             ListItem() {
               this.buildRecord(record)
             }
-          }, (record: DownloadBookRecord) => record.bookId)
+          }, (record: DownloadBookRecord) => `${record.bookId}:${this.refreshTick}`)
         }
         .layoutWeight(1)
         .width('100%')
@@ -194,6 +200,12 @@ export struct DownloadManagerPage {
       .width('100%')
       .alignItems(VerticalAlign.Center)
       .onClick(() => this.openBook(record))
+
+      Progress({ value: this.progress(record).progressPercent, total: 100, type: ProgressType.Linear })
+        .width('100%')
+        .height(6)
+        .color(record.failedCount > 0 ? '#D03050' : '#0A84FF')
+        .backgroundColor($r('sys.color.comp_background_tertiary'))
 
       Row({ space: AppSpace.Sm }) {
         if (record.status === 'downloading' || record.status === 'queued') {

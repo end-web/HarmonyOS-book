@@ -107,6 +107,18 @@
     {
       "name": "download_operation_failed",
       "value": "下载操作失败，请重试"
+    },
+    {
+      "name": "chapter_downloaded",
+      "value": "已下载"
+    },
+    {
+      "name": "chapter_downloading",
+      "value": "下载中"
+    },
+    {
+      "name": "chapter_download_failed",
+      "value": "下载失败"
     }
   ]
 }

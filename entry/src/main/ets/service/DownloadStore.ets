@@ -10,6 +10,7 @@ export interface DownloadChapterRecord {
   chapterId: string;
   chapterIndex: number;
   title: string;
+  durationSec?: number;
   pageUrl: string;
   audioUrl: string;
   filePath: string;
@@ -210,6 +211,7 @@ export class DownloadStore {
         chapterId: chapter.id,
         chapterIndex: chapter.index,
         title: chapter.title,
+        durationSec: chapter.duration > 0 ? chapter.duration : undefined,
         pageUrl,
         audioUrl,
         filePath,
@@ -224,6 +226,7 @@ export class DownloadStore {
       record.chapterId = chapter.id;
       record.chapterIndex = chapter.index;
       record.title = chapter.title;
+      if (chapter.duration > 0) record.durationSec = chapter.duration;
       record.pageUrl = pageUrl || record.pageUrl;
       record.audioUrl = audioUrl || record.audioUrl;
       record.filePath = filePath || record.filePath;
