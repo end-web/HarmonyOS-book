@@ -170,6 +170,10 @@ struct Index {
       // 无 bookId 时停在主页,避免黑屏
     } else if (target === 'detail') {
       if (bookId) this.navStack.pushPathByName('detail', bookId, false);
+    } else if (target === 'downloads') {
+      const cur = this.navStack.getAllPathName();
+      if (cur && cur.length > 0 && cur[cur.length - 1] === 'downloads') return;
+      this.navStack.pushPathByName('downloads', null, false);
     }
     // target === 'home' 默认停在 Tab,不需要跳转
   }

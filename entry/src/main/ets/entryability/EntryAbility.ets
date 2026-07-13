@@ -69,7 +69,7 @@ export default class EntryAbility extends UIAbility {
     });
 
     this.registerCallee();
-    this.consumeWidgetWant(want);
+    this.consumeRouteWant(want);
   }
 
   /**
@@ -153,9 +153,9 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, 'initServicesCore: complete, total=%{public}dms', Date.now() - startTime);
   }
 
-  /** 卡片 router 跳转 / 已存活时的拉起,统一在 onNewWant 处理 */
+  /** 卡片或通知跳转 / 已存活时的拉起,统一在 onNewWant 处理 */
   onNewWant(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
-    this.consumeWidgetWant(want);
+    this.consumeRouteWant(want);
   }
 
   /**
@@ -231,11 +231,11 @@ export default class EntryAbility extends UIAbility {
     return Math.min(4.0, Math.max(0.125, speed));
   }
 
-  private consumeWidgetWant(want: Want): void {
+  private consumeRouteWant(want: Want): void {
     const params = want.parameters;
     if (!params) return;
     const from = params['from'] as string | undefined;
-    if (from !== 'widget') return;
+    if (from !== 'widget' && from !== 'download_notification') return;
     const target = (params['target'] as string | undefined) ?? 'home';
     const bookId = params['bookId'] as string | undefined;
     const route: WidgetRoute = { target, bookId, ts: Date.now() };

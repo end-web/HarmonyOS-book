@@ -1,4 +1,4 @@
-import { common } from '@kit.AbilityKit';
+import { common, WantAgent, wantAgent } from '@kit.AbilityKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
@@ -45,7 +45,8 @@ export class DownloadNotificationService {
       if (!await notificationManager.isNotificationEnabled()) return;
       await DownloadNotificationService.ensureSlot();
       const progress = Math.max(0, Math.min(100, Math.round(summary.progressPercent)));
-      const request = DownloadNotificationService.createRequest(summary, progress);
+      const launchAgent = await DownloadNotificationService.createLaunchAgent();
+      const request = DownloadNotificationService.createRequest(summary, progress, launchAgent);
       let supportsTemplate = false;
       try {
         supportsTemplate = await notificationManager.isSupportTemplate('downloadTemplate');
@@ -55,7 +56,7 @@ export class DownloadNotificationService {
           e?.message ?? JSON.stringify(err));
       }
       if (supportsTemplate) {
-        const templateRequest = DownloadNotificationService.createRequest(summary, progress);
+        const templateRequest = DownloadNotificationService.createRequest(summary, progress, launchAgent);
         templateRequest.template = {
           name: 'downloadTemplate',
           data: {
@@ -81,7 +82,7 @@ export class DownloadNotificationService {
   }
 
   private static createRequest(summary: DownloadNotificationSummary,
-    progress: number): notificationManager.NotificationRequest {
+    progress: number, launchAgent?: WantAgent): notificationManager.NotificationRequest {
     const request: notificationManager.NotificationRequest = {
       id: NOTIFICATION_ID,
       notificationSlotType: notificationManager.SlotType.SERVICE_INFORMATION,
@@ -95,8 +96,35 @@ export class DownloadNotificationService {
         }
       }
     };
+    if (launchAgent) request.wantAgent = launchAgent;
     if (summary.status === 'completed') request.autoDeletedTime = Date.now() + 5000;
     return request;
+  }
+
+  private static async createLaunchAgent(): Promise<WantAgent | undefined> {
+    const ctx = DownloadNotificationService.ctx as common.UIAbilityContext;
+    if (!ctx) return undefined;
+    try {
+      const wantAgentInfo: wantAgent.WantAgentInfo = {
+        wants: [{
+          bundleName: ctx.abilityInfo.bundleName,
+          abilityName: ctx.abilityInfo.name,
+          parameters: {
+            from: 'download_notification',
+            target: 'downloads'
+          }
+        }],
+        operationType: wantAgent.OperationType.START_ABILITY,
+        requestCode: NOTIFICATION_ID,
+        wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+      };
+      return await wantAgent.getWantAgent(wantAgentInfo);
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'create launch agent failed: %{public}s',
+        e?.message ?? JSON.stringify(err));
+      return undefined;
+    }
   }
 
   private static async ensureSlot(): Promise<void> {
