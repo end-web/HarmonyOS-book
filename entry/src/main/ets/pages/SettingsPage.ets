@@ -5,6 +5,7 @@ import { PreferenceService } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { DataService } from '../service/DataService';
+import { DownloadService } from '../service/DownloadService';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface ThemeOption {
@@ -129,6 +130,7 @@ export struct SettingsPage {
     await PreferenceService.clearBookshelfAndHistory();
     await DataService.clearCachedBooks();
     await ChapterCacheService.getInstance().wipeDiskCaches();
+    await DownloadService.getInstance().clearAllDownloads();
     try {
       this.getUIContext().getPromptAction().showToast({ message: '书架与历史已清空' });
     } catch (_e) { /* ignore */ }
@@ -149,6 +151,27 @@ export struct SettingsPage {
     setTimeout(() => {
       WindowUtils.updateColorMode(mode);
     }, 100);
+  }
+
+  private confirmClearDownloads(): void {
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.showDialog({
+      title: '清除下载内容',
+      message: '将删除所有整本/单章离线下载音频，不会删除书架、收藏和播放记录。确定清除吗？',
+      buttons: [
+        { text: '取消', color: '#8F8F8F' },
+        { text: '清除', color: '#FF4444' }
+      ]
+    }).then((result) => {
+      if (result.index === 1) this.doClearDownloads();
+    }).catch(() => { /* ignore */ });
+  }
+
+  private async doClearDownloads(): Promise<void> {
+    await DownloadService.getInstance().clearAllDownloads();
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: '下载内容已清除' });
+    } catch (_e) { /* ignore */ }
   }
 
   build() {
@@ -319,6 +342,10 @@ export struct SettingsPage {
         this.buildDivider()
 
         this.buildActionItem('清除预加载缓存', '释放已缓存的有声书音频与电子书正文', () => this.clearCache())
+
+        this.buildDivider()
+
+        this.buildActionItem('清除下载内容', '删除整本/单章离线音频，保留书架和记录', () => this.confirmClearDownloads())
 
         this.buildDivider()
 

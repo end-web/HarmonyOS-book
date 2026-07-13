@@ -35,6 +35,78 @@
     {
       "name": "player_card_desc",
       "value": "桌面快速控制听书播放"
+    },
+    {
+      "name": "download_panel_title",
+      "value": "离线下载"
+    },
+    {
+      "name": "download_all",
+      "value": "整本"
+    },
+    {
+      "name": "download_next_twenty",
+      "value": "后续20章"
+    },
+    {
+      "name": "download_incremental",
+      "value": "增量"
+    },
+    {
+      "name": "download_pause",
+      "value": "暂停"
+    },
+    {
+      "name": "download_resume",
+      "value": "继续"
+    },
+    {
+      "name": "download_delete",
+      "value": "删除下载"
+    },
+    {
+      "name": "download_queued_all",
+      "value": "已加入整本下载"
+    },
+    {
+      "name": "download_queued_next_twenty",
+      "value": "已加入后续20章下载"
+    },
+    {
+      "name": "download_queued_incremental",
+      "value": "已开始增量下载"
+    },
+    {
+      "name": "download_paused",
+      "value": "下载已暂停"
+    },
+    {
+      "name": "download_resumed",
+      "value": "已继续下载"
+    },
+    {
+      "name": "download_delete_title",
+      "value": "删除下载"
+    },
+    {
+      "name": "download_delete_message",
+      "value": "将删除这本书已下载的离线音频，不会删除书架、收藏和播放记录。"
+    },
+    {
+      "name": "common_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "download_delete_confirm",
+      "value": "删除"
+    },
+    {
+      "name": "download_deleted",
+      "value": "下载内容已删除"
+    },
+    {
+      "name": "download_operation_failed",
+      "value": "下载操作失败，请重试"
     }
   ]
 }

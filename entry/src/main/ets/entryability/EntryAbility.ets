@@ -9,6 +9,7 @@ import { AudioService } from '../service/AudioService';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { DataService } from '../service/DataService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
+import { DownloadService } from '../service/DownloadService';
 import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
@@ -56,6 +57,7 @@ export default class EntryAbility extends UIAbility {
     registerBuiltInSources();
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
+    DownloadService.getInstance().setContext(this.context);
     // 缓存书改用文件持久化,注入 context 供 filesDir 读写
     DataService.setContext(this.context);
 
@@ -108,6 +110,11 @@ export default class EntryAbility extends UIAbility {
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'StatsService init failed: %{public}s', JSON.stringify(e));
     }
+    try {
+      await DownloadService.getInstance().init(this.context);
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'DownloadService init failed: %{public}s', JSON.stringify(e));
+    }
 
     this.restoreColorMode();
     // 初始化源变量存储和缓存服务
@@ -117,6 +124,11 @@ export default class EntryAbility extends UIAbility {
       await cacheService.init(this.context);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'SourceVariableStore/CacheService init failed: %{public}s', JSON.stringify(e));
+    }
+    try {
+      await DownloadService.getInstance().restoreDownloads();
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'DownloadService restore failed: %{public}s', JSON.stringify(e));
     }
     // 设置设备标识（用于 java.androidId()）
     try {

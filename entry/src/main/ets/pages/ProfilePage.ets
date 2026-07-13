@@ -12,7 +12,8 @@ interface ProfileItem {
 }
 
 const CONTENT_ITEMS: ProfileItem[] = [
-  { icon: $r('sys.symbol.arrow_down_circle'), label: '本地导入', id: 'import', iconBg: '#34C759' }
+  { icon: $r('sys.symbol.arrow_down_circle'), label: '本地导入', id: 'import', iconBg: '#34C759' },
+  { icon: $r('sys.symbol.arrow_down_circle'), label: '下载管理', id: 'downloads', iconBg: '#0A84FF' }
 ];
 
 const SYSTEM_ITEMS: ProfileItem[] = [
@@ -94,6 +95,8 @@ export struct ProfilePage {
   private onItemTap(id: string): void {
     if (id === 'import') {
       this.navStack.pushPathByName('import', '');
+    } else if (id === 'downloads') {
+      this.navStack.pushPathByName('downloads', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');
     } else if (id === 'sourceManage') {

@@ -7,9 +7,11 @@ import { AppColor, AppSpace, AppFont, AppMotion, AppRadius } from '../theme/Them
 import { Book, Chapter } from '../model/Book';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
-import { AudioService } from '../service/AudioService';
+import { AudioPlayFailedPayload, AudioService, EVT_AUDIO_PLAY_FAILED } from '../service/AudioService';
 import { PreferenceService } from '../service/PreferenceService';
 import { PlaybackStore } from '../service/PlaybackStore';
+import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
+import { DownloadChapterRecord } from '../service/DownloadStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
@@ -91,6 +93,7 @@ export struct PlayerPage {
   @Local seekValueMs: number = 0;
   /** 缓存版本号：每次有章节时长被解析出来就 +1，强制 V2 重渲染章节列表 */
   @Local chapterCacheTick: number = 0;
+  @Local downloadTick: number = 0;
   /** 章节列表滚动位置 vs 当前播放章节的偏离（vp）；用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
   /** 章节搜索关键词；非空时章节列表按标题过滤 */
@@ -104,6 +107,17 @@ export struct PlayerPage {
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
+  };
+  private downloadHandler = (evt: emitter.EventData): void => {
+    const data = evt.data as DownloadUpdatePayload;
+    if (!data || data.bookId !== this.bookId) return;
+    this.downloadTick = this.downloadTick + 1;
+  };
+  private audioPlayFailedHandler = (evt: emitter.EventData): void => {
+    const data = evt.data as AudioPlayFailedPayload;
+    if (!data || data.bookId !== this.bookId) return;
+    if (this.playerState.currentChapter && data.chapterId !== this.playerState.currentChapter.id) return;
+    this.showToast(data.message || '播放失败，请点击重试');
   };
   /** 延迟加载 timer id,用户立即返回时需要 cancel,避免阻塞返回响应 */
   private deferredLoadTimerId: number = -1;
@@ -127,6 +141,8 @@ export struct PlayerPage {
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
+    emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
+    emitter.on(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
     WindowUtils.setStatusBarLight(true);
     // 错落渐显:进场后下一帧触发内容动画
     setTimeout(() => { this.contentVisible = true; }, 16);
@@ -164,6 +180,8 @@ export struct PlayerPage {
     PlayerEntryDecider.setMarkLeaving(null);
     this.cancelPendingClearTimers();
     emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
+    emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
+    emitter.off(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
   }
@@ -358,6 +376,56 @@ export struct PlayerPage {
     if (this.chapterCacheTick < 0) return 0;
     if (ch.duration && ch.duration > 0) return ch.duration;
     return ChapterCacheService.getInstance().getChapterDuration(ch.id);
+  }
+
+  private chapterDownloadRecord(ch: Chapter): DownloadChapterRecord | null {
+    if (this.downloadTick < 0 || !this.book) return null;
+    return DownloadService.getInstance().getChapterStatus(this.book.id, ch);
+  }
+
+  private showToast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message });
+    } catch (_e) {
+      // ignore
+    }
+  }
+
+  private handleChapterDownloadLongPress(ch: Chapter): void {
+    if (!this.book) return;
+    const record = this.chapterDownloadRecord(ch);
+    if (record?.status === 'completed') {
+      this.confirmDeleteChapterDownload(ch);
+      return;
+    }
+    if (record && (record.status === 'pending' || record.status === 'resolving' || record.status === 'downloading')) {
+      this.showToast('这一章正在下载');
+      return;
+    }
+    DownloadService.getInstance().downloadChapter(this.book, ch).then(() => {
+      this.downloadTick = this.downloadTick + 1;
+      this.showToast('已加入单章下载');
+    }).catch(() => this.showToast('下载操作失败，请重试'));
+  }
+
+  private confirmDeleteChapterDownload(ch: Chapter): void {
+    if (!this.book) return;
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.showDialog({
+      title: '删除单章下载',
+      message: `删除《${ch.title}》的离线音频？`,
+      buttons: [
+        { text: '取消', color: '#8F8F8F' },
+        { text: '删除', color: '#FF4444' }
+      ]
+    }).then((result) => {
+      if (result.index === 1 && this.book) {
+        DownloadService.getInstance().deleteChapterDownload(this.book.id, ch.id).then(() => {
+          this.downloadTick = this.downloadTick + 1;
+          this.showToast('单章下载已删除');
+        }).catch(() => this.showToast('删除下载失败，请重试'));
+      }
+    }).catch(() => { /* ignore */ });
   }
 
   private async selectChapter(ch: Chapter): Promise<void> {
@@ -1007,16 +1075,17 @@ export struct PlayerPage {
                   .fontSize(18)
                   .fontColor([AppColor.Brand])
               }
-            } else if (this.chapterCacheTick >= 0
-              && !ChapterCacheService.getInstance().isAudioChapterCached(this.book!, ch)) {
-              SymbolGlyph($r('sys.symbol.cloud'))
-                .fontSize(16)
-                .fontColor([$r('sys.color.font_tertiary')])
+            } else {
+              this.buildChapterDownloadIndicator(ch)
             }
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
           .onClick(() => this.selectChapter(ch))
+          .gesture(
+            LongPressGesture({ repeat: false, duration: 500 })
+              .onAction(() => this.handleChapterDownloadLongPress(ch))
+          )
         }
       }, (ch: Chapter) => ch.id)
     }
@@ -1299,6 +1368,30 @@ export struct PlayerPage {
     SearchCache.put(cloned);
     if (this.playerState.currentBook?.id === b.id) {
       this.playerState.currentBook = cloned;
+    }
+  }
+
+  @Builder
+  buildChapterDownloadIndicator(ch: Chapter) {
+    if (this.chapterDownloadRecord(ch)?.status === 'completed') {
+      SymbolGlyph($r('sys.symbol.checkmark'))
+        .fontSize(16)
+        .fontColor([AppColor.Brand])
+    } else if (this.chapterDownloadRecord(ch)?.status === 'pending'
+      || this.chapterDownloadRecord(ch)?.status === 'resolving'
+      || this.chapterDownloadRecord(ch)?.status === 'downloading') {
+      LoadingProgress()
+        .width(16)
+        .height(16)
+        .color(AppColor.Brand)
+    } else if (this.chapterDownloadRecord(ch)?.status === 'failed') {
+      SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+        .fontSize(16)
+        .fontColor(['#D03050'])
+    } else if (this.chapterCacheTick >= 0 && !ChapterCacheService.getInstance().isAudioChapterCached(this.book!, ch)) {
+      SymbolGlyph($r('sys.symbol.cloud'))
+        .fontSize(16)
+        .fontColor([$r('sys.color.font_tertiary')])
     }
   }
 }

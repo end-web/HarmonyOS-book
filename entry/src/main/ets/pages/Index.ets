@@ -15,6 +15,7 @@ import { LoginPage } from './LoginPage';
 import { SourcePage } from './SourcePage';
 import { SourceDebugPage } from './SourceDebugPage';
 import { SourceEditPage } from './SourceEditPage';
+import { DownloadManagerPage } from './DownloadManagerPage';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
 import { webview } from '@kit.ArkWeb';
@@ -324,6 +325,13 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'downloads') {
+      NavDestination() {
+        DownloadManagerPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_secondary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'about') {
       NavDestination() {

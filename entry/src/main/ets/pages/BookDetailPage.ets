@@ -10,6 +10,9 @@ import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { AudioService } from '../service/AudioService';
+import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
+import { DownloadBookRecord } from '../service/DownloadStore';
+import { DownloadPolicy } from '../service/DownloadPolicy';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -34,15 +37,22 @@ export struct BookDetailPage {
   @Local debugInfo: string = '';
   /** 章节搜索关键词(对齐阅读页目录搜索) */
   @Local chapterQuery: string = '';
+  @Local downloadTick: number = 0;
   /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
   private chapterListScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
+  private downloadHandler = (evt: emitter.EventData): void => {
+    const data = evt.data as DownloadUpdatePayload;
+    if (!data || data.bookId !== this.bookId) return;
+    this.downloadTick = this.downloadTick + 1;
+  };
 
   aboutToAppear(): void {
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
     // 收藏状态 / TOC 拉取 / 取色等重活推迟到转场动画结束后,避免抢主线程
     this.primeBookFromCache();
+    emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(true);
     setTimeout(() => { this.loadBook(); }, AppMotion.Page);
   }
@@ -61,6 +71,7 @@ export struct BookDetailPage {
   }
 
   aboutToDisappear(): void {
+    emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(false);
   }
 
@@ -343,6 +354,116 @@ export struct BookDetailPage {
 
   private isTextBook(): boolean {
     return this.book?.contentType === 'text' || this.book?.category === 'text';
+  }
+
+  private downloadRecord(): DownloadBookRecord | null {
+    if (this.downloadTick < 0) return null;
+    return DownloadService.getInstance().getBookStatus(this.bookId);
+  }
+
+  private downloadStatusText(): string {
+    const record = this.downloadRecord();
+    if (!record || record.chapters.length === 0) return '未下载';
+    const total = Math.max(record.chapterCount, record.chapters.length);
+    if (record.status === 'completed') return `已下载 ${record.downloadedCount}/${total}`;
+    if (record.status === 'downloading' || record.status === 'queued') {
+      return `下载中 ${record.downloadedCount}/${total}${record.failedCount > 0 ? ` · 失败 ${record.failedCount}` : ''}`;
+    }
+    if (record.status === 'paused') return `已暂停 ${record.downloadedCount}/${total}`;
+    if (record.failedCount > 0) {
+      const failed = record.chapters.find((item) => item.status === 'failed');
+      const reason = failed ? DownloadPolicy.failureText(failed.failureCode
+        ?? DownloadPolicy.classifyFailure(failed.failureReason)) : '';
+      return `已下载 ${record.downloadedCount}/${total} · 失败 ${record.failedCount}${reason ? ` · ${reason}` : ''}`;
+    }
+    return `已下载 ${record.downloadedCount}/${total}`;
+  }
+
+  private currentDownloadStartIndex(): number {
+    const idx = this.currentChapterIndex();
+    return idx >= 0 ? idx : 0;
+  }
+
+  private showToast(message: string | Resource): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message });
+    } catch (_e) {
+      // ignore
+    }
+  }
+
+  private async downloadWholeBook(): Promise<void> {
+    if (!this.book || this.isTextBook()) return;
+    try {
+      const queued = await DownloadService.getInstance().downloadBook(this.book);
+      this.downloadTick = this.downloadTick + 1;
+      this.showToast(queued > 0 ? $r('app.string.download_queued_all') : '没有可下载的新章节');
+    } catch (_e) {
+      this.showToast($r('app.string.download_operation_failed'));
+    }
+  }
+
+  private async downloadNextTwenty(): Promise<void> {
+    if (!this.book || this.isTextBook()) return;
+    try {
+      const queued = await DownloadService.getInstance()
+        .downloadNextChapters(this.book, this.currentDownloadStartIndex(), 20);
+      this.downloadTick = this.downloadTick + 1;
+      this.showToast(queued > 0 ? $r('app.string.download_queued_next_twenty') : '后续章节已下载或不可下载');
+    } catch (_e) {
+      this.showToast($r('app.string.download_operation_failed'));
+    }
+  }
+
+  private async downloadIncremental(): Promise<void> {
+    if (!this.book || this.isTextBook()) return;
+    try {
+      const queued = await DownloadService.getInstance().downloadIncremental(this.book);
+      this.downloadTick = this.downloadTick + 1;
+      this.showToast(queued > 0 ? $r('app.string.download_queued_incremental') : '没有发现可下载的新章节');
+    } catch (_e) {
+      this.showToast($r('app.string.download_operation_failed'));
+    }
+  }
+
+  private async pauseDownload(): Promise<void> {
+    try {
+      await DownloadService.getInstance().pauseBook(this.bookId);
+      this.downloadTick = this.downloadTick + 1;
+      this.showToast($r('app.string.download_paused'));
+    } catch (_e) {
+      this.showToast($r('app.string.download_operation_failed'));
+    }
+  }
+
+  private async resumeDownload(): Promise<void> {
+    try {
+      await DownloadService.getInstance().resumeBook(this.bookId);
+      this.downloadTick = this.downloadTick + 1;
+      this.showToast($r('app.string.download_resumed'));
+    } catch (_e) {
+      this.showToast($r('app.string.download_operation_failed'));
+    }
+  }
+
+  private confirmDeleteBookDownload(): void {
+    if (!this.book) return;
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.showDialog({
+      title: $r('app.string.download_delete_title'),
+      message: $r('app.string.download_delete_message'),
+      buttons: [
+        { text: $r('app.string.common_cancel'), color: '#8F8F8F' },
+        { text: $r('app.string.download_delete_confirm'), color: '#FF4444' }
+      ]
+    }).then((result) => {
+      if (result.index === 1) {
+        DownloadService.getInstance().deleteBookDownload(this.bookId).then(() => {
+          this.downloadTick = this.downloadTick + 1;
+          this.showToast($r('app.string.download_deleted'));
+        }).catch(() => this.showToast($r('app.string.download_operation_failed')));
+      }
+    }).catch(() => this.showToast($r('app.string.download_operation_failed')));
   }
 
   private openPrimaryAction(chapter?: Chapter): void {
@@ -781,12 +902,82 @@ export struct BookDetailPage {
         .backgroundColor(AppColor.Brand)
         .margin({ top: AppSpace.Md })
         .onClick(() => this.openPrimaryAction())
+
+        if (!this.isTextBook()) {
+          this.buildDownloadPanel()
+        }
       }
       .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Lg, bottom: AppSpace.Xl })
     }
     .layoutWeight(1)
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  buildDownloadPanel() {
+    Column({ space: AppSpace.Xs }) {
+      Row() {
+        Text($r('app.string.download_panel_title'))
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Medium)
+        Blank()
+        Text(this.downloadStatusText())
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: AppSpace.Xs }) {
+        this.buildDownloadChip($r('app.string.download_all'), $r('sys.symbol.arrow_down_circle'),
+          () => this.downloadWholeBook(), false)
+        this.buildDownloadChip($r('app.string.download_next_twenty'), $r('sys.symbol.cloud'),
+          () => this.downloadNextTwenty(), false)
+        this.buildDownloadChip($r('app.string.download_incremental'), $r('sys.symbol.arrow_clockwise'),
+          () => this.downloadIncremental(), false)
+      }
+      .width('100%')
+
+      if (DownloadService.getInstance().hasAnyDownload(this.bookId)) {
+        Row({ space: AppSpace.Xs }) {
+          if (this.downloadRecord()?.status === 'downloading' || this.downloadRecord()?.status === 'queued') {
+            this.buildDownloadChip($r('app.string.download_pause'), $r('sys.symbol.pause_fill'),
+              () => this.pauseDownload(), false)
+          } else if (this.downloadRecord()?.status === 'paused') {
+            this.buildDownloadChip($r('app.string.download_resume'), $r('sys.symbol.play_fill'),
+              () => this.resumeDownload(), false)
+          }
+          this.buildDownloadChip($r('app.string.download_delete'), $r('sys.symbol.trash'),
+            () => this.confirmDeleteBookDownload(), true)
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .margin({ top: AppSpace.Md })
+  }
+
+  @Builder
+  buildDownloadChip(text: string | Resource, icon: Resource, onAction: () => void, danger: boolean) {
+    Row({ space: 4 }) {
+      SymbolGlyph(icon)
+        .fontSize(15)
+        .fontColor([danger ? '#D03050' : AppColor.Brand])
+      Text(text)
+        .fontSize(AppFont.Caption)
+        .fontColor(danger ? '#D03050' : $r('sys.color.font_primary'))
+        .fontWeight(FontWeight.Medium)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(36)
+    .justifyContent(FlexAlign.Center)
+    .borderRadius(AppRadius.Lg)
+    .backgroundColor(danger ? '#14D03050' : $r('sys.color.comp_background_tertiary'))
+    .onClick(() => onAction())
   }
 
   @Builder

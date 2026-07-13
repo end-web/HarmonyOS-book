@@ -74,6 +74,11 @@ export interface ExploreFetchResult {
   nextPage?: number;
 }
 
+export interface AudioRequestInfo {
+  url: string;
+  headers: Record<string, string>;
+}
+
 class HomeBlockImpl implements HomeBlockSection {
   title: string;
   books: SearchResult[];
@@ -757,17 +762,35 @@ export class BookSourceService {
 
   private static mergeHeaderValue(headers: Record<string, string>, key: string, value: string): void {
     const existingKey = BookSourceService.findHeaderKey(headers, key);
+    if (key.toLowerCase() === 'cookie') {
+      BookSourceService.mergeCookieHeader(headers, existingKey, value);
+      return;
+    }
     if (!existingKey) {
       headers[key] = value;
       return;
     }
-    if (key.toLowerCase() === 'cookie') {
-      const existing = headers[existingKey];
-      headers[existingKey] = existing ? existing + '; ' + value : value;
-      return;
-    }
     if (!headers[existingKey]) {
       headers[existingKey] = value;
+    }
+  }
+
+  private static mergeCookieHeader(headers: Record<string, string>, existingKey: string, value: string): void {
+    const cookies: Map<string, string> = new Map();
+    if (existingKey) BookSourceService.appendCookiePairs(cookies, headers[existingKey] || '');
+    BookSourceService.appendCookiePairs(cookies, value);
+    const merged: string[] = [];
+    for (const item of cookies.entries()) merged.push(`${item[0]}=${item[1]}`);
+    headers[existingKey || 'Cookie'] = merged.join('; ');
+  }
+
+  private static appendCookiePairs(cookies: Map<string, string>, value: string): void {
+    for (const part of value.split(';')) {
+      const separator = part.indexOf('=');
+      if (separator <= 0) continue;
+      const name = part.substring(0, separator).trim();
+      const cookieValue = part.substring(separator + 1).trim();
+      if (name) cookies.set(name, cookieValue);
     }
   }
 
@@ -1684,6 +1707,28 @@ export class BookSourceService {
       // 剥掉配置后缀只留干净 URL
       return AnalyzeUrl.splitUrlConfig(chapterUrl).url;
     }
+  }
+
+  static async resolveAudioRequest(source: BookSource, chapterUrl: string): Promise<AudioRequestInfo> {
+    const audioUrl = await BookSourceService.getAudioUrl(source, chapterUrl);
+    let headers: Record<string, string> = {};
+    let cleanUrl = AnalyzeUrl.splitUrlConfig(audioUrl).url;
+    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
+      headers = BuiltInDispatcher.getAudioHeaders(source, cleanUrl);
+      BookSourceService.mergeLoginHeaders(source, headers);
+    } else {
+      const analyzed = await BookSourceService.analyzeRequestUrl(source, audioUrl, undefined,
+        undefined, undefined, chapterUrl);
+      cleanUrl = analyzed.url;
+      headers = analyzed.headers;
+    }
+    try {
+      const cookie = getCookieManager().getCookieHeader(cleanUrl);
+      if (cookie) BookSourceService.mergeHeaderValue(headers, 'Cookie', cookie);
+    } catch (_e) {
+      // Cookie jar is optional for sources that do not use login state.
+    }
+    return { url: cleanUrl, headers };
   }
 
   /**

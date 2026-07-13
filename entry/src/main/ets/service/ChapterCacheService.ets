@@ -27,6 +27,7 @@ const MAX_CONCURRENT = 2;             // URL 解析（WebView/HTTP）最多 2 �
 const MAX_FILE_CONCURRENT = 2;        // 音频文件下载最多 2 并发
 const MAX_URL_CACHE_SIZE = 50;
 const MAX_FILE_CACHE_COUNT = 12;      // 最多缓存 12 个音频文件（约 200MB 量级）
+const PRELOAD_FAILURE_COOLDOWN_MS = 30000;
 
 interface CacheEntry {
   resolvedUrl: string;
@@ -57,6 +58,7 @@ export class ChapterCacheService {
   /** 章节 → 解析出的真实时长（秒）。来自缓存音频文件的元数据 */
   private durationCache: Map<string, number> = new Map();
   private pendingTasks: Set<string> = new Set();
+  private preloadFailureAt: Map<string, number> = new Map();
   private runningCount: number = 0;
   private queue: Array<() => Promise<void>> = [];
   private fileRunningCount: number = 0;
@@ -97,6 +99,7 @@ export class ChapterCacheService {
     this.audioCache.clear();
     this.textCache.clear();
     this.durationCache.clear();
+    this.preloadFailureAt.clear();
     for (const entry of this.fileCache.values()) {
       this.deleteFileSafely(entry.filePath);
     }
@@ -191,6 +194,7 @@ export class ChapterCacheService {
       if (i === currentIndex) continue;
       const ch = book.chapters[i];
       if (ch.source.type !== 'url') continue;
+      if (this.isPreloadCoolingDown(ch.id)) continue;
       const pageUrl = ch.originSourceValue || ch.source.value;
       if (this.getAudioFilePath(book.id, ch.id, pageUrl)) continue;
       // 1) URL 解析
@@ -231,6 +235,9 @@ export class ChapterCacheService {
     for (const key of this.durationCache.keys()) {
       if (key.startsWith(prefix)) this.durationCache.delete(key);
     }
+    for (const key of this.preloadFailureAt.keys()) {
+      if (key.startsWith(prefix)) this.preloadFailureAt.delete(key);
+    }
     for (const key of this.fileCache.keys()) {
       if (key.startsWith(prefix)) {
         const entry = this.fileCache.get(key);
@@ -245,6 +252,7 @@ export class ChapterCacheService {
     this.audioCache.delete(chapterId);
     this.textCache.delete(chapterId);
     this.durationCache.delete(chapterId);
+    this.preloadFailureAt.delete(chapterId);
     const entry = this.fileCache.get(chapterId);
     if (entry) this.deleteFileSafely(entry.filePath);
     this.fileCache.delete(chapterId);
@@ -308,16 +316,23 @@ export class ChapterCacheService {
     this.pendingTasks.add(taskKey);
     try {
       const source = await this.findSource(book.sourceUrl);
-      if (!source) return;
+      if (!source) throw new Error('预加载书源不可用');
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const audioUrl = await BookSourceService.getAudioUrl(source, pageUrl);
       if (audioUrl && audioUrl !== pageUrl) {
+        this.preloadFailureAt.delete(chapter.id);
         this.evictUrlCache();
         this.audioCache.set(chapter.id, { resolvedUrl: audioUrl, timestamp: Date.now() });
         // URL 拿到后顺手把文件也下了
         this.enqueueFile(() => this.downloadFile(book, chapter, audioUrl));
+      } else {
+        throw new Error('预加载未获取到有效音频地址');
       }
-    } catch (_e) {
+    } catch (err) {
+      this.markPreloadFailure(chapter.id);
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'resolve preload failed [%{public}s]: %{public}s', chapter.title,
+        e?.message ?? JSON.stringify(err));
     } finally {
       this.pendingTasks.delete(taskKey);
     }
@@ -351,6 +366,7 @@ export class ChapterCacheService {
         readTimeout: 30000,
       });
       if (resp.responseCode !== 200 || !resp.result) {
+        this.markPreloadFailure(chapter.id);
         hilog.warn(DOMAIN, TAG, 'download failed [%{public}d] %{public}s', resp.responseCode, chapter.title);
         return;
       }
@@ -365,9 +381,11 @@ export class ChapterCacheService {
         bytes: buf.byteLength,
         timestamp: Date.now(),
       });
+      this.preloadFailureAt.delete(chapter.id);
       this.evictFileCache();
       this.extractDuration(chapter, filePath);
     } catch (err) {
+      this.markPreloadFailure(chapter.id);
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'downloadFile failed: %{public}s', e?.message ?? JSON.stringify(err));
     } finally {
@@ -377,6 +395,18 @@ export class ChapterCacheService {
       if (httpClient) httpClient.destroy();
       this.pendingTasks.delete(taskKey);
     }
+  }
+
+  private isPreloadCoolingDown(chapterId: string): boolean {
+    const failedAt = this.preloadFailureAt.get(chapterId) ?? 0;
+    if (failedAt <= 0) return false;
+    if (Date.now() - failedAt < PRELOAD_FAILURE_COOLDOWN_MS) return true;
+    this.preloadFailureAt.delete(chapterId);
+    return false;
+  }
+
+  private markPreloadFailure(chapterId: string): void {
+    this.preloadFailureAt.set(chapterId, Date.now());
   }
 
   private async resolveText(book: Book, chapter: Chapter, nextChapter?: Chapter): Promise<void> {

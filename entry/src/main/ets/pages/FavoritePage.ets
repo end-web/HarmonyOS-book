@@ -1,5 +1,4 @@
 import { common } from '@kit.AbilityKit';
-import { fileIo } from '@kit.CoreFileKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
@@ -14,6 +13,7 @@ import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
+import { DownloadService } from '../service/DownloadService';
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
 
@@ -736,9 +736,13 @@ export struct FavoritePage {
 
   private async doRemove(bookId: string, deleteFiles: boolean): Promise<void> {
     if (!this.context) return;
+    let downloadCleanupFailed = false;
+    try {
+      await DownloadService.getInstance().deleteBookDownload(bookId);
+    } catch (_e) {
+      downloadCleanupFailed = true;
+    }
     if (deleteFiles) {
-      const audioDir = this.context.filesDir + '/audio/' + bookId;
-      try { await fileIo.rmdir(audioDir); } catch (_e) { /* not exists */ }
       await DataService.removeImportedBook(bookId);
     }
     await PreferenceService.removeFavorite(bookId);
@@ -746,6 +750,11 @@ export struct FavoritePage {
       await DataService.removeCachedBook(bookId);
     }
     await this.loadFavorites();
+    if (downloadCleanupFailed) {
+      try {
+        this.getUIContext().getPromptAction().showToast({ message: '书籍已移除，部分下载文件清理失败' });
+      } catch (_e) { /* ignore */ }
+    }
   }
 
   build() {

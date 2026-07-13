@@ -149,6 +149,18 @@ export class BuiltInDispatcher {
     }
   }
 
+  static getAudioHeaders(source: BookSource, audioUrl: string): Record<string, string> {
+    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+    if (!plugin) return {};
+    try {
+      return plugin.getAudioHeaders(audioUrl);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      console.error(`[${TAG}] getAudioHeaders ${plugin.name} error: ${msg}`);
+      return {};
+    }
+  }
+
   static async getTextContent(source: BookSource, chapterUrl: string, nextChapterUrl?: string): Promise<string> {
     const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
     if (!plugin || !plugin.getTextContent) return '';

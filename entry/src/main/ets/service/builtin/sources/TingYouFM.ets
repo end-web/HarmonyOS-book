@@ -88,7 +88,7 @@ class TingYouFMClass implements IBuiltInSource {
     try {
       const headers = baseHeaders();
       headers['X-Payload-Version'] = '1';
-      const r = await HttpClient.request(`${API}/me`, { method: 'POST', headers, timeout: 15000 });
+      const r = await HttpClient.request(`${API}/me`, { method: 'POST', headers, timeout: 6000 });
       if (r.statusCode === 200 && r.body) {
         const j = new JsonObj(JSON.parse(r.body) as Object);
         const payload = j.getString('payload', '');
@@ -131,7 +131,9 @@ class TingYouFMClass implements IBuiltInSource {
         headers['X-Payload-Version'] = '1';
         headers['Content-Type'] = 'text/plain';
         if (token) headers['Authorization'] = 'Bearer ' + token;
-        const r = await HttpClient.request(`${API}/${endpoint}`, { method: 'POST', headers, body: hexBody, timeout: 15000 });
+        const r = await HttpClient.request(`${API}/${endpoint}`, {
+          method: 'POST', headers, body: hexBody, timeout: 8000
+        });
         if (r.statusCode === 401) {
           token = await this.ensureToken(true);
           if (!token) return null;
@@ -143,9 +145,17 @@ class TingYouFMClass implements IBuiltInSource {
           if (payload) return new JsonObj(JSON.parse(TingYouCrypto.decryptResponse(payload)) as Object);
           return j;
         }
+        if (attempt === 0) {
+          token = await this.ensureToken(true);
+          continue;
+        }
         return null;
       } catch (e) {
         hilog.error(0, TAG, 'apiPost %{public}s failed: %{public}s', endpoint, e instanceof Error ? e.message : String(e));
+        if (attempt === 0) {
+          token = await this.ensureToken(true);
+          continue;
+        }
         return null;
       }
     }
@@ -218,10 +228,9 @@ class TingYouFMClass implements IBuiltInSource {
   }
 
   getAudioHeaders(_audioUrl: string): Record<string, string> {
-    const h: Record<string, string> = {};
-    h['User-Agent'] = UA;
-    h['Referer'] = SITE + '/';
-    return h;
+    // play_url 是带签名的 CDN 临时地址。预加载和播放器均以无附加请求头方式访问；
+    // 添加站点 Referer 反而可能触发 CDN 防盗链校验，导致长期下载与预加载结果不一致。
+    return {};
   }
 
   async getHomeBlocks(): Promise<HomeBlock[]> {

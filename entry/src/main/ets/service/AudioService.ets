@@ -14,6 +14,7 @@ import { DataService } from './DataService';
 import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
 import { ChapterCacheService } from './ChapterCacheService';
+import { DownloadService } from './DownloadService';
 import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
 import { StatsService } from './StatsService';
@@ -23,9 +24,17 @@ import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
+const AUDIO_RESOLVE_TIMEOUT_MS = 15000;
 
 /** 播放历史落盘后广播的事件名,书架等页面订阅以实时刷新进度文案 */
 export const EVT_HISTORY_UPDATED = 'app.history.updated';
+export const EVT_AUDIO_PLAY_FAILED = 'app.audio.play.failed';
+
+export interface AudioPlayFailedPayload {
+  bookId: string;
+  chapterId: string;
+  message: string;
+}
 
 /**
  * AVPlayer 单例封装
@@ -718,13 +727,14 @@ export class AudioService {
   /**
    * 同步判断目标章节是否走"快路径":
    * - source.type === 'file' / 'rawfile': 已经是本地文件,无需嗅探
-   * - source.type === 'url' 且 ChapterCacheService 已有文件 / 已解析 URL: 命中
+   * - source.type === 'url' 且长期下载 / ChapterCacheService 已有文件 / 已解析 URL: 命中
    *
    * 命中时切书过程整体 ~300-600ms 就能 prepared,UI 不必显示 loading 圈,
    * 给用户"瞬间切换"的观感。
    */
   private isFastSwitchPath(book: Book, chapter: Chapter): boolean {
     if (chapter.source.type === 'file' || chapter.source.type === 'rawfile') return true;
+    if (DownloadService.getInstance().getDownloadedFilePath(book.id, chapter)) return true;
     const cache = ChapterCacheService.getInstance();
     const pageUrl = chapter.originSourceValue || chapter.source.value;
     if (cache.getAudioFilePath(book.id, chapter.id, pageUrl)) return true;
@@ -793,6 +803,7 @@ export class AudioService {
         hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed (source unchanged), aborting playback');
         this.state.isLoading = false;
         this.state.isPlaying = false;
+        this.emitPlayFailed(book.id, chapter.id, '音频地址获取失败，请点击重试');
         return;
       }
 
@@ -808,7 +819,13 @@ export class AudioService {
       await this.applySource(p, chapter.source);
       this.triggerPreload(book, chapter);
     } catch (err) {
-      if (myGen === this.playGen && this.state) this.state.isLoading = false;
+      if (myGen === this.playGen && this.state) {
+        this.state.isLoading = false;
+        this.state.isPlaying = false;
+        const e = err as Error;
+        const message = e?.message?.includes('超时') ? '音频地址获取超时，请点击重试' : '播放失败，请点击重试';
+        this.emitPlayFailed(book.id, chapter.id, message);
+      }
       throw err as Error;
     } finally {
       if (myGen === this.playGen) this.isApplying = false;
@@ -832,13 +849,19 @@ export class AudioService {
       chapter.originSourceValue = chapter.source.value;
     }
     const cache = ChapterCacheService.getInstance();
-    // 1) 优先看本地音频文件缓存（已下载到沙箱），最快路径，离线也能播
+    // 1) 优先看长期下载文件，保证整本下载后离线播放稳定
+    const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
+    if (downloadedPath) {
+      chapter.source = { type: 'file', value: downloadedPath };
+      return;
+    }
+    // 2) 再看临时本地音频文件缓存（预加载到沙箱），最快路径，离线也能播
     const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
     if (filePath) {
       chapter.source = { type: 'file', value: filePath };
       return;
     }
-    // 2) URL 缓存命中
+    // 3) URL 缓存命中
     const cachedUrl = cache.getAudioUrl(chapter.id);
     if (cachedUrl) {
       chapter.source = { type: 'url', value: cachedUrl };
@@ -846,13 +869,13 @@ export class AudioService {
       cache.ensureFileCached(book, chapter, cachedUrl);
       return;
     }
-    // 3) 都没有，从书源解析
+    // 4) 都没有，从书源解析
     try {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
       if (!source) return;
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const audioUrl = await BookSourceService.getAudioUrl(source, pageUrl);
+      const audioUrl = await this.resolveAudioUrlWithTimeout(source, pageUrl);
       if (audioUrl) {
         chapter.source = { type: 'url', value: audioUrl };
         // 把当前章节也下到本地
@@ -862,7 +885,26 @@ export class AudioService {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'resolveAudioUrl failed: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
+      throw new Error(e?.message || '音频地址获取失败');
     }
+  }
+
+  private async resolveAudioUrlWithTimeout(source: BookSource, pageUrl: string): Promise<string> {
+    let timerId: number = -1;
+    const timeout = new Promise<string>((_resolve, reject) => {
+      timerId = setTimeout(() => reject(new Error('音频地址获取超时')), AUDIO_RESOLVE_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([BookSourceService.getAudioUrl(source, pageUrl), timeout]);
+    } finally {
+      if (timerId >= 0) clearTimeout(timerId);
+    }
+  }
+
+  private emitPlayFailed(bookId: string, chapterId: string, message: string): void {
+    emitter.emit(EVT_AUDIO_PLAY_FAILED, {
+      data: { bookId, chapterId, message } as AudioPlayFailedPayload
+    });
   }
 
   private async applySource(p: media.AVPlayer, src: AudioSource): Promise<void> {
