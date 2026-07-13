@@ -356,6 +356,14 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'onBackground flushHistory failed: %{public}s',
         e?.message ?? JSON.stringify(err));
     }
+    // 退后台/息屏前再确认一次：若仍有下载队列，维持 dataTransfer 长时任务
+    try {
+      await DownloadService.getInstance().onAppBackground();
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'onBackground download keep-alive failed: %{public}s',
+        e?.message ?? JSON.stringify(err));
+    }
   }
 
   /**

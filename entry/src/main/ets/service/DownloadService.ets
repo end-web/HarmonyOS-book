@@ -101,6 +101,18 @@ export class DownloadService {
     await this.restoreInterruptedDownloads();
   }
 
+  /**
+   * 应用退后台时调用：只要还有下载队列/进行中任务，就重新声明 dataTransfer 长时任务。
+   * 息屏后系统可能立刻校验 continuous task，尽早 reassert 可降低被冻结概率。
+   */
+  async onAppBackground(): Promise<void> {
+    if (this.resolveQueue.length === 0 && this.fileQueue.length === 0
+      && this.resolveRunningCount === 0 && this.fileRunningCount === 0 && this.pendingKeys.size === 0) {
+      return;
+    }
+    await this.startBackgroundTransfer();
+  }
+
   setContext(ctx: common.Context): void {
     this.ctx = ctx;
     DownloadStore.setContext(ctx);
@@ -377,6 +389,9 @@ export class DownloadService {
     while (this.resolveRunningCount < MAX_RESOLVE_CONCURRENT && this.resolveQueue.length > 0) {
       const item = this.resolveQueue.shift()!;
       this.resolveRunningCount++;
+      // 解析阶段往往没有大流量，系统可能判定 dataTransfer 低速并取消长时任务；
+      // 每开一个 resolve 都重申一次，降低息屏后被冻结概率。
+      this.ensureBackgroundTransfer();
       this.resolveAndQueueFile(item).then(() => {
         this.resolveRunningCount--;
         this.drainResolve();
@@ -393,6 +408,7 @@ export class DownloadService {
     while (this.fileRunningCount < MAX_FILE_CONCURRENT && this.fileQueue.length > 0) {
       const item = this.fileQueue.shift()!;
       this.fileRunningCount++;
+      this.ensureBackgroundTransfer();
       this.downloadFile(item).then(() => {
         this.fileRunningCount--;
         this.drainFile();
@@ -730,6 +746,21 @@ export class DownloadService {
     await BackgroundTaskService.startDataTransfer(this.ctx as common.UIAbilityContext);
   }
 
+  /** 有活跃下载时确保 dataTransfer 长时任务仍在；系统取消后由 BackgroundTaskService 重申 */
+  private ensureBackgroundTransfer(): void {
+    if (!this.ctx) return;
+    if (this.resolveQueue.length === 0 && this.fileQueue.length === 0
+      && this.resolveRunningCount === 0 && this.fileRunningCount === 0 && this.pendingKeys.size === 0) {
+      return;
+    }
+    // 已在跑且已声明 dataTransfer 时跳过，避免进度回调刷屏申请
+    if (BackgroundTaskService.isRunning() && BackgroundTaskService.hasMode('dataTransfer')) return;
+    BackgroundTaskService.startDataTransfer(this.ctx as common.UIAbilityContext).catch((err: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'ensure background transfer failed: %{public}s',
+        err?.message ?? JSON.stringify(err));
+    });
+  }
+
   private stopBackgroundTransferIfIdle(): void {
     if (this.resolveQueue.length > 0 || this.fileQueue.length > 0
       || this.resolveRunningCount > 0 || this.fileRunningCount > 0 || this.pendingKeys.size > 0) return;
@@ -754,6 +785,8 @@ export class DownloadService {
       receivedBytes,
       totalBytes
     });
+    // 有真实字节写入时顺带确认长时任务仍在（系统可能因低速已取消 dataTransfer）
+    this.ensureBackgroundTransfer();
     const now = Date.now();
     const last = this.lastProgressEmitAt.get(key) ?? 0;
     if (now - last < 500) return;

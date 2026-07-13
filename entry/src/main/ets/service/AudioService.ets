@@ -281,12 +281,21 @@ export class AudioService {
         this.persistHistory();
         this.syncPlaybackState();
         PlaybackStore.getInstance().setPlaying(false);
+        // 未在播时不要继续挂 audioPlayback 长时任务:
+        // 系统会以「音频未运行」取消整条 continuous task，连同 dataTransfer 一起失效，
+        // 息屏后纯下载也会被冻结。下载侧会单独维持 dataTransfer。
+        if (this.context) {
+          BackgroundTaskService.stop(this.context).catch((_e: Error): void => {});
+        }
       } else if (newState === 'completed') {
         this.state.isPlaying = false;
         this.recordPause();
         this.stopTick();
         this.syncPlaybackState();
         PlaybackStore.getInstance().setPlaying(false);
+        if (this.context) {
+          BackgroundTaskService.stop(this.context).catch((_e: Error): void => {});
+        }
         this.autoPlayNext();
       }
     });
