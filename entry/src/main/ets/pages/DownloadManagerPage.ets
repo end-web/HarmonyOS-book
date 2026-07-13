@@ -1,17 +1,29 @@
 import { emitter } from '@kit.BasicServicesKit';
-import { DownloadProgressSnapshot, DownloadService, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
+import { DownloadProgressSnapshot, DownloadService, DownloadUpdatePayload,
+  EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
 import { DownloadBookRecord } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
-import { AppFont, AppRadius, AppSpace } from '../theme/Theme';
+import { AppCurve, AppFont, AppMotion, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
 @ComponentV2
-export struct DownloadManagerPage {
+struct DownloadBookItem {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Param bookId: string = '';
   @Local refreshTick: number = 0;
 
-  private downloadHandler = (): void => {
-    this.refreshTick = this.refreshTick + 1;
+  private downloadHandler = (evt: emitter.EventData): void => {
+    const data = evt.data as DownloadUpdatePayload;
+    if (!data || data.bookId === this.bookId || data.bookId === '') {
+      this.refreshTick = this.refreshTick + 1;
+    }
   };
 
   aboutToAppear(): void {
@@ -23,27 +35,14 @@ export struct DownloadManagerPage {
     emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
   }
 
-  private records(): DownloadBookRecord[] {
-    if (this.refreshTick < 0) return [];
-    return DownloadService.getInstance().getAllBookStatuses()
-      .filter((item: DownloadBookRecord) => item.chapters.some((chapter) => chapter.status !== 'deleted'))
-      .sort((a: DownloadBookRecord, b: DownloadBookRecord) => b.updatedAt - a.updatedAt);
-  }
-
-  private totalBytes(): number {
-    return this.records().reduce((sum: number, item: DownloadBookRecord) => sum + item.totalBytes, 0);
+  private record(): DownloadBookRecord | null {
+    if (this.refreshTick < 0) return null;
+    return DownloadService.getInstance().getBookStatus(this.bookId);
   }
 
   private progress(record: DownloadBookRecord): DownloadProgressSnapshot {
     if (this.refreshTick < 0) return DownloadService.getInstance().getBookProgress('');
     return DownloadService.getInstance().getBookProgress(record.bookId);
-  }
-
-  private formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
   private statusText(record: DownloadBookRecord): string {
@@ -101,72 +100,9 @@ export struct DownloadManagerPage {
   }
 
   build() {
-    Column() {
-      this.buildHeader()
-      if (this.records().length === 0) {
-        this.buildEmpty()
-      } else {
-        List({ space: AppSpace.Sm }) {
-          ForEach(this.records(), (record: DownloadBookRecord) => {
-            ListItem() {
-              this.buildRecord(record)
-            }
-          }, (record: DownloadBookRecord) => `${record.bookId}:${this.refreshTick}`)
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Xl })
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      }
+    if (this.record()) {
+      this.buildRecord(this.record()!)
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('sys.color.background_secondary'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-  }
-
-  @Builder
-  buildHeader() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(24)
-        .fontColor([$r('sys.color.font_primary')])
-        .onClick(() => this.navStack.pop())
-      Column({ space: 2 }) {
-        Text('下载管理')
-          .fontSize(AppFont.TitleL)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
-        Text(`${this.records().length} 本 · ${this.formatBytes(this.totalBytes())}`)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-      }
-      .alignItems(HorizontalAlign.Start)
-      .margin({ left: AppSpace.Sm })
-    }
-    .width('100%')
-    .padding({
-      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
-      left: AppSpace.Md,
-      right: AppSpace.Md,
-      bottom: AppSpace.Md
-    })
-  }
-
-  @Builder
-  buildEmpty() {
-    Column({ space: AppSpace.Sm }) {
-      SymbolGlyph($r('sys.symbol.arrow_down_circle'))
-        .fontSize(42)
-        .fontColor([$r('sys.color.font_tertiary')])
-      Text('暂无离线下载')
-        .fontSize(AppFont.BodyL)
-        .fontColor($r('sys.color.font_secondary'))
-    }
-    .layoutWeight(1)
-    .width('100%')
-    .justifyContent(FlexAlign.Center)
   }
 
   @Builder
@@ -193,7 +129,7 @@ export struct DownloadManagerPage {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        Text(this.formatBytes(record.totalBytes))
+        Text(formatBytes(record.totalBytes))
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
       }
@@ -206,6 +142,7 @@ export struct DownloadManagerPage {
         .height(6)
         .color(record.failedCount > 0 ? '#D03050' : '#0A84FF')
         .backgroundColor($r('sys.color.comp_background_tertiary'))
+        .animation({ duration: AppMotion.Slow, curve: AppCurve.Standard })
 
       Row({ space: AppSpace.Sm }) {
         if (record.status === 'downloading' || record.status === 'queued') {
@@ -268,4 +205,106 @@ export struct DownloadManagerPage {
     .borderRadius(AppRadius.Md)
     .onClick(() => action())
   }
+}
+
+@ComponentV2
+export struct DownloadManagerPage {
+  @Param navStack: NavPathStack = new NavPathStack();
+  @Local refreshTick: number = 0;
+
+  private downloadHandler = (evt: emitter.EventData): void => {
+    const data = evt.data as DownloadUpdatePayload;
+    if (data?.progressOnly) return;
+    this.refreshTick = this.refreshTick + 1;
+  };
+
+  aboutToAppear(): void {
+    this.refreshTick = this.refreshTick + 1;
+    emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
+  }
+
+  aboutToDisappear(): void {
+    emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
+  }
+
+  private records(): DownloadBookRecord[] {
+    if (this.refreshTick < 0) return [];
+    return DownloadService.getInstance().getAllBookStatuses()
+      .filter((item: DownloadBookRecord) => item.chapters.some((chapter) => chapter.status !== 'deleted'))
+      .sort((a: DownloadBookRecord, b: DownloadBookRecord) => b.updatedAt - a.updatedAt);
+  }
+
+  private totalBytes(): number {
+    return this.records().reduce((sum: number, item: DownloadBookRecord) => sum + item.totalBytes, 0);
+  }
+
+  build() {
+    Column() {
+      this.buildHeader()
+      if (this.records().length === 0) {
+        this.buildEmpty()
+      } else {
+        List({ space: AppSpace.Sm }) {
+          ForEach(this.records(), (record: DownloadBookRecord) => {
+            ListItem() {
+              DownloadBookItem({ navStack: this.navStack, bookId: record.bookId })
+            }
+          }, (record: DownloadBookRecord) => record.bookId)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Xl })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor($r('sys.color.background_secondary'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  buildHeader() {
+    Row() {
+      SymbolGlyph($r('sys.symbol.chevron_left'))
+        .fontSize(24)
+        .fontColor([$r('sys.color.font_primary')])
+        .onClick(() => this.navStack.pop())
+      Column({ space: 2 }) {
+        Text('下载管理')
+          .fontSize(AppFont.TitleL)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Bold)
+        Text(`${this.records().length} 本 · ${formatBytes(this.totalBytes())}`)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+      .alignItems(HorizontalAlign.Start)
+      .margin({ left: AppSpace.Sm })
+    }
+    .width('100%')
+    .padding({
+      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
+      left: AppSpace.Md,
+      right: AppSpace.Md,
+      bottom: AppSpace.Md
+    })
+  }
+
+  @Builder
+  buildEmpty() {
+    Column({ space: AppSpace.Sm }) {
+      SymbolGlyph($r('sys.symbol.arrow_down_circle'))
+        .fontSize(42)
+        .fontColor([$r('sys.color.font_tertiary')])
+      Text('暂无离线下载')
+        .fontSize(AppFont.BodyL)
+        .fontColor($r('sys.color.font_secondary'))
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+  }
+
 }
