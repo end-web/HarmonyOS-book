@@ -1,7 +1,6 @@
 import { emitter } from '@kit.BasicServicesKit';
-import { DownloadProgressSnapshot, DownloadService, DownloadUpdatePayload,
-  EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
-import { DownloadBookRecord } from '../service/DownloadStore';
+import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
+import { DownloadBookRecord, DownloadBookStatus } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
 import { AppCurve, AppFont, AppMotion, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -17,17 +16,24 @@ function formatBytes(bytes: number): string {
 struct DownloadBookItem {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
-  @Local refreshTick: number = 0;
+  @Local available: boolean = true;
+  @Local status: DownloadBookStatus = 'idle';
+  @Local downloadedCount: number = 0;
+  @Local failedCount: number = 0;
+  @Local totalCount: number = 0;
+  @Local totalBytes: number = 0;
+  @Local progressPercent: number = 0;
+  @Local failureText: string = '';
 
   private downloadHandler = (evt: emitter.EventData): void => {
     const data = evt.data as DownloadUpdatePayload;
     if (!data || data.bookId === this.bookId || data.bookId === '') {
-      this.refreshTick = this.refreshTick + 1;
+      this.syncState();
     }
   };
 
   aboutToAppear(): void {
-    this.refreshTick = this.refreshTick + 1;
+    this.syncState();
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
   }
 
@@ -36,28 +42,37 @@ struct DownloadBookItem {
   }
 
   private record(): DownloadBookRecord | null {
-    if (this.refreshTick < 0) return null;
     return DownloadService.getInstance().getBookStatus(this.bookId);
   }
 
-  private progress(record: DownloadBookRecord): DownloadProgressSnapshot {
-    if (this.refreshTick < 0) return DownloadService.getInstance().getBookProgress('');
-    return DownloadService.getInstance().getBookProgress(record.bookId);
+  private syncState(): void {
+    const record = this.record();
+    if (!record) {
+      this.available = false;
+      return;
+    }
+    const progress = DownloadService.getInstance().getBookProgress(record.bookId);
+    const failed = record.chapters.find((item) => item.status === 'failed');
+    this.available = true;
+    this.status = record.status;
+    this.downloadedCount = record.downloadedCount;
+    this.failedCount = record.failedCount;
+    this.totalCount = record.chapters.filter((item) => item.status !== 'deleted').length;
+    this.totalBytes = record.totalBytes;
+    this.progressPercent = progress.progressPercent;
+    this.failureText = failed ? DownloadPolicy.failureText(failed.failureCode
+      ?? DownloadPolicy.classifyFailure(failed.failureReason)) : '下载失败，请重试';
   }
 
-  private statusText(record: DownloadBookRecord): string {
-    const total = record.chapters.filter((item) => item.status !== 'deleted').length;
-    if (record.status === 'paused') return `已暂停 · ${record.downloadedCount}/${total}`;
-    if (record.status === 'downloading' || record.status === 'queued') {
-      return `下载中 · ${record.downloadedCount}/${total} · ${Math.round(this.progress(record).progressPercent)}%`;
+  private statusText(): string {
+    if (this.status === 'paused') return `已暂停 · ${this.downloadedCount}/${this.totalCount}`;
+    if (this.status === 'downloading' || this.status === 'queued') {
+      return `下载中 · ${this.downloadedCount}/${this.totalCount} · ${Math.round(this.progressPercent)}%`;
     }
-    if (record.failedCount > 0) {
-      const failed = record.chapters.find((item) => item.status === 'failed');
-      const reason = failed ? DownloadPolicy.failureText(failed.failureCode
-        ?? DownloadPolicy.classifyFailure(failed.failureReason)) : '下载失败，请重试';
-      return `${record.downloadedCount}/${total} · 失败 ${record.failedCount} · ${reason}`;
+    if (this.failedCount > 0) {
+      return `${this.downloadedCount}/${this.totalCount} · 失败 ${this.failedCount} · ${this.failureText}`;
     }
-    return `已完成 · ${record.downloadedCount}/${total}`;
+    return `已完成 · ${this.downloadedCount}/${this.totalCount}`;
   }
 
   private showToast(message: string): void {
@@ -67,6 +82,7 @@ struct DownloadBookItem {
   private async pause(record: DownloadBookRecord): Promise<void> {
     try {
       await DownloadService.getInstance().pauseBook(record.bookId);
+      this.syncState();
     } catch (_e) {
       this.showToast('暂停下载失败，请重试');
     }
@@ -75,6 +91,7 @@ struct DownloadBookItem {
   private async resume(record: DownloadBookRecord): Promise<void> {
     try {
       await DownloadService.getInstance().resumeBook(record.bookId);
+      this.syncState();
     } catch (_e) {
       this.showToast('继续下载失败，请重试');
     }
@@ -100,7 +117,7 @@ struct DownloadBookItem {
   }
 
   build() {
-    if (this.record()) {
+    if (this.available && this.record()) {
       this.buildRecord(this.record()!)
     }
   }
@@ -121,15 +138,15 @@ struct DownloadBookItem {
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
             .maxLines(1)
-          Text(this.statusText(record))
+          Text(this.statusText())
             .fontSize(AppFont.Caption)
-            .fontColor(record.failedCount > 0 ? '#D03050' : $r('sys.color.font_secondary'))
+            .fontColor(this.failedCount > 0 ? '#D03050' : $r('sys.color.font_secondary'))
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        Text(formatBytes(record.totalBytes))
+        Text(formatBytes(this.totalBytes))
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
       }
@@ -137,18 +154,18 @@ struct DownloadBookItem {
       .alignItems(VerticalAlign.Center)
       .onClick(() => this.openBook(record))
 
-      Progress({ value: this.progress(record).progressPercent, total: 100, type: ProgressType.Linear })
+      Progress({ value: this.progressPercent, total: 100, type: ProgressType.Linear })
         .width('100%')
         .height(6)
-        .color(record.failedCount > 0 ? '#D03050' : '#0A84FF')
+        .color(this.failedCount > 0 ? '#D03050' : '#0A84FF')
         .backgroundColor($r('sys.color.comp_background_tertiary'))
         .animation({ duration: AppMotion.Slow, curve: AppCurve.Standard })
 
       Row({ space: AppSpace.Sm }) {
-        if (record.status === 'downloading' || record.status === 'queued') {
+        if (this.status === 'downloading' || this.status === 'queued') {
           this.buildAction($r('sys.symbol.pause_fill'), '暂停', () => this.pause(record), false)
-        } else if (record.status === 'paused' || record.failedCount > 0) {
-          this.buildAction($r('sys.symbol.play_fill'), record.failedCount > 0 ? '重试' : '继续',
+        } else if (this.status === 'paused' || this.failedCount > 0) {
+          this.buildAction($r('sys.symbol.play_fill'), this.failedCount > 0 ? '重试' : '继续',
             () => this.resume(record), false)
         }
         this.buildAction($r('sys.symbol.trash'), '删除', () => this.confirmDelete(record), true)

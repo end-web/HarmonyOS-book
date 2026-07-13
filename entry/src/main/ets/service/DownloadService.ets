@@ -161,6 +161,8 @@ export class DownloadService {
         chapters.push(this.chapterFromRecord(ch));
       }
     }
+    if (chapters.length === 0) return;
+    record.status = 'queued';
     await this.enqueueChapters(book, chapters);
   }
 
