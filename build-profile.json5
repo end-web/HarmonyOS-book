@@ -1,8 +1,37 @@
 {
   "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BE7C31BD92363BA3D9A25C33E9EB80F08EC130A60E7132D0D3236E5D4F857E1A96A3BA3CD5F7635",
+          "profile": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p12",
+          "storePassword": "0000001BADAF21FA449271F764FA0802D9B5C20D4F0A120DC893107011ABB60105400A0C284DCDC28451C4"
+        }
+      },
+      {
+        "name": "release",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "C:/Users/ylwang112/.ohos/config/release_ListenBook.p12",
+          "storePassword": "0000001FD452BCDB4BB050B9BAC9C18A6251FD7B82AA2EFBC707483E0A273887432189CE50C3393FC9140568A568E4",
+          "keyAlias": "releaseKey",
+          "keyPassword": "0000001F8ED5A9D2DE802E91EEA412009B89C029BE1F2523591D11D934A2CCB4CD970B0ED2A293BF3DFFE2ABD885C8",
+          "signAlg": "SHA256withECDSA",
+          "profile": "C:/Users/ylwang112/.ohos/config/release_ListenBook.p7b",
+          "certpath": "C:/Users/ylwang112/.ohos/config/release_ListenBook.cer"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
+        "signingConfig": "default",
         "bundleName": "com.ylwang.listenbook.tingyou",
         "targetSdkVersion": "6.1.0(23)",
         "compatibleSdkVersion": "6.1.0(23)",
@@ -16,6 +45,7 @@
       },
       {
         "name": "release",
+        "signingConfig": "release",
         "bundleName": "com.ylwang.listenbook.tingyou",
         "targetSdkVersion": "6.1.0(23)",
         "compatibleSdkVersion": "6.1.0(23)",
