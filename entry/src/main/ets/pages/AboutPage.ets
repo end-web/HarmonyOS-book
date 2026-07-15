@@ -131,7 +131,7 @@ export struct AboutPage {
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 12, color: '#1F000000', offsetY: 4 })
 
-          Text('ListenBook')
+          Text($r('app.string.EntryAbility_label'))
             .fontSize(AppFont.TitleL)
             .fontColor($r('sys.color.font_primary'))
             .fontWeight(FontWeight.Bold)

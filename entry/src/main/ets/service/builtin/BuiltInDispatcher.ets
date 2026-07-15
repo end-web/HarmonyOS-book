@@ -61,11 +61,13 @@ class TI implements TocItem {
   name: string;
   url: string;
   isVip: boolean;
+  duration: number;
 
-  constructor(name: string, url: string, isVip: boolean = false) {
+  constructor(name: string, url: string, isVip: boolean = false, duration: number = 0) {
     this.name = name;
     this.url = url;
     this.isVip = isVip;
+    this.duration = duration;
   }
 }
 
@@ -133,7 +135,7 @@ export class BuiltInDispatcher {
     try {
       const detail = await plugin.getBookDetail(tocUrl, true, true);
       const out: TocItem[] = [];
-      for (const ep of detail.episodes) out.push(new TI(ep.title, ep.url, !ep.isFree));
+      for (const ep of detail.episodes) out.push(new TI(ep.title, ep.url, !ep.isFree, ep.duration));
       return out;
     } catch (e) {
       const msg = e instanceof Error ? e.message : JSON.stringify(e);

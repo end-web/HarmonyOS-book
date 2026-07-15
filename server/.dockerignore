@@ -1,0 +1,11 @@
+node_modules
+dist
+admin/node_modules
+admin/dist
+data
+.env
+deploy/.env
+deploy/data
+deploy/backups
+test
+*.log

@@ -4,7 +4,7 @@ import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
-import { SearchResult, HomeBlockSection } from '../model/BookSource';
+import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { SearchCache } from '../utils/SearchCache';
@@ -369,21 +369,39 @@ export struct HomePage {
     BookCard.resetAnimations();
     try {
       const sources = await SourceDataService.getEnabledSources();
-      const source = sources.length > 0 ? sources[0] : undefined;
-      if (!source || gen !== this.searchGen) return;
-      const results = await BookSourceService.searchBooks(source, keyword);
       if (gen !== this.searchGen) return;
-      const books = results.map((item: SearchResult): Book => this.searchResultToBook(item));
-      this.audioBooks = books;
-      this.audioCount = books.length;
-      this.audioDataSource.appendBooks(books);
+      const seen = new Set<string>();
+      const tasks: Promise<void>[] = [];
+      for (const source of sources) {
+        tasks.push(this.searchOneSource(source, keyword, gen, seen));
+      }
+      await Promise.all(tasks);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'search failed: %{public}s', String(e));
-      this.audioBooks = [];
-      this.audioCount = 0;
-      this.audioDataSource.clear();
     } finally {
       if (gen === this.searchGen) this.searching = false;
+    }
+  }
+
+  private async searchOneSource(source: BookSource, keyword: string, gen: number,
+    seen: Set<string>): Promise<void> {
+    try {
+      const results = await BookSourceService.searchBooks(source, keyword);
+      if (gen !== this.searchGen) return;
+      const books: Book[] = [];
+      for (const item of results) {
+        const dedupeKey = `${item.sourceUrl}\u001f${item.bookUrl}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        books.push(this.searchResultToBook(item));
+      }
+      if (books.length === 0) return;
+      this.audioBooks = this.audioBooks.concat(books);
+      this.audioCount = this.audioBooks.length;
+      this.audioDataSource.appendBooks(books);
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
+        source.bookSourceName, String(e));
     }
   }
 

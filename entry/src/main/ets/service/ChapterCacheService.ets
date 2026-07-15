@@ -6,7 +6,7 @@ import { emitter } from '@kit.BasicServicesKit';
 import { media } from '@kit.MediaKit';
 import { Book, Chapter } from '../model/Book';
 import { BookSource } from '../model/BookSource';
-import { BookSourceService } from './BookSourceService';
+import { AudioRequestInfo, BookSourceService } from './BookSourceService';
 import { SourceDataService } from './SourceDataService';
 
 const DOMAIN = 0x0001;
@@ -24,6 +24,7 @@ const PRELOAD_FAILURE_COOLDOWN_MS = 30000;
 
 interface CacheEntry {
   resolvedUrl: string;
+  headers: Record<string, string>;
   timestamp: number;
 }
 
@@ -136,6 +137,11 @@ export class ChapterCacheService {
     return entry ? entry.resolvedUrl : null;
   }
 
+  getAudioHeaders(chapterId: string): Record<string, string> {
+    const entry = this.audioCache.get(chapterId);
+    return entry ? entry.headers : {};
+  }
+
   /** 章节是否已经有完整音频文件落盘，命中后 AudioService 直接 fdSrc 播放 */
   getAudioFilePath(bookId: string, chapterId: string, pageUrl: string): string | null {
     const safePageUrl = pageUrl || '';
@@ -175,7 +181,7 @@ export class ChapterCacheService {
         // 2) URL 已有，仅下载文件
         const cached = this.audioCache.get(ch.id);
         if (cached) {
-          this.enqueueFile(() => this.downloadFile(book, ch, cached.resolvedUrl));
+          this.enqueueFile(() => this.downloadFile(book, ch, cached.resolvedUrl, cached.headers));
         }
       }
     }
@@ -212,12 +218,13 @@ export class ChapterCacheService {
   }
 
   /** 主动给某个章节下载文件（AudioService 在 playChapter 时调用，让当前章节也能落盘） */
-  ensureFileCached(book: Book, chapter: Chapter, resolvedUrl: string): void {
+  ensureFileCached(book: Book, chapter: Chapter, resolvedUrl: string,
+    headers: Record<string, string> = {}): void {
     if (!resolvedUrl || !resolvedUrl.startsWith('http')) return;
     const pageUrl = chapter.originSourceValue || chapter.source.value;
     if (this.getAudioFilePath(book.id, chapter.id, pageUrl)) return;
     if (this.pendingTasks.has(`file_${chapter.id}`)) return;
-    this.enqueueFile(() => this.downloadFile(book, chapter, resolvedUrl));
+    this.enqueueFile(() => this.downloadFile(book, chapter, resolvedUrl, headers));
   }
 
   /* ───────────── 内部：URL 解析队列 ───────────── */
@@ -271,13 +278,19 @@ export class ChapterCacheService {
       const source = await this.findSource(book.sourceUrl);
       if (!source) throw new Error('预加载书源不可用');
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const audioUrl = await BookSourceService.getAudioUrl(source, pageUrl, book.variables);
+      const requestInfo: AudioRequestInfo =
+        await BookSourceService.resolveAudioRequest(source, pageUrl, book.variables);
+      const audioUrl = requestInfo.url;
       if (audioUrl && audioUrl !== pageUrl) {
         this.preloadFailureAt.delete(chapter.id);
         this.evictUrlCache();
-        this.audioCache.set(chapter.id, { resolvedUrl: audioUrl, timestamp: Date.now() });
+        this.audioCache.set(chapter.id, {
+          resolvedUrl: audioUrl,
+          headers: requestInfo.headers,
+          timestamp: Date.now()
+        });
         // URL 拿到后顺手把文件也下了
-        this.enqueueFile(() => this.downloadFile(book, chapter, audioUrl));
+        this.enqueueFile(() => this.downloadFile(book, chapter, audioUrl, requestInfo.headers));
       } else {
         throw new Error('预加载未获取到有效音频地址');
       }
@@ -291,7 +304,8 @@ export class ChapterCacheService {
     }
   }
 
-  private async downloadFile(book: Book, chapter: Chapter, audioUrl: string): Promise<void> {
+  private async downloadFile(book: Book, chapter: Chapter, audioUrl: string,
+    headers: Record<string, string> = {}): Promise<void> {
     if (!this.appContext) return;
     if (!audioUrl || !audioUrl.startsWith('http')) return;
     if (this.fileCache.has(chapter.id)) return;
@@ -314,6 +328,7 @@ export class ChapterCacheService {
       httpClient = http.createHttp();
       const resp = await httpClient.request(audioUrl, {
         method: http.RequestMethod.GET,
+        header: headers,
         expectDataType: http.HttpDataType.ARRAY_BUFFER,
         connectTimeout: 15000,
         readTimeout: 30000,

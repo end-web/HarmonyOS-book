@@ -1,5 +1,5 @@
 /**
- * 听友 FM 内置源数据类型。
+ * 内置音频源数据类型。
  *
  * ArkTS 严格模式：使用 class 而非 interface 作为数据载体，便于 new 实例化避免 obj-literal 报错。
  */
@@ -31,11 +31,13 @@ export class BuiltInEpisode {
   url: string;
   isFree: boolean;
   coverUrl: string = '';
+  duration: number;
 
-  constructor(title: string, url: string, isFree: boolean = true) {
+  constructor(title: string, url: string, isFree: boolean = true, duration: number = 0) {
     this.title = title;
     this.url = url;
     this.isFree = isFree;
+    this.duration = duration;
   }
 }
 

@@ -9,7 +9,7 @@ import { BookSource } from '../model/BookSource';
 import { PlayerState, PlayMode } from '../model/PlayerState';
 import { PreferenceService, PlayProgress } from './PreferenceService';
 import { SourceDataService } from './SourceDataService';
-import { BookSourceService } from './BookSourceService';
+import { AudioRequestInfo, BookSourceService } from './BookSourceService';
 import { DataService } from './DataService';
 import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
@@ -809,7 +809,7 @@ export class AudioService {
       );
 
       // 2) 解析音频 URL
-      await this.resolveAudioUrl(book, chapter);
+      const audioHeaders = await this.resolveAudioUrl(book, chapter);
       if (myGen !== this.playGen) {
         // 被抢占:如果新 gen 走的也是慢路径,它的 isLoading 已经是 true;
         // 如果新 gen 走快路径,它的 isLoading 已经是 false。
@@ -837,7 +837,7 @@ export class AudioService {
         this.pendingSeek = seekMs;
         this.resumeTargetMs = seekMs;
       }
-      await this.applySource(p, chapter.source);
+      await this.applySource(p, chapter.source, audioHeaders);
       this.triggerPreload(book, chapter);
     } catch (err) {
       if (myGen === this.playGen && this.state) {
@@ -862,9 +862,9 @@ export class AudioService {
    * 重要：如果上一次播放后 source.value 已经是临时签名 URL（如 api.aikeu.com 带 sign），
    * 重启后这条 URL 已过期，必须用 originSourceValue 里保存的章节页 URL 重新解析。
    */
-  private async resolveAudioUrl(book: Book, chapter: Chapter): Promise<void> {
-    if (chapter.source.type !== 'url') return;
-    if (!book.sourceUrl) return;
+  private async resolveAudioUrl(book: Book, chapter: Chapter): Promise<Record<string, string>> {
+    if (chapter.source.type !== 'url') return {};
+    if (!book.sourceUrl) return {};
     // 第一次解析，把当前的 source.value 备份成 originSourceValue（永远是章节页 URL）
     if (!chapter.originSourceValue) {
       chapter.originSourceValue = chapter.source.value;
@@ -874,34 +874,37 @@ export class AudioService {
     const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
     if (downloadedPath) {
       chapter.source = { type: 'file', value: downloadedPath };
-      return;
+      return {};
     }
     // 2) 再看临时本地音频文件缓存（预加载到沙箱），最快路径，离线也能播
     const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
     if (filePath) {
       chapter.source = { type: 'file', value: filePath };
-      return;
+      return {};
     }
     // 3) URL 缓存命中
     const cachedUrl = cache.getAudioUrl(chapter.id);
     if (cachedUrl) {
       chapter.source = { type: 'url', value: cachedUrl };
+      const cachedHeaders = cache.getAudioHeaders(chapter.id);
       // 顺手把这个章节的文件也缓到本地
-      cache.ensureFileCached(book, chapter, cachedUrl);
-      return;
+      cache.ensureFileCached(book, chapter, cachedUrl, cachedHeaders);
+      return cachedHeaders;
     }
     // 4) 都没有，从书源解析
     try {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
-      if (!source) return;
+      if (!source) return {};
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const audioUrl = await this.resolveAudioUrlWithTimeout(source, pageUrl, book.variables);
+      const requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables);
+      const audioUrl = requestInfo.url;
       if (audioUrl) {
         chapter.source = { type: 'url', value: audioUrl };
         // 把当前章节也下到本地
-        cache.ensureFileCached(book, chapter, audioUrl);
+        cache.ensureFileCached(book, chapter, audioUrl, requestInfo.headers);
       }
+      return requestInfo.headers;
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'resolveAudioUrl failed: %{public}s',
@@ -910,15 +913,15 @@ export class AudioService {
     }
   }
 
-  private async resolveAudioUrlWithTimeout(source: BookSource, pageUrl: string,
-    variables?: Record<string, string>): Promise<string> {
+  private async resolveAudioRequestWithTimeout(source: BookSource, pageUrl: string,
+    variables?: Record<string, string>): Promise<AudioRequestInfo> {
     let timerId: number = -1;
     const timeoutMs = BookSourceService.getAudioResolveTimeoutMs(source, AUDIO_RESOLVE_TIMEOUT_MS);
-    const timeout = new Promise<string>((_resolve, reject) => {
+    const timeout = new Promise<AudioRequestInfo>((_resolve, reject) => {
       timerId = setTimeout(() => reject(new Error('音频地址获取超时')), timeoutMs);
     });
     try {
-      return await Promise.race([BookSourceService.getAudioUrl(source, pageUrl, variables), timeout]);
+      return await Promise.race([BookSourceService.resolveAudioRequest(source, pageUrl, variables), timeout]);
     } finally {
       if (timerId >= 0) clearTimeout(timerId);
     }
@@ -930,7 +933,8 @@ export class AudioService {
     });
   }
 
-  private async applySource(p: media.AVPlayer, src: AudioSource): Promise<void> {
+  private async applySource(p: media.AVPlayer, src: AudioSource,
+    headers: Record<string, string> = {}): Promise<void> {
     if (!this.context) return;
 
     this.closeCurrentFile();
@@ -948,7 +952,12 @@ export class AudioService {
           hilog.error(DOMAIN, TAG, 'Invalid URL scheme: %{public}s', src.value.substring(0, 50));
           return;
         }
-        p.url = src.value;
+        if (Object.keys(headers).length > 0) {
+          const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
+          await p.setMediaSource(mediaSource);
+        } else {
+          p.url = src.value;
+        }
       } else if (src.type === 'file') {
         // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）
         const f = await fileIo.open(src.value, fileIo.OpenMode.READ_ONLY);

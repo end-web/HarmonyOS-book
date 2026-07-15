@@ -7,6 +7,7 @@
 
 import { BuiltInSourceRegistry } from './BuiltInSourceRegistry';
 
+import { ServerAudioSource } from './sources/ServerAudioSource';
 import { TingYouFM } from './sources/TingYouFM';
 
 let registered = false;
@@ -18,4 +19,5 @@ export function registerBuiltInSources(): void {
   registered = true;
 
   BuiltInSourceRegistry.register(TingYouFM);
+  BuiltInSourceRegistry.register(ServerAudioSource);
 }

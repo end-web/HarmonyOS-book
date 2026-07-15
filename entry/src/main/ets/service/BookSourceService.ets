@@ -1,7 +1,7 @@
 /**
  * 内置音频源门面。
  *
- * 页面和播放服务继续使用稳定接口，具体网络协议全部封装在 TingYouFM 中。
+ * 页面和播放服务继续使用稳定接口，具体网络协议分别封装在各内置音频源中。
  */
 import { BookInfo, BookSource, HomeBlockSection, SearchResult, TocItem } from '../model/BookSource';
 import { ChapterTitleFormatter } from '../utils/ChapterTitleFormatter';
