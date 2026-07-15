@@ -2,7 +2,6 @@ import { common } from '@kit.AbilityKit';
 import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
-import { ReaderBackInterceptor, ReaderEntryDecider, ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
 import { GuidePage } from './GuidePage';
@@ -10,29 +9,9 @@ import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
 import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
-import { BrowserPage } from './BrowserPage';
-import { LoginPage } from './LoginPage';
-import { SourcePage } from './SourcePage';
-import { SourceDebugPage } from './SourceDebugPage';
-import { SourceEditPage } from './SourceEditPage';
 import { DownloadManagerPage } from './DownloadManagerPage';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
-import { webview } from '@kit.ArkWeb';
-import { JavaBridgeImpl } from '../service/rule/JavaBridge';
-import { EVT_OPEN_LOGIN } from './HomePage';
-
-interface BrowserPageParams {
-  url: string;
-  title: string;
-}
-
-interface LoginRouteParams {
-  loginUrl: string;
-  serverHost: string;
-  sourceUrl?: string;
-  title: string;
-}
 
 interface WidgetRouteEvent {
   target: string;
@@ -61,23 +40,6 @@ struct Index {
     // 先 push home 作为栈底,再消费 widget 路由,保证栈不空
     this.navStack.pushPathByName('home', null, false);
 
-    // 注册 JavaBridge 回调（toast / 浏览器 / 刷新发现页）
-    this.registerJavaBridgeCallbacks();
-
-    // 监听聚合源登录事件
-    emitter.on(EVT_OPEN_LOGIN, () => {
-      try {
-        const params: LoginRouteParams = {
-          loginUrl: 'https://v1.gyks.cf/login',
-          serverHost: 'https://v1.gyks.cf',
-          title: '登录聚合源',
-        };
-        this.navStack.pushPathByName('login', params);
-      } catch (e) {
-        console.error(`[Index] login navigation error: ${e}`);
-      }
-    });
-
     this.consumePendingWidgetRoute();
     if (!this.widgetSubscribed) {
       emitter.on(EVT_WIDGET_ROUTE, (data) => {
@@ -95,54 +57,12 @@ struct Index {
   }
 
   aboutToDisappear(): void {
-    // 清理登录事件监听
-    try {
-      emitter.off(EVT_OPEN_LOGIN);
-    } catch (_e) { /* ignore */ }
     if (this.widgetSubscribed) {
       try {
         emitter.off(EVT_WIDGET_ROUTE);
       } catch (_e) { /* ignore */ }
       this.widgetSubscribed = false;
     }
-    // 清理 JavaBridge 回调
-    JavaBridgeImpl.setToastCallback(null);
-    JavaBridgeImpl.setBrowserCallback(null);
-    JavaBridgeImpl.setRefreshExploreCallback(null);
-  }
-
-  private registerJavaBridgeCallbacks(): void {
-    // Toast 回调
-    JavaBridgeImpl.setToastCallback((msg: string, duration: number) => {
-      try {
-        this.getUIContext().getPromptAction().showToast({
-          message: msg,
-          duration: duration,
-        });
-      } catch (e) {
-        console.error(`[Index] toast error: ${e}`);
-      }
-    });
-
-    // 浏览器回调
-    JavaBridgeImpl.setBrowserCallback((url: string, title: string) => {
-      try {
-        const params: BrowserPageParams = { url, title };
-        this.navStack.pushPathByName('browser', params);
-      } catch (e) {
-        console.error(`[Index] browser error: ${e}`);
-      }
-    });
-
-    // 刷新发现页回调
-    JavaBridgeImpl.setRefreshExploreCallback(() => {
-      // 通过 emitter 通知 MainPage 刷新发现页
-      try {
-        emitter.emit({ eventId: 1001 });
-      } catch {
-        // ignore
-      }
-    });
   }
 
   /** EntryAbility.onCreate 写入路由后,Index 首次挂载时消费一次 */
@@ -311,18 +231,6 @@ struct Index {
         }
         return undefined;
       })
-    } else if (name === 'reader') {
-      NavDestination() {
-        ReaderPageWrapper({ navStack: this.navStack, param: param as Object })
-      }
-      .hideTitleBar(true)
-      .backgroundColor('#121212')
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-      .onBackPressed((): boolean => {
-        if (ReaderBackInterceptor.consume()) return true;
-        ReaderEntryDecider.markLeaving();
-        return false;
-      })
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })
@@ -379,47 +287,6 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'browser') {
-      NavDestination() {
-        BrowserPage({ navStack: this.navStack, url: (param as BrowserPageParams)?.url || '', title: (param as BrowserPageParams)?.title || '' })
-      }
-      .hideTitleBar(true)
-      .backgroundColor('#FFFFFF')
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'login') {
-      NavDestination() {
-        LoginPage({
-          navStack: this.navStack,
-          loginUrl: ((param as LoginRouteParams)?.loginUrl) || 'https://v1.gyks.cf/login',
-          serverHost: ((param as LoginRouteParams)?.serverHost) || 'https://v1.gyks.cf',
-          sourceUrl: ((param as LoginRouteParams)?.sourceUrl) || '',
-          title: ((param as LoginRouteParams)?.title) || '登录聚合源',
-        })
-      }
-      .hideTitleBar(true)
-      .backgroundColor('#FFFFFF')
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'sourceDebug') {
-      NavDestination() {
-        SourceDebugPage({ navStack: this.navStack })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'sourceManage') {
-      NavDestination() {
-        SourcePage({ navStack: this.navStack, showBackButton: true })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    } else if (name === 'sourceEdit') {
-      NavDestination() {
-        SourceEditPage({ navStack: this.navStack, sourceUrl: (param as Object as string) || '' })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     }
   }
 
@@ -471,40 +338,6 @@ struct PlayerPageWrapper {
 
   build() {
     PlayerPage({
-      navStack: this.navStack,
-      bookId: this.resolveBookId(),
-      resumeChapterId: this.resolveChapterId(),
-      resumeProgressMs: this.resolveProgressMs()
-    })
-  }
-}
-
-@ComponentV2
-struct ReaderPageWrapper {
-  @Param navStack: NavPathStack = new NavPathStack();
-  @Param param: Object = '';
-
-  private resolveBookId(): string {
-    if (typeof this.param === 'string') return this.param as string;
-    const r = this.param as Record<string, Object>;
-    return (r['bookId'] as string) ?? '';
-  }
-
-  private resolveChapterId(): string {
-    if (typeof this.param === 'string') return '';
-    const r = this.param as Record<string, Object>;
-    return (r['chapterId'] as string) ?? '';
-  }
-
-  private resolveProgressMs(): number {
-    if (typeof this.param === 'string') return 0;
-    const r = this.param as Record<string, Object>;
-    const v = r['progressMs'];
-    return typeof v === 'number' ? v : 0;
-  }
-
-  build() {
-    ReaderPage({
       navStack: this.navStack,
       bookId: this.resolveBookId(),
       resumeChapterId: this.resolveChapterId(),

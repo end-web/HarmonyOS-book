@@ -8,13 +8,6 @@ import { Book, Chapter } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { BookSourceService } from './BookSourceService';
 import { SourceDataService } from './SourceDataService';
-import { PreferenceService } from './PreferenceService';
-
-interface ClearListenedResult {
-  deletedFiles: number;
-  freedBytes: number;
-  keptFiles: number;
-}
 
 const DOMAIN = 0x0001;
 const TAG = 'ChapterCache';
@@ -34,12 +27,6 @@ interface CacheEntry {
   timestamp: number;
 }
 
-interface TextCacheEntry {
-  content: string;
-  pageUrl: string;
-  timestamp: number;
-}
-
 interface FileCacheEntry {
   /** 沙箱内的绝对路径 */
   filePath: string;
@@ -52,7 +39,6 @@ interface FileCacheEntry {
 export class ChapterCacheService {
   private static instance: ChapterCacheService | null = null;
   private audioCache: Map<string, CacheEntry> = new Map();
-  private textCache: Map<string, TextCacheEntry> = new Map();
   /** 章节 → 已下载到本地的音频文件 */
   private fileCache: Map<string, FileCacheEntry> = new Map();
   /** 章节 → 解析出的真实时长（秒）。来自缓存音频文件的元数据 */
@@ -82,10 +68,10 @@ export class ChapterCacheService {
   }
 
   isChapterCached(chapterId: string): boolean {
-    return this.audioCache.has(chapterId) || this.fileCache.has(chapterId) || this.textCache.has(chapterId);
+    return this.audioCache.has(chapterId) || this.fileCache.has(chapterId);
   }
 
-  isAudioChapterCached(book: Book, chapter: Chapter): boolean {
+  isAudioChapterCached(_book: Book, chapter: Chapter): boolean {
     if (chapter.source.type === 'file' || chapter.source.type === 'rawfile') return true;
     return this.audioCache.has(chapter.id) || this.fileCache.has(chapter.id);
   }
@@ -97,7 +83,6 @@ export class ChapterCacheService {
 
   clearAllCache(): void {
     this.audioCache.clear();
-    this.textCache.clear();
     this.durationCache.clear();
     this.preloadFailureAt.clear();
     for (const entry of this.fileCache.values()) {
@@ -107,8 +92,7 @@ export class ChapterCacheService {
   }
 
   /**
-   * 物理清除磁盘上的章节缓存:电子书 reader_*.txt 桥接文件(filesDir)+
-   * 有声书 chap_*.mp3 与图片缓存(cacheDir)。用于"清空书架"彻底释放空间。
+   * 物理清除磁盘上的章节音频与图片缓存，并顺带清理旧版本遗留的 reader 文件。
    */
   async wipeDiskCaches(): Promise<void> {
     this.clearAllCache();
@@ -173,19 +157,6 @@ export class ChapterCacheService {
     return this.restoreFileCacheEntry(chapterId, safePageUrl, legacyPath);
   }
 
-  getTextContent(chapterId: string, pageUrl?: string): string | null {
-    const entry = this.textCache.get(chapterId);
-    if (!entry) return null;
-    if (pageUrl && entry.pageUrl !== pageUrl) return null;
-    return entry.content;
-  }
-
-  putTextContent(chapterId: string, pageUrl: string, content: string): void {
-    if (!content) return;
-    this.evictIfNeeded(this.textCache);
-    this.textCache.set(chapterId, { content, pageUrl, timestamp: Date.now() });
-  }
-
   preloadAudioChapters(book: Book, currentIndex: number): void {
     if (!book.sourceUrl) return;
     const start = Math.max(0, currentIndex - PRE_DOWNLOAD_BACKWARD);
@@ -210,27 +181,10 @@ export class ChapterCacheService {
     }
   }
 
-  preloadTextChapters(book: Book, currentIndex: number): void {
-    if (!book.sourceUrl) return;
-    const start = Math.max(0, currentIndex - PRE_DOWNLOAD_BACKWARD);
-    const end = Math.min(book.chapters.length - 1, currentIndex + PRE_DOWNLOAD_FORWARD);
-    for (let i = start; i <= end; i++) {
-      if (i === currentIndex) continue;
-      const ch = book.chapters[i];
-      if (ch.source.type === 'file') continue;
-      if (this.textCache.has(ch.id) || this.pendingTasks.has(`text_${ch.id}`)) continue;
-      const next = i + 1 < book.chapters.length ? book.chapters[i + 1] : undefined;
-      this.enqueue(() => this.resolveText(book, ch, next));
-    }
-  }
-
   clearBook(bookId: string): void {
     const prefix = bookId + '-c';
     for (const key of this.audioCache.keys()) {
       if (key.startsWith(prefix)) this.audioCache.delete(key);
-    }
-    for (const key of this.textCache.keys()) {
-      if (key.startsWith(prefix)) this.textCache.delete(key);
     }
     for (const key of this.durationCache.keys()) {
       if (key.startsWith(prefix)) this.durationCache.delete(key);
@@ -250,7 +204,6 @@ export class ChapterCacheService {
   /** 清除某个章节的所有缓存（临时签名 URL 失效时用） */
   clearChapter(chapterId: string): void {
     this.audioCache.delete(chapterId);
-    this.textCache.delete(chapterId);
     this.durationCache.delete(chapterId);
     this.preloadFailureAt.delete(chapterId);
     const entry = this.fileCache.get(chapterId);
@@ -409,24 +362,6 @@ export class ChapterCacheService {
     this.preloadFailureAt.set(chapterId, Date.now());
   }
 
-  private async resolveText(book: Book, chapter: Chapter, nextChapter?: Chapter): Promise<void> {
-    const taskKey = `text_${chapter.id}`;
-    this.pendingTasks.add(taskKey);
-    try {
-      const source = await this.findSource(book.sourceUrl);
-      if (!source) return;
-      const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const nextUrl = nextChapter ? (nextChapter.originSourceValue || nextChapter.source.value) : undefined;
-      const text = await BookSourceService.getTextContent(source, pageUrl, nextUrl);
-      if (text) {
-        this.putTextContent(chapter.id, pageUrl, text);
-      }
-    } catch (_e) {
-    } finally {
-      this.pendingTasks.delete(taskKey);
-    }
-  }
-
   private async findSource(sourceUrl: string): Promise<BookSource | null> {
     const sources = await SourceDataService.getSources();
     return sources.find((s) => s.bookSourceUrl === sourceUrl) || null;
@@ -436,12 +371,6 @@ export class ChapterCacheService {
     if (this.audioCache.size < MAX_URL_CACHE_SIZE) return;
     const first = this.audioCache.keys().next();
     if (!first.done) this.audioCache.delete(first.value);
-  }
-
-  private evictIfNeeded<T>(cache: Map<string, T>): void {
-    if (cache.size < MAX_URL_CACHE_SIZE) return;
-    const first = cache.keys().next();
-    if (!first.done) cache.delete(first.value);
   }
 
   /** 文件缓存满了，从最旧的开始删 */

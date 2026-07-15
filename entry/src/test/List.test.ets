@@ -1,7 +1,13 @@
 import localUnitTest from './LocalUnit.test';
 import downloadPolicyTest from './DownloadPolicy.test';
+import asyncSingleFlightTest from './AsyncSingleFlight.test';
+import builtInAudioCapabilityTest from './BuiltInAudioCapability.test';
+import tingYouRequestPolicyTest from './TingYouRequestPolicy.test';
 
 export default function testsuite() {
   localUnitTest();
   downloadPolicyTest();
+  asyncSingleFlightTest();
+  builtInAudioCapabilityTest();
+  tingYouRequestPolicyTest();
 }

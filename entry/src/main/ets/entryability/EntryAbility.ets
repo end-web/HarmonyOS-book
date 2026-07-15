@@ -13,12 +13,6 @@ import { DownloadService } from '../service/DownloadService';
 import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
-import { SourceVariableStore } from '../service/SourceVariableStore';
-import { resetJSExecutor } from '../service/js/JSExecutor';
-import { resetWebViewJSEngine } from '../service/js/WebViewJSEngine';
-import { getCacheService } from '../service/CacheService';
-import { JavaBridgeImpl } from '../service/rule/JavaBridge';
-import { deviceInfo } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -56,7 +50,7 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     WidgetUpdater.setContext(this.context);
-    // 注册内置源（与用户订阅源同列出现）
+    // 注册唯一在线内容源：听友 FM。
     registerBuiltInSources();
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
@@ -121,20 +115,6 @@ export default class EntryAbility extends UIAbility {
     }
 
     this.restoreColorMode();
-    // 初始化源变量存储和缓存服务
-    try {
-      await SourceVariableStore.init(this.context);
-      const cacheService = getCacheService();
-      await cacheService.init(this.context);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'SourceVariableStore/CacheService init failed: %{public}s', JSON.stringify(e));
-    }
-    // 设置设备标识（用于 java.androidId()）
-    try {
-      JavaBridgeImpl.setDeviceId(deviceInfo.ODID || '');
-    } catch {
-      // ignore
-    }
     const preloadCount = await PreferenceService.getPreloadChapters();
     ChapterCacheService.getInstance().setPreloadCount(preloadCount);
     // 提前把 PlayerState 还原到全局 AppStorage,这样卡片 call 进来时
@@ -182,11 +162,13 @@ export default class EntryAbility extends UIAbility {
    */
   private async bootstrapAudioService(): Promise<void> {
     const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
-    AudioService.getInstance().bind(state, this.context);
+    const audioService = AudioService.getInstance();
+    audioService.bind(state, this.context);
 
     try {
       // 已经有书就不覆盖(用户已在 App 内播放过)
       if (state.currentBook && state.currentChapter) {
+        audioService.prewarmBookSource(state.currentBook);
         return;
       }
 
@@ -219,6 +201,7 @@ export default class EntryAbility extends UIAbility {
         await PreferenceService.applySkipConfig(book);
         state.currentBook = book;
         state.currentChapter = chapter;
+        audioService.prewarmBookSource(book);
         state.progressMs = last.progressMs;
         state.durationMs = last.durationMs ?? 0;
         const progress = await PreferenceService.getProgress(last.bookId);
@@ -236,7 +219,7 @@ export default class EntryAbility extends UIAbility {
         e?.message ?? JSON.stringify(err));
     } finally {
       // 不管 lastPlayed 有没有恢复都要 markReady，否则 callee 会一直等
-      AudioService.getInstance().markReady();
+      audioService.markReady();
     }
   }
 
@@ -330,9 +313,6 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'AudioService release failed: %{public}s',
         (err as Error)?.message ?? JSON.stringify(err));
     }
-    // 重置 JS 引擎单例，避免 Ability 重建后 proxyAvailable/pendingTasks 等状态残留
-    try { resetJSExecutor(); } catch (_e) { /* ignore */ }
-    try { resetWebViewJSEngine(); } catch (_e) { /* ignore */ }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

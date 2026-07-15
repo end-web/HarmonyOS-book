@@ -17,7 +17,6 @@ export interface BookUsageInput {
 export interface BookUsageDay {
   day: string;
   listenSeconds: number;
-  readSeconds: number;
 }
 
 export interface BookUsageStats {
@@ -26,7 +25,6 @@ export interface BookUsageStats {
   author: string;
   cover: string;
   listenSeconds: number;
-  readSeconds: number;
   updatedAt: number;
   days: BookUsageDay[];
 }
@@ -34,13 +32,11 @@ export interface BookUsageStats {
 export interface DailyUsageStats {
   day: string;
   listenSeconds: number;
-  readSeconds: number;
 }
 
 export interface UsageStatsBucket {
   label: string;
   listenSeconds: number;
-  readSeconds: number;
 }
 
 export interface UsageStatsSummary {
@@ -88,14 +84,10 @@ export class StatsService {
   }
 
   static async addListenSeconds(seconds: number, book: BookUsageInput): Promise<void> {
-    await StatsService.addSeconds(seconds, true, book);
+    await StatsService.addSeconds(seconds, book);
   }
 
-  static async addReadSeconds(seconds: number, book: BookUsageInput): Promise<void> {
-    await StatsService.addSeconds(seconds, false, book);
-  }
-
-  private static async addSeconds(seconds: number, isListen: boolean, book: BookUsageInput): Promise<void> {
+  private static async addSeconds(seconds: number, book: BookUsageInput): Promise<void> {
     const delta = Math.floor(seconds);
     if (delta <= 0 || !book.bookId) return;
     const s = await StatsService.ensureStore();
@@ -109,7 +101,6 @@ export class StatsService {
         author: book.author || '',
         cover: book.cover || '',
         listenSeconds: 0,
-        readSeconds: 0,
         updatedAt: Date.now(),
         days: []
       };
@@ -122,16 +113,11 @@ export class StatsService {
     rec.updatedAt = Date.now();
     let dayItem = rec.days.find((item) => item.day === day);
     if (!dayItem) {
-      dayItem = { day, listenSeconds: 0, readSeconds: 0 };
+      dayItem = { day, listenSeconds: 0 };
       rec.days.push(dayItem);
     }
-    if (isListen) {
-      rec.listenSeconds += delta;
-      dayItem.listenSeconds += delta;
-    } else {
-      rec.readSeconds += delta;
-      dayItem.readSeconds += delta;
-    }
+    rec.listenSeconds += delta;
+    dayItem.listenSeconds += delta;
     rec.days = StatsService.trimDays(rec.days);
     records.sort((a, b) => b.updatedAt - a.updatedAt);
     await s.put(KEY_BOOK_USAGE, JSON.stringify(records));
@@ -155,7 +141,6 @@ export class StatsService {
             author: item.author || '',
             cover: item.cover || '',
             listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0)),
-            readSeconds: Math.max(0, Math.floor(item.readSeconds || 0)),
             updatedAt: item.updatedAt || 0,
             days: StatsService.trimDays(days)
           };
@@ -198,8 +183,7 @@ export class StatsService {
       const item = map.get(day);
       out.push({
         label: count <= 7 ? StatsService.weekdayLabel(date) : `${date.getMonth() + 1}/${date.getDate()}`,
-        listenSeconds: item?.listenSeconds ?? 0,
-        readSeconds: item?.readSeconds ?? 0
+        listenSeconds: item?.listenSeconds ?? 0
       });
     }
     return out;
@@ -215,7 +199,7 @@ export class StatsService {
       const date = StatsService.addDays(new Date(), -i);
       const day = StatsService.formatDay(date);
       const item = map.get(day);
-      out.push({ day, seconds: (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0) });
+      out.push({ day, seconds: item?.listenSeconds ?? 0 });
     }
     return out;
   }
@@ -228,11 +212,11 @@ export class StatsService {
     for (let i = 0; i < 730; i++) {
       const day = StatsService.formatDay(StatsService.addDays(new Date(), -i));
       const item = map.get(day);
-      const seconds = (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0);
+      const seconds = item?.listenSeconds ?? 0;
       if (seconds > 0) {
         streak++;
       } else if (i === 0) {
-        // 今天还没听读，从昨天继续算
+        // 今天还没收听，从昨天继续算
         continue;
       } else {
         break;
@@ -245,14 +229,13 @@ export class StatsService {
     const stats = await StatsService.getAllDailyStats();
     const out: UsageStatsBucket[] = [];
     for (let month = 0; month < 12; month++) {
-      out.push({ label: `${month + 1}月`, listenSeconds: 0, readSeconds: 0 });
+      out.push({ label: `${month + 1}月`, listenSeconds: 0 });
     }
     for (const item of stats) {
       const date = StatsService.parseDay(item.day);
       if (!date || date.getFullYear() !== year) continue;
       const idx = date.getMonth();
       out[idx].listenSeconds += item.listenSeconds;
-      out[idx].readSeconds += item.readSeconds;
     }
     return out;
   }
@@ -296,7 +279,7 @@ export class StatsService {
     let monthSeconds = 0;
     let totalSeconds = 0;
     for (const item of map.values()) {
-      const secs = item.listenSeconds + item.readSeconds;
+      const secs = item.listenSeconds;
       totalSeconds += secs;
       if (item.day === today) todaySeconds += secs;
       if (item.day >= weekStart) weekSeconds += secs;
@@ -310,7 +293,7 @@ export class StatsService {
     for (let i = 0; i < 730; i++) {
       const day = StatsService.formatDay(StatsService.addDays(new Date(), -i));
       const item = map.get(day);
-      const seconds = (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0);
+      const seconds = item?.listenSeconds ?? 0;
       if (seconds > 0) {
         streak++;
       } else if (i === 0) {
@@ -329,7 +312,7 @@ export class StatsService {
       const date = StatsService.addDays(new Date(), -i);
       const day = StatsService.formatDay(date);
       const item = map.get(day);
-      out.push({ day, seconds: (item?.listenSeconds ?? 0) + (item?.readSeconds ?? 0) });
+      out.push({ day, seconds: item?.listenSeconds ?? 0 });
     }
     return out;
   }
@@ -340,11 +323,10 @@ export class StatsService {
       for (const day of record.days) {
         let item = map.get(day.day);
         if (!item) {
-          item = { day: day.day, listenSeconds: 0, readSeconds: 0 };
+          item = { day: day.day, listenSeconds: 0 };
           map.set(day.day, item);
         }
         item.listenSeconds += Math.max(0, Math.floor(day.listenSeconds || 0));
-        item.readSeconds += Math.max(0, Math.floor(day.readSeconds || 0));
       }
     }
     return Array.from(map.values()).sort((a, b) => a.day.localeCompare(b.day));
@@ -356,8 +338,7 @@ export class StatsService {
       .filter((item) => item && item.day >= start)
       .map((item): BookUsageDay => ({
         day: item.day,
-        listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0)),
-        readSeconds: Math.max(0, Math.floor(item.readSeconds || 0))
+        listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0))
       }))
       .sort((a, b) => a.day.localeCompare(b.day));
   }
@@ -371,7 +352,7 @@ export class StatsService {
   }
 
   private static sum(stats: DailyUsageStats[]): number {
-    return stats.reduce((acc, item) => acc + item.listenSeconds + item.readSeconds, 0);
+    return stats.reduce((acc, item) => acc + item.listenSeconds, 0);
   }
 
   private static addDays(date: Date, days: number): Date {

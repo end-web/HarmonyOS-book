@@ -1,29 +1,17 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
-import { AppStorageV2 } from '@kit.ArkUI';
-import { common } from '@kit.AbilityKit';
 import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
-import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
-import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
+import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
-import { PreferenceService } from '../service/PreferenceService';
-import { DataService } from '../service/DataService';
-import { SimpleSemaphore } from '../service/ConcurrentRateLimiter';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
-import { ResumeCard, ResumeCardMode } from '../components/ResumeCard';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
-import { EVT_SOURCES_CHANGED } from './SourcePage';
-import { getCookieManager } from '../service/rule/CookieManager';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
-
-/** 跳转聚合源登录页事件 */
-export const EVT_OPEN_LOGIN = 'app.login.open';
 
 /** 双击首页 Tab 触发刷新首页数据 */
 export const EVT_REFRESH_HOME = 'app.home.refresh';
@@ -35,13 +23,11 @@ interface HomeCategory {
   url: string;
 }
 
-interface SearchJob {
-  source: BookSource;
-  contentType: string;
-}
+const LATEST_CATEGORY_URL = 'rank/recommend_novel/latest/p1';
 
-/** 完整的16个分类(对接听友FM filters 的 type，url=types/<id>/comprehensive/p1) */
+/** 最新榜单 + 完整的16个分类。 */
 const HOME_CATEGORIES: HomeCategory[] = [
+  { name: '最新', url: LATEST_CATEGORY_URL },
   { name: '玄幻奇幻', url: 'types/46/comprehensive/p1' },
   { name: '武侠小说', url: 'types/11/comprehensive/p1' },
   { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' },
@@ -60,14 +46,17 @@ const HOME_CATEGORIES: HomeCategory[] = [
   { name: '单田芳', url: 'types/1/comprehensive/p1' },
 ];
 
-/** 第一行固定分类:玄幻奇幻、武侠小说、恐怖惊悚(配合"推荐"凑4个) */
+/** 第一行固定入口：最新、玄幻奇幻、武侠小说（配合“推荐”凑4个）。 */
 const FIXED_CATEGORIES: HomeCategory[] = [
+  { name: '最新', url: LATEST_CATEGORY_URL },
   { name: '玄幻奇幻', url: 'types/46/comprehensive/p1' },
   { name: '武侠小说', url: 'types/11/comprehensive/p1' },
-  { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' },
 ];
 
-/** 剩余13个分类池(用于随机抽取第二行,已排除第一行固定的3个) */
+/** 第二行固定保留恐怖惊悚，再从剩余13类随机抽取3个。 */
+const SECOND_ROW_FIXED_CATEGORY: HomeCategory =
+  { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' };
+
 const RANDOM_POOL_CATEGORIES: HomeCategory[] = [
   { name: '言情通俗', url: 'types/19/comprehensive/p1' },
   { name: '历史军事', url: 'types/15/comprehensive/p1' },
@@ -85,8 +74,8 @@ const RANDOM_POOL_CATEGORIES: HomeCategory[] = [
 ];
 
 /** 听友FM内置源标识(分类入口固定走该源) */
-const TIANXIA_SOURCE_URL = 'builtin://eprendre/tingyou_fm';
-const TIANXIA_SOURCE_NAME = '听友FM';
+const TINGYOU_SOURCE_URL = 'builtin://eprendre/tingyou_fm';
+const TINGYOU_SOURCE_NAME = '听友FM';
 
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
@@ -96,27 +85,14 @@ const HEADER_TOOLBAR_HEIGHT: number = 40;
 @ComponentV2
 export struct HomePage {
   @Local audioBooks: Book[] = [];
-  @Local textBooks: Book[] = [];
   @Local keyword: string = '';
   @Local searching: boolean = false;
-  @Local searchingSource: string = '';
   @Local hasSearched: boolean = false;
-  @Local sourceCount: number = 0;
   @Local viewMode: number = 0; // 0=grid, 1=list (默认表格模式)
-  @Local searchType: number = 0; // 0=有声书, 1=电子书
-  @Local pendingCount: number = 0;
   @Local audioCount: number = 0;
-  @Local textCount: number = 0;
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local loadingHome: boolean = false;
-  /** 续听卡状态（由 loadResumeState 维护） */
-  @Local resumeMode: ResumeCardMode = ResumeCardMode.Empty;
-  @Local resumeBook: Book | null = null;
-  @Local resumeChapterTitle: string = '';
-  @Local resumeProgress: number = 0;
-  /** 全局播放状态（监听 currentBook 变化触发续听卡刷新） */
-  @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
-  /** 当前选中的分类索引(-1=推荐,0-7=8个分类) */
+  /** 当前选中的入口索引（-1=推荐，其他值对应 HOME_CATEGORIES）。 */
   @Local selectedCategoryIndex: number = -1;
   /** 分类书单数据 */
   @Local categoryBooks: Book[] = [];
@@ -137,19 +113,10 @@ export struct HomePage {
 
   private contentScroller: Scroller = new Scroller();
   private audioDataSource: BookDataSource = new BookDataSource();
-  private textDataSource: BookDataSource = new BookDataSource();
   private categoryDS: BookDataSource = new BookDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private searchGen: number = 0;
   private homeGen: number = 0;
-  private sourcesChangedHandler: () => void = () => {
-    this.loadSourceCount();
-    if (this.hasSearched) {
-      this.doSearch();
-      return;
-    }
-    this.loadHomeBlocks();
-  };
   private refreshHandler: () => void = () => this.refreshHomeData();
 
   aboutToAppear(): void {
@@ -157,26 +124,21 @@ export struct HomePage {
     // 固定搜索栏高度初始估值(状态栏 + 搜索框约 56vp),实际以 onAreaChange 实测为准
     this.searchBarHeight = WindowUtils.getStatusBarHeightVp() + 56;
     this.shuffleRandomCategories();
-    this.loadSourceCount();
     this.loadHomeBlocks();
-    emitter.on(EVT_SOURCES_CHANGED, this.sourcesChangedHandler);
     emitter.on(EVT_REFRESH_HOME, this.refreshHandler);
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.contentScroller);
-    this.loadResumeState();
   }
 
   aboutToDisappear(): void {
-    emitter.off(EVT_SOURCES_CHANGED, this.sourcesChangedHandler);
     emitter.off(EVT_REFRESH_HOME, this.refreshHandler);
   }
 
-  /** 随机抽取第二行分类(从剩余池中随机选4个) */
+  /** 第二行保留恐怖惊悚，并从剩余池中随机选3个。 */
   private shuffleRandomCategories(): void {
     const pool = [...RANDOM_POOL_CATEGORIES];
-    const selected: HomeCategory[] = [];
-    // 随机抽取4个
-    for (let i = 0; i < 4 && pool.length > 0; i++) {
+    const selected: HomeCategory[] = [SECOND_ROW_FIXED_CATEGORY];
+    for (let i = 0; i < 3 && pool.length > 0; i++) {
       const randomIndex = Math.floor(Math.random() * pool.length);
       selected.push(pool[randomIndex]);
       pool.splice(randomIndex, 1);
@@ -199,19 +161,6 @@ export struct HomePage {
     }
   }
 
-  private async loadSourceCount(): Promise<void> {
-    try {
-      const sources = await SourceDataService.getSources();
-      const enabledSources = sources.filter(s => s.enabled !== false &&
-        (this.isAudioSearchSource(s) || this.isTextSearchSource(s)));
-      // 强制触发响应式更新:先置 -1 再赋新值,确保 ArkUI V2 能检测到变化
-      this.sourceCount = -1;
-      this.sourceCount = enabledSources.length;
-    } catch (_e) {
-      this.sourceCount = 0;
-    }
-  }
-
   private async loadHomeBlocks(): Promise<void> {
     hilog.info(DOMAIN, TAG, 'loadHomeBlocks START, gen=%{public}d', this.homeGen);
     this.homeGen++;
@@ -222,7 +171,7 @@ export struct HomePage {
     hilog.info(DOMAIN, TAG, 'loadHomeBlocks: cleared data, loadingHome=%{public}s', String(this.loadingHome));
     try {
       // 只加载内置书源的首页推荐,不加载导入的书源
-      const plugin = BuiltInSourceRegistry.getByUrl(TIANXIA_SOURCE_URL);
+      const plugin = BuiltInSourceRegistry.getByUrl(TINGYOU_SOURCE_URL);
       if (!plugin) {
         hilog.warn(DOMAIN, TAG, 'loadHomeBlocks: Built-in source not available');
         this.loadingHome = false;
@@ -249,7 +198,7 @@ export struct HomePage {
             kind: book.status || '',
             lastChapter: '',
             sourceName: plugin.name,
-            sourceUrl: TIANXIA_SOURCE_URL
+            sourceUrl: TINGYOU_SOURCE_URL
           });
         }
         sections.push({
@@ -258,7 +207,7 @@ export struct HomePage {
           moreUrl: b.moreUrl,
           layout: b.layout,
           sourceName: plugin.name,
-          sourceUrl: TIANXIA_SOURCE_URL
+          sourceUrl: TINGYOU_SOURCE_URL
         });
       }
 
@@ -267,10 +216,6 @@ export struct HomePage {
       this.loadingHome = false;
       hilog.info(DOMAIN, TAG, 'loadHomeBlocks: SUCCESS, sections=%{public}d, loadingHome=false', sections.length);
 
-      // 首板块到货 → 若续听卡仍是 Empty,触发 Suggest 兜底
-      if (this.resumeMode === ResumeCardMode.Empty) {
-        this.loadResumeState();
-      }
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'loadHomeBlocks failed: %{public}s', String(e));
     } finally {
@@ -283,18 +228,13 @@ export struct HomePage {
   private clearSearch(): void {
     this.searchGen++;
     this.searching = false;
-    this.searchingSource = '';
     this.hasSearched = false;
     this.audioBooks = [];
-    this.textBooks = [];
     this.audioCount = 0;
-    this.textCount = 0;
     this.audioDataSource.clear();
-    this.textDataSource.clear();
-    this.pendingCount = 0;
   }
 
-  /** 切换分类(-1=推荐,0-7=具体分类) */
+  /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
   private async switchCategory(index: number): Promise<void> {
     if (this.selectedCategoryIndex === index) return; // 重复点击不处理
 
@@ -319,7 +259,7 @@ export struct HomePage {
     this.categoryNextUrl = '';
 
     try {
-      const plugin = BuiltInSourceRegistry.getByUrl(TIANXIA_SOURCE_URL);
+      const plugin = BuiltInSourceRegistry.getByUrl(TINGYOU_SOURCE_URL);
       if (!plugin) {
         this.categoryLoading = false;
         this.categoryError = '听友FM源不可用';
@@ -339,7 +279,7 @@ export struct HomePage {
           const sr: SearchResult = {
             name: b.title, author: b.author, coverUrl: b.coverUrl,
             bookUrl: b.bookUrl, intro: b.intro, kind: b.status, lastChapter: '',
-            sourceName: plugin.name, sourceUrl: TIANXIA_SOURCE_URL,
+            sourceName: plugin.name, sourceUrl: TINGYOU_SOURCE_URL,
           };
           books.push(this.homeBookFromResult(sr));
         }
@@ -413,143 +353,56 @@ export struct HomePage {
     return book;
   }
 
-  private isTextSearchSource(source: BookSource): boolean {
-    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
-    if (plugin) {
-      return (plugin.sourceType ?? 1) === 0;
-    }
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) return false;
-    const isAggregateAudio = source.bookSourceType === 0 &&
-      !!source.jsLib && source.jsLib.includes('getCloudSettings');
-    return source.bookSourceType === 0 && !isAggregateAudio;
-  }
-
-  private isAudioSearchSource(source: BookSource): boolean {
-    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
-    if (plugin) {
-      return (plugin.sourceType ?? 1) === 1;
-    }
-    const isAggregateAudio = source.bookSourceType === 0 &&
-      !!source.jsLib && source.jsLib.includes('getCloudSettings');
-    return source.bookSourceType === 1 || isAggregateAudio;
-  }
-
-  private activeSearchCount(): number {
-    return this.searchType === 0 ? this.audioCount : this.textCount;
-  }
-
-  private totalSearchCount(): number {
-    return this.audioCount + this.textCount;
-  }
-
-  private activeSearchDataSource(): BookDataSource {
-    return this.searchType === 0 ? this.audioDataSource : this.textDataSource;
-  }
-
   private async doSearch(): Promise<void> {
-    if (!this.keyword.trim()) {
+    const keyword = this.keyword.trim();
+    if (!keyword) {
       this.clearSearch();
       return;
     }
     this.searchGen++;
     const gen = this.searchGen;
     this.searching = true;
-    this.searchingSource = '';
     this.hasSearched = true;
     this.audioBooks = [];
-    this.textBooks = [];
     this.audioCount = 0;
-    this.textCount = 0;
     this.audioDataSource.clear();
-    this.textDataSource.clear();
     BookCard.resetAnimations();
     try {
-      const sources = await SourceDataService.getSources();
-      const audioSources = sources.filter(s => s.enabled !== false && this.isAudioSearchSource(s));
-      const textSources = sources.filter(s => s.enabled !== false && this.isTextSearchSource(s));
-      const searchJobs: SearchJob[] = [];
-      for (const s of audioSources) searchJobs.push({ source: s, contentType: 'audio' });
-      for (const s of textSources) searchJobs.push({ source: s, contentType: 'text' });
-      this.pendingCount = searchJobs.length;
-
-      if (this.pendingCount === 0) {
-        this.searching = false;
-        return;
-      }
-
-      // 限制并发数：书源数量多时避免一次性发起过多网络请求打满连接池
-      const MAX_SEARCH_CONCURRENCY = 6;
-      const semaphore = new SimpleSemaphore(MAX_SEARCH_CONCURRENCY);
-
-      for (const job of searchJobs) {
-        const source = job.source;
-        const contentType = job.contentType;
-        semaphore.acquire()
-          .then(() => {
-            if (gen !== this.searchGen) return [] as SearchResult[];
-            return BookSourceService.searchBooks(source, this.keyword.trim());
-          })
-          .then((r: SearchResult[]) => {
-            if (gen !== this.searchGen) return;
-            this.searchingSource = source.bookSourceName;
-            if (r && r.length > 0) {
-              const books = r.map((item) => this.searchResultToBook(item, contentType === 'text' ? 'text' : 'audio'));
-              if (contentType === 'text') {
-                this.textBooks = this.textBooks.concat(books);
-                this.textCount = this.textBooks.length;
-                this.textDataSource.appendBooks(books);
-              } else {
-                this.audioBooks = this.audioBooks.concat(books);
-                this.audioCount = this.audioBooks.length;
-                this.audioDataSource.appendBooks(books);
-              }
-            }
-          })
-          .catch((e: Object) => {
-            if (gen !== this.searchGen) return;
-            this.searchingSource = source.bookSourceName;
-            const msg = e instanceof Error ? e.message : String(e);
-            console.error(`[Search] ${source.bookSourceName} error: ${msg}`);
-          })
-          .finally(() => {
-            semaphore.release();
-            if (gen !== this.searchGen) return;
-            this.pendingCount--;
-            if (this.pendingCount <= 0) {
-              this.searching = false;
-              this.searchingSource = '';
-              if (this.audioCount === 0 && this.textCount > 0) {
-                this.searchType = 1;
-              }
-            }
-          });
-      }
+      const sources = await SourceDataService.getEnabledSources();
+      const source = sources.length > 0 ? sources[0] : undefined;
+      if (!source || gen !== this.searchGen) return;
+      const results = await BookSourceService.searchBooks(source, keyword);
+      if (gen !== this.searchGen) return;
+      const books = results.map((item: SearchResult): Book => this.searchResultToBook(item));
+      this.audioBooks = books;
+      this.audioCount = books.length;
+      this.audioDataSource.appendBooks(books);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'search failed: %{public}s', String(e));
       this.audioBooks = [];
-      this.textBooks = [];
-      this.searching = false;
-      this.searchingSource = '';
+      this.audioCount = 0;
+      this.audioDataSource.clear();
+    } finally {
+      if (gen === this.searchGen) this.searching = false;
     }
   }
 
-  private searchResultToBook(r: SearchResult, contentType: string): Book {
+  private searchResultToBook(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
     const idHash = this.hashSearchKey(r.sourceUrl || '', r.bookUrl || r.name);
-    const isText = contentType === 'text';
     const book: Book = {
-      id: `search_${isText ? 'text' : 'audio'}_${idHash}`,
+      id: `search_audio_${idHash}`,
       title: r.name,
       author: r.author || '未知',
-      narrator: isText ? '' : r.sourceName,
+      narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: isText ? 'text' : 'audio',
-      contentType: isText ? 'text' : 'audio',
+      category: 'audio',
+      contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,
       chapterCount: 0,
       rating: 0,
-      tags: isText ? [r.sourceName, '电子书'] : [r.sourceName],
+      tags: [r.sourceName],
       chapters: emptyChapters,
       bookUrl: r.bookUrl,
       sourceUrl: r.sourceUrl,
@@ -594,14 +447,9 @@ export struct HomePage {
 
       if (this.hasSearched) {
         Row() {
-          Row({ space: 6 }) {
-            this.searchTypeTab('有声书', 0)
-            this.searchTypeTab('电子书', 1)
-          }
-          .padding(1)
-          .borderRadius(18)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-          .backgroundColor('rgba(255,255,255,0.3)')
+          Text(`有声书 ${this.audioCount}`)
+            .fontSize(13)
+            .fontColor($r('sys.color.font_secondary'))
           if (this.searching) {
             LoadingProgress()
               .width(18).height(18)
@@ -674,11 +522,11 @@ export struct HomePage {
         }
 
         // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
-        if (this.hasSearched && this.activeSearchCount() === 0 && this.searching) {
+        if (this.hasSearched && this.audioCount === 0 && this.searching) {
           ListItem() {
             this.buildSearchingState()
           }
-        } else if (this.hasSearched && this.activeSearchCount() === 0 && !this.searching) {
+        } else if (this.hasSearched && this.audioCount === 0 && !this.searching) {
           ListItem() {
             this.buildNoResultState()
           }
@@ -686,23 +534,13 @@ export struct HomePage {
           // 搜索结果：直接渲染为 ListItem
           if (this.viewMode === 0) {
             // Grid 模式：用单个 ListItem 包裹 Grid
-            // 按 searchType 分 if 各挂一个 LazyForEach：切 tab 时分支结构性重建，
-            // 强制重新绑定对应 DataSource(单个 LazyForEach 热替换 source 实例不会刷新)
             ListItem() {
               Grid() {
-                if (this.searchType === 0) {
-                  LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
-                    GridItem() {
-                      BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
-                    }
-                  }, (book: Book) => book.id)
-                } else {
-                  LazyForEach(this.textDataSource, (book: Book, idx: number) => {
-                    GridItem() {
-                      BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
-                    }
-                  }, (book: Book) => book.id)
-                }
+                LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
+                  GridItem() {
+                    BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
+                  }
+                }, (book: Book) => book.id)
               }
               .columnsTemplate('1fr 1fr 1fr')
               .columnsGap(AppSpace.Sm)
@@ -712,21 +550,12 @@ export struct HomePage {
             }
           } else {
             // List 模式：每本书一个 ListItem
-            if (this.searchType === 0) {
-              LazyForEach(this.audioDataSource, (book: Book) => {
-                ListItem() {
-                  this.buildListItem(book)
-                }
-                .padding({ left: AppSpace.Md, right: AppSpace.Md })
-              }, (book: Book) => book.id)
-            } else {
-              LazyForEach(this.textDataSource, (book: Book) => {
-                ListItem() {
-                  this.buildListItem(book)
-                }
-                .padding({ left: AppSpace.Md, right: AppSpace.Md })
-              }, (book: Book) => book.id)
-            }
+            LazyForEach(this.audioDataSource, (book: Book) => {
+              ListItem() {
+                this.buildListItem(book)
+              }
+              .padding({ left: AppSpace.Md, right: AppSpace.Md })
+            }, (book: Book) => book.id)
           }
         } else {
           // 未搜索状态:根据 selectedCategoryIndex 显示推荐或分类书单
@@ -763,17 +592,10 @@ export struct HomePage {
                     .fontSize(AppFont.Body)
                     .fontColor($r('sys.color.font_tertiary'))
                     .margin({ top: AppSpace.Md })
-                  if (this.sourceCount > 0) {
-                    Text(`已启用 ${this.sourceCount} 个书源`)
-                      .fontSize(AppFont.Caption)
-                      .fontColor($r('sys.color.font_tertiary'))
-                      .margin({ top: AppSpace.Xs })
-                  } else {
-                    Text('请先添加书源')
-                      .fontSize(AppFont.Caption)
-                      .fontColor($r('sys.color.font_tertiary'))
-                      .margin({ top: AppSpace.Xs })
-                  }
+                  Text(TINGYOU_SOURCE_NAME)
+                    .fontSize(AppFont.Caption)
+                    .fontColor($r('sys.color.font_tertiary'))
+                    .margin({ top: AppSpace.Xs })
                 }
                 .width('100%')
                 .height(300)
@@ -860,39 +682,13 @@ export struct HomePage {
   }
 
   @Builder
-  searchTypeTab(label: string, type: number) {
-    // 直接读 this.audioCount/textCount 建立 V2 响应式依赖;
-    // 不能用按值传入的 count 参数(@Builder 按值基本类型不会随状态变化重渲染)
-    Text(`${label} ${type === 0 ? this.audioCount : this.textCount}`)
-      .fontSize(13)
-      .fontWeight(this.searchType === type ? FontWeight.Medium : FontWeight.Normal)
-      .fontColor(this.searchType === type ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
-      .height(30)
-      .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-      .textAlign(TextAlign.Center)
-      .borderRadius(15)
-      .backgroundBlurStyle(this.searchType === type ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
-      .backgroundColor(this.searchType === type ? 'rgba(255,255,255,0.85)' : Color.Transparent)
-      .onClick(() => {
-        this.searchType = type;
-      })
-  }
-
-  @Builder
   buildSearchingState() {
     Column() {
       LoadingProgress().width(40).height(40).color($r('sys.color.brand'))
-      if (this.searchingSource) {
-        Text(`正在搜索 ${this.searchingSource}`)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_tertiary'))
-          .margin({ top: AppSpace.Sm })
-      } else {
-        Text(this.searchType === 0 ? '正在搜索有声书...' : '正在搜索电子书...')
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_tertiary'))
-          .margin({ top: AppSpace.Sm })
-      }
+      Text(`正在搜索 ${TINGYOU_SOURCE_NAME}...`)
+        .fontSize(AppFont.Body)
+        .fontColor($r('sys.color.font_tertiary'))
+        .margin({ top: AppSpace.Sm })
     }
     .width('100%')
     .height(300)
@@ -905,7 +701,7 @@ export struct HomePage {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
         .fontSize(48)
         .fontColor([$r('sys.color.font_tertiary')])
-      Text(this.searchType === 0 ? '未找到相关有声书' : '未找到相关电子书')
+      Text('未找到相关有声书')
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Md })
@@ -913,19 +709,6 @@ export struct HomePage {
         .fontSize(AppFont.Caption)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Xs })
-      if (this.searchType === 0) {
-        // 聚合源登录按钮
-        Button('登录聚合源获取更多资源')
-          .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF')
-          .backgroundColor('#FF6B35')
-          .borderRadius(20)
-          .height(36)
-          .margin({ top: AppSpace.Lg })
-          .onClick(() => {
-            emitter.emit(EVT_OPEN_LOGIN);
-          })
-      }
     }
     .width('100%')
     .height(300)
@@ -1060,7 +843,7 @@ export struct HomePage {
   @Builder
   buildCategoryTags() {
     Column({ space: AppSpace.Sm }) {
-      // 第一行:推荐 + 固定3个分类(悬疑、玄幻、恐怖)
+      // 第一行：推荐 + 最新 + 两个固定分类
       Row({ space: AppSpace.Sm }) {
         // 推荐标签
         Text('推荐')
@@ -1077,7 +860,7 @@ export struct HomePage {
           })
 
         // 固定3个分类
-        ForEach(FIXED_CATEGORIES, (cat: HomeCategory, idx: number) => {
+        ForEach(FIXED_CATEGORIES, (cat: HomeCategory) => {
           Text(cat.name)
             .fontSize(AppFont.Body)
             .fontColor(this.getFixedCategorySelected(cat) ? Color.White : $r('sys.color.font_primary'))
@@ -1094,9 +877,9 @@ export struct HomePage {
       }
       .width('100%')
 
-      // 第二行:随机4个分类
+      // 第二行：恐怖惊悚 + 随机3个分类
       Row({ space: AppSpace.Sm }) {
-        ForEach(this.randomCategories, (cat: HomeCategory, idx: number) => {
+        ForEach(this.randomCategories, (cat: HomeCategory) => {
           Text(cat.name)
             .fontSize(AppFont.Body)
             .fontColor(this.getRandomCategorySelected(cat) ? Color.White : $r('sys.color.font_primary'))
@@ -1187,70 +970,4 @@ export struct HomePage {
     .onClick(() => this.onBookTap(book.id))
   }
 
-  @Monitor('playerState.currentBook')
-  onCurrentBookChange(): void {
-    this.loadResumeState();
-  }
-
-  private async loadResumeState(): Promise<void> {
-    // 1) 优先：lastPlayed 还原
-    try {
-      const last = await PreferenceService.getLastPlayed();
-      if (last && last.bookId) {
-        const book = await this.restoreBookById(last.bookId);
-        if (book) {
-          this.resumeBook = book;
-          this.resumeChapterTitle = last.chapterTitle ?? '';
-          const dur = last.durationMs ?? 0;
-          this.resumeProgress = dur > 0 ? Math.max(0, Math.min(1, last.progressMs / dur)) : 0;
-          this.resumeMode = ResumeCardMode.Resume;
-          return;
-        }
-      }
-    } catch (_e) {
-      // 还原失败兜底走 Suggest
-    }
-
-    // 2) 兜底：homeBlocks[0].books[0] → Suggest
-    if (this.homeBlocks.length > 0 && this.homeBlocks[0].books.length > 0) {
-      const r = this.homeBlocks[0].books[0];
-      this.resumeBook = this.homeBookFromResult(r);
-      this.resumeChapterTitle = '';
-      this.resumeProgress = 0;
-      this.resumeMode = ResumeCardMode.Suggest;
-      return;
-    }
-
-    // 3) 都没有：Empty
-    this.resumeMode = ResumeCardMode.Empty;
-    this.resumeBook = null;
-  }
-
-  private async restoreBookById(bookId: string): Promise<Book | null> {
-    // 优先内存 SearchCache（同步，最快）
-    const cached = SearchCache.get(bookId);
-    if (cached) return cached;
-    // 兜底走 DataService（覆盖收藏 / 历史 / cachedBooks）
-    try {
-      const ctx = this.getUIContext()?.getHostContext() as common.UIAbilityContext | undefined;
-      if (!ctx) return null;
-      const found = await DataService.getBookById(ctx, bookId);
-      return found ?? null;
-    } catch (_e) {
-      return null;
-    }
-  }
-
-  private onResumeBodyTap(): void {
-    if (!this.resumeBook) return;
-    this.onBookTap(this.resumeBook.id);
-  }
-
-  private onResumePlayTap(): void {
-    if (!this.resumeBook) return;
-    // Resume 模式带 progress 续播；Suggest 模式仅路由（详情页负责后续）
-    // 路由仍走 onBookTap 回调，progressMs 由 PlaybackStore + 详情页恢复，
-    // 与现有"返回首页继续播"路径一致，避免引入新事件协议。
-    this.onBookTap(this.resumeBook.id);
-  }
 }

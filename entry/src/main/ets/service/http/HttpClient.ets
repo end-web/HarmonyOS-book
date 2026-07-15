@@ -9,7 +9,6 @@
 
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { CharsetCodec } from '../../utils/CharsetCodec';
-import { getCookieManager } from '../rule/CookieManager';
 
 const DEFAULT_UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
 const DEFAULT_TIMEOUT = 30000;
@@ -45,7 +44,6 @@ function getSession(): rcp.Session {
 export class HttpClient {
   static async request(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
     const session = getSession();
-    const cookieJar = getCookieManager();
 
     // 用大小写不敏感的累积器收集 header（最终发送时再转成 Record）
     const accum: Map<string, string> = new Map();
@@ -58,13 +56,6 @@ export class HttpClient {
     if (!accum.has('accept')) {
       accum.set('accept', 'text/html,application/xhtml+xml,application/json,application/xml;q=0.9,*/*;q=0.8');
     }
-    // 注入 cookie jar 中匹配的 cookie（合并已有 Cookie header）
-    const jarCookie = cookieJar.getCookieHeader(url);
-    if (jarCookie) {
-      const existing = accum.get('cookie') || '';
-      accum.set('cookie', HttpClient.mergeCookieHeader(existing, jarCookie));
-    }
-
     const charset = (options.charset || '').toLowerCase();
     const isNonUtf8 = charset !== '' && charset !== 'utf-8' && charset !== 'utf8';
 
@@ -143,8 +134,6 @@ export class HttpClient {
       body = '';
     }
 
-    cookieJar.acceptResponseCookies(url, respHeaders);
-
     const result: HttpResponse = {
       statusCode: response.statusCode,
       headers: respHeaders,
@@ -170,28 +159,6 @@ export class HttpClient {
       if (!p) return p;
       return p.charAt(0).toUpperCase() + p.substring(1);
     }).join('-');
-  }
-
-  private static mergeCookieHeader(left: string, right: string): string {
-    const items: Map<string, string> = new Map();
-    HttpClient.appendCookiePairs(items, left);
-    HttpClient.appendCookiePairs(items, right);
-    const out: string[] = [];
-    for (const item of items.entries()) {
-      out.push(`${item[0]}=${item[1]}`);
-    }
-    return out.join('; ');
-  }
-
-  private static appendCookiePairs(items: Map<string, string>, cookie: string): void {
-    if (!cookie) return;
-    for (const part of cookie.split(';')) {
-      const eq = part.indexOf('=');
-      if (eq <= 0) continue;
-      const name = part.substring(0, eq).trim();
-      const value = part.substring(eq + 1).trim();
-      if (name) items.set(name, value);
-    }
   }
 
   /** 自动探测响应编码：Content-Type 头 → HTML meta(前2KB) → 默认 utf-8 */

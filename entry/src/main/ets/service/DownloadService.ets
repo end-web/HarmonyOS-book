@@ -374,7 +374,6 @@ export class DownloadService {
 
   private async enqueueChapters(book: Book, chapters: Chapter[]): Promise<number> {
     if (!book || !book.id || chapters.length === 0) return 0;
-    if (book.contentType === 'text' || book.category === 'text') return 0;
     this.deletedBooks.delete(book.id);
     this.pausedBooks.delete(book.id);
     const candidates: DownloadQueueItem[] = [];
@@ -463,7 +462,7 @@ export class DownloadService {
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       const source = sources.find((s) => s.bookSourceUrl === item.book.sourceUrl);
       if (!source) {
-        await this.markFailed(item, '书源不存在');
+        await this.markFailed(item, '内容来源不可用');
         return;
       }
       const requestInfo = await BookSourceService.resolveAudioRequest(source, pageUrl, item.book.variables);
@@ -687,7 +686,7 @@ export class DownloadService {
     this.refreshNotification(true).catch((_e: Error): void => {});
   }
 
-  /** 恢复任务时尽量带回书源 variables，避免依赖变量的规则解析失败 */
+  /** 恢复任务时带回在线内容参数，避免音频地址解析所需信息缺失。 */
   private async bookFromRecordWithVariables(record: DownloadBookRecord): Promise<Book> {
     const book = this.bookFromRecord(record);
     if (!this.ctx) return book;
@@ -983,7 +982,7 @@ export class DownloadService {
   private bookFromRecord(record: DownloadBookRecord): Book {
     return {
       id: record.bookId,
-      contentType: record.contentType === 'text' ? 'text' : 'audio',
+      contentType: 'audio',
       title: record.title,
       author: record.author,
       narrator: '',

@@ -1,6 +1,0 @@
-{
-  "name": "libjsvmengine.so",
-  "types": "./index.d.ts",
-  "version": "1.0.0",
-  "description": "JSVM general JS engine for legado book sources"
-}

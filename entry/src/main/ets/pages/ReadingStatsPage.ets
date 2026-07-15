@@ -25,9 +25,7 @@ interface ListenRecordView {
   durationMs: number;
   progressPercent: number;
   listenSeconds: number;
-  readSeconds: number;
   updatedAt: number;
-  isReading: boolean;
 }
 
 const AVERAGE_BOOK_SECONDS: number = 8 * 60 * 60;
@@ -108,6 +106,7 @@ export struct ReadingStatsPage {
     const views: ListenRecordView[] = [];
     for (const item of history) {
       if (!item || !item.bookId || used.has(item.bookId)) continue;
+      if (item.bookId.startsWith('search_text_') || item.bookId.startsWith('home_text_')) continue;
       used.add(item.bookId);
       const progress = await PreferenceService.getProgress(item.bookId);
       views.push(this.createRecordView(item.bookId, statMap[item.bookId], item, progress));
@@ -115,6 +114,8 @@ export struct ReadingStatsPage {
 
     for (const item of stats) {
       if (!item || !item.bookId || used.has(item.bookId)) continue;
+      if (item.bookId.startsWith('search_text_') || item.bookId.startsWith('home_text_')) continue;
+      if (item.listenSeconds <= 0) continue;
       views.push(this.createRecordView(item.bookId, item, null, null));
     }
 
@@ -127,7 +128,6 @@ export struct ReadingStatsPage {
     const durationMs = progress?.durationMs ?? history?.durationMs ?? 0;
     const ratio = durationMs > 0 ? Math.max(0, Math.min(1, progressMs / durationMs)) : 0;
     const listenSeconds = stat?.listenSeconds ?? 0;
-    const readSeconds = stat?.readSeconds ?? 0;
     return {
       bookId,
       title: stat?.title || '未知书籍',
@@ -139,9 +139,7 @@ export struct ReadingStatsPage {
       durationMs,
       progressPercent: Math.round(ratio * 100),
       listenSeconds,
-      readSeconds,
-      updatedAt: progress?.updatedAt || history?.updatedAt || stat?.updatedAt || Date.now(),
-      isReading: !!(progress?.domPos || history?.domPos || (readSeconds > listenSeconds && readSeconds > 0))
+      updatedAt: progress?.updatedAt || history?.updatedAt || stat?.updatedAt || Date.now()
     };
   }
 
@@ -179,7 +177,7 @@ export struct ReadingStatsPage {
   }
 
   private formatDurationText(item: ListenRecordView): string {
-    const total = item.listenSeconds > 0 ? item.listenSeconds : item.readSeconds;
+    const total = item.listenSeconds;
     if (total > 0) return this.formatDuration(total);
     if (item.progressMs > 0) return this.formatDuration(Math.floor(item.progressMs / 1000));
     return '刚刚开始';
@@ -251,7 +249,7 @@ export struct ReadingStatsPage {
       'chapterId': item.chapterId,
       'progressMs': item.progressMs
     };
-    this.navStack.pushPathByName(item.isReading ? 'reader' : 'player', params);
+    this.navStack.pushPathByName('player', params);
   }
 
   build() {
@@ -567,7 +565,7 @@ export struct ReadingStatsPage {
           ForEach(this.records, (item: ListenRecordView) => {
             this.buildRecordItem(item)
           }, (item: ListenRecordView) =>
-            `${item.bookId}|${item.updatedAt}|${item.progressPercent}|${item.listenSeconds}|${item.readSeconds}`)
+            `${item.bookId}|${item.updatedAt}|${item.progressPercent}|${item.listenSeconds}`)
         }
         .width('100%')
       }
@@ -683,7 +681,7 @@ export struct ReadingStatsPage {
             SymbolGlyph($r('sys.symbol.play_fill'))
               .fontSize(10)
               .fontColor([HomeTheme.Accent])
-            Text(`${item.isReading ? '已读' : '已听'} ${item.progressPercent}%`)
+            Text(`已听 ${item.progressPercent}%`)
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_secondary'))
           }
@@ -796,7 +794,7 @@ export struct ReadingStatsPage {
   @Builder
   buildLoadingState() {
     Column({ space: AppSpace.Lg }) {
-      ForEach([0, 1, 2], (loadingIndex: number) => {
+      ForEach([0, 1, 2], (_loadingIndex: number) => {
         Row({ space: AppSpace.Md }) {
           Column()
             .width(72)

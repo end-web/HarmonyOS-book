@@ -14,6 +14,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 import { DownloadService } from '../service/DownloadService';
+import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
 
@@ -103,7 +104,7 @@ export struct FavoritePage {
   private listScroller: Scroller = new Scroller();
   private bookDataSource: BookDataSource = new BookDataSource();
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
-  /** 加入/移出书架后重新拉书清单(覆盖从阅读页/详情页等任意入口的收藏变化) */
+  /** 加入/移出书架后重新拉书清单。 */
   private favoritesChangedHandler: () => void = () => { this.loadFavorites(); };
 
   private getChapterCount(book: Book): number {
@@ -136,7 +137,7 @@ export struct FavoritePage {
     }
   }
 
-  /** 收到播放/阅读进度更新事件:只重算历史相关 map,不重拉书清单,避免列表抖动 */
+  /** 收到播放进度更新事件:只重算历史相关 map,不重拉书清单,避免列表抖动 */
   private async onHistoryUpdated(_e: emitter.EventData): Promise<void> {
     if (!this.context || this.favoriteBooks.length === 0) return;
     const history = await PreferenceService.getHistory();
@@ -182,9 +183,10 @@ export struct FavoritePage {
     for (const id of ids) {
       const book = byId.get(id);
       if (book) {
-        books.push(book);
+        if (this.isSupportedBook(book)) books.push(book);
         continue;
       }
+      if (id.startsWith('search_text_') || id.startsWith('home_text_')) continue;
       const progress = await PreferenceService.getProgress(id);
       const chapterTitle = map[id]?.chapterTitle ?? progress?.chapterTitle ??
         (lastPlayed?.bookId === id ? (lastPlayed.chapterTitle ?? '') : '');
@@ -192,7 +194,7 @@ export struct FavoritePage {
         (lastPlayed?.bookId === id ? lastPlayed.chapterId : '');
       const chapterIndex = progress?.chapterIndex ?? this.parseLegacyChapterIndex(chapterId);
       const alias = this.findFavoriteAlias(id, chapterTitle, chapterIndex, allBooks);
-      if (alias) {
+      if (alias && this.isSupportedBook(alias)) {
         books.push(alias);
         continue;
       }
@@ -244,16 +246,15 @@ export struct FavoritePage {
   }
 
   private createMissingFavoriteBook(id: string, chapterTitle: string): Book {
-    const isTextBook = id.startsWith('search_text_') || id.startsWith('home_text_');
     const inferredTitle = this.legacyBookNameFromChapterTitle(chapterTitle);
     return {
       id,
-      contentType: isTextBook ? 'text' : 'audio',
-      title: inferredTitle || (isTextBook ? '电子书缓存缺失' : '有声书缓存缺失'),
+      contentType: 'audio',
+      title: inferredTitle || '有声书缓存缺失',
       author: '收藏记录仍在',
       narrator: '',
       cover: '',
-      category: isTextBook ? 'text' : 'audio',
+      category: 'audio',
       intro: '',
       totalDuration: 0,
       chapterCount: 0,
@@ -290,6 +291,13 @@ export struct FavoritePage {
     return book.tags ? book.tags.includes('cache_alias') : false;
   }
 
+  /** 仅展示本地音频和当前内置听友源，屏蔽升级前遗留的文本书与规则源缓存。 */
+  private isSupportedBook(book: Book): boolean {
+    if (book.contentType === 'text' || book.category === 'text') return false;
+    if (!book.sourceUrl) return true;
+    return BuiltInSourceRegistry.isBuiltIn(book.sourceUrl);
+  }
+
   private legacyBookNameFromChapterTitle(title: string): string {
     const t = title.trim();
     if (!t || t.startsWith('第') || /^[0-9０-９]/.test(t)) return '';
@@ -315,38 +323,19 @@ export struct FavoritePage {
 
   /**
    * 只做运行期别名,不写 favorite_book_ids。
-   * 规则故意保守:旧标题里能取到书名,且缓存池里只有一本完整标题精确匹配的同类型书,才用于展示和打开。
+   * 规则故意保守:旧标题里能取到书名,且缓存池里只有一本完整标题精确匹配的有声书,才用于展示和打开。
    */
   private findFavoriteAlias(oldId: string, chapterTitle: string, chapterIndex: number, books: Book[]): Book | null {
-    const oldIsText = oldId.startsWith('search_text_') || oldId.startsWith('home_text_');
     const oldIsAudio = oldId.startsWith('search_audio_') || oldId.startsWith('home_audio_');
-    if (!oldIsAudio && !oldIsText) return null;
-
-    if (oldIsText) {
-      return this.findTextFavoriteAlias(oldId, chapterTitle, chapterIndex, books);
-    }
+    if (!oldIsAudio) return null;
 
     const name = this.normalizeRecoverName(this.legacyBookNameFromChapterTitle(chapterTitle));
     if (!name) return null;
     const candidates: Book[] = [];
     for (const book of books) {
-      if (this.isText(book)) continue;
+      if (!this.isSupportedBook(book)) continue;
       if (this.normalizeRecoverName(book.title) !== name) continue;
       if (chapterIndex >= 0 && book.chapters && chapterIndex >= book.chapters.length) continue;
-      candidates.push(book);
-    }
-    if (candidates.length !== 1) return null;
-    return this.createFavoriteAliasBook(oldId, candidates[0]);
-  }
-
-  private findTextFavoriteAlias(oldId: string, chapterTitle: string, chapterIndex: number, books: Book[]): Book | null {
-    if (!chapterTitle) return null;
-    const candidates: Book[] = [];
-    for (const book of books) {
-      if (!this.isText(book) || !book.chapters || book.chapters.length === 0) continue;
-      const idx = DataService.resolveChapterIndex(book, '', chapterTitle);
-      if (idx < 0) continue;
-      if (chapterIndex >= 0 && idx !== chapterIndex) continue;
       candidates.push(book);
     }
     if (candidates.length !== 1) return null;
@@ -493,11 +482,6 @@ export struct FavoritePage {
     } catch (_e) { /* ignore */ }
   }
 
-  /** 电子书判定:文本源标"章"+进阅读器,有声书标"集"+进播放器 */
-  private isText(book: Book): boolean {
-    return book.contentType === 'text' || book.category === 'text';
-  }
-
   /** 当前在读章节的短标签:优先"第N章/集/回",取不到用完整标题(由 Text 省略号兜底) */
   private currentChapterLabel(book: Book, idx: number): string {
     const ch = book.chapters && book.chapters[idx] ? book.chapters[idx] : undefined;
@@ -517,13 +501,13 @@ export struct FavoritePage {
     if (this.isMissingCachedBook(book)) {
       return '缓存缺失 · 重新搜索后加入';
     }
-    const unit = this.isText(book) ? '章' : '集';
+    const unit = '集';
     const chapterCount = this.getChapterCount(book);
     const h = this.historyMap[book.id];
     if (h && chapterCount > 0) {
       const idx = this.chapterIdxMap[book.id];
       if (idx !== undefined && idx >= 0) {
-        // 显示"当前章标题 · 总数",与阅读/播放页内章号一致;不用 idx+1(列表位置),
+        // 显示"当前节目标题 · 总数",与播放页内序号一致;不用 idx+1(列表位置),
         // 因为含水章/公告章时列表位置≠作者章号(如列表第527位其实是"第512章"),会对不上
         const label = this.currentChapterLabel(book, idx);
         if (label) return `${label} · ${chapterCount}${unit}`;
@@ -549,9 +533,8 @@ export struct FavoritePage {
     }
     const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
-    const text = this.isText(book);
-    // ★ 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state(电子书不走此路)
-    if (!text && PlaybackStore.getInstance().isCurrentBook(book.id)) {
+    // 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state。
+    if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
       this.navStack.pushPathByName('player', book.id, onPop);
       return;
     }
@@ -586,7 +569,7 @@ export struct FavoritePage {
       'chapterId': resolved.id as Object,
       'progressMs': history.progressMs as Object
     };
-    this.navStack.pushPathByName(text ? 'reader' : 'player', params, onPop);
+    this.navStack.pushPathByName('player', params, onPop);
   }
 
   /** 老收藏的在线书没缓存章节时,先拉 toc 再恢复进度;期间禁用重复点击 */
@@ -609,7 +592,7 @@ export struct FavoritePage {
             'chapterId': resolvedLocal.id as Object,
             'progressMs': history.progressMs as Object
           };
-          this.navStack.pushPathByName(this.isText(book) ? 'reader' : 'player', localParams, onPop);
+          this.navStack.pushPathByName('player', localParams, onPop);
           return;
         }
         // 本地目录命中但定位不到章节(可能已下架/重排)→ 落到下面联网重拉刷新
@@ -621,8 +604,7 @@ export struct FavoritePage {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
       if (!source) {
-        this.getUIContext().getPromptAction().showToast({ message: '书源已删除,请到详情页重新选择' });
-        this.navStack.pushPathByName('detail', book.id, onPop);
+        this.getUIContext().getPromptAction().showToast({ message: '该内容来源已不可用，请重新搜索后加入书架' });
         return;
       }
       let tocUrl = book.bookUrl;
@@ -668,7 +650,7 @@ export struct FavoritePage {
         'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
-      this.navStack.pushPathByName(this.isText(book) ? 'reader' : 'player', params, onPop);
+      this.navStack.pushPathByName('player', params, onPop);
     } catch (_e) {
       try {
         this.getUIContext().getPromptAction().showToast({ message: '章节加载失败' });
@@ -954,7 +936,7 @@ export struct FavoritePage {
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }
-        this.buildTypeBadge(false, this.isText(book))
+        this.buildTypeBadge(false)
       }
       .width('100%')
       .borderRadius(AppRadius.Md)
@@ -1014,12 +996,12 @@ export struct FavoritePage {
   }
 
   @Builder
-  buildTypeBadge(small: boolean, isTextBook: boolean) {
+  buildTypeBadge(small: boolean) {
     Row({ space: small ? 2 : 3 }) {
-      SymbolGlyph(isTextBook ? $r('sys.symbol.book') : $r('sys.symbol.speaker_wave_2_fill'))
+      SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
         .fontSize(small ? 10 : 12)
         .fontColor([Color.White])
-      Text(isTextBook ? '电子书' : '有声书')
+      Text('有声书')
         .fontSize(small ? 9 : 10)
         .fontColor(Color.White)
         .fontWeight(FontWeight.Medium)
@@ -1030,7 +1012,7 @@ export struct FavoritePage {
       top: small ? 2 : 3,
       bottom: small ? 2 : 3
     })
-    .backgroundColor(isTextBook ? '#CC3478F6' : '#CCFF8800')
+    .backgroundColor('#CCFF8800')
     .borderRadius(AppRadius.Sm)
     .margin({ top: small ? 5 : 6, left: small ? 5 : 6 })
   }
@@ -1073,7 +1055,7 @@ export struct FavoritePage {
           .borderRadius(AppRadius.Sm)
           .clip(true)
         }
-        this.buildTypeBadge(true, this.isText(book))
+        this.buildTypeBadge(true)
       }
 
       Column({ space: 4 }) {

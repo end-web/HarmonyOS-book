@@ -49,7 +49,7 @@ export interface ChapterRow {
 
 /**
  * 章节行 LazyForEach 数据源（支持过滤）
- * 用于 ReaderPage 等需要搜索过滤的长章节目录
+ * 用于详情页等需要搜索过滤的长节目目录。
  */
 export class ChapterRowDataSource implements IDataSource {
   private rows: ChapterRow[] = [];

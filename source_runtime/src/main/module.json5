@@ -1,9 +1,0 @@
-{
-  "module": {
-    "name": "source_runtime",
-    "type": "har",
-    "deviceTypes": [
-      "phone"
-    ]
-  }
-}

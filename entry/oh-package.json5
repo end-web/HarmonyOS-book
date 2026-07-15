@@ -5,9 +5,6 @@
   "main": "",
   "author": "ylwang",
   "license": "MIT",
-  "dependencies": {
-    "libjsvmengine.so": "file:./src/main/cpp/types/libjsvmengine",
-    "@listenbook/source-runtime": "file:../source_runtime"
-  }
+  "dependencies": {}
 }
 

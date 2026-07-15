@@ -15,9 +15,11 @@ import {
   BuiltInCategoryTab, BuiltInSearchResult, BuiltInBook, BuiltInEpisode, HomeBlock
 } from '../IBuiltInSource';
 import { HttpClient } from '../../http/HttpClient';
-import { JsonObj, JsonArr } from '../BuiltInContext';
+import { JsonObj, JsonArr } from '../JsonValue';
 import { TingYouCrypto } from '../TingYouCrypto';
 import { getWebViewAudioExtractor } from '../WebViewAudioExtractor';
+import { AsyncSingleFlight } from '../../../utils/AsyncSingleFlight';
+import { TingYouRequestPolicy, TingYouRetryAction } from './TingYouRequestPolicy';
 
 const TAG = 'TingYouFM';
 const SITE = 'https://www.tingyou.fm';
@@ -29,6 +31,8 @@ const CDN_BASES: string[] = [
   'https://json.fmfm.pro/tyfm/json_v1',
 ];
 const THRILLER_CATEGORY_URL = 'types/14/comprehensive/p1';
+const LATEST_CATEGORY_PREFIX = 'rank/recommend_novel/latest/';
+const LATEST_RANK_PAGE_SIZE = 50;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 /** 章节播放标识：tingyou://play/<albumId>/<chapterIdx> */
 const PLAY_SCHEME = 'tingyou://play/';
@@ -51,7 +55,7 @@ function jsonToBook(o: JsonObj): BuiltInBook | null {
   const teller = o.getString('teller', '');
   if (!author) author = teller;
   const b = new BuiltInBook(cover, id, title, author, teller);
-  b.intro = o.getString('description', '') || o.getString('synopsis', '');
+  b.intro = o.getString('description', '') || o.getString('synopsis', '') || o.getString('intro', '');
   b.status = o.getString('type', '');
   b.completed = o.getInt('status', 0) === 1;
   return b;
@@ -72,17 +76,26 @@ class TingYouFMClass implements IBuiltInSource {
   readonly url: string = SITE;
   readonly desc: string = '推荐指数:5星 ⭐⭐⭐⭐⭐\n来源：www.tingyou.fm';
   readonly searchable: boolean = true;
-  readonly sourceType: number = 1;
+  readonly audioResolveTimeoutMs: number = 35000;
 
   /** guest 会话 token（不含 "Bearer " 前缀） */
   private token: string = '';
+  private tokenFlight: AsyncSingleFlight<string> = new AsyncSingleFlight<string>();
 
   /* ─────────────── token 与 API 基础设施 ─────────────── */
 
   /** 获取 guest token：内存缓存 → 原生 /api/me → WebView 读 localStorage */
   private async ensureToken(force: boolean): Promise<string> {
     if (this.token && !force) return this.token;
-    this.token = '';
+    return this.tokenFlight.run(async (): Promise<string> => {
+      if (this.token && !force) return this.token;
+      if (force) this.token = '';
+      return await this.acquireToken();
+    });
+  }
+
+  private async acquireToken(): Promise<string> {
+    const startedAt = Date.now();
 
     // 1) 原生 POST /api/me（空 body）
     try {
@@ -97,11 +110,12 @@ class TingYouFMClass implements IBuiltInSource {
           const t = dec.getString('auth_token', '');
           if (t) {
             this.token = t.replace(/^Bearer\s+/i, '');
-            hilog.info(0, TAG, 'token via native /api/me');
+            hilog.info(0, TAG, 'token via native /api/me, elapsed=%{public}dms', Date.now() - startedAt);
             return this.token;
           }
         }
       }
+      hilog.warn(0, TAG, 'native /api/me returned status=%{public}d', r.statusCode);
     } catch (e) {
       hilog.warn(0, TAG, 'native /api/me failed: %{public}s', e instanceof Error ? e.message : String(e));
     }
@@ -112,18 +126,23 @@ class TingYouFMClass implements IBuiltInSource {
       const v = await getWebViewAudioExtractor().extract(SITE + '/', expr, 3500);
       if (v) {
         this.token = v.replace(/^Bearer\s+/i, '');
-        hilog.info(0, TAG, 'token via WebView');
+        hilog.info(0, TAG, 'token via WebView, elapsed=%{public}dms', Date.now() - startedAt);
         return this.token;
       }
     } catch (e) {
       hilog.warn(0, TAG, 'WebView token failed: %{public}s', e instanceof Error ? e.message : String(e));
     }
+    hilog.warn(0, TAG, 'guest token unavailable, elapsed=%{public}dms', Date.now() - startedAt);
     return '';
   }
 
   /** 动态加密 POST：自动带 token，401 时刷新一次重试。bodyJson 为已序列化的 JSON 字符串 */
   private async apiPost(endpoint: string, bodyJson: string): Promise<JsonObj | null> {
     let token = await this.ensureToken(false);
+    if (!token) {
+      hilog.warn(0, TAG, 'apiPost %{public}s skipped: guest token unavailable', endpoint);
+      return null;
+    }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const hexBody = await TingYouCrypto.encryptRequest(bodyJson);
@@ -134,32 +153,52 @@ class TingYouFMClass implements IBuiltInSource {
         const r = await HttpClient.request(`${API}/${endpoint}`, {
           method: 'POST', headers, body: hexBody, timeout: 8000
         });
-        if (r.statusCode === 401) {
-          token = await this.ensureToken(true);
-          if (!token) return null;
-          continue;
-        }
         if (r.statusCode === 200 && r.body) {
           const j = new JsonObj(JSON.parse(r.body) as Object);
           const payload = j.getString('payload', '');
           if (payload) return new JsonObj(JSON.parse(TingYouCrypto.decryptResponse(payload)) as Object);
           return j;
         }
-        if (attempt === 0) {
+        const action = TingYouRequestPolicy.forHttpStatus(r.statusCode, attempt);
+        if (action === TingYouRetryAction.REFRESH_TOKEN) {
+          hilog.warn(0, TAG, 'apiPost %{public}s unauthorized, attempt=%{public}d', endpoint, attempt + 1);
           token = await this.ensureToken(true);
+          if (!token) return null;
           continue;
         }
+        hilog.warn(0, TAG, 'apiPost %{public}s status=%{public}d, attempt=%{public}d',
+          endpoint, r.statusCode, attempt + 1);
+        if (action === TingYouRetryAction.RETRY_REQUEST) continue;
         return null;
       } catch (e) {
-        hilog.error(0, TAG, 'apiPost %{public}s failed: %{public}s', endpoint, e instanceof Error ? e.message : String(e));
-        if (attempt === 0) {
-          token = await this.ensureToken(true);
-          continue;
-        }
+        hilog.error(0, TAG, 'apiPost %{public}s failed, attempt=%{public}d: %{public}s',
+          endpoint, attempt + 1, e instanceof Error ? e.message : String(e));
+        if (TingYouRequestPolicy.shouldRetryNetworkError(attempt)) continue;
         return null;
       }
     }
     return null;
+  }
+
+  /** 无需 token 的公开 GET 接口，响应仍使用站点 payload 协议加密。 */
+  private async publicApiGet(endpoint: string): Promise<JsonObj | null> {
+    try {
+      const r = await HttpClient.request(`${API}/${endpoint}`, {
+        method: 'GET', headers: baseHeaders(), timeout: 15000, retry: 1
+      });
+      if (r.statusCode !== 200 || !r.body) {
+        hilog.warn(0, TAG, 'publicApiGet %{public}s status=%{public}d', endpoint, r.statusCode);
+        return null;
+      }
+      const root = new JsonObj(JSON.parse(r.body) as Object);
+      const payload = root.getString('payload', '');
+      if (!payload) return root;
+      return new JsonObj(JSON.parse(TingYouCrypto.decryptResponse(payload)) as Object);
+    } catch (e) {
+      hilog.warn(0, TAG, 'publicApiGet %{public}s failed: %{public}s', endpoint,
+        e instanceof Error ? e.message : String(e));
+      return null;
+    }
   }
 
   /** 静态加密 GET（CDN 镜像兜底）：返回解密后的 JsonObj */
@@ -180,6 +219,10 @@ class TingYouFMClass implements IBuiltInSource {
   }
 
   /* ─────────────── IBuiltInSource ─────────────── */
+
+  async prepareAudio(): Promise<void> {
+    await this.ensureToken(false);
+  }
 
   async search(keywords: string, page: number): Promise<BuiltInSearchResult> {
     const p = page < 1 ? 1 : page;
@@ -273,11 +316,37 @@ class TingYouFMClass implements IBuiltInSource {
     return menus;
   }
 
+  private async getLatestCategory(url: string): Promise<BuiltInCategory | null> {
+    if (url.indexOf(LATEST_CATEGORY_PREFIX) !== 0) return null;
+    const pageText = url.substring(LATEST_CATEGORY_PREFIX.length).replace(/^p/i, '');
+    const requestedPage = Math.max(1, Number(pageText) || 1);
+    const endpoint = `rank/recommend_novel?group=latest&page=${requestedPage}&page_size=${LATEST_RANK_PAGE_SIZE}`;
+    const data = await this.publicApiGet(endpoint);
+    let books: BuiltInBook[] = data ? parseBookArray(data.getArr('items')) : [];
+
+    // 动态榜单偶发不可用时，首屏仍可使用 homepage 中同源的最近更新数据。
+    if (books.length === 0 && requestedPage === 1) {
+      const homepage = await this.cdnGet('homepage');
+      if (homepage) books = parseBookArray(homepage.getArr('recent_updates'));
+    }
+
+    const page = data ? Math.max(1, data.getInt('page', requestedPage)) : requestedPage;
+    const pageSize = data ? Math.max(1, data.getInt('page_size', LATEST_RANK_PAGE_SIZE)) : LATEST_RANK_PAGE_SIZE;
+    const total = data ? Math.max(books.length, data.getInt('total', books.length)) : books.length;
+    const hasMore = data !== null && books.length > 0 &&
+      (data.getInt('has_more', 0) === 1 || page * pageSize < total);
+    const totalPage = Math.max(page, Math.ceil(total / pageSize));
+    const nextUrl = hasMore ? `${LATEST_CATEGORY_PREFIX}p${page + 1}` : '';
+    return new BuiltInCategory(books, page, totalPage, url, nextUrl);
+  }
+
   /**
    * 分类书单。url 形如 `types/<typeId>/comprehensive/p<N>`（也兼容只传 typeId）。
    * 返回 nextUrl 指向下一页，供上层循环加载。
    */
   async getCategoryList(url: string): Promise<BuiltInCategory> {
+    const latest = await this.getLatestCategory(url);
+    if (latest) return latest;
     const path = url.indexOf('types/') === 0 ? url : `types/${url}/comprehensive/p1`;
     const data = await this.cdnGet(path);
     if (!data) return new BuiltInCategory([], 1, 1, url, '');

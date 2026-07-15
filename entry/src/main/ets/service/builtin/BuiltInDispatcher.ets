@@ -3,10 +3,16 @@
  */
 
 import { BookSource, BookInfo, SearchResult, TocItem, HomeBlockSection } from '../../model/BookSource';
-import { BuiltInBook, BuiltInEpisode, IBuiltInSource } from './IBuiltInSource';
+import { BuiltInBook, IBuiltInSource } from './IBuiltInSource';
 import { BuiltInSourceRegistry } from './BuiltInSourceRegistry';
 
 const TAG = 'BuiltInDispatcher';
+
+interface BuiltInExploreResult {
+  books: SearchResult[];
+  nextUrl: string;
+  nextPage?: number;
+}
 
 class SR implements SearchResult {
   name: string;
@@ -149,6 +155,19 @@ export class BuiltInDispatcher {
     }
   }
 
+  static async prepareAudio(bookSourceUrl: string): Promise<void> {
+    const plugin = BuiltInSourceRegistry.getByUrl(bookSourceUrl);
+    if (!plugin || !plugin.prepareAudio) return;
+    await plugin.prepareAudio();
+  }
+
+  static getAudioResolveTimeoutMs(source: BookSource, fallbackMs: number): number {
+    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+    const configured = plugin?.audioResolveTimeoutMs;
+    if (configured === undefined || !Number.isFinite(configured) || configured <= 0) return fallbackMs;
+    return configured;
+  }
+
   static getAudioHeaders(source: BookSource, audioUrl: string): Record<string, string> {
     const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
     if (!plugin) return {};
@@ -158,18 +177,6 @@ export class BuiltInDispatcher {
       const msg = e instanceof Error ? e.message : JSON.stringify(e);
       console.error(`[${TAG}] getAudioHeaders ${plugin.name} error: ${msg}`);
       return {};
-    }
-  }
-
-  static async getTextContent(source: BookSource, chapterUrl: string, nextChapterUrl?: string): Promise<string> {
-    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
-    if (!plugin || !plugin.getTextContent) return '';
-    try {
-      return await plugin.getTextContent(chapterUrl, nextChapterUrl);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : JSON.stringify(e);
-      console.error(`[${TAG}] getTextContent ${plugin.name} error: ${msg}`);
-      return '';
     }
   }
 
@@ -192,6 +199,26 @@ export class BuiltInDispatcher {
       const msg = e instanceof Error ? e.message : JSON.stringify(e);
       console.error(`[${TAG}] getExploreBooks ${plugin.name} error: ${msg}`);
       return [];
+    }
+  }
+
+  static async getExploreBooksByUrl(source: BookSource, categoryUrl: string,
+    page: number = 1): Promise<BuiltInExploreResult> {
+    const plugin = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl);
+    if (!plugin || !categoryUrl) return { books: [], nextUrl: '' };
+    try {
+      const category = await plugin.getCategoryList(categoryUrl);
+      const books: SearchResult[] = [];
+      for (const book of category.books) {
+        BuiltInSourceRegistry.cacheBookMeta(book);
+        books.push(bookToSearchResult(book, plugin, source.bookSourceUrl));
+      }
+      const nextPage = category.nextUrl ? Math.max(page + 1, category.currentPage + 1) : undefined;
+      return { books, nextUrl: category.nextUrl, nextPage };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : JSON.stringify(e);
+      console.error(`[${TAG}] getExploreBooksByUrl ${plugin.name} error: ${msg}`);
+      return { books: [], nextUrl: '' };
     }
   }
 

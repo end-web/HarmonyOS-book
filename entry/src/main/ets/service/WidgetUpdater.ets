@@ -217,11 +217,6 @@ export class WidgetUpdater {
     }
   }
 
-  /** 阅读卡片已废弃,保留空方法做兼容,避免 DataService 等历史调用点报错 */
-  static async updateReaderCard(): Promise<void> {
-    // no-op
-  }
-
   /** 没有快照时,从 lastPlayed + cachedBooks 拼一份兜底快照(冷启动卡片首次添加用)。
    *  注意:这里 isPlaying 必须保持 false —— 兜底是给"主进程从未推过快照"的场景用的,
    *  此时主进程那边肯定不在播。

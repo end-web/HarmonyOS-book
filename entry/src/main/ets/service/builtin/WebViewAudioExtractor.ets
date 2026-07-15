@@ -47,7 +47,6 @@ export function getWebViewAudioExtractor(): WebViewAudioExtractor {
 
 export class WebViewAudioExtractor {
   private controller: webview.WebviewController | null = null;
-  private currentUrl: string = '';
   private taskQueue: ExtractTask[] = [];
   private busy: boolean = false;
   private timeoutMs: number = 25000;
@@ -130,6 +129,8 @@ export class WebViewAudioExtractor {
 
   /** 通知当前页加载完成 - 由 Host onPageEnd 调用 */
   onPageEnd(url: string): void {
+    const normalizedUrl = (url || '').trim().toLowerCase();
+    if (!normalizedUrl || normalizedUrl.startsWith('about:blank')) return;
     const task = this.taskQueue[0];
     if (!task || (task.loaded && task.type !== 'html')) return;
     if (task.type === 'html') {
@@ -329,7 +330,6 @@ export class WebViewAudioExtractor {
     this.busy = true;
     try {
       this.controller!.loadUrl(task.url);
-      this.currentUrl = task.url;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       task.reject(new Error('loadUrl 失败: ' + msg));
@@ -386,7 +386,6 @@ export class WebViewAudioExtractor {
       // （实测瞬时 PSS 顶到 ~990MB）。退回空白页让 ArkWeb 回收掉这部分。
       try {
         this.controller?.loadUrl('about:blank');
-        this.currentUrl = 'about:blank';
       } catch (_e) { /* ignore */ }
       return;
     }

@@ -10,15 +10,11 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "欢"
+      "value": "欢·听友版"
     },
     {
       "name": "keep_background_running_reason",
       "value": "用于后台播放音频及离线下载"
-    },
-    {
-      "name": "read_pasteboard_reason",
-      "value": "用于粘贴书源链接"
     },
     {
       "name": "PlayerFormAbility_desc",
@@ -26,11 +22,11 @@
     },
     {
       "name": "PlayerFormAbility_label",
-      "value": "听书"
+      "value": "听友版"
     },
     {
       "name": "player_card_label",
-      "value": "听书"
+      "value": "听友版"
     },
     {
       "name": "player_card_desc",

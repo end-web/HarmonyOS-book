@@ -28,21 +28,14 @@ const GUIDE_GROUPS: GuideGroup[] = [
   {
     title: '书架',
     items: [
-      { action: '下拉', desc: '从书源刷新在线书籍的最新数据' },
+      { action: '下拉', desc: '从听友 FM 刷新在线书籍的最新数据' },
       { action: '长按书籍并拖到底部删除区', desc: '移出书架(可选仅移除,或删除本地文件)' },
-    ]
-  },
-  {
-    title: '书源',
-    items: [
-      { action: '长按任一书源', desc: '进入批量管理,多选启用 / 删除' },
-      { action: '下拉', desc: '重新拉取全部订阅源' },
     ]
   },
   {
     title: '记录',
     items: [
-      { action: '长按任一条记录', desc: '进入多选,批量删除阅听记录' },
+      { action: '长按任一条记录', desc: '进入多选,批量删除收听记录' },
     ]
   },
   {
@@ -51,13 +44,6 @@ const GUIDE_GROUPS: GuideGroup[] = [
       { action: '长按「倍速」', desc: '恢复 1.0 倍速' },
       { action: '长按「定时」', desc: '取消睡眠定时' },
       { action: '长按「跳过」', desc: '清除片头 / 片尾跳过设置' },
-    ]
-  },
-  {
-    title: '阅读(文本书)',
-    items: [
-      { action: '点屏幕左 / 右侧,或左右滑动', desc: '上一页 / 下一页' },
-      { action: '点屏幕中间', desc: '唤起 / 收起工具栏' },
     ]
   },
 ];

@@ -72,7 +72,7 @@ export class AppCurve {
 }
 
 /**
- * 首页改版颜色聚合（仅 HomePage / ResumeCard 使用）
+ * 首页与记录页共用的暖色主题。
  * 走 base/dark element/color.json 双份资源，自动深浅切换。
  */
 export class HomeTheme {

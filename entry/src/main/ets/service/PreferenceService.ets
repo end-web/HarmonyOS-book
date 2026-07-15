@@ -15,9 +15,6 @@ const KEY_HISTORY = 'play_history';
 const KEY_LAST_PLAYED = 'last_played';
 const KEY_COLOR_MODE = 'color_mode';
 const KEY_IMPORTED_BOOKS = 'imported_books';
-const KEY_SOURCE_SUBSCRIPTIONS = 'source_subscriptions';
-const KEY_BOOK_SOURCES = 'book_sources';
-const KEY_BUILTIN_DISABLED = 'builtin_sources_disabled_v1';
 const KEY_DEFAULT_TAB = 'default_tab';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
@@ -25,8 +22,6 @@ const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
-/** 阅读器外观设置(字号/主题/翻页模式),JSON 持久化,跨次打开保持一致 */
-const KEY_READER_SETTINGS = 'reader_settings_v2';
 /** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
 const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 /** 已添加的卡片 formId 集合(按卡片名分桶) */
@@ -36,8 +31,6 @@ const KEY_PROGRESS_PREFIX = 'progress_v1_';
 /** 每本书独立的跳过头尾设置,key = `${KEY_SKIP_PREFIX}${bookId}`。
  *  独立小 KV,不再搭车缓存书索引——避免冷启动走 legacy/persistUnsafe 兜底分支时把 skip 丢掉。 */
 const KEY_SKIP_PREFIX = 'skip_v1_';
-/** 订阅源发现导航缓存,key = `${KEY_EXPLORE_NAV_PREFIX}${sourceUrlHash}` */
-const KEY_EXPLORE_NAV_PREFIX = 'explore_nav_v1_';
 /** 华为账号登录身份标识(UnionID/OpenID),JSON 持久化 */
 const KEY_HW_ACCOUNT = 'hw_account_v1';
 
@@ -50,8 +43,6 @@ export interface PlayHistoryItem {
   chapterTitle?: string;
   // 章节真实时长(ms):有声书 TOC 不带时长,prepared 时回写,用于冷启动滑块/百分比
   durationMs?: number;
-  // 电子书章内位置(Reader Kit domPos):文本阅读模式恢复"上次读到的页",audio 书不写
-  domPos?: string;
 }
 
 export interface LastPlayedItem {
@@ -83,8 +74,6 @@ export interface PlayProgress {
   positionMs: number;
   durationMs: number;
   updatedAt: number;
-  // 电子书章内位置(Reader Kit domPos):文本阅读模式恢复"上次读到的页",audio 书不写
-  domPos?: string;
   // 该书上次使用的播放倍速(每本书独立记忆),缺省视为 1.0
   speed?: number;
 }
@@ -113,23 +102,6 @@ export interface WidgetPlayerSnapshot {
 interface FormIdBucket {
   name: string;
   ids: string[];
-}
-
-/** 订阅源发现导航缓存项 */
-export interface ExploreNavCache {
-  sourceUrl: string;
-  /** 源的 lastUpdateTime，用于版本戳 */
-  sourceVersion: number;
-  /** 缓存的导航 JSON 数组（已解析） */
-  navigation: ExploreNavItem[];
-  /** 缓存时间戳 */
-  cachedAt: number;
-}
-
-/** 导航项 */
-export interface ExploreNavItem {
-  title: string;
-  url: string;
 }
 
 /** 华为账号登录身份标识(端侧直接返回,无需后端) */
@@ -449,46 +421,6 @@ export class PreferenceService {
     await s.flush();
   }
 
-  static async getSourceSubscriptions(): Promise<string> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_SOURCE_SUBSCRIPTIONS, '[]') as string;
-  }
-
-  static async saveSourceSubscriptions(json: string): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_SOURCE_SUBSCRIPTIONS, json);
-    await s.flush();
-  }
-
-  static async getBookSources(): Promise<string> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_BOOK_SOURCES, '[]') as string;
-  }
-
-  static async saveBookSources(json: string): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_BOOK_SOURCES, json);
-    await s.flush();
-  }
-
-  /** 内置源禁用列表（保存被用户关掉的内置源 ID） */
-  static async getBuiltinDisabledIds(): Promise<string[]> {
-    const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_BUILTIN_DISABLED, '[]') as string;
-    try {
-      const arr = JSON.parse(raw) as string[];
-      return Array.isArray(arr) ? arr : [];
-    } catch {
-      return [];
-    }
-  }
-
-  static async saveBuiltinDisabledIds(ids: string[]): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_BUILTIN_DISABLED, JSON.stringify(ids));
-    await s.flush();
-  }
-
   static async getDefaultTab(): Promise<number> {
     const s = await PreferenceService.ensureStore();
     const idx = await s.get(KEY_DEFAULT_TAB, 0) as number;
@@ -511,66 +443,6 @@ export class PreferenceService {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_PRIVACY_AGREED_VERSION, version);
     await s.flush();
-  }
-
-  // ──────────────────── 订阅源发现导航缓存 ────────────────────
-
-  /**
-   * 获取订阅源发现导航缓存（30 天 TTL，含版本戳）
-   */
-  static async getExploreNavCache(sourceUrl: string, sourceVersion: number): Promise<ExploreNavItem[] | null> {
-    try {
-      const s = await PreferenceService.ensureStore();
-      const hash = PreferenceService.hashString(sourceUrl);
-      const key = `${KEY_EXPLORE_NAV_PREFIX}${hash}`;
-      const json = await s.get(key, '') as string;
-      if (!json) return null;
-      const cache: ExploreNavCache = JSON.parse(json) as ExploreNavCache;
-      // 检查版本戳（源更新后自动失效）
-      if (cache.sourceVersion !== sourceVersion) {
-        return null;
-      }
-      // 检查 TTL（30 天）
-      const age = Date.now() - cache.cachedAt;
-      const TTL_MS = 30 * 24 * 60 * 60 * 1000;
-      if (age > TTL_MS) {
-        return null;
-      }
-      return cache.navigation;
-    } catch (e) {
-      console.warn(`[PreferenceService] getExploreNavCache failed: ${e}`);
-      return null;
-    }
-  }
-
-  /**
-   * 保存订阅源发现导航缓存
-   */
-  static async setExploreNavCache(sourceUrl: string, sourceVersion: number, navigation: ExploreNavItem[]): Promise<void> {
-    try {
-      const s = await PreferenceService.ensureStore();
-      const hash = PreferenceService.hashString(sourceUrl);
-      const key = `${KEY_EXPLORE_NAV_PREFIX}${hash}`;
-      const cache: ExploreNavCache = {
-        sourceUrl,
-        sourceVersion,
-        navigation,
-        cachedAt: Date.now(),
-      };
-      await s.put(key, JSON.stringify(cache));
-      await s.flush();
-    } catch (e) {
-      console.warn(`[PreferenceService] setExploreNavCache failed: ${e}`);
-    }
-  }
-
-  /** 简单字符串 hash（用于缓存 key） */
-  private static hashString(str: string): string {
-    let h: number = 5381;
-    for (let i = 0; i < str.length; i++) {
-      h = (((h << 5) + h) + str.charCodeAt(i)) | 0;
-    }
-    return (h >>> 0).toString(36);
   }
 
   /** 0=共享焦点（默认，听书与其他音乐互斥）, 1=独立焦点（不与本应用其他音频互斥） */
@@ -627,7 +499,7 @@ export class PreferenceService {
 
   /**
    * 清空"书架 + 播放记录":收藏 / 历史 / 每本进度 / 上次播放 / 卡片快照 / 旧缓存池。
-   * 保留:书源订阅、阅读播放设置、登录、卡片 formId 等其余偏好。
+   * 保留:应用设置、登录信息、卡片 formId 等其余偏好。
    */
   static async clearBookshelfAndHistory(): Promise<void> {
     const s = await PreferenceService.ensureStore();
@@ -718,34 +590,4 @@ export class PreferenceService {
     await s.flush();
   }
 
-  /** 阅读器外观设置:字号/主题索引/翻页模式索引。themeIndex<0 表示未设置(由页面按系统深浅色挑默认) */
-  static async getReaderSettings(): Promise<ReaderSettingsItem | null> {
-    const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_READER_SETTINGS, '') as string;
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw) as ReaderSettingsItem;
-    } catch (_e) {
-      return null;
-    }
-  }
-
-  static async setReaderSettings(item: ReaderSettingsItem): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_READER_SETTINGS, JSON.stringify(item));
-    await s.flush();
-  }
-}
-
-/** 阅读器外观设置(持久化)。字体固定为系统字体,不再持久化字体族/字重 */
-export interface ReaderSettingsItem {
-  fontSize: number;
-  themeIndex: number;
-  flipModeIndex: number;
-  /** 屏幕亮度:-1=跟随系统,[0,1]=覆盖。旧数据无此字段时按跟随系统处理 */
-  brightness?: number;
-  /** 行距系数(行高 = 字号 * 该值)。旧数据无此字段时用默认 1.8 */
-  lineHeight?: number;
-  /** 主题是否跟随系统深浅色。旧数据无此字段(undefined)按 false 处理,保留手选主题 */
-  followSystem?: boolean;
 }

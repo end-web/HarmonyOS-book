@@ -13,10 +13,8 @@ import { AudioService } from '../service/AudioService';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { PlaybackStore } from '../service/PlaybackStore';
-import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
-import { WebViewJSEngineHost } from '../service/js/WebViewJSEngine';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
 import { WebEngineGate } from '../service/WebEngineGate';
 import { UpdateService } from '../service/UpdateService';
@@ -88,21 +86,6 @@ export struct MainPage {
 
   private navigateToBook(bookId: string, chapterId: string, progressMs: number, forceDetail: boolean): void {
     if (forceDetail) {
-      this.navStack.pushPathByName('detail', bookId);
-      return;
-    }
-    const cached = SearchCache.get(bookId);
-    const isTextBook = cached?.contentType === 'text' || cached?.category === 'text';
-    if (isTextBook && chapterId) {
-      const params: Record<string, Object> = {
-        'bookId': bookId,
-        'chapterId': chapterId,
-        'progressMs': progressMs
-      };
-      this.navStack.pushPathByName('reader', params);
-      return;
-    }
-    if (isTextBook) {
       this.navStack.pushPathByName('detail', bookId);
       return;
     }
@@ -319,10 +302,7 @@ export struct MainPage {
       .backgroundColor('#FFF5F5F5')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      // 按需挂载:仅在引擎首次需要时才创建对应隐藏 Web,纯 CSS/JSONPath 用户永不初始化 ArkWeb
-      if (this.gate.needJsEngine) {
-        WebViewJSEngineHost()
-      }
+      // 听友部分音频地址需要 ArkWeb 兜底提取，按需创建隐藏宿主。
       if (this.gate.needAudioExtractor) {
         WebViewAudioExtractorHost()
       }

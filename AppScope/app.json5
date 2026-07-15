@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "com.ylwang.listenbook",
+    "bundleName": "com.ylwang.listenbook.tingyou",
     "vendor": "ylwang",
     "versionCode": 1000001,
     "versionName": "0.1.1",

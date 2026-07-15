@@ -115,6 +115,18 @@ export class AudioService {
     if (timer >= 0) clearTimeout(timer);
   }
 
+  prewarmBookSource(book: Book): void {
+    if (!book.sourceUrl) return;
+    this.prepareBookSource(book.sourceUrl).catch((err: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'prewarmBookSource failed: %{public}s',
+        err?.message ?? JSON.stringify(err));
+    });
+  }
+
+  private async prepareBookSource(sourceUrl: string): Promise<void> {
+    await BookSourceService.prepareAudioSource(sourceUrl);
+  }
+
   bind(state: PlayerState, context: common.UIAbilityContext): void {
     this.state = state;
     this.context = context;
@@ -901,8 +913,9 @@ export class AudioService {
   private async resolveAudioUrlWithTimeout(source: BookSource, pageUrl: string,
     variables?: Record<string, string>): Promise<string> {
     let timerId: number = -1;
+    const timeoutMs = BookSourceService.getAudioResolveTimeoutMs(source, AUDIO_RESOLVE_TIMEOUT_MS);
     const timeout = new Promise<string>((_resolve, reject) => {
-      timerId = setTimeout(() => reject(new Error('音频地址获取超时')), AUDIO_RESOLVE_TIMEOUT_MS);
+      timerId = setTimeout(() => reject(new Error('音频地址获取超时')), timeoutMs);
     });
     try {
       return await Promise.race([BookSourceService.getAudioUrl(source, pageUrl, variables), timeout]);

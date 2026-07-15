@@ -7,9 +7,10 @@
 - HarmonyOS Next，`compatibleSdkVersion = 6.1.0(23)`，stage 模式
 - 单 module：`entry/`（type=entry，deviceTypes=phone）
 - ArkUI 使用 **V2 装饰器**（`@ComponentV2`/`@Local`/`@Param`/`@Event`/`@ObservedV2`/`@Trace`）
-- `bundleName`: `com.ylwang.listenbook`
+- `bundleName`: `com.ylwang.listenbook.tingyou`
 - 后台模式：`audioPlayback` + `KEEP_BACKGROUND_RUNNING`
 - 网络：`INTERNET`；体感：`VIBRATE`
+- 签名配置属于本机私有设置，不提交证书路径、Profile 或口令；请在 DevEco Studio 的 Signing Configs 中本地配置
 
 ## 目录约定（与实际一致）
 

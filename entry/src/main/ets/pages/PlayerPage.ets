@@ -163,6 +163,7 @@ export struct PlayerPage {
     }
     if (!b) return;
     this.book = b;
+    AudioService.getInstance().prewarmBookSource(b);
     if (!b.cover) return;
 
     const palette = ColorPickerUtils.getPaletteCached(b.cover);
@@ -246,6 +247,7 @@ export struct PlayerPage {
     await PreferenceService.applySkipConfig(b);
     if (this.isLeaving) return;
     this.book = b;
+    AudioService.getInstance().prewarmBookSource(b);
     this.isFavorite = await PreferenceService.isFavorite(b.id);
     if (this.isLeaving) return;
     this.extractCoverColor(b.cover);

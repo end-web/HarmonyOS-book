@@ -1,7 +1,7 @@
-import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
-export const PRIVACY_POLICY_VERSION = '1.0.0';
+export const PRIVACY_POLICY_VERSION = '2.0.0';
 
 interface PolicySection {
   title: string;
@@ -13,17 +13,17 @@ const POLICY_SECTIONS: PolicySection[] = [
     title: '一、我们如何收集和使用信息',
     paragraphs: [
       '本应用是一款本地优先的听书工具，不要求注册账号，不收集你的姓名、电话、身份证、定位、通讯录等个人身份信息。',
-      '所有书架、收藏、播放历史、阅读偏好、书源订阅地址都仅保存在你的设备本地（系统 Preference 与沙箱目录），我们无服务器，不会上传到任何后端。'
+      '书架、收藏、播放历史和应用设置仅保存在你的设备本地（系统 Preference 与沙箱目录），不会上传到开发者服务器。'
     ]
   },
   {
     title: '二、网络访问说明',
     paragraphs: [
       '应用申请「访问网络（INTERNET）」权限，仅用于以下场景：',
-      '1) 拉取你主动添加的书源订阅 JSON；',
-      '2) 按你保存的书源规则向对应站点发起搜索、章节、正文、音频请求；',
-      '3) 加载书籍封面图片。',
-      '所有目标地址都由你自行添加的书源决定，与我们无关；我们不向任何第三方服务上报数据。'
+      '1) 从内置的听友 FM 服务获取推荐、搜索结果、节目目录和音频地址；',
+      '2) 加载书籍封面和下载你主动选择的离线音频；',
+      '3) 从 GitHub Release 及其网络代理检查应用更新。',
+      '网络请求只服务于上述功能，不用于广告追踪或向开发者上报使用数据。'
     ]
   },
   {
@@ -35,10 +35,10 @@ const POLICY_SECTIONS: PolicySection[] = [
     ]
   },
   {
-    title: '四、第三方书源风险',
+    title: '四、第三方内容说明',
     paragraphs: [
-      '应用本身不内置任何书源。你添加的订阅源由第三方提供，其内容、协议、JS 解析逻辑均不受本应用控制。',
-      '请仅添加你信任来源的书源；对书源内容及由此产生的版权问题，本应用不承担责任。'
+      '在线书籍与音频内容由听友 FM 相关服务提供，其内容、可用性和版权状态不受本应用控制。',
+      '请在法律法规和内容提供方许可范围内使用在线内容及离线下载功能。'
     ]
   },
   {

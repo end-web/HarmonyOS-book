@@ -1,5 +1,5 @@
 /**
- * 内置书源数据类型（移植自 eprendre/listen3 的 sources_by_eprendre.jar）
+ * 听友 FM 内置源数据类型。
  *
  * ArkTS 严格模式：使用 class 而非 interface 作为数据载体，便于 new 实例化避免 obj-literal 报错。
  */
@@ -26,7 +26,6 @@ export class BuiltInBook {
     return new BuiltInBook(coverUrl, bookUrl, title, author, artist);
   }
 }
-
 export class BuiltInEpisode {
   title: string;
   url: string;
@@ -116,13 +115,7 @@ export class HomeBlock {
   }
 }
 
-/**
- * 内置源接口
- *
- * 内置源可声明 sourceType：
- * - 0: 文本源，搜索 → 详情 → 目录 → 正文
- * - 1: 音频源，搜索 → 详情 → 目录 → 音频 URL
- */
+/** 内置音频源接口。 */
 export interface IBuiltInSource {
   /** 源 ID（保持与 eprendre 原 ID 一致，便于后续兼容老收藏） */
   readonly id: string;
@@ -134,30 +127,18 @@ export interface IBuiltInSource {
   readonly desc: string;
   /** 是否支持搜索（不支持时仅出现在分类发现） */
   readonly searchable: boolean;
-  /** 书源类型：0=文本, 1=音频。不声明时默认音频，兼容旧内置源。 */
-  readonly sourceType?: number;
+  /** 可选：该源解析真实音频地址允许的总等待时间。 */
+  readonly audioResolveTimeoutMs?: number;
 
   search(keywords: string, page: number): Promise<BuiltInSearchResult>;
   getCategoryMenus(): Promise<BuiltInCategoryMenu[]>;
   getCategoryList(url: string): Promise<BuiltInCategory>;
   getBookDetail(bookUrl: string, loadEpisodes: boolean, loadFullPages: boolean): Promise<BuiltInBookDetail>;
+  /** 可选：按需预热播放会话。调用方不应阻塞页面渲染。 */
+  prepareAudio?(): Promise<void>;
   getAudioUrl(chapterUrl: string): Promise<string>;
-  /** 文本源正文；音频源可不实现。 */
-  getTextContent?(chapterUrl: string, nextChapterUrl?: string): Promise<string>;
   /** 可选：音频请求所需的额外头（Referer/Cookie 等） */
   getAudioHeaders(audioUrl: string): Record<string, string>;
   /** 首页推荐板块；不支持时返回空数组即可 */
   getHomeBlocks(): Promise<HomeBlock[]>;
-}
-
-/** 工具：构造分类菜单 */
-export class CatBuilder {
-  static menu(title: string, tabs: Array<string[]>): BuiltInCategoryMenu {
-    const list: BuiltInCategoryTab[] = [];
-    for (let i = 0; i < tabs.length; i++) {
-      const t = tabs[i];
-      list.push(new BuiltInCategoryTab(t[0], t[1]));
-    }
-    return new BuiltInCategoryMenu(title, list);
-  }
 }
