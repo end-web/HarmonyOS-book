@@ -65,7 +65,7 @@ export interface DownloadUpdatePayload {
 export class DownloadService {
   private static instance: DownloadService | null = null;
 
-  private ctx: common.Context | null = null;
+  private ctx: common.UIAbilityContext | null = null;
   private resolveQueue: DownloadQueueItem[] = [];
   private fileQueue: DownloadQueueItem[] = [];
   private resolveRunningCount: number = 0;
@@ -81,6 +81,7 @@ export class DownloadService {
   private activeProgress: Map<string, ActiveDownloadProgress> = new Map();
   private lastProgressEmitAt: Map<string, number> = new Map();
   private durationHydrationBooks: Set<string> = new Set();
+  private durationHydrationRerunBooks: Set<string> = new Set();
   private notificationBookIds: Set<string> = new Set();
   private lastNotificationAt: number = 0;
 
@@ -91,13 +92,19 @@ export class DownloadService {
     return DownloadService.instance;
   }
 
-  async init(ctx: common.Context): Promise<void> {
+  async init(ctx: common.UIAbilityContext): Promise<void> {
     this.ctx = ctx;
     DownloadNotificationService.setContext(ctx);
+    // 仅加载索引，不做全量文件 stat，避免冷启动卡死
     await DownloadStore.init(ctx);
   }
 
+  /**
+   * 冷启动后恢复下载：先分批校验本地文件，再重入队未完成任务。
+   * 必须在 UI 首帧 / AudioService.markReady 之后调用。
+   */
   async restoreDownloads(): Promise<void> {
+    await DownloadStore.normalizeInterruptedTasks();
     await this.restoreInterruptedDownloads();
   }
 
@@ -113,7 +120,7 @@ export class DownloadService {
     await this.startBackgroundTransfer();
   }
 
-  setContext(ctx: common.Context): void {
+  setContext(ctx: common.UIAbilityContext): void {
     this.ctx = ctx;
     DownloadStore.setContext(ctx);
     DownloadNotificationService.setContext(ctx);
@@ -157,6 +164,7 @@ export class DownloadService {
       }
       record.status = 'paused';
       await DownloadStore.saveBook(record);
+      if (record.status !== 'paused') this.pausedBooks.delete(bookId);
       this.emitUpdate(bookId);
     }
     this.stopBackgroundTransferIfIdle();
@@ -168,14 +176,19 @@ export class DownloadService {
     this.deletedBooks.delete(bookId);
     const record = await DownloadStore.getBook(bookId);
     if (!record) return;
-    const book = this.bookFromRecord(record);
+    const book = await this.bookFromRecordWithVariables(record);
     const chapters: Chapter[] = [];
     for (const ch of record.chapters) {
       if (ch.status !== 'completed' && ch.status !== 'deleted') {
         chapters.push(this.chapterFromRecord(ch));
       }
     }
-    if (chapters.length === 0) return;
+    if (chapters.length === 0) {
+      await DownloadStore.saveBook(record);
+      this.emitUpdate(bookId);
+      this.stopBackgroundTransferIfIdle();
+      return;
+    }
     record.status = 'queued';
     await this.enqueueChapters(book, chapters);
   }
@@ -207,11 +220,10 @@ export class DownloadService {
   async deleteChapterDownload(bookId: string, chapterId: string, pageUrl: string = ''): Promise<void> {
     const record = DownloadStore.getBookSync(bookId);
     if (!record) return;
-    let chapter: DownloadChapterRecord | undefined = undefined;
-    if (pageUrl) chapter = record.chapters.find((item: DownloadChapterRecord) => item.pageUrl === pageUrl);
-    if (!chapter) chapter = record.chapters.find((item: DownloadChapterRecord) => item.chapterId === chapterId);
+    const chapter = record.chapters.find((item: DownloadChapterRecord) => DownloadPolicy.matchesChapter(
+      item.chapterId, item.pageUrl, chapterId, pageUrl));
     if (!chapter) return;
-    const stablePageUrl = chapter.pageUrl;
+    const stablePageUrl = chapter.pageUrl || pageUrl;
     const deletedKey = this.taskKey(bookId, stablePageUrl);
     this.advanceChapterGeneration(deletedKey);
     this.deletedChapters.add(deletedKey);
@@ -312,29 +324,44 @@ export class DownloadService {
   }
 
   async hydrateBookDurations(bookId: string): Promise<void> {
-    if (!bookId || this.durationHydrationBooks.has(bookId)) return;
+    if (!bookId) return;
+    if (this.durationHydrationBooks.has(bookId)) {
+      this.durationHydrationRerunBooks.add(bookId);
+      return;
+    }
     this.durationHydrationBooks.add(bookId);
     try {
-      const record = await DownloadStore.getBook(bookId);
-      if (!record) return;
-      let changed = false;
-      for (const chapter of record.chapters) {
-        if (chapter.status !== 'completed' || (chapter.durationSec ?? 0) > 0
-          || !DownloadStore.isExpectedFile(chapter.filePath, chapter.bytes)) continue;
-        const durationSec = await this.extractAudioDuration(chapter.filePath);
-        if (durationSec <= 0) continue;
-        chapter.durationSec = durationSec;
-        changed = true;
-      }
-      if (changed) {
-        await DownloadStore.saveBook(record);
-        const progress = this.getBookProgress(bookId);
-        this.emitRawUpdate(bookId, undefined, record.status, record.downloadedCount, record.failedCount,
-          progress.totalCount, progress);
-      }
+      do {
+        this.durationHydrationRerunBooks.delete(bookId);
+        await this.hydrateBookDurationsOnce(bookId);
+      } while (this.durationHydrationRerunBooks.has(bookId));
     } finally {
       this.durationHydrationBooks.delete(bookId);
+      const shouldRerun = this.durationHydrationRerunBooks.delete(bookId);
+      if (shouldRerun) this.hydrateBookDurations(bookId).catch((_e: Error): void => {});
     }
+  }
+
+  private async hydrateBookDurationsOnce(bookId: string): Promise<void> {
+    const record = await DownloadStore.getBook(bookId);
+    if (!record) return;
+    let changed = false;
+    for (const chapter of record.chapters) {
+      if (chapter.status !== 'completed' || (chapter.durationSec ?? 0) > 0
+        || !DownloadStore.isExpectedFile(chapter.filePath, chapter.bytes)) continue;
+      const filePath = chapter.filePath;
+      const durationSec = await this.extractAudioDuration(filePath);
+      if (DownloadStore.getBookSync(bookId) !== record) return;
+      if (chapter.status !== 'completed' || chapter.filePath !== filePath || durationSec <= 0) continue;
+      chapter.durationSec = durationSec;
+      changed = true;
+    }
+    if (!changed || DownloadStore.getBookSync(bookId) !== record) return;
+    await DownloadStore.saveBook(record);
+    if (DownloadStore.getBookSync(bookId) !== record) return;
+    const progress = this.getBookProgress(bookId);
+    this.emitRawUpdate(bookId, undefined, record.status, record.downloadedCount, record.failedCount,
+      progress.totalCount, progress);
   }
 
   hasAnyDownload(bookId: string): boolean {
@@ -357,7 +384,10 @@ export class DownloadService {
       const pageUrl = this.chapterPageUrl(chapter);
       if (!pageUrl) continue;
       const existing = DownloadStore.getChapterSync(book.id, chapter);
-      if (existing && existing.status === 'completed' && DownloadStore.isUsableFile(existing.filePath)) continue;
+      // 必须用 isExpectedFile：仅 size>1KB 的 isUsableFile 会把“伪完成/大小不符”当成已下载而跳过，
+      // 导致 UI 显示已下载但播放器 getDownloadedFilePath 拿不到文件。
+      if (existing && existing.status === 'completed'
+        && DownloadStore.isExpectedFile(existing.filePath, existing.bytes)) continue;
       const key = this.taskKey(book.id, pageUrl);
       if (this.pendingKeys.has(key) || localKeys.has(key)) continue;
       this.deletedChapters.delete(key);
@@ -436,7 +466,7 @@ export class DownloadService {
         await this.markFailed(item, '书源不存在');
         return;
       }
-      const requestInfo = await BookSourceService.resolveAudioRequest(source, pageUrl);
+      const requestInfo = await BookSourceService.resolveAudioRequest(source, pageUrl, item.book.variables);
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       if (!this.isValidAudioUrl(pageUrl, requestInfo.url)) {
         await this.markFailed(item, '音频地址解析失败');
@@ -473,12 +503,16 @@ export class DownloadService {
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       if (DownloadStore.isExpectedFile(filePath, record?.bytes ?? 0)) {
         const size = fileIo.statSync(filePath).size;
-        await this.ensureChapterDuration(item, filePath, record?.durationSec ?? 0);
+        // 已有可用文件：先落 completed，时长后台补齐，避免抽时长阻塞/被暂停冲掉完成态
+        if (record?.durationSec && record.durationSec > 0) {
+          item.chapter.duration = record.durationSec;
+        }
         await DownloadStore.upsertChapter(item.book, item.chapter, 'completed', audioUrl, filePath, size, '',
           (): boolean => this.isItemCurrent(item));
         if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
         this.clearPendingItem(item);
         this.emitUpdate(item.book.id, item.chapter.id);
+        this.hydrateBookDurations(item.book.id).catch((_e: Error): void => {});
         return;
       }
       await DownloadStore.upsertChapter(item.book, item.chapter, 'downloading', audioUrl, filePath, 0, '',
@@ -496,16 +530,17 @@ export class DownloadService {
         }
       });
       if (!this.isItemCurrent(item)) {
+        // 暂停时保留已落盘的最终文件，供 resume 时 isExpectedFile 直接认领；仅删除场景清文件
         if (this.isItemDeleted(item)) await DownloadStore.deleteFileSafely(filePath);
         return this.discardStaleItem(item);
       }
-      await this.ensureChapterDuration(item, filePath);
-      if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
+      // 先标记 completed 再异步抽时长：防止抽 metadata 期间 pause 导致“文件在、状态未完成”
       await DownloadStore.upsertChapter(item.book, item.chapter, 'completed', audioUrl, filePath, bytes, '',
         (): boolean => this.isItemCurrent(item));
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       this.clearPendingItem(item);
       this.emitUpdate(item.book.id, item.chapter.id);
+      this.hydrateBookDurations(item.book.id).catch((_e: Error): void => {});
     } catch (err) {
       if (!this.isItemCurrent(item)) {
         if (filePath && this.isItemDeleted(item)) await DownloadStore.deleteFileSafely(filePath);
@@ -528,18 +563,6 @@ export class DownloadService {
     if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
     this.clearPendingItem(item);
     this.emitUpdate(item.book.id, item.chapter.id);
-  }
-
-  private async ensureChapterDuration(item: DownloadQueueItem, filePath: string,
-    knownDurationSec: number = 0): Promise<void> {
-    let durationSec = item.chapter.duration > 0 ? item.chapter.duration : knownDurationSec;
-    if (durationSec <= 0) durationSec = await this.extractAudioDuration(filePath);
-    if (durationSec <= 0) return;
-    item.chapter.duration = durationSec;
-    const pageUrl = this.chapterPageUrl(item.chapter);
-    const original = item.book.chapters.find((chapter: Chapter) => chapter.id === item.chapter.id
-      || this.chapterPageUrl(chapter) === pageUrl);
-    if (original) original.duration = durationSec;
   }
 
   private async extractAudioDuration(filePath: string): Promise<number> {
@@ -641,6 +664,13 @@ export class DownloadService {
   private async restoreInterruptedDownloads(): Promise<void> {
     const records = await DownloadStore.getBooks();
     for (const record of records) {
+      // 冷启动后内存 notification 集合为空；只重建进行中/暂停任务，避免每次启动重复弹“下载完成”
+      if (record.status === 'queued' || record.status === 'downloading' || record.status === 'paused') {
+        this.notificationBookIds.add(record.bookId);
+      }
+      if (record.status === 'paused') {
+        this.pausedBooks.add(record.bookId);
+      }
       if (record.status !== 'queued') continue;
       const chapters: Chapter[] = [];
       for (const chapter of record.chapters) {
@@ -648,8 +678,30 @@ export class DownloadService {
           chapters.push(this.chapterFromRecord(chapter));
         }
       }
-      if (chapters.length > 0) await this.enqueueChapters(this.bookFromRecord(record), chapters);
+      if (chapters.length > 0) {
+        const book = await this.bookFromRecordWithVariables(record);
+        await this.enqueueChapters(book, chapters);
+      }
     }
+    // 刷新一次通知：暂停中展示暂停，队列中继续进度；无任务则清理陈旧通知
+    this.refreshNotification(true).catch((_e: Error): void => {});
+  }
+
+  /** 恢复任务时尽量带回书源 variables，避免依赖变量的规则解析失败 */
+  private async bookFromRecordWithVariables(record: DownloadBookRecord): Promise<Book> {
+    const book = this.bookFromRecord(record);
+    if (!this.ctx) return book;
+    try {
+      const cached = await DataService.getBookById(this.ctx, record.bookId);
+      if (cached?.variables && Object.keys(cached.variables).length > 0) {
+        book.variables = cached.variables;
+      }
+      if (cached?.contentType) book.contentType = cached.contentType;
+      if (cached?.category) book.category = cached.category;
+    } catch (_e) {
+      // 缓存书缺失时仍用 store 记录继续下载
+    }
+    return book;
   }
 
   private createQueueItem(book: Book, chapter: Chapter): DownloadQueueItem {
@@ -743,7 +795,7 @@ export class DownloadService {
 
   private async startBackgroundTransfer(): Promise<void> {
     if (!this.ctx) return;
-    await BackgroundTaskService.startDataTransfer(this.ctx as common.UIAbilityContext);
+    await BackgroundTaskService.startDataTransfer(this.ctx);
   }
 
   /** 有活跃下载时确保 dataTransfer 长时任务仍在；系统取消后由 BackgroundTaskService 重申 */
@@ -755,7 +807,7 @@ export class DownloadService {
     }
     // 已在跑且已声明 dataTransfer 时跳过，避免进度回调刷屏申请
     if (BackgroundTaskService.isRunning() && BackgroundTaskService.hasMode('dataTransfer')) return;
-    BackgroundTaskService.startDataTransfer(this.ctx as common.UIAbilityContext).catch((err: Error): void => {
+    BackgroundTaskService.startDataTransfer(this.ctx).catch((err: Error): void => {
       hilog.warn(DOMAIN, TAG, 'ensure background transfer failed: %{public}s',
         err?.message ?? JSON.stringify(err));
     });
@@ -765,7 +817,7 @@ export class DownloadService {
     if (this.resolveQueue.length > 0 || this.fileQueue.length > 0
       || this.resolveRunningCount > 0 || this.fileRunningCount > 0 || this.pendingKeys.size > 0) return;
     if (!this.ctx) return;
-    BackgroundTaskService.stopDataTransfer(this.ctx as common.UIAbilityContext).catch((err: Error): void => {
+    BackgroundTaskService.stopDataTransfer(this.ctx).catch((err: Error): void => {
       hilog.warn(DOMAIN, TAG, 'stop background transfer failed: %{public}s',
         err?.message ?? JSON.stringify(err));
     });

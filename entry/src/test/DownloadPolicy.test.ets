@@ -2,6 +2,13 @@ import { describe, it, expect } from '@ohos/hypium';
 import { DownloadPolicy, DownloadGenerationSnapshot } from '../main/ets/service/DownloadPolicy';
 import { Chapter } from '../main/ets/model/Book';
 
+function bytes(values: number[]): ArrayBuffer {
+  const buffer = new ArrayBuffer(values.length);
+  const target = new Uint8Array(buffer);
+  for (let i = 0; i < values.length; i++) target[i] = values[i];
+  return buffer;
+}
+
 export default function downloadPolicyTest() {
   describe('DownloadPolicy', () => {
     it('invalidates stale task generations after pause or delete', 0, () => {
@@ -16,7 +23,11 @@ export default function downloadPolicyTest() {
     it('prefers stable page url when matching chapters', 0, () => {
       expect(DownloadPolicy.matchesChapter('old-id', 'https://audio.test/page/1', 'new-id',
         'https://audio.test/page/1')).assertEqual(true);
+      expect(DownloadPolicy.matchesChapter('same-id', 'https://audio.test/page/old', 'same-id',
+        'https://audio.test/page/new')).assertEqual(false);
       expect(DownloadPolicy.matchesChapter('same-id', 'https://audio.test/page/old', 'same-id', ''))
+        .assertEqual(true);
+      expect(DownloadPolicy.matchesChapter('same-id', '', 'same-id', 'https://audio.test/page/new'))
         .assertEqual(true);
     });
 
@@ -45,12 +56,53 @@ export default function downloadPolicyTest() {
     });
 
     it('recognizes common audio signatures', 0, () => {
-      const id3 = new Uint8Array([0x49, 0x44, 0x33, 0x04]).buffer;
-      const mp3 = new Uint8Array([0xFF, 0xFB, 0x90, 0x64]).buffer;
-      const html = new Uint8Array([0x3C, 0x68, 0x74, 0x6D]).buffer;
+      const id3 = bytes([0x49, 0x44, 0x33, 0x04]);
+      const mp3 = bytes([0xFF, 0xFB, 0x90, 0x64]);
+      const adts = bytes([0xFF, 0xF1, 0x50, 0x80]);
+      const flac = bytes([0x66, 0x4C, 0x61, 0x43]);
+      const ogg = bytes([0x4F, 0x67, 0x67, 0x53]);
+      const wav = bytes([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45]);
+      const aiff = bytes([0x46, 0x4F, 0x52, 0x4D, 0, 0, 0, 0, 0x41, 0x49, 0x46, 0x46]);
+      const mp4 = bytes([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70]);
+      const amr = bytes([0x23, 0x21, 0x41, 0x4D, 0x52, 0x0A]);
+      const asf = bytes([0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11,
+        0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C]);
+      const ape = bytes([0x4D, 0x41, 0x43, 0x20]);
       expect(DownloadPolicy.hasKnownAudioSignature(id3)).assertEqual(true);
       expect(DownloadPolicy.hasKnownAudioSignature(mp3)).assertEqual(true);
-      expect(DownloadPolicy.hasKnownAudioSignature(html)).assertEqual(false);
+      expect(DownloadPolicy.hasKnownAudioSignature(adts)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(flac)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(ogg)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(wav)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(aiff)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(mp4)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(amr)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(asf)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(ape)).assertEqual(true);
+      expect(DownloadPolicy.hasKnownAudioSignature(bytes([1, 2, 3, 4]))).assertEqual(false);
+    });
+
+    it('accumulates fragmented prefixes and rejects text payloads', 0, () => {
+      let prefix = DownloadPolicy.appendPrefix(new ArrayBuffer(0), bytes([0x49]));
+      prefix = DownloadPolicy.appendPrefix(prefix, bytes([0x44, 0x33, 0x04]));
+      expect(DownloadPolicy.hasKnownAudioSignature(prefix)).assertEqual(true);
+      const html = bytes([0x20, 0x3C, 0x68, 0x74, 0x6D, 0x6C, 0x3E]);
+      const json = bytes([0x7B, 0x22, 0x65, 0x72, 0x72, 0x6F, 0x72, 0x22, 0x3A, 0x31, 0x7D]);
+      expect(DownloadPolicy.isClearlyTextResponse(html)).assertEqual(true);
+      expect(DownloadPolicy.isClearlyTextResponse(json)).assertEqual(true);
+      expect(DownloadPolicy.isClearlyTextResponse(prefix)).assertEqual(false);
+    });
+
+    it('keeps paused only while unfinished chapters remain', 0, () => {
+      expect(DownloadPolicy.deriveBookStatus('paused', ['completed', 'pending'])).assertEqual('paused');
+      expect(DownloadPolicy.deriveBookStatus('paused', ['completed'])).assertEqual('completed');
+      expect(DownloadPolicy.deriveBookStatus('paused', ['failed'])).assertEqual('failed');
+      expect(DownloadPolicy.deriveBookStatus('downloading', ['completed', 'deleted'])).assertEqual('completed');
+    });
+
+    it('distinguishes missing files from other stat failures', 0, () => {
+      expect(DownloadPolicy.classifyFileProbeErrorCode(13900002)).assertEqual('missing');
+      expect(DownloadPolicy.classifyFileProbeErrorCode(13900012)).assertEqual('stat_error');
     });
 
     it('classifies stable download failure codes', 0, () => {
@@ -59,6 +111,8 @@ export default function downloadPolicyTest() {
       expect(DownloadPolicy.classifyFailure('存储空间不足')).assertEqual('storage');
       expect(DownloadPolicy.classifyFailure('connect timeout')).assertEqual('network');
       expect(DownloadPolicy.classifyFailure('响应不是音频内容 text/html')).assertEqual('invalid_response');
+      expect(DownloadPolicy.classifyFailure('音频文件落盘不完整 8192/3500000')).assertEqual('invalid_response');
+      expect(DownloadPolicy.classifyFailure('已下载文件不完整（大小与记录不符）')).assertEqual('invalid_response');
     });
   });
 }

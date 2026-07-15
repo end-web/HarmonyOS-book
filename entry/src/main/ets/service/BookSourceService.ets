@@ -1541,14 +1541,15 @@ export class BookSourceService {
 
   // ──────────────────── 音频 URL ────────────────────
 
-  static async getAudioUrl(source: BookSource, chapterUrl: string): Promise<string> {
+  static async getAudioUrl(source: BookSource, chapterUrl: string,
+    variables?: Record<string, string>): Promise<string> {
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
       return BuiltInDispatcher.getAudioUrl(source, chapterUrl);
     }
     try {
       const rule = source.ruleContent;
       const contentRule = rule.audioUrl || rule.content;
-      BookSourceService.prepareSourceContext(source);
+      BookSourceService.prepareSourceContext(source, variables);
 
       // 处理 data: URL（代理书源的中间路由机制）
       if (DataUrlHandler.isDataUrl(chapterUrl)) {
@@ -1556,7 +1557,7 @@ export class BookSourceService {
       }
 
       // 拆分 Legado ",{...}" 配置语法（如 url,{webView:"true"}）
-      const analyzedChapter = await BookSourceService.analyzeRequestUrl(source, chapterUrl);
+      const analyzedChapter = await BookSourceService.analyzeRequestUrl(source, chapterUrl, variables);
       const split = AnalyzeUrl.splitUrlConfig(chapterUrl);
       const realUrl = analyzedChapter.url;
       const webViewVal = split.config.webView;
@@ -1669,7 +1670,7 @@ export class BookSourceService {
           if (audioUrl && !audioUrl.startsWith('DEBUG:')) {
             // 嗅探/解析得到真实音频 URL 后，仍按 content 规则做一次后处理
             // （如本源的 <js>result.replace(IP)</js> 换源 IP）
-            return await BookSourceService.applyContentPostProcess(source, realUrl, audioUrl);
+            return await BookSourceService.applyContentPostProcess(source, realUrl, audioUrl, variables);
           }
           if (audioUrl.startsWith('DEBUG:')) {
             console.warn(`[${TAG}] getAudioUrl WebView debug: ${audioUrl}`);
@@ -1687,16 +1688,19 @@ export class BookSourceService {
       const chapterCtx: Record<string, Object> = {};
       chapterCtx['url'] = realUrl as Object;
       chapterCtx['chapterUrl'] = realUrl as Object;
-      const ctx = new AnalyzeContext(realUrl);
-      BookSourceService.configureAnalyzeContext(
-        ctx,
-        source,
-        undefined,
-        { origin: source.bookSourceUrl, bookUrl: realUrl, name: '' } as BookContext,
-        chapterCtx,
-      );
-      const analyzer = new AnalyzeRule(body, ctx);
-      const audioUrl = await analyzer.getString(contentRule);
+      const audioUrl = await BookSourceService.contextLock.withLock(async (): Promise<string> => {
+        BookSourceService.prepareSourceContext(source, variables);
+        const ctx = new AnalyzeContext(realUrl, variables);
+        BookSourceService.configureAnalyzeContext(
+          ctx,
+          source,
+          variables,
+          { origin: source.bookSourceUrl, bookUrl: realUrl, name: '' } as BookContext,
+          chapterCtx,
+        );
+        const analyzer = new AnalyzeRule(body, ctx);
+        return await analyzer.getString(contentRule) || '';
+      });
       if (!audioUrl) return realUrl;
 
       return AnalyzeUrl.resolveUrl(realUrl, audioUrl);
@@ -1709,15 +1713,16 @@ export class BookSourceService {
     }
   }
 
-  static async resolveAudioRequest(source: BookSource, chapterUrl: string): Promise<AudioRequestInfo> {
-    const audioUrl = await BookSourceService.getAudioUrl(source, chapterUrl);
+  static async resolveAudioRequest(source: BookSource, chapterUrl: string,
+    variables?: Record<string, string>): Promise<AudioRequestInfo> {
+    const audioUrl = await BookSourceService.getAudioUrl(source, chapterUrl, variables);
     let headers: Record<string, string> = {};
     let cleanUrl = AnalyzeUrl.splitUrlConfig(audioUrl).url;
     if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
       headers = BuiltInDispatcher.getAudioHeaders(source, cleanUrl);
       BookSourceService.mergeLoginHeaders(source, headers);
     } else {
-      const analyzed = await BookSourceService.analyzeRequestUrl(source, audioUrl, undefined,
+      const analyzed = await BookSourceService.analyzeRequestUrl(source, audioUrl, variables,
         undefined, undefined, chapterUrl);
       cleanUrl = analyzed.url;
       headers = analyzed.headers;
@@ -1738,7 +1743,7 @@ export class BookSourceService {
    * 非 JS 规则（CSS/JSONPath）针对页面 HTML 设计，不应作用在裸 URL 上，直接原样返回。
    */
   private static async applyContentPostProcess(
-    source: BookSource, baseUrl: string, audioUrl: string
+    source: BookSource, baseUrl: string, audioUrl: string, variables?: Record<string, string>
   ): Promise<string> {
     const rule = source.ruleContent;
     const contentRule = (rule.audioUrl || rule.content || '').trim();
@@ -1746,11 +1751,14 @@ export class BookSourceService {
       || contentRule.toLowerCase().startsWith('js:');
     if (!isJs) return audioUrl;
     try {
-      const ctx = new AnalyzeContext(baseUrl);
-      ctx.jsLib = source.jsLib || '';
-      // content 为裸 URL 字符串，JS 里的 result 即这个 URL
-      const analyzer = new AnalyzeRule(audioUrl, ctx);
-      const processed = await analyzer.getString(contentRule);
+      const processed = await BookSourceService.contextLock.withLock(async (): Promise<string> => {
+        BookSourceService.prepareSourceContext(source, variables);
+        const ctx = new AnalyzeContext(baseUrl, variables);
+        BookSourceService.configureAnalyzeContext(ctx, source, variables);
+        // content 为裸 URL 字符串，JS 里的 result 即这个 URL
+        const analyzer = new AnalyzeRule(audioUrl, ctx);
+        return await analyzer.getString(contentRule) || '';
+      });
       if (processed && (processed.startsWith('http://') || processed.startsWith('https://'))) {
         return processed;
       }

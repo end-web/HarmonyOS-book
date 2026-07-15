@@ -12,6 +12,7 @@ import { PreferenceService } from '../service/PreferenceService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
 import { DownloadChapterRecord } from '../service/DownloadStore';
+import { DownloadPolicy } from '../service/DownloadPolicy';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
@@ -107,11 +108,13 @@ export struct PlayerPage {
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
+    this.chapterDataSource.notifyDataReloaded();
   };
   private downloadHandler = (evt: emitter.EventData): void => {
     const data = evt.data as DownloadUpdatePayload;
     if (!data || data.bookId !== this.bookId) return;
     this.downloadTick = this.downloadTick + 1;
+    if (!data.progressOnly) this.chapterDataSource.notifyDataReloaded();
   };
   private audioPlayFailedHandler = (evt: emitter.EventData): void => {
     const data = evt.data as AudioPlayFailedPayload;
@@ -420,7 +423,8 @@ export struct PlayerPage {
       ]
     }).then((result) => {
       if (result.index === 1 && this.book) {
-        DownloadService.getInstance().deleteChapterDownload(this.book.id, ch.id).then(() => {
+        DownloadService.getInstance().deleteChapterDownload(
+          this.book.id, ch.id, DownloadPolicy.stablePageUrl(ch)).then(() => {
           this.downloadTick = this.downloadTick + 1;
           this.showToast('单章下载已删除');
         }).catch(() => this.showToast('删除下载失败，请重试'));
@@ -531,17 +535,22 @@ export struct PlayerPage {
   }
 
   private playModeIcon(): Resource {
-    if (this.playerState.playMode === PlayMode.SingleLoop) {
-      return $r('sys.symbol.repeat_1');
-    }
-    if (this.playerState.playMode === PlayMode.ListLoop) {
-      return $r('sys.symbol.repeat');
-    }
+    if (this.playerState.playMode === PlayMode.SingleLoop) return $r('sys.symbol.repeat_1');
+    if (this.playerState.playMode === PlayMode.ListLoop) return $r('sys.symbol.repeat');
     return $r('sys.symbol.arrow_right');
   }
 
   private playModeColor(): string {
     return this.playerState.playMode === PlayMode.Sequence ? '#FFFFFF' : '#FFD480';
+  }
+
+  private openBookDetail(): void {
+    const id = this.book?.id || this.bookId;
+    if (!id) {
+      this.showToast('暂无书籍详情');
+      return;
+    }
+    this.navStack.pushPathByName('detail', id);
   }
 
   private applyCoverPalette(palette: CoverColorPalette, cover: string): void {
@@ -692,11 +701,7 @@ export struct PlayerPage {
       SymbolGlyph($r('sys.symbol.info_circle'))
         .fontSize(24)
         .fontColor(['#FFFFFF'])
-        .onClick(() => {
-          if (this.book) {
-            this.navStack.pushPathByName('detail', this.book.id);
-          }
-        })
+        .onClick(() => this.openBookDetail())
     }
     .width('100%')
     .height(48)
@@ -1087,7 +1092,7 @@ export struct PlayerPage {
               .onAction(() => this.handleChapterDownloadLongPress(ch))
           )
         }
-      }, (ch: Chapter) => ch.id)
+      }, (ch: Chapter) => DownloadPolicy.stablePageUrl(ch) || ch.id)
     }
     .width('100%')
     .layoutWeight(1)

@@ -46,6 +46,9 @@ class AckParcelable implements rpc.Parcelable {
 }
 
 export default class EntryAbility extends UIAbility {
+  /** 防止 timeout 路径与正常完成路径重复调度下载恢复 */
+  private downloadRecoveryScheduled: boolean = false;
+
   onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -91,10 +94,10 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'Init services timeout or failed: %{public}s', e?.message ?? '');
-      // 注意:bootstrapAudioService 的 finally 块已保证 markReady() 被调用,
-      // 这里无需重复调用。但为防止 initServicesCore 在超时前就失败(未进入 bootstrap),
-      // 仍需确保 markReady 至少被调用一次
-      // TODO: 更优雅的方案是让 AudioService.markReady() 具有幂等性
+      // 超时可能发生在 bootstrapAudioService 之前，必须 markReady，否则 whenReady 只能靠超时兜底
+      AudioService.getInstance().markReady();
+      // 超时后仍后台恢复下载，不阻塞冷启动首帧
+      this.scheduleDownloadRecovery();
     }
   }
 
@@ -111,6 +114,7 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, TAG, 'StatsService init failed: %{public}s', JSON.stringify(e));
     }
     try {
+      // 轻量：只读 download_store.json，不做全量文件 stat
       await DownloadService.getInstance().init(this.context);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'DownloadService init failed: %{public}s', JSON.stringify(e));
@@ -124,11 +128,6 @@ export default class EntryAbility extends UIAbility {
       await cacheService.init(this.context);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'SourceVariableStore/CacheService init failed: %{public}s', JSON.stringify(e));
-    }
-    try {
-      await DownloadService.getInstance().restoreDownloads();
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'DownloadService restore failed: %{public}s', JSON.stringify(e));
     }
     // 设置设备标识（用于 java.androidId()）
     try {
@@ -151,6 +150,21 @@ export default class EntryAbility extends UIAbility {
     }
 
     hilog.info(DOMAIN, TAG, 'initServicesCore: complete, total=%{public}dms', Date.now() - startTime);
+
+    // 下载文件校验 + 中断任务恢复：延后到 ready 之后，避免主线程扫盘卡死
+    this.scheduleDownloadRecovery();
+  }
+
+  /** 延后恢复下载队列，不阻塞冷启动 / 首帧 */
+  private scheduleDownloadRecovery(): void {
+    if (this.downloadRecoveryScheduled) return;
+    this.downloadRecoveryScheduled = true;
+    setTimeout((): void => {
+      DownloadService.getInstance().restoreDownloads().catch((e: Error) => {
+        hilog.warn(DOMAIN, TAG, 'DownloadService restore failed: %{public}s',
+          e?.message ?? JSON.stringify(e));
+      });
+    }, 300);
   }
 
   /** 卡片或通知跳转 / 已存活时的拉起,统一在 onNewWant 处理 */

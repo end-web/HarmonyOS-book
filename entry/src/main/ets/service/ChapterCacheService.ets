@@ -318,7 +318,7 @@ export class ChapterCacheService {
       const source = await this.findSource(book.sourceUrl);
       if (!source) throw new Error('预加载书源不可用');
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const audioUrl = await BookSourceService.getAudioUrl(source, pageUrl);
+      const audioUrl = await BookSourceService.getAudioUrl(source, pageUrl, book.variables);
       if (audioUrl && audioUrl !== pageUrl) {
         this.preloadFailureAt.delete(chapter.id);
         this.evictUrlCache();

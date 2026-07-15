@@ -18,6 +18,10 @@ export class ChapterDataSource implements IDataSource {
 
   setChapters(chapters: Chapter[]): void {
     this.chapters = chapters;
+    this.notifyDataReloaded();
+  }
+
+  notifyDataReloaded(): void {
     this.listeners.forEach((l) => l.onDataReloaded());
   }
 

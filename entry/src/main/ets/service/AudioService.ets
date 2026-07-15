@@ -884,7 +884,7 @@ export class AudioService {
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
       if (!source) return;
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const audioUrl = await this.resolveAudioUrlWithTimeout(source, pageUrl);
+      const audioUrl = await this.resolveAudioUrlWithTimeout(source, pageUrl, book.variables);
       if (audioUrl) {
         chapter.source = { type: 'url', value: audioUrl };
         // 把当前章节也下到本地
@@ -898,13 +898,14 @@ export class AudioService {
     }
   }
 
-  private async resolveAudioUrlWithTimeout(source: BookSource, pageUrl: string): Promise<string> {
+  private async resolveAudioUrlWithTimeout(source: BookSource, pageUrl: string,
+    variables?: Record<string, string>): Promise<string> {
     let timerId: number = -1;
     const timeout = new Promise<string>((_resolve, reject) => {
       timerId = setTimeout(() => reject(new Error('音频地址获取超时')), AUDIO_RESOLVE_TIMEOUT_MS);
     });
     try {
-      return await Promise.race([BookSourceService.getAudioUrl(source, pageUrl), timeout]);
+      return await Promise.race([BookSourceService.getAudioUrl(source, pageUrl, variables), timeout]);
     } finally {
       if (timerId >= 0) clearTimeout(timerId);
     }

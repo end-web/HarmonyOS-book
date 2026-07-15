@@ -5,6 +5,8 @@ import { DownloadPolicy } from './DownloadPolicy';
 const MIN_AUDIO_FILE_BYTES = 1024;
 const MIN_FREE_BYTES = 16 * 1024 * 1024;
 const FREE_SPACE_RESERVE_BYTES = 8 * 1024 * 1024;
+const UNKNOWN_LENGTH_SPACE_CHECK_BYTES = 4 * 1024 * 1024;
+const RESPONSE_PREFIX_BYTES = 64;
 
 export interface AudioDownloadRequest {
   url: string;
@@ -31,11 +33,13 @@ export class AudioDownloadTransport {
     let writeErrorMessage = '';
     let writtenBytes = 0;
     let responseHeaders: Record<string, string> = {};
-    let firstBytes: ArrayBuffer = new ArrayBuffer(0);
+    let responsePrefix: ArrayBuffer = new ArrayBuffer(0);
+    let nextUnknownLengthSpaceCheck = UNKNOWN_LENGTH_SPACE_CHECK_BYTES;
     let completed = false;
 
     this.cancelled = false;
     await AudioDownloadTransport.deleteFile(partPath);
+    await AudioDownloadTransport.deleteFile(`${options.finalPath}.swap`);
     try {
       if (DownloadPolicy.isHls(options.url, '')) {
         throw new Error('暂不支持 HLS 音频离线下载');
@@ -58,17 +62,25 @@ export class AudioDownloadTransport {
       });
       this.request.on('dataReceive', (chunk: ArrayBuffer) => {
         if (this.cancelled || writeErrorMessage.length > 0 || chunk.byteLength === 0) return;
-        if (firstBytes.byteLength === 0) firstBytes = AudioDownloadTransport.copyPrefix(chunk, 16);
+        responsePrefix = DownloadPolicy.appendPrefix(responsePrefix, chunk, RESPONSE_PREFIX_BYTES);
         writeChain = writeChain.then(async (): Promise<void> => {
           if (this.cancelled || writeErrorMessage.length > 0 || !file) return;
-          const count = await fileIo.write(file.fd, chunk, { offset: 0, length: chunk.byteLength });
+          // WriteOptions.offset 是文件内写入位置，不是 buffer 偏移。
+          // 传 offset:0 会让每一块都覆盖文件头，最终只剩最后一块，
+          // 但 writtenBytes 仍累计为完整大小，重启校验 size!==bytes 会整批失败。
+          // 不传 offset，从当前文件指针顺序追加。
+          const count = await fileIo.write(file.fd, chunk, { length: chunk.byteLength });
           if (count !== chunk.byteLength) {
             throw new Error(`音频文件写入不完整 ${count}/${chunk.byteLength}`);
           }
           writtenBytes += count;
+          const contentLength = Number(AudioDownloadTransport.getHeader(responseHeaders, 'content-length'));
+          if (!(contentLength > 0) && writtenBytes >= nextUnknownLengthSpaceCheck) {
+            AudioDownloadTransport.ensureFreeSpace(options.finalPath, MIN_FREE_BYTES);
+            nextUnknownLengthSpaceCheck = writtenBytes + UNKNOWN_LENGTH_SPACE_CHECK_BYTES;
+          }
           if (options.onProgress) {
-            const totalBytes = Number(AudioDownloadTransport.getHeader(responseHeaders, 'content-length'));
-            options.onProgress(writtenBytes, totalBytes > 0 ? totalBytes : 0);
+            options.onProgress(writtenBytes, contentLength > 0 ? contentLength : 0);
           }
         }).catch((err: Error): void => {
           writeErrorMessage = err.message;
@@ -110,8 +122,10 @@ export class AudioDownloadTransport {
       if (writtenBytes <= MIN_AUDIO_FILE_BYTES) {
         throw new Error(`音频文件过小 (${writtenBytes} bytes)`);
       }
-      if (DownloadPolicy.needsAudioSignatureCheck(contentType)
-        && !DownloadPolicy.hasKnownAudioSignature(firstBytes)) {
+      if (DownloadPolicy.isClearlyTextResponse(responsePrefix)) {
+        throw new Error('响应是文本错误页，不是有效音频');
+      }
+      if (!DownloadPolicy.hasKnownAudioSignature(responsePrefix)) {
         throw new Error('响应没有有效音频文件头');
       }
 
@@ -120,12 +134,25 @@ export class AudioDownloadTransport {
         await fileIo.close(file);
         file = null;
       }
+      // 以磁盘真实大小为准：防止累计写入计数与落盘不一致（如错误 offset 覆盖）
+      const partSize = fileIo.statSync(partPath).size;
+      if (partSize !== writtenBytes) {
+        throw new Error(`音频文件落盘不完整 ${partSize}/${writtenBytes}`);
+      }
+      if (contentLength > 0 && partSize !== contentLength) {
+        throw new Error(`音频下载不完整 ${partSize}/${contentLength}`);
+      }
+      if (partSize <= MIN_AUDIO_FILE_BYTES) {
+        throw new Error(`音频文件过小 (${partSize} bytes)`);
+      }
       if (this.cancelled) throw new Error('下载已取消');
-      await AudioDownloadTransport.deleteFile(options.finalPath);
-      if (this.cancelled) throw new Error('下载已取消');
-      await fileIo.moveFile(partPath, options.finalPath);
+      await AudioDownloadTransport.publishFinalFile(partPath, options.finalPath);
+      const finalSize = fileIo.statSync(options.finalPath).size;
+      if (finalSize !== partSize) {
+        throw new Error(`音频文件落盘不完整 ${finalSize}/${partSize}`);
+      }
       completed = true;
-      return writtenBytes;
+      return finalSize;
     } finally {
       if (file) {
         try { await fileIo.close(file); } catch (_e) { /* ignore */ }
@@ -164,6 +191,10 @@ export class AudioDownloadTransport {
     }
   }
 
+  private static async publishFinalFile(partPath: string, finalPath: string): Promise<void> {
+    await fileIo.moveFile(partPath, finalPath, 0);
+  }
+
   private static ensureFreeSpace(filePath: string, requiredBytes: number): void {
     const slash = filePath.lastIndexOf('/');
     const dir = slash > 0 ? filePath.substring(0, slash) : filePath;
@@ -179,11 +210,4 @@ export class AudioDownloadTransport {
     }
   }
 
-  private static copyPrefix(buffer: ArrayBuffer, maxLength: number): ArrayBuffer {
-    const source = new Uint8Array(buffer);
-    const length = Math.min(source.length, maxLength);
-    const copy = new Uint8Array(length);
-    for (let i = 0; i < length; i++) copy[i] = source[i];
-    return copy.buffer;
-  }
 }

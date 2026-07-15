@@ -1,10 +1,12 @@
 import { common } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { Book, Chapter } from '../model/Book';
-import { DownloadFailureCode } from './DownloadPolicy';
+import { DownloadBookDerivedStatus, DownloadChapterDerivedStatus, DownloadFailureCode,
+  DownloadFileProbeResult, DownloadPolicy } from './DownloadPolicy';
 
-export type DownloadBookStatus = 'idle' | 'queued' | 'downloading' | 'paused' | 'completed' | 'failed';
-export type DownloadChapterStatus = 'pending' | 'resolving' | 'downloading' | 'completed' | 'failed' | 'deleted';
+export type DownloadBookStatus = DownloadBookDerivedStatus;
+export type DownloadChapterStatus = DownloadChapterDerivedStatus;
 
 export interface DownloadChapterRecord {
   chapterId: string;
@@ -54,11 +56,74 @@ export class DownloadStore {
   private static writeChain: Promise<void> = Promise.resolve();
   private static persistUnsafe: boolean = false;
 
+  /**
+   * 启动轻量初始化：只建目录 + 读 JSON。
+   * 完整文件校验（stat 每个 completed 章节）放到 normalizeInterruptedTasks，
+   * 必须延后到首帧之后，否则章节一多会主线程卡死触发 AppFreeze。
+   */
   static async init(ctx: common.Context): Promise<void> {
     DownloadStore.ctx = ctx;
     await DownloadStore.ensureBaseDirs();
     await DownloadStore.ensureLoaded();
-    await DownloadStore.normalizeInterruptedTasks();
+  }
+
+  /** 冷启动后异步执行：校验已下载文件、复位中断任务。可安全重复调用。 */
+  static async normalizeInterruptedTasks(): Promise<void> {
+    await DownloadStore.ensureLoaded();
+    let changed = false;
+    let probeCount = 0;
+    const list = DownloadStore.records ?? [];
+    for (const book of list) {
+      const shouldResume = book.status === 'downloading' || book.status === 'queued';
+      for (const chapter of book.chapters) {
+        if (chapter.status === 'completed') {
+          const probe = DownloadStore.probeCompletedFile(chapter.filePath, chapter.bytes);
+          probeCount++;
+          // 每扫一批就让出主线程，避免启动/恢复阶段 AppFreeze
+          if (probeCount % 20 === 0) {
+            await DownloadStore.yieldToMain();
+          }
+          if (probe === 'ok' || probe === 'stat_error') {
+            // stat 暂时失败时保留 completed，避免冷启动误删整批已下载文件
+            continue;
+          }
+          if (probe === 'size_mismatch' || probe === 'too_small' || probe === 'missing') {
+            await DownloadStore.deleteFileSafely(chapter.filePath);
+            chapter.status = 'failed';
+            chapter.failureCode = 'invalid_response';
+            chapter.failureReason = probe === 'missing'
+              ? '已下载文件缺失'
+              : (probe === 'size_mismatch'
+                ? '已下载文件不完整（大小与记录不符）'
+                : '已下载文件过小或不完整');
+            chapter.bytes = 0;
+            chapter.filePath = '';
+            changed = true;
+          }
+        }
+        if (chapter.status === 'resolving' || chapter.status === 'downloading') {
+          chapter.status = 'pending';
+          changed = true;
+        }
+      }
+      const statusBeforeRecalculate = book.status;
+      DownloadStore.recalculateBook(book);
+      if (book.status !== statusBeforeRecalculate) changed = true;
+      if (shouldResume
+        && book.chapters.some((chapter: DownloadChapterRecord) => chapter.status === 'pending')) {
+        if (book.status !== 'queued') changed = true;
+        book.status = 'queued';
+      }
+      // 每本书之间也让出一次，防止单书章节极多时长时间占满事件循环
+      await DownloadStore.yieldToMain();
+    }
+    if (changed) await DownloadStore.saveAll();
+  }
+
+  private static async yieldToMain(): Promise<void> {
+    await new Promise<void>((resolve: () => void) => {
+      setTimeout(resolve, 0);
+    });
   }
 
   static setContext(ctx: common.Context): void {
@@ -120,12 +185,9 @@ export class DownloadStore {
   }
 
   static findChapterRecord(book: DownloadBookRecord, chapter: Chapter): DownloadChapterRecord | null {
-    const pageUrl = chapter.originSourceValue || chapter.source.value;
-    if (pageUrl) {
-      const byPageUrl = book.chapters.find((item: DownloadChapterRecord) => item.pageUrl === pageUrl);
-      if (byPageUrl) return byPageUrl;
-    }
-    return book.chapters.find((item: DownloadChapterRecord) => item.chapterId === chapter.id) ?? null;
+    const pageUrl = DownloadPolicy.stablePageUrl(chapter);
+    return book.chapters.find((item: DownloadChapterRecord) => DownloadPolicy.matchesChapter(
+      item.chapterId, item.pageUrl, chapter.id, pageUrl)) ?? null;
   }
 
   static async ensureBookRecord(book: Book): Promise<DownloadBookRecord> {
@@ -204,7 +266,7 @@ export class DownloadStore {
   private static upsertChapterInMemory(bookRecord: DownloadBookRecord, chapter: Chapter,
     status: DownloadChapterStatus, audioUrl: string = '', filePath: string = '', bytes: number = 0,
     failureReason: string = '', failureCode: DownloadFailureCode = 'unknown'): DownloadChapterRecord {
-    const pageUrl = chapter.originSourceValue || chapter.source.value;
+    const pageUrl = DownloadPolicy.stablePageUrl(chapter);
     let record = DownloadStore.findChapterRecord(bookRecord, chapter);
     if (!record) {
       record = {
@@ -261,7 +323,7 @@ export class DownloadStore {
 
   static async deleteFileSafely(path: string): Promise<void> {
     if (!path) return;
-    const paths = [path, `${path}.part`];
+    const paths = [path, `${path}.part`, `${path}.swap`];
     for (const current of paths) {
       try {
         await fileIo.unlink(current);
@@ -281,12 +343,27 @@ export class DownloadStore {
   }
 
   static isExpectedFile(path: string, expectedBytes: number): boolean {
-    if (!path) return false;
+    return DownloadStore.probeCompletedFile(path, expectedBytes) === 'ok';
+  }
+
+  /**
+   * 探测已完成文件状态：
+   * - ok: 可用
+   * - missing: 路径空或不存在
+   * - size_mismatch: 存在但与记录字节数不一致（常见于写入错误导致只剩最后一块）
+   * - too_small: 存在但过小
+   * - stat_error: 暂时无法 stat（不要当成损坏去删）
+   */
+  static probeCompletedFile(path: string, expectedBytes: number): DownloadFileProbeResult {
+    if (!path) return 'missing';
     try {
       const size = fileIo.statSync(path).size;
-      return size > 1024 && (expectedBytes <= 0 || size === expectedBytes);
-    } catch (_e) {
-      return false;
+      if (size <= 1024) return 'too_small';
+      if (expectedBytes > 0 && size !== expectedBytes) return 'size_mismatch';
+      return 'ok';
+    } catch (err) {
+      const error = err as BusinessError;
+      return DownloadPolicy.classifyFileProbeErrorCode(error.code);
     }
   }
 
@@ -298,66 +375,20 @@ export class DownloadStore {
     return Math.abs(h).toString(16);
   }
 
-  private static async normalizeInterruptedTasks(): Promise<void> {
-    await DownloadStore.ensureLoaded();
-    let changed = false;
-    const list = DownloadStore.records ?? [];
-    for (const book of list) {
-      const shouldResume = book.status === 'downloading' || book.status === 'queued';
-      for (const chapter of book.chapters) {
-        if (chapter.status === 'completed' && !DownloadStore.isCompletedFileValid(chapter)) {
-          await DownloadStore.deleteFileSafely(chapter.filePath);
-          chapter.status = 'failed';
-          chapter.failureCode = 'invalid_response';
-          chapter.failureReason = '已下载文件缺失或不完整';
-          chapter.bytes = 0;
-          changed = true;
-        }
-        if (chapter.status === 'resolving' || chapter.status === 'downloading') {
-          chapter.status = 'pending';
-          changed = true;
-        }
-      }
-      DownloadStore.recalculateBook(book);
-      if (shouldResume && book.chapters.some((chapter: DownloadChapterRecord) => chapter.status === 'pending')) {
-        if (book.status !== 'queued') changed = true;
-        book.status = 'queued';
-      }
-    }
-    if (changed) await DownloadStore.saveAll();
-  }
-
-  private static isCompletedFileValid(chapter: DownloadChapterRecord): boolean {
-    return DownloadStore.isExpectedFile(chapter.filePath, chapter.bytes);
-  }
-
   private static recalculateBook(book: DownloadBookRecord): void {
     let downloaded = 0;
     let failed = 0;
     let totalBytes = 0;
-    let active = 0;
     for (const chapter of book.chapters) {
       if (chapter.status === 'completed') downloaded++;
       if (chapter.status === 'failed') failed++;
-      if (chapter.status === 'pending' || chapter.status === 'resolving' || chapter.status === 'downloading') active++;
       if (chapter.status === 'completed') totalBytes += chapter.bytes;
     }
     book.downloadedCount = downloaded;
     book.failedCount = failed;
     book.totalBytes = totalBytes;
-    if (book.status !== 'paused') {
-      if (active > 0) {
-        book.status = 'downloading';
-      } else if (failed > 0) {
-        book.status = downloaded > 0 ? 'failed' : 'failed';
-      } else if (downloaded > 0 && downloaded >= book.chapters.length) {
-        book.status = 'completed';
-      } else if (downloaded > 0) {
-        book.status = 'idle';
-      } else {
-        book.status = 'idle';
-      }
-    }
+    book.status = DownloadPolicy.deriveBookStatus(book.status,
+      book.chapters.map((chapter: DownloadChapterRecord): DownloadChapterDerivedStatus => chapter.status));
   }
 
   private static storePath(): string | null {

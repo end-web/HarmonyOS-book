@@ -47,7 +47,10 @@ export struct BookDetailPage {
     const data = evt.data as DownloadUpdatePayload;
     if (!data || data.bookId !== this.bookId) return;
     this.downloadTick = this.downloadTick + 1;
-    if (!data.progressOnly) this.chapterDownloadTick = this.chapterDownloadTick + 1;
+    if (!data.progressOnly) {
+      this.chapterDownloadTick = this.chapterDownloadTick + 1;
+      this.chapterDataSource.notifyDataReloaded();
+    }
   };
 
   aboutToAppear(): void {
@@ -369,6 +372,10 @@ export struct BookDetailPage {
   private chapterDownloadRecord(chapter: Chapter): DownloadChapterRecord | null {
     if (this.chapterDownloadTick < 0) return null;
     return DownloadService.getInstance().getChapterStatus(this.bookId, chapter);
+  }
+
+  private chapterListKey(chapter: Chapter): string {
+    return DownloadPolicy.stablePageUrl(chapter) || chapter.id;
   }
 
   private chapterDuration(chapter: Chapter): number {
@@ -1095,7 +1102,7 @@ export struct BookDetailPage {
               ListItem() {
                 this.buildChapterItem(ch)
               }
-            }, (ch: Chapter) => `${ch.id}:${this.chapterDownloadTick}`)
+            }, (ch: Chapter) => this.chapterListKey(ch))
           }
           .width('100%')
           .height('100%')
