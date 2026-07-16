@@ -9,7 +9,7 @@ const YCKCEO_CATALOG_URL = 'https://www.yckceo.com/yuedu/shuyuan/index.html?shen
 const AOAO_CATALOG_URL = 'https://legado.aoaostar.com/';
 const DEFAULT_TEST_KEYWORD = '三国演义';
 const FETCH_TIMEOUT_MS = 30000;
-const MAX_CATALOG_BYTES = 20_000_000;
+const MAX_CATALOG_BYTES = 24_000_000;
 
 interface CatalogDefinition {
   id: string;
@@ -268,13 +268,8 @@ export class SourceCatalogSyncService {
       if (match[0]) urls.add(match[0]);
     }
     if (urls.size === 0) throw new Error('AOAOSTAR_NO_SOURCE_LINKS');
-    const orderedUrls = Array.from(urls);
-    try {
-      const primaryContent = await this.fetchText(orderedUrls[0]!);
-      const primary = parseAudioSourceContent(primaryContent, 10000);
-      if (primary.sources.length > 0) return primary;
-    } catch (_error) { /* fall back to the remaining curated collections */ }
-    const batches = await mapLimit(orderedUrls.slice(1), Math.min(4, this.config.SOURCE_CONCURRENCY), async (url) => {
+    // 合集文件体积差异很大，顺序处理可避免多个 JSON 同时解析造成容器内存峰值。
+    const batches = await mapLimit(Array.from(urls), 1, async (url) => {
       try {
         const content = await this.fetchText(url);
         return parseAudioSourceContent(content, 10000);
@@ -282,7 +277,9 @@ export class SourceCatalogSyncService {
         return { sources: [], total: 1, rejected: 1 };
       }
     });
-    return uniqueSources(batches);
+    const merged = uniqueSources(batches);
+    if (merged.sources.length === 0) throw new Error('AOAOSTAR_NO_AUDIO_SOURCES');
+    return merged;
   }
 
   private async fetchYiove(): Promise<ParsedBatch> {
@@ -308,7 +305,7 @@ export class SourceCatalogSyncService {
     const contentLength = Number(response.headers.get('content-length') ?? 0);
     if (contentLength > MAX_CATALOG_BYTES) throw new Error('CATALOG_FILE_TOO_LARGE');
     const text = await response.text();
-    if (text.length > MAX_CATALOG_BYTES) throw new Error('CATALOG_FILE_TOO_LARGE');
+    if (Buffer.byteLength(text, 'utf8') > MAX_CATALOG_BYTES) throw new Error('CATALOG_FILE_TOO_LARGE');
     if (!response.ok) {
       if (text.includes('Just a moment') || text.includes('cf-chl-')) {
         throw new Error('CATALOG_CLOUDFLARE_BLOCKED');
