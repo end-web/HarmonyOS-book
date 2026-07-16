@@ -127,7 +127,6 @@ export class LegadoProvider implements SourceProvider {
   async resolve(source: SourceRecord, book: AudioBook, chapter: AudioChapter): Promise<AudioResolution> {
     const data = await this.reader.post<unknown>('/reader3/getBookContent', {
       url: book.externalId,
-      chapterUrl: chapter.externalId,
       index: chapter.index,
       refresh: 1,
       bookSource: source.config
