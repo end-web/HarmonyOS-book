@@ -45,7 +45,7 @@ describe('source catalog sync', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const config = { SOURCE_CONCURRENCY: 4 } as AppConfig;
+    const config = { SOURCE_CONCURRENCY: 4, SOURCE_SYNC_FETCH_TIMEOUT_MS: 120000 } as AppConfig;
     const catalog = {} as CatalogService;
     const service = new SourceCatalogSyncService(db, config, catalog);
     const result = await (service as unknown as { fetchAoaoStar(): Promise<{
@@ -60,5 +60,5 @@ describe('source catalog sync', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
     for (const url of urls) expect(fetchMock).toHaveBeenCalledWith(url, expect.any(Object));
     db.close();
-  });
+  }, 15000);
 });

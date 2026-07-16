@@ -23,6 +23,7 @@ const envSchema = z.object({
   SOURCE_SYNC_TEST_LIMIT: z.coerce.number().int().min(0).max(100).default(10),
   SOURCE_SYNC_MAX_ENABLED: z.coerce.number().int().min(1).max(50).default(16),
   SOURCE_SYNC_TEST_KEYWORD: z.string().trim().min(1).max(100).default('三国演义'),
+  SOURCE_SYNC_FETCH_TIMEOUT_MS: z.coerce.number().int().min(5000).max(300000).default(120000),
   SOURCE_CATALOG_YIOVE_IMPORT_URL: z.string().url()
     .default('https://shuyuan-api.yiove.com/import/book-sources/1-100')
 });

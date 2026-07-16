@@ -85,6 +85,7 @@ curl https://121.196.223.85/api/v1/health
 - 新来源先保持停用，再按每日检测预算自动启用搜索可用的来源；人工启用状态不会被后续同步覆盖。
 - Yiove 官方接口单页最多 100 条，服务端会自动抓取前两页，对应网页的 `page_size=200`。
 - 三个目录独立记录成功或失败，一个目录被 Cloudflare 或上游故障拦截时不会影响另外两个目录。
+- 目录文件下载默认允许 120 秒，适配 AOAOSTAR 的大合集；可通过 `SOURCE_SYNC_FETCH_TIMEOUT_MS` 调整。
 - 播放地址按需解析，不代理或持久化音频文件。
 - `deploy/backup.sh` 使用 SQLite 在线快照备份数据库和 Reader 配置，默认保留 14 天。
 - 生产服务器每天 03:17 执行一次备份，日志写入 `/var/log/jianhu-backup.log`。

@@ -8,7 +8,6 @@ import type { SourceRecord } from './types.js';
 const YCKCEO_CATALOG_URL = 'https://www.yckceo.com/yuedu/shuyuan/index.html?shengyin=1';
 const AOAO_CATALOG_URL = 'https://legado.aoaostar.com/';
 const DEFAULT_TEST_KEYWORD = '三国演义';
-const FETCH_TIMEOUT_MS = 30000;
 const MAX_CATALOG_BYTES = 24_000_000;
 
 interface CatalogDefinition {
@@ -300,7 +299,7 @@ export class SourceCatalogSyncService {
         'User-Agent': 'JianHuanSourceSync/1.0 (+https://121.196.223.85)'
       },
       redirect: 'follow',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      signal: AbortSignal.timeout(this.config.SOURCE_SYNC_FETCH_TIMEOUT_MS)
     });
     const contentLength = Number(response.headers.get('content-length') ?? 0);
     if (contentLength > MAX_CATALOG_BYTES) throw new Error('CATALOG_FILE_TOO_LARGE');
