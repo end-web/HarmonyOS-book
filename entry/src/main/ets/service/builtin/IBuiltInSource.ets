@@ -12,6 +12,8 @@ export class BuiltInBook {
   artist: string = '';
   intro: string = '';
   status: string = '';
+  /** 聚合服务返回的实际来源名称；sourceUrl 仍保持内置云源路由标识。 */
+  sourceName: string = '';
   completed: boolean = false;
 
   constructor(coverUrl: string, bookUrl: string, title: string, author: string, artist: string) {

@@ -64,6 +64,7 @@ class ServerAudioSourceClass implements IBuiltInSource {
     const book = new BuiltInBook(value.getString('cover', ''), id, title, author, narrator);
     book.intro = value.getString('intro', '');
     book.status = value.getString('category', '');
+    book.sourceName = value.getString('sourceName', '');
     return book;
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSourceImport } from '../src/source-import.js';
+import { parseAudioSourceContent, parseSourceImport } from '../src/source-import.js';
 
 describe('audio source import', () => {
   it('keeps only valid audio source records', async () => {
@@ -23,5 +23,15 @@ describe('audio source import', () => {
       bookSourceName: 'Private', bookSourceUrl: 'https://audio.example.com', bookSourceType: 1,
       searchUrl: 'http://127.0.0.1/search'
     }) })).rejects.toThrow('SOURCE_PRIVATE_NETWORK_DENIED');
+  });
+
+  it('keeps audio entries when a catalog contains mixed source types', () => {
+    const result = parseAudioSourceContent(JSON.stringify([
+      { bookSourceName: 'Text', bookSourceUrl: 'https://text.example.com', bookSourceType: 0 },
+      { bookSourceName: 'Audio', bookSourceUrl: 'https://audio.example.com', bookSourceType: 1 }
+    ]));
+    expect(result.sources).toHaveLength(1);
+    expect(result.rejected).toBe(1);
+    expect(result.sources[0]?.bookSourceName).toBe('Audio');
   });
 });

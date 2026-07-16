@@ -26,6 +26,42 @@ export interface Source {
   health: HealthEvent[];
 }
 
+export interface SourceCatalog {
+  id: string;
+  name: string;
+  pageUrl: string;
+  state: 'idle' | 'running' | 'healthy' | 'degraded';
+  lastStartedAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorCode: string | null;
+  lastTotal: number;
+  lastAudio: number;
+  lastRejected: number;
+  lastImported: number;
+  lastChanged: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SourceSyncSummary {
+  trigger: 'startup' | 'scheduled' | 'manual';
+  startedAt: string;
+  completedAt: string;
+  catalogs: Array<{
+    id: string;
+    name: string;
+    ok: boolean;
+    total: number;
+    audio: number;
+    rejected: number;
+    imported: number;
+    changed: number;
+    enabled: number;
+    errorCode: string | null;
+    completedAt: string;
+  }>;
+}
+
 export interface Summary {
   sourceCount: number;
   healthy: number;

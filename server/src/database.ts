@@ -52,6 +52,46 @@ interface ChapterRow {
   raw_json: string;
 }
 
+interface SourceCatalogRow {
+  id: string;
+  name: string;
+  page_url: string;
+  state: 'idle' | 'running' | 'healthy' | 'degraded';
+  last_started_at: string | null;
+  last_success_at: string | null;
+  last_error_code: string | null;
+  last_total: number;
+  last_audio: number;
+  last_rejected: number;
+  last_imported: number;
+  last_changed: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SourceCatalogRecord {
+  id: string;
+  name: string;
+  pageUrl: string;
+  state: 'idle' | 'running' | 'healthy' | 'degraded';
+  lastStartedAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorCode: string | null;
+  lastTotal: number;
+  lastAudio: number;
+  lastRejected: number;
+  lastImported: number;
+  lastChanged: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SyncedLegadoSource {
+  source: SourceRecord;
+  created: boolean;
+  changed: boolean;
+}
+
 export class AppDatabase {
   readonly db: DatabaseSync;
 
@@ -168,6 +208,30 @@ export class AppDatabase {
         detail TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS source_catalogs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        page_url TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'idle' CHECK(state IN ('idle', 'running', 'healthy', 'degraded')),
+        last_started_at TEXT,
+        last_success_at TEXT,
+        last_error_code TEXT,
+        last_total INTEGER NOT NULL DEFAULT 0,
+        last_audio INTEGER NOT NULL DEFAULT 0,
+        last_rejected INTEGER NOT NULL DEFAULT 0,
+        last_imported INTEGER NOT NULL DEFAULT 0,
+        last_changed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS source_catalog_members (
+        catalog_id TEXT NOT NULL REFERENCES source_catalogs(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+        last_seen_at TEXT NOT NULL,
+        PRIMARY KEY(catalog_id, source_id)
+      );
     `);
   }
 
@@ -238,6 +302,106 @@ export class AppDatabase {
         .run(id, version, configJson, now);
     });
     return this.getSource(id)!;
+  }
+
+  syncLegadoSource(config: Record<string, unknown>, testKeyword: string): SyncedLegadoSource {
+    const sourceUrl = String(config.bookSourceUrl ?? '').trim();
+    const name = String(config.bookSourceName ?? '').trim();
+    const id = stableId('legado', sourceUrl);
+    const now = new Date().toISOString();
+    const existing = this.getSource(id);
+    const configJson = JSON.stringify(config);
+    const changed = !existing || JSON.stringify(existing.config) !== configJson;
+    const version = Number((this.db.prepare('SELECT MAX(version) AS value FROM source_versions WHERE source_id = ?').get(id) as
+      { value: number | null } | undefined)?.value ?? 0) + 1;
+
+    this.transaction(() => {
+      if (!existing) {
+        this.db.prepare(`
+          INSERT INTO sources (id, kind, name, source_url, enabled, priority, state, test_keyword, config_json, created_at, updated_at)
+          VALUES (?, 'legado', ?, ?, 0, 100, 'unknown', ?, ?, ?, ?)
+        `).run(id, name, sourceUrl, testKeyword, configJson, now, now);
+      } else if (changed) {
+        this.db.prepare(`
+          UPDATE sources SET name = ?, source_url = ?, test_keyword = ?, config_json = ?, state = 'unknown',
+            consecutive_failures = 0, last_error_code = NULL, updated_at = ? WHERE id = ?
+        `).run(name, sourceUrl, testKeyword, configJson, now, id);
+      }
+      if (changed) {
+        this.db.prepare('INSERT INTO source_versions (source_id, version, config_json, created_at) VALUES (?, ?, ?, ?)')
+          .run(id, version, configJson, now);
+      }
+    });
+    return { source: this.getSource(id)!, created: !existing, changed };
+  }
+
+  ensureSourceCatalog(id: string, name: string, pageUrl: string): SourceCatalogRecord {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO source_catalogs (id, name, page_url, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name, page_url = excluded.page_url, updated_at = excluded.updated_at
+    `).run(id, name, pageUrl, now, now);
+    return this.getSourceCatalog(id)!;
+  }
+
+  markSourceCatalogStarted(id: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE source_catalogs SET state = 'running', last_started_at = ?, last_error_code = NULL, updated_at = ? WHERE id = ?
+    `).run(now, now, id);
+  }
+
+  markSourceCatalogFinished(id: string, result: {
+    ok: boolean;
+    total: number;
+    audio: number;
+    rejected: number;
+    imported: number;
+    changed: number;
+    errorCode?: string;
+  }): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE source_catalogs SET state = ?, last_success_at = CASE WHEN ? = 1 THEN ? ELSE last_success_at END,
+        last_error_code = ?, last_total = ?, last_audio = ?,
+        last_rejected = ?, last_imported = ?, last_changed = ?, updated_at = ? WHERE id = ?
+    `).run(result.ok ? 'healthy' : 'degraded', result.ok ? 1 : 0, now,
+      result.ok ? null : (result.errorCode ?? 'SYNC_FAILED'),
+      result.total, result.audio, result.rejected, result.imported, result.changed, now, id);
+  }
+
+  linkSourceCatalog(catalogId: string, sourceId: string): void {
+    this.db.prepare(`
+      INSERT INTO source_catalog_members (catalog_id, source_id, last_seen_at) VALUES (?, ?, ?)
+      ON CONFLICT(catalog_id, source_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+    `).run(catalogId, sourceId, new Date().toISOString());
+  }
+
+  getSourceCatalog(id: string): SourceCatalogRecord | null {
+    const row = this.db.prepare('SELECT * FROM source_catalogs WHERE id = ?').get(id) as SourceCatalogRow | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      name: row.name,
+      pageUrl: row.page_url,
+      state: row.state,
+      lastStartedAt: row.last_started_at,
+      lastSuccessAt: row.last_success_at,
+      lastErrorCode: row.last_error_code,
+      lastTotal: row.last_total,
+      lastAudio: row.last_audio,
+      lastRejected: row.last_rejected,
+      lastImported: row.last_imported,
+      lastChanged: row.last_changed,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  listSourceCatalogs(): SourceCatalogRecord[] {
+    const rows = this.db.prepare('SELECT * FROM source_catalogs ORDER BY name ASC').all() as unknown as SourceCatalogRow[];
+    return rows.map((row) => this.getSourceCatalog(row.id)!).filter((item): item is SourceCatalogRecord => item !== null);
   }
 
   updateSource(id: string, input: {

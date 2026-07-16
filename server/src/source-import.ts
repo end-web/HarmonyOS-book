@@ -10,7 +10,7 @@ const requestSchema = z.object({
 
 export type SourceImportRequest = z.infer<typeof requestSchema>;
 
-function collectSources(value: unknown, output: Record<string, unknown>[]): void {
+export function collectSources(value: unknown, output: Record<string, unknown>[]): void {
   if (typeof value === 'string') {
     collectSources(JSON.parse(value) as unknown, output);
     return;
@@ -30,7 +30,7 @@ function collectSources(value: unknown, output: Record<string, unknown>[]): void
   }
 }
 
-function validateSource(source: Record<string, unknown>): Record<string, unknown> {
+export function validateAudioSource(source: Record<string, unknown>): Record<string, unknown> {
   if (Number(source.bookSourceType) !== 1) throw new Error('ONLY_AUDIO_SOURCE_ALLOWED');
   const name = String(source.bookSourceName ?? '').trim();
   const sourceUrl = String(source.bookSourceUrl ?? '').trim();
@@ -65,18 +65,48 @@ async function downloadSource(urlValue: string): Promise<string> {
 export async function parseSourceImport(input: unknown): Promise<{ request: SourceImportRequest; sources: Record<string, unknown>[] }> {
   const request = requestSchema.parse(input);
   const content = request.content ?? await downloadSource(request.url!);
+  const parsed = parseAudioSourceContent(content, 200);
+  return { request, sources: parsed.sources };
+}
+
+export interface ParsedAudioSourceContent {
+  sources: Record<string, unknown>[];
+  total: number;
+  rejected: number;
+  rejectedCodes: string[];
+}
+
+/**
+ * 解析大批量书源时采用“单条容错”：一个坏源不能阻断其它源同步。
+ * 手动导入仍通过 maxSources=200 限制请求体规模，定时目录同步可使用更大上限。
+ */
+export function parseAudioSourceContent(content: string, maxSources = 200): ParsedAudioSourceContent {
   const output: Record<string, unknown>[] = [];
   collectSources(JSON.parse(content) as unknown, output);
   if (output.length === 0) throw new Error('NO_SOURCE_FOUND');
-  if (output.length > 200) throw new Error('TOO_MANY_SOURCES');
+  if (output.length > maxSources) throw new Error('TOO_MANY_SOURCES');
+
   const valid: Record<string, unknown>[] = [];
   const seen = new Set<string>();
+  const rejectedCodes: string[] = [];
   for (const item of output) {
-    const source = validateSource(item);
-    const sourceUrl = String(source.bookSourceUrl);
-    if (seen.has(sourceUrl)) continue;
-    seen.add(sourceUrl);
-    valid.push(source);
+    try {
+      const source = validateAudioSource(item);
+      const sourceUrl = String(source.bookSourceUrl);
+      if (seen.has(sourceUrl)) continue;
+      seen.add(sourceUrl);
+      valid.push(source);
+    } catch (error) {
+      rejectedCodes.push(error instanceof Error ? error.message : 'INVALID_SOURCE');
+    }
   }
-  return { request, sources: valid };
+  if (valid.length === 0 && rejectedCodes.length > 0) {
+    throw new Error(rejectedCodes[0]);
+  }
+  return {
+    sources: valid,
+    total: output.length,
+    rejected: output.length - valid.length,
+    rejectedCodes
+  };
 }

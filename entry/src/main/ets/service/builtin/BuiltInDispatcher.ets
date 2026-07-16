@@ -91,7 +91,9 @@ class HBS implements HomeBlockSection {
 
 function bookToSearchResult(book: BuiltInBook, source: IBuiltInSource, sourceUrl: string): SearchResult {
   BuiltInSourceRegistry.cacheBookMeta(book);
-  return new SR(book.title, book.author, book.coverUrl, book.bookUrl, book.intro, book.status, source.name, sourceUrl);
+  const displaySourceName = book.sourceName.trim() || source.name;
+  return new SR(book.title, book.author, book.coverUrl, book.bookUrl, book.intro, book.status,
+    displaySourceName, sourceUrl);
 }
 
 export class BuiltInDispatcher {

@@ -8,12 +8,14 @@ import type { ReaderClient } from '../providers/reader-client.js';
 import { clearSessionCookie, createSession, requireAdmin, setSessionCookie, verifyPassword, verifySession } from '../auth.js';
 import { HttpError, sendData } from '../http.js';
 import { parseSourceImport } from '../source-import.js';
+import type { SourceCatalogSyncService } from '../source-catalog-sync.js';
 
 export function createAdminRouter(
   config: AppConfig,
   db: AppDatabase,
   catalog: CatalogService,
-  reader: ReaderClient
+  reader: ReaderClient,
+  sourceSync: SourceCatalogSyncService
 ): Router {
   const router = Router();
   const secureCookie = config.PUBLIC_ORIGIN.startsWith('https://');
@@ -52,6 +54,15 @@ export function createAdminRouter(
   router.get('/sources', (request, response) => {
     const sources = db.listSources().map((source) => ({ ...source, config: undefined, health: db.healthHistory(source.id) }));
     sendData(request, response, sources);
+  });
+
+  router.get('/source-catalogs', (request, response) => {
+    sendData(request, response, sourceSync.listCatalogs());
+  });
+
+  router.post('/source-catalogs/sync', async (request, response) => {
+    const result = await sourceSync.syncAll('manual');
+    sendData(request, response, result, 'SOURCE_CATALOGS_SYNCED');
   });
 
   router.get('/sources/:id/export', (request, response) => {

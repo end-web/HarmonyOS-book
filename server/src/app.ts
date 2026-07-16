@@ -12,12 +12,14 @@ import { errorHandler, notFound } from './http.js';
 import { ReaderClient } from './providers/reader-client.js';
 import { createAdminRouter } from './routes/admin-routes.js';
 import { createPublicRouter } from './routes/public-routes.js';
+import { SourceCatalogSyncService } from './source-catalog-sync.js';
 
 export interface AppContext {
   app: Express;
   db: AppDatabase;
   catalog: CatalogService;
   reader: ReaderClient;
+  sourceSync: SourceCatalogSyncService;
   close(): void;
 }
 
@@ -27,6 +29,7 @@ export function createApp(config: AppConfig): AppContext {
   const db = new AppDatabase(config.DB_PATH);
   const reader = new ReaderClient(config.READER_BASE_URL);
   const catalog = new CatalogService(db, config, reader);
+  const sourceSync = new SourceCatalogSyncService(db, config, catalog);
 
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
@@ -51,7 +54,7 @@ export function createApp(config: AppConfig): AppContext {
 
   app.get('/', (_request, response) => response.redirect('/admin/'));
   app.use('/api/v1', createPublicRouter(catalog, reader));
-  app.use('/api/admin', createAdminRouter(config, db, catalog, reader));
+  app.use('/api/admin', createAdminRouter(config, db, catalog, reader, sourceSync));
 
   const adminRoot = path.resolve(process.cwd(), 'public/admin');
   if (fs.existsSync(path.join(adminRoot, 'index.html'))) {
@@ -63,13 +66,16 @@ export function createApp(config: AppConfig): AppContext {
   app.use(notFound);
   app.use(errorHandler);
   catalog.startHealthChecks();
+  sourceSync.start();
 
   return {
     app,
     db,
     catalog,
     reader,
+    sourceSync,
     close: () => {
+      sourceSync.stop();
       catalog.stopHealthChecks();
       db.close();
     }
