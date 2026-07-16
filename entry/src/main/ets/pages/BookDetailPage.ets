@@ -18,6 +18,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
+import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -151,9 +152,13 @@ export struct BookDetailPage {
       const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
       this.debugInfo += `\nsource=${source ? source.bookSourceName : 'NOT FOUND'}`;
       if (source && book.bookUrl) {
+        const isServerAudio = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl)?.id === 'jianhu_server';
         // 先获取书籍详情，提取正确的 tocUrl
         let tocUrl = book.bookUrl;
         const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+        if (!bookInfo && isServerAudio) {
+          SearchCache.remove(book.id);
+        }
         // 合并 search 时的 @put 变量 + getBookInfo 时的 @put 变量
         const mergedVars: Record<string, string> = {};
         if (book.variables) {
@@ -173,6 +178,9 @@ export struct BookDetailPage {
         this.debugInfo += `\ntocUrl=${tocUrl}`;
 
         const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
+        if (tocItems.length === 0 && isServerAudio) {
+          SearchCache.remove(book.id);
+        }
         this.debugInfo += `\ntocItems=${tocItems.length}`;
         if (tocItems.length > 0) {
           this.debugInfo += `\nfirst=${tocItems[0].name}`;

@@ -1,13 +1,16 @@
 import type { AppConfig } from './config.js';
 import type { AppDatabase } from './database.js';
 import type {
-  AudioBook, AudioChapter, AudioResolution, SearchOutcome, SourceProvider, SourceRecord
+  AudioBook, AudioBookCandidate, AudioChapter, AudioResolution, SearchOutcome, SourceProvider, SourceRecord
 } from './types.js';
 import { errorCode, mapLimit, stableId, withTimeout } from './utils.js';
 import { ArchiveProvider } from './providers/archive-provider.js';
 import { LegadoProvider } from './providers/legado-provider.js';
 import { PodcastProvider } from './providers/podcast-provider.js';
 import type { ReaderClient } from './providers/reader-client.js';
+
+const SOURCE_VALIDATION_SAMPLE_SIZE = 3;
+const AUDIO_PROBE_TIMEOUT_MS = 15000;
 
 export interface SearchResponse {
   items: AudioBook[];
@@ -22,6 +25,19 @@ export interface SourceValidationOutcome {
   latencyMs: number;
   errorCode?: string;
 }
+
+interface CandidateValidationSuccess {
+  ok: true;
+  stage: 'resolve';
+}
+
+interface CandidateValidationFailure {
+  ok: false;
+  stage: 'detail' | 'chapters' | 'resolve';
+  errorCode: string;
+}
+
+type CandidateValidationOutcome = CandidateValidationSuccess | CandidateValidationFailure;
 
 export class CatalogService {
   private readonly providers: Record<'archive' | 'podcast' | 'legado', SourceProvider>;
@@ -92,56 +108,43 @@ export class CatalogService {
    * 新目录来源只有在搜索、目录和首章解析全部可用时才允许自动启用。
    * 这里不写入书籍或章节缓存，避免健康检测污染用户搜索历史。
    */
-  async validateSource(source: SourceRecord, keyword?: string): Promise<SourceValidationOutcome> {
+  async validateSource(source: SourceRecord, keyword?: string, quarantineOnFailure = false): Promise<SourceValidationOutcome> {
     const started = Date.now();
     const search = await this.searchSource(source, (keyword || source.testKeyword || 'Alice').trim(), 1);
     if (!search.ok) {
-      return {
+      const outcome: SourceValidationOutcome = {
         ok: false,
         stage: 'search',
         latencyMs: Date.now() - started,
         errorCode: search.errorCode ?? 'SOURCE_ERROR'
       };
+      if (quarantineOnFailure) this.quarantineSource(source, outcome.errorCode ?? 'SOURCE_ERROR', outcome.stage);
+      return outcome;
     }
-    const candidate = search.items[0];
-    if (!candidate) {
+    const candidates = search.items.slice(0, SOURCE_VALIDATION_SAMPLE_SIZE);
+    if (candidates.length === 0) {
       const latencyMs = Date.now() - started;
       this.db.recordHealth(source.id, false, latencyMs, 'SOURCE_EMPTY');
-      return { ok: false, stage: 'search', latencyMs, errorCode: 'SOURCE_EMPTY' };
+      const outcome: SourceValidationOutcome = { ok: false, stage: 'search', latencyMs, errorCode: 'SOURCE_EMPTY' };
+      if (quarantineOnFailure) this.quarantineSource(source, outcome.errorCode ?? 'SOURCE_EMPTY', outcome.stage);
+      return outcome;
     }
 
-    const provider = this.providers[source.kind];
-    let stage: SourceValidationOutcome['stage'] = 'detail';
-    try {
-      const detail = await withTimeout(
-        provider.getBook(source, candidate.externalId, candidate.raw),
-        this.config.SOURCE_TIMEOUT_MS,
-        'SOURCE_DETAIL_TIMEOUT'
-      );
-      const book: AudioBook = { ...detail, id: 'validation', chapterCount: 0, totalDuration: 0 };
-      stage = 'chapters';
-      const chapterCandidates = await withTimeout(
-        provider.getChapters(source, book),
-        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
-        'SOURCE_CHAPTER_TIMEOUT'
-      );
-      const firstChapter = chapterCandidates[0];
-      if (!firstChapter) throw new Error('EMPTY_CHAPTERS');
-      const chapter: AudioChapter = { ...firstChapter, id: 'validation', bookId: book.id };
-      stage = 'resolve';
-      const resolution = await withTimeout(
-        provider.resolve(source, book, chapter),
-        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
-        'AUDIO_RESOLVE_TIMEOUT'
-      );
-      if (!resolution.url) throw new Error('EMPTY_AUDIO_URL');
-      return { ok: true, stage, latencyMs: Date.now() - started };
-    } catch (error) {
+    for (const candidate of candidates) {
+      const candidateOutcome = await this.validateCandidate(source, candidate);
+      if (candidateOutcome.ok) continue;
       const latencyMs = Date.now() - started;
-      const code = errorCode(error);
-      this.db.recordHealth(source.id, false, latencyMs, code);
-      return { ok: false, stage, latencyMs, errorCode: code };
+      this.db.recordHealth(source.id, false, latencyMs, candidateOutcome.errorCode);
+      const outcome: SourceValidationOutcome = {
+        ok: false,
+        stage: candidateOutcome.stage,
+        latencyMs,
+        errorCode: candidateOutcome.errorCode
+      };
+      if (quarantineOnFailure) this.quarantineSource(source, candidateOutcome.errorCode, candidateOutcome.stage);
+      return outcome;
     }
+    return { ok: true, stage: 'resolve', latencyMs: Date.now() - started };
   }
 
   async getBook(id: string): Promise<AudioBook> {
@@ -173,6 +176,7 @@ export class CatalogService {
       return this.db.replaceChapters(book, chapters);
     } catch (error) {
       if (cached.length > 0) return cached;
+      this.reportRuntimeFailure(source, 'chapters', error);
       throw error;
     }
   }
@@ -187,18 +191,111 @@ export class CatalogService {
       const chapters = await this.getChapters(book.id);
       chapter = chapters.find((item) => item.id === chapterId) ?? chapter;
     }
-    return await withTimeout(
-      this.providers[source.kind].resolve(source, book, chapter),
-      Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
-      'AUDIO_RESOLVE_TIMEOUT'
-    );
+    try {
+      const resolution = await withTimeout(
+        this.providers[source.kind].resolve(source, book, chapter),
+        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
+        'AUDIO_RESOLVE_TIMEOUT'
+      );
+      if (source.kind === 'legado') await this.probeAudioResolution(resolution);
+      return resolution;
+    } catch (error) {
+      this.reportRuntimeFailure(source, 'resolve', error);
+      throw error;
+    }
   }
 
   async checkAllSources(): Promise<void> {
     const sources = this.db.listSources(true);
     await mapLimit(sources, Math.min(2, this.config.SOURCE_CONCURRENCY), async (source) => {
-      await this.testSource(source);
+      await this.validateSource(source, source.testKeyword, true);
     });
+  }
+
+  private async validateCandidate(source: SourceRecord, candidate: AudioBookCandidate): Promise<CandidateValidationOutcome> {
+    const provider = this.providers[source.kind];
+    let stage: CandidateValidationFailure['stage'] = 'detail';
+    try {
+      const detail = await withTimeout(
+        provider.getBook(source, candidate.externalId, candidate.raw),
+        this.config.SOURCE_TIMEOUT_MS,
+        'SOURCE_DETAIL_TIMEOUT'
+      );
+      const book: AudioBook = { ...detail, id: 'validation', chapterCount: 0, totalDuration: 0 };
+      stage = 'chapters';
+      const chapterCandidates = await withTimeout(
+        provider.getChapters(source, book),
+        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
+        'SOURCE_CHAPTER_TIMEOUT'
+      );
+      const firstChapter = chapterCandidates[0];
+      if (!firstChapter) throw new Error('EMPTY_CHAPTERS');
+      const chapter: AudioChapter = { ...firstChapter, id: 'validation', bookId: book.id };
+      stage = 'resolve';
+      const resolution = await withTimeout(
+        provider.resolve(source, book, chapter),
+        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
+        'AUDIO_RESOLVE_TIMEOUT'
+      );
+      if (!resolution.url) throw new Error('EMPTY_AUDIO_URL');
+      await this.probeAudioResolution(resolution);
+      return { ok: true, stage: 'resolve' };
+    } catch (error) {
+      return { ok: false, stage, errorCode: errorCode(error) };
+    }
+  }
+
+  private async probeAudioResolution(resolution: AudioResolution): Promise<void> {
+    const headers: Record<string, string> = {
+      Accept: 'audio/*,application/vnd.apple.mpegurl,application/x-mpegurl;q=0.9,*/*;q=0.1',
+      Range: 'bytes=0-4095'
+    };
+    for (const [key, value] of Object.entries(resolution.headers)) {
+      const lower = key.toLowerCase();
+      if (lower === 'host' || lower === 'content-length' || lower === 'range' || !value) continue;
+      headers[key] = value;
+    }
+    const response = await withTimeout(fetch(resolution.url, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(AUDIO_PROBE_TIMEOUT_MS)
+    }), AUDIO_PROBE_TIMEOUT_MS + 1000, 'AUDIO_PROBE_TIMEOUT');
+    if (!response.ok) throw new Error(`AUDIO_PROBE_HTTP_${response.status}`);
+
+    const finalUrl = response.url || resolution.url;
+    const pathname = new URL(finalUrl).pathname.toLowerCase();
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+    const isHls = resolution.format === 'hls' || pathname.endsWith('.m3u8') ||
+      contentType.includes('mpegurl') || contentType.includes('vnd.apple.mpegurl');
+    if (isHls) {
+      const manifest = await withTimeout(response.text(), AUDIO_PROBE_TIMEOUT_MS, 'AUDIO_PROBE_TIMEOUT');
+      if (!manifest.includes('#EXTM3U')) throw new Error('AUDIO_PROBE_INVALID_HLS');
+      return;
+    }
+    if (contentType.includes('text/html') || contentType.includes('application/json')) {
+      throw new Error('AUDIO_PROBE_NOT_AUDIO');
+    }
+    await response.body?.cancel();
+  }
+
+  private reportRuntimeFailure(source: SourceRecord, stage: 'chapters' | 'resolve', error: unknown): void {
+    const code = errorCode(error);
+    this.db.recordHealth(source.id, false, 0, code);
+    this.quarantineSource(source, code, stage);
+  }
+
+  private quarantineSource(source: SourceRecord, errorCode: string, stage: SourceValidationOutcome['stage']): void {
+    if (source.kind !== 'legado' || !source.enabled ||
+      errorCode === 'SOURCE_TIMEOUT' || errorCode === 'SOURCE_UPSTREAM_ERROR') return;
+    const current = this.db.getSource(source.id);
+    if (!current || !current.enabled) return;
+    this.db.updateSource(source.id, { enabled: false });
+    this.db.clearCache();
+    this.db.audit('source.quarantined', source.id, JSON.stringify({
+      name: source.name,
+      stage,
+      errorCode
+    }));
   }
 
   private async searchSource(source: SourceRecord, keyword: string, page: number): Promise<SearchOutcome> {

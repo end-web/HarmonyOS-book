@@ -65,4 +65,9 @@ export class BuiltInSourceRegistry {
   static getBookMeta(bookUrl: string): BuiltInBook | undefined {
     return bookMetaCache.get(bookUrl);
   }
+
+  static evictBookMeta(bookUrl: string): void {
+    if (!bookUrl) return;
+    bookMetaCache.delete(bookUrl);
+  }
 }

@@ -125,6 +125,7 @@ export class BuiltInDispatcher {
       const kind = meta ? meta.status : '';
       return new BI(name, author, cover, intro, kind, bookUrl);
     } catch (e) {
+      BuiltInSourceRegistry.evictBookMeta(bookUrl);
       const msg = e instanceof Error ? e.message : JSON.stringify(e);
       console.error(`[${TAG}] getBookInfo ${plugin.name} error: ${msg}`);
       return null;
@@ -140,6 +141,7 @@ export class BuiltInDispatcher {
       for (const ep of detail.episodes) out.push(new TI(ep.title, ep.url, !ep.isFree, ep.duration));
       return out;
     } catch (e) {
+      BuiltInSourceRegistry.evictBookMeta(tocUrl);
       const msg = e instanceof Error ? e.message : JSON.stringify(e);
       console.error(`[${TAG}] getBookToc ${plugin.name} error: ${msg}`);
       return [];

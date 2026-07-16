@@ -30,6 +30,11 @@ export class SearchCache {
     return book;
   }
 
+  static remove(id: string): void {
+    if (!id) return;
+    searchCache.delete(id);
+  }
+
   static clear(): void {
     searchCache.clear();
   }
