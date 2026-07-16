@@ -115,6 +115,90 @@
     {
       "name": "chapter_download_failed",
       "value": "下载失败"
+    },
+    {
+      "name": "cloud_source_group_title",
+      "value": "云源服务"
+    },
+    {
+      "name": "cloud_source_api_title",
+      "value": "服务器音频接口"
+    },
+    {
+      "name": "cloud_source_sheet_title",
+      "value": "云源服务地址"
+    },
+    {
+      "name": "cloud_source_sheet_desc",
+      "value": "用于简·欢云源的搜索、书籍详情、章节和播放解析。听友 FM 不受此设置影响。"
+    },
+    {
+      "name": "cloud_source_api_label",
+      "value": "API 地址"
+    },
+    {
+      "name": "cloud_source_api_placeholder",
+      "value": "例如 121.196.223.85"
+    },
+    {
+      "name": "cloud_source_api_hint",
+      "value": "只填域名或 IP 时，会自动使用 HTTPS 并补全 /api/v1。"
+    },
+    {
+      "name": "cloud_source_check",
+      "value": "连接检测"
+    },
+    {
+      "name": "cloud_source_checking",
+      "value": "正在检测连接"
+    },
+    {
+      "name": "cloud_source_check_success",
+      "value": "连接正常，解析服务已就绪"
+    },
+    {
+      "name": "cloud_source_check_degraded",
+      "value": "接口可访问，但解析服务暂未就绪"
+    },
+    {
+      "name": "cloud_source_check_failed",
+      "value": "连接失败，请检查地址或服务器状态"
+    },
+    {
+      "name": "cloud_source_restore_default",
+      "value": "恢复默认"
+    },
+    {
+      "name": "cloud_source_restored_hint",
+      "value": "已填入默认地址，保存后生效"
+    },
+    {
+      "name": "cloud_source_save",
+      "value": "保存"
+    },
+    {
+      "name": "cloud_source_saving",
+      "value": "保存中"
+    },
+    {
+      "name": "cloud_source_saved",
+      "value": "云源服务地址已保存"
+    },
+    {
+      "name": "cloud_source_error_empty",
+      "value": "请输入服务器音频接口地址"
+    },
+    {
+      "name": "cloud_source_error_scheme",
+      "value": "地址只支持 HTTP 或 HTTPS"
+    },
+    {
+      "name": "cloud_source_error_invalid",
+      "value": "服务器地址格式不正确"
+    },
+    {
+      "name": "cloud_source_error_save",
+      "value": "保存失败，请稍后重试"
     }
   ]
 }

@@ -22,6 +22,7 @@ const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
+const KEY_SERVER_AUDIO_API_BASE = 'server_audio_api_base';
 /** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
 const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 /** 已添加的卡片 formId 集合(按卡片名分桶) */
@@ -587,6 +588,23 @@ export class PreferenceService {
   static async setPreloadChapters(count: number): Promise<void> {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_PRELOAD_CHAPTERS, count);
+    await s.flush();
+  }
+
+  static async getServerAudioApiBase(): Promise<string> {
+    const s = await PreferenceService.ensureStore();
+    return await s.get(KEY_SERVER_AUDIO_API_BASE, '') as string;
+  }
+
+  static async setServerAudioApiBase(apiBase: string): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_SERVER_AUDIO_API_BASE, apiBase);
+    await s.flush();
+  }
+
+  static async clearServerAudioApiBase(): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.delete(KEY_SERVER_AUDIO_API_BASE);
     await s.flush();
   }
 

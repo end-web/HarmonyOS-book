@@ -11,10 +11,10 @@ import {
 } from '../IBuiltInSource';
 import { JsonArr, JsonObj } from '../JsonValue';
 import { HttpClient } from '../../http/HttpClient';
+import { ServerAudioConfig } from '../ServerAudioConfig';
 
 const DOMAIN = 0x0000;
 const TAG = 'ServerAudioSource';
-const API_BASE = 'https://121.196.223.85/api/v1';
 const CHAPTER_SCHEME = 'jianhu://audio-chapter/';
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -27,7 +27,9 @@ function apiHeaders(): Record<string, string> {
 class ServerAudioSourceClass implements IBuiltInSource {
   readonly id: string = 'jianhu_server';
   readonly name: string = '简·欢云源';
-  readonly url: string = API_BASE;
+  get url(): string {
+    return ServerAudioConfig.peekApiBase();
+  }
   readonly desc: string = '服务端聚合音频源；来源可在简·欢源控制台集中维护';
   readonly searchable: boolean = true;
   readonly audioResolveTimeoutMs: number = 40000;
@@ -35,7 +37,8 @@ class ServerAudioSourceClass implements IBuiltInSource {
   private audioHeadersByUrl: Map<string, Record<string, string>> = new Map();
 
   private async request(path: string, method: string = 'GET'): Promise<JsonObj> {
-    const response = await HttpClient.request(API_BASE + path, {
+    const apiBase = await ServerAudioConfig.getApiBase();
+    const response = await HttpClient.request(apiBase + path, {
       method,
       headers: apiHeaders(),
       timeout: REQUEST_TIMEOUT_MS,
