@@ -16,6 +16,13 @@ export interface SearchResponse {
   stale: boolean;
 }
 
+export interface SourceValidationOutcome {
+  ok: boolean;
+  stage: 'search' | 'detail' | 'chapters' | 'resolve';
+  latencyMs: number;
+  errorCode?: string;
+}
+
 export class CatalogService {
   private readonly providers: Record<'archive' | 'podcast' | 'legado', SourceProvider>;
   private healthTimer: NodeJS.Timeout | null = null;
@@ -79,6 +86,62 @@ export class CatalogService {
 
   async testSource(source: SourceRecord, keyword?: string): Promise<SearchOutcome> {
     return await this.searchSource(source, (keyword || source.testKeyword || 'Alice').trim(), 1);
+  }
+
+  /**
+   * 新目录来源只有在搜索、目录和首章解析全部可用时才允许自动启用。
+   * 这里不写入书籍或章节缓存，避免健康检测污染用户搜索历史。
+   */
+  async validateSource(source: SourceRecord, keyword?: string): Promise<SourceValidationOutcome> {
+    const started = Date.now();
+    const search = await this.searchSource(source, (keyword || source.testKeyword || 'Alice').trim(), 1);
+    if (!search.ok) {
+      return {
+        ok: false,
+        stage: 'search',
+        latencyMs: Date.now() - started,
+        errorCode: search.errorCode ?? 'SOURCE_ERROR'
+      };
+    }
+    const candidate = search.items[0];
+    if (!candidate) {
+      const latencyMs = Date.now() - started;
+      this.db.recordHealth(source.id, false, latencyMs, 'SOURCE_EMPTY');
+      return { ok: false, stage: 'search', latencyMs, errorCode: 'SOURCE_EMPTY' };
+    }
+
+    const provider = this.providers[source.kind];
+    let stage: SourceValidationOutcome['stage'] = 'detail';
+    try {
+      const detail = await withTimeout(
+        provider.getBook(source, candidate.externalId, candidate.raw),
+        this.config.SOURCE_TIMEOUT_MS,
+        'SOURCE_DETAIL_TIMEOUT'
+      );
+      const book: AudioBook = { ...detail, id: 'validation', chapterCount: 0, totalDuration: 0 };
+      stage = 'chapters';
+      const chapterCandidates = await withTimeout(
+        provider.getChapters(source, book),
+        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
+        'SOURCE_CHAPTER_TIMEOUT'
+      );
+      const firstChapter = chapterCandidates[0];
+      if (!firstChapter) throw new Error('EMPTY_CHAPTERS');
+      const chapter: AudioChapter = { ...firstChapter, id: 'validation', bookId: book.id };
+      stage = 'resolve';
+      const resolution = await withTimeout(
+        provider.resolve(source, book, chapter),
+        Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
+        'AUDIO_RESOLVE_TIMEOUT'
+      );
+      if (!resolution.url) throw new Error('EMPTY_AUDIO_URL');
+      return { ok: true, stage, latencyMs: Date.now() - started };
+    } catch (error) {
+      const latencyMs = Date.now() - started;
+      const code = errorCode(error);
+      this.db.recordHealth(source.id, false, latencyMs, code);
+      return { ok: false, stage, latencyMs, errorCode: code };
+    }
   }
 
   async getBook(id: string): Promise<AudioBook> {

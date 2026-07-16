@@ -228,8 +228,8 @@ export class SourceCatalogSyncService {
     this.remainingTestBudget -= candidates.length;
     for (const result of candidates) {
       if (!result.source.enabled && enabledCount >= this.config.SOURCE_SYNC_MAX_ENABLED) continue;
-      const outcome = await this.catalog.testSource(result.source, this.config.SOURCE_SYNC_TEST_KEYWORD);
-      if (outcome.ok && outcome.items.length > 0 && !result.source.enabled) {
+      const outcome = await this.catalog.validateSource(result.source, this.config.SOURCE_SYNC_TEST_KEYWORD);
+      if (outcome.ok && !result.source.enabled) {
         this.db.updateSource(result.source.id, { enabled: true, priority: 30 + enabledCount });
         enabledCount++;
         enabled++;
