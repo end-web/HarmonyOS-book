@@ -1,4 +1,4 @@
-export type SourceKind = 'archive' | 'podcast' | 'legado';
+export type SourceKind = 'archive' | 'podcast' | 'legado' | 'guowei';
 export type SourceState = 'healthy' | 'degraded' | 'down' | 'unknown';
 
 export interface SourceRecord {

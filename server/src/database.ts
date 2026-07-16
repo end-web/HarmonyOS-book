@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { AudioBook, AudioBookCandidate, AudioChapter, AudioChapterCandidate, SourceRecord, SourceState } from './types.js';
 import { stableId } from './utils.js';
 
 interface SourceRow {
   id: string;
-  kind: 'archive' | 'podcast' | 'legado';
+  kind: 'archive' | 'podcast' | 'legado' | 'guowei';
   name: string;
   source_url: string;
   enabled: number;
@@ -123,7 +124,7 @@ export class AppDatabase {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS sources (
         id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL CHECK(kind IN ('archive', 'podcast', 'legado')),
+        kind TEXT NOT NULL CHECK(kind IN ('archive', 'podcast', 'legado', 'guowei')),
         name TEXT NOT NULL,
         source_url TEXT NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 0,
@@ -141,6 +142,9 @@ export class AppDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+    `);
+    this.migrateSourceKindConstraint();
+    this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_sources_kind_url ON sources(kind, source_url);
 
       CREATE TABLE IF NOT EXISTS source_versions (
@@ -235,6 +239,60 @@ export class AppDatabase {
     `);
   }
 
+  private migrateSourceKindConstraint(): void {
+    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sources'")
+      .get() as { sql: string | null } | undefined;
+    if (!row?.sql || row.sql.includes("'guowei'")) return;
+
+    this.db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        DROP TABLE IF EXISTS sources_new;
+        CREATE TABLE sources_new (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK(kind IN ('archive', 'podcast', 'legado', 'guowei')),
+          name TEXT NOT NULL,
+          source_url TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          priority INTEGER NOT NULL DEFAULT 100,
+          state TEXT NOT NULL DEFAULT 'unknown',
+          test_keyword TEXT NOT NULL DEFAULT '',
+          config_json TEXT NOT NULL DEFAULT '{}',
+          consecutive_failures INTEGER NOT NULL DEFAULT 0,
+          success_count INTEGER NOT NULL DEFAULT 0,
+          failure_count INTEGER NOT NULL DEFAULT 0,
+          last_latency_ms INTEGER,
+          last_success_at TEXT,
+          last_failure_at TEXT,
+          last_error_code TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO sources_new (
+          id, kind, name, source_url, enabled, priority, state, test_keyword, config_json,
+          consecutive_failures, success_count, failure_count, last_latency_ms, last_success_at,
+          last_failure_at, last_error_code, created_at, updated_at
+        )
+        SELECT id, kind, name, source_url, enabled, priority, state, test_keyword, config_json,
+          consecutive_failures, success_count, failure_count, last_latency_ms, last_success_at,
+          last_failure_at, last_error_code, created_at, updated_at
+        FROM sources;
+        DROP TABLE sources;
+        ALTER TABLE sources_new RENAME TO sources;
+        CREATE UNIQUE INDEX idx_sources_kind_url ON sources(kind, source_url);
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.db.exec('ROLLBACK;'); } catch { /* preserve original migration error */ }
+      throw error;
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON;');
+    }
+    const violations = this.db.prepare('PRAGMA foreign_key_check').all();
+    if (violations.length > 0) throw new Error('DATABASE_FOREIGN_KEY_MIGRATION_FAILED');
+  }
+
   private seedArchiveSource(): void {
     const now = new Date().toISOString();
     this.db.prepare(`
@@ -247,6 +305,30 @@ export class AppDatabase {
       VALUES ('podcast_apple', 'podcast', '开放播客目录', 'https://itunes.apple.com/search', 1, 5, 'unknown', '三国演义', '{}', ?, ?)
       ON CONFLICT(id) DO NOTHING
     `).run(now, now);
+  }
+
+  ensureGuoweiSource(sourceUrl: string, enabledByDefault: boolean): SourceRecord {
+    const id = 'guowei_free_listen';
+    const now = new Date().toISOString();
+    const existing = this.getSource(id);
+    const config = existing?.config ?? { deviceId: randomBytes(16).toString('hex') };
+    if (!String(config.deviceId ?? '').trim()) config.deviceId = randomBytes(16).toString('hex');
+    const configJson = JSON.stringify(config);
+    if (!existing) {
+      this.db.prepare(`
+        INSERT INTO sources (id, kind, name, source_url, enabled, priority, state, test_keyword, config_json, created_at, updated_at)
+        VALUES (?, 'guowei', ?, ?, ?, 10, 'unknown', ?, ?, ?, ?)
+      `).run(id, '免费听书王', sourceUrl, enabledByDefault ? 1 : 0, '万古天帝', configJson, now, now);
+    } else {
+      this.db.prepare(`
+        UPDATE sources SET source_url = ?, config_json = ?, updated_at = ? WHERE id = ?
+      `).run(sourceUrl, configJson, now, id);
+      if (enabledByDefault && existing.consecutiveFailures === 0 && existing.successCount === 0 &&
+        existing.failureCount === 0 && existing.state === 'unknown' && !existing.enabled) {
+        this.db.prepare('UPDATE sources SET enabled = 1, updated_at = ? WHERE id = ?').run(now, id);
+      }
+    }
+    return this.getSource(id)!;
   }
 
   private sourceFromRow(row: SourceRow): SourceRecord {
@@ -422,7 +504,7 @@ export class AppDatabase {
 
   deleteSource(id: string): boolean {
     const source = this.getSource(id);
-    if (!source || source.kind === 'archive') return false;
+    if (!source || source.kind !== 'legado') return false;
     return Number(this.db.prepare('DELETE FROM sources WHERE id = ?').run(id).changes) > 0;
   }
 

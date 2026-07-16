@@ -8,12 +8,16 @@
 - Express + TypeScript 标准 API
 - SQLite WAL 缓存、来源版本和审计记录
 - Reader/Legado 服务端音频规则引擎
+- 免费听书王专有音频 API Provider（匿名会话、签名、令牌自动刷新）
 - YCKCEO、AOAOSTAR、Yiove 网络目录每日同步
 - Vue 3 运维后台
 - Caddy HTTPS 入口
 
 默认启用开放播客目录，LibriVox 公版音频目录保留为可选来源。阅读书源仅允许 `bookSourceType = 1`，
 且只能由后台管理员导入。
+
+“免费听书王”作为独立来源接入，不转换成 Legado JSON。服务器仅在配置 `GUOWEI_SIGNING_KEY` 时首次启用，
+签名值属于部署环境配置，不得提交到仓库。
 
 ## 调用结构
 
@@ -52,6 +56,7 @@ node -e "const{randomBytes,scryptSync}=require('crypto');const p=process.argv[1]
 ```
 
 复制 `deploy/.env.example` 为 `deploy/.env`，填入密码哈希和随机 `SESSION_SECRET`。
+如已获得该 API 的合法接入授权，再填写 `GUOWEI_SIGNING_KEY`；未填写时来源会保留为停用状态。
 
 ## Docker 部署
 

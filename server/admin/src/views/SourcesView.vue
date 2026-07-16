@@ -102,6 +102,10 @@ function stateLabel(source: Source): string {
   return { healthy: '正常', degraded: '波动', down: '离线', unknown: '待检测' }[source.state];
 }
 
+function kindLabel(source: Source): string {
+  return { legado: '阅读音频', guowei: '免费听书王 API', podcast: '开放播客', archive: '公版目录' }[source.kind];
+}
+
 function catalogStateLabel(catalog: SourceCatalog): string {
   return { idle: '待同步', running: '同步中', healthy: '正常', degraded: '失败' }[catalog.state];
 }
@@ -154,7 +158,7 @@ onMounted(refreshAll);
             <td><label class="switch-control"><input type="checkbox" :checked="source.enabled" :disabled="busyId === source.id"
               @change="update(source, ($event.target as HTMLInputElement).checked)" /><span /></label></td>
             <td><strong>{{ source.name }}</strong><small class="truncate-source" :title="source.sourceUrl">{{ source.sourceUrl }}</small></td>
-            <td>{{ source.kind === 'legado' ? '阅读音频' : source.kind === 'podcast' ? '开放播客' : '公版目录' }}</td>
+            <td>{{ kindLabel(source) }}</td>
             <td><span :class="['status-label', `state-${source.state}`]">{{ stateLabel(source) }}</span></td>
             <td><HealthStrip :events="source.health" /></td>
             <td class="mono">{{ source.successCount }} / {{ source.failureCount }}</td>

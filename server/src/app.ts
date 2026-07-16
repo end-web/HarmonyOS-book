@@ -27,6 +27,7 @@ export function createApp(config: AppConfig): AppContext {
   const app = express();
   const logger = pino({ level: config.LOG_LEVEL, redact: ['req.headers.cookie', 'req.body.password', 'req.body.content'] });
   const db = new AppDatabase(config.DB_PATH);
+  db.ensureGuoweiSource(config.GUOWEI_API_BASE_URL, Boolean(config.GUOWEI_SIGNING_KEY));
   const reader = new ReaderClient(config.READER_BASE_URL);
   const catalog = new CatalogService(db, config, reader);
   const sourceSync = new SourceCatalogSyncService(db, config, catalog);

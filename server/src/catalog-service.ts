@@ -5,6 +5,7 @@ import type {
 } from './types.js';
 import { errorCode, mapLimit, stableId, withTimeout } from './utils.js';
 import { ArchiveProvider } from './providers/archive-provider.js';
+import { GuoweiProvider } from './providers/guowei-provider.js';
 import { LegadoProvider } from './providers/legado-provider.js';
 import { PodcastProvider } from './providers/podcast-provider.js';
 import type { ReaderClient } from './providers/reader-client.js';
@@ -40,7 +41,7 @@ interface CandidateValidationFailure {
 type CandidateValidationOutcome = CandidateValidationSuccess | CandidateValidationFailure;
 
 export class CatalogService {
-  private readonly providers: Record<'archive' | 'podcast' | 'legado', SourceProvider>;
+  private readonly providers: Record<SourceRecord['kind'], SourceProvider>;
   private healthTimer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -51,7 +52,12 @@ export class CatalogService {
     this.providers = {
       archive: new ArchiveProvider(),
       podcast: new PodcastProvider(),
-      legado: new LegadoProvider(reader)
+      legado: new LegadoProvider(reader),
+      guowei: new GuoweiProvider({
+        baseUrl: config.GUOWEI_API_BASE_URL ?? 'https://yssapi.guoweitech.com/',
+        signingKey: config.GUOWEI_SIGNING_KEY ?? '',
+        timeoutMs: config.SOURCE_TIMEOUT_MS
+      })
     };
   }
 
@@ -121,7 +127,8 @@ export class CatalogService {
       if (quarantineOnFailure) this.quarantineSource(source, outcome.errorCode ?? 'SOURCE_ERROR', outcome.stage);
       return outcome;
     }
-    const candidates = search.items.slice(0, SOURCE_VALIDATION_SAMPLE_SIZE);
+    const sampleSize = source.kind === 'guowei' ? 1 : SOURCE_VALIDATION_SAMPLE_SIZE;
+    const candidates = search.items.slice(0, sampleSize);
     if (candidates.length === 0) {
       const latencyMs = Date.now() - started;
       this.db.recordHealth(source.id, false, latencyMs, 'SOURCE_EMPTY');
@@ -197,7 +204,7 @@ export class CatalogService {
         Math.max(this.config.SOURCE_TIMEOUT_MS, 30000),
         'AUDIO_RESOLVE_TIMEOUT'
       );
-      if (source.kind === 'legado') await this.probeAudioResolution(resolution);
+      if (source.kind === 'legado' || source.kind === 'guowei') await this.probeAudioResolution(resolution);
       return resolution;
     } catch (error) {
       this.reportRuntimeFailure(source, 'resolve', error);
@@ -285,7 +292,7 @@ export class CatalogService {
   }
 
   private quarantineSource(source: SourceRecord, errorCode: string, stage: SourceValidationOutcome['stage']): void {
-    if (source.kind !== 'legado' || !source.enabled ||
+    if ((source.kind !== 'legado' && source.kind !== 'guowei') || !source.enabled ||
       errorCode === 'SOURCE_TIMEOUT' || errorCode === 'SOURCE_UPSTREAM_ERROR') return;
     const current = this.db.getSource(source.id);
     if (!current || !current.enabled) return;

@@ -26,6 +26,10 @@ function stateLabel(source: Source): string {
   return { healthy: '正常', degraded: '波动', down: '离线', unknown: '待检测' }[source.state];
 }
 
+function kindLabel(source: Source): string {
+  return { legado: '阅读音频规则', guowei: '免费听书王 API', podcast: '公开 RSS 目录', archive: '公版目录' }[source.kind];
+}
+
 function time(value: string | null): string {
   return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚无记录';
 }
@@ -55,7 +59,7 @@ onMounted(load);
         <thead><tr><th>来源</th><th>状态</th><th>最近响应</th><th>健康脉冲</th><th>最后成功</th></tr></thead>
         <tbody>
           <tr v-for="source in summary?.sources || []" :key="source.id">
-            <td><strong>{{ source.name }}</strong><small>{{ source.kind === 'legado' ? '阅读音频规则' : source.kind === 'podcast' ? '公开 RSS 目录' : '公版目录' }}</small></td>
+            <td><strong>{{ source.name }}</strong><small>{{ kindLabel(source) }}</small></td>
             <td><span :class="['status-label', `state-${source.state}`]">{{ stateLabel(source) }}</span></td>
             <td class="mono">{{ source.lastLatencyMs === null ? '—' : `${source.lastLatencyMs} ms` }}</td>
             <td><HealthStrip :events="source.health" /></td>

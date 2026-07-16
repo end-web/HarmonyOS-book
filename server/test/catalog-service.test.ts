@@ -158,4 +158,55 @@ describe('catalog source validation', () => {
     expect(db.getSource(source.id)?.enabled).toBe(false);
     db.close();
   }, 15000);
+
+  it('quarantines the Guowei provider when its resolved URL is not real audio', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jianhu-guowei-'));
+    directories.push(directory);
+    const db = new AppDatabase(path.join(directory, 'test.db'));
+    const created = db.ensureGuoweiSource('https://api.example.com/', true);
+    const book = db.upsertBook({
+      sourceId: created.id,
+      sourceName: created.name,
+      externalId: '100',
+      title: '万古天帝',
+      author: '第一神',
+      narrator: '播音员',
+      cover: '',
+      intro: '',
+      category: '玄幻',
+      latestChapter: '',
+      language: '中文',
+      raw: { novel_id: '100', novel_name: '万古天帝' }
+    });
+    const [chapter] = db.replaceChapters(book, [{
+      externalId: 'chapter-1',
+      title: '第1集',
+      index: 0,
+      duration: 0,
+      raw: { chapter_id: 'chapter-1' }
+    }]);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname === '/User/Reg') {
+        return new Response(JSON.stringify({ code: 200, data: { token: 'token', userid: 'user' } }), { status: 200 });
+      }
+      if (url.pathname === '/Yss/GetChapterByCid') {
+        return new Response(JSON.stringify({ code: 200, data: { mp3_src: 'https://audio.example.com/not-audio.mp3' } }), { status: 200 });
+      }
+      if (url.hostname === 'audio.example.com') {
+        return new Response('<html>blocked</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    }));
+    const config = {
+      ...createConfig(),
+      GUOWEI_API_BASE_URL: 'https://api.example.com/',
+      GUOWEI_SIGNING_KEY: 'unit-test-key'
+    } as AppConfig;
+    const catalog = new CatalogService(db, config, { post: vi.fn() } as unknown as ReaderClient);
+
+    await expect(catalog.resolve(chapter!.id)).rejects.toThrow('AUDIO_PROBE_NOT_AUDIO');
+    expect(db.getSource(created.id)?.enabled).toBe(false);
+    db.close();
+  }, 15000);
 });

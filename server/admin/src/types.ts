@@ -7,7 +7,7 @@ export interface HealthEvent {
 
 export interface Source {
   id: string;
-  kind: 'archive' | 'podcast' | 'legado';
+  kind: 'archive' | 'podcast' | 'legado' | 'guowei';
   name: string;
   sourceUrl: string;
   enabled: boolean;
