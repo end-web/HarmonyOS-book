@@ -223,8 +223,7 @@ export class SourceCatalogSyncService {
     if (this.remainingTestBudget <= 0) return 0;
     let enabledCount = this.db.listSources(true).filter((source) => source.kind === 'legado').length;
     let enabled = 0;
-    const candidates = results.filter((result) => result.created || result.changed ||
-      (!result.source.enabled && result.source.state === 'unknown')).slice(0, this.remainingTestBudget);
+    const candidates = results.filter((result) => this.shouldStrictValidate(result)).slice(0, this.remainingTestBudget);
     this.remainingTestBudget -= candidates.length;
     for (const result of candidates) {
       if (!result.source.enabled && enabledCount >= this.config.SOURCE_SYNC_MAX_ENABLED) continue;
@@ -240,6 +239,13 @@ export class SourceCatalogSyncService {
       }
     }
     return enabled;
+  }
+
+  private shouldStrictValidate(result: { source: SourceRecord; created: boolean; changed: boolean }): boolean {
+    if (result.created || result.changed) return true;
+    if (result.source.enabled) return false;
+    return result.source.state === 'unknown' || result.source.state === 'healthy' ||
+      result.source.lastErrorCode === null;
   }
 
   private async fetchYckCeo(): Promise<ParsedBatch> {

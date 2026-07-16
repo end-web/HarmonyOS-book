@@ -15,6 +15,52 @@ afterEach(() => {
 });
 
 describe('source catalog sync', () => {
+  it('strictly retests and enables a healthy source left disabled by an earlier sync', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jianhu-catalog-'));
+    directories.push(directory);
+    const db = new AppDatabase(path.join(directory, 'test.db'));
+    const source = db.upsertLegadoSource({
+      bookSourceName: 'Healthy disabled source',
+      bookSourceUrl: 'https://healthy.example.com',
+      bookSourceType: 1
+    }, false, '三国演义');
+    db.recordHealth(source.id, true, 12);
+    const healthySource = db.getSource(source.id)!;
+    const validateSource = vi.fn(async () => ({ ok: true, stage: 'resolve' as const, latencyMs: 1 }));
+    const config = {
+      SOURCE_SYNC_TEST_LIMIT: 10,
+      SOURCE_SYNC_MAX_ENABLED: 16,
+      SOURCE_SYNC_TEST_KEYWORD: '三国演义',
+      SOURCE_CONCURRENCY: 4,
+      SOURCE_SYNC_FETCH_TIMEOUT_MS: 120000
+    } as AppConfig;
+    const service = new SourceCatalogSyncService(
+      db,
+      config,
+      { validateSource } as unknown as CatalogService
+    );
+    const internals = service as unknown as {
+      remainingTestBudget: number;
+      testAndEnable(results: Array<{
+        source: typeof healthySource;
+        created: boolean;
+        changed: boolean;
+      }>): Promise<number>;
+    };
+    internals.remainingTestBudget = config.SOURCE_SYNC_TEST_LIMIT;
+
+    const enabled = await internals.testAndEnable([{
+      source: healthySource,
+      created: false,
+      changed: false
+    }]);
+
+    expect(enabled).toBe(1);
+    expect(validateSource).toHaveBeenCalledWith(healthySource, '三国演义', true);
+    expect(db.getSource(source.id)?.enabled).toBe(true);
+    db.close();
+  });
+
   it('merges every AOAOSTAR audio collection instead of stopping at the first match', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jianhu-catalog-'));
     directories.push(directory);
