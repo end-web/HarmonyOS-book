@@ -13,6 +13,8 @@ import {
   PlayProgress,
   PreferenceService
 } from '../service/PreferenceService';
+import { Book } from '../model/Book';
+import { DataService } from '../service/DataService';
 
 interface ListenRecordView {
   bookId: string;
@@ -72,7 +74,7 @@ export struct ReadingStatsPage {
       return;
     }
     this.loadingStats = true;
-    const ctx = this.getUIContext().getHostContext() as common.Context;
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       await StatsService.init(ctx);
       await PreferenceService.ensureReady(ctx);
@@ -80,7 +82,7 @@ export struct ReadingStatsPage {
       const history = await PreferenceService.getHistory();
       this.streak = bundle.streak;
       this.sourceRecords = bundle.records;
-      this.records = await this.buildRecordViews(bundle.records, history);
+      this.records = await this.buildRecordViews(ctx, bundle.records, history);
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
       if (this.selectedIds.size === 0) this.selectMode = false;
@@ -96,7 +98,8 @@ export struct ReadingStatsPage {
     }
   }
 
-  private async buildRecordViews(stats: BookUsageStats[], history: PlayHistoryItem[]): Promise<ListenRecordView[]> {
+  private async buildRecordViews(context: common.UIAbilityContext, stats: BookUsageStats[],
+    history: PlayHistoryItem[]): Promise<ListenRecordView[]> {
     const statMap: Record<string, BookUsageStats> = {};
     for (const item of stats) {
       statMap[item.bookId] = item;
@@ -109,24 +112,25 @@ export struct ReadingStatsPage {
       if (item.bookId.startsWith('search_text_') || item.bookId.startsWith('home_text_')) continue;
       used.add(item.bookId);
       const progress = await PreferenceService.getProgress(item.bookId);
-      views.push(this.createRecordView(item.bookId, statMap[item.bookId], item, progress));
+      const book = await DataService.getBookById(context, item.bookId) ?? null;
+      views.push(this.createRecordView(item.bookId, statMap[item.bookId], item, progress, book));
     }
 
     for (const item of stats) {
       if (!item || !item.bookId || used.has(item.bookId)) continue;
       if (item.bookId.startsWith('search_text_') || item.bookId.startsWith('home_text_')) continue;
       if (item.listenSeconds <= 0) continue;
-      views.push(this.createRecordView(item.bookId, item, null, null));
+      views.push(this.createRecordView(item.bookId, item, null, null, null));
     }
 
     return views.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   private createRecordView(bookId: string, stat: BookUsageStats | undefined,
-    history: PlayHistoryItem | null, progress: PlayProgress | null): ListenRecordView {
+    history: PlayHistoryItem | null, progress: PlayProgress | null, book: Book | null): ListenRecordView {
     const progressMs = progress?.positionMs ?? history?.progressMs ?? 0;
     const durationMs = progress?.durationMs ?? history?.durationMs ?? 0;
-    const ratio = durationMs > 0 ? Math.max(0, Math.min(1, progressMs / durationMs)) : 0;
+    const ratio = this.calculateBookProgress(book, progress, history, progressMs, durationMs);
     const listenSeconds = stat?.listenSeconds ?? 0;
     return {
       bookId,
@@ -141,6 +145,31 @@ export struct ReadingStatsPage {
       listenSeconds,
       updatedAt: progress?.updatedAt || history?.updatedAt || stat?.updatedAt || Date.now()
     };
+  }
+
+  private calculateBookProgress(book: Book | null, progress: PlayProgress | null,
+    history: PlayHistoryItem | null, progressMs: number, durationMs: number): number {
+    const chapterRatio = durationMs > 0 ? Math.max(0, Math.min(1, progressMs / durationMs)) : 0;
+    if (!book) return chapterRatio;
+
+    const chapterCount = book.chapters && book.chapters.length > 0 ? book.chapters.length : (book.chapterCount || 0);
+    if (chapterCount <= 0) return chapterRatio;
+
+    let chapterIndex = -1;
+    if (book.chapters && book.chapters.length > 0) {
+      chapterIndex = DataService.resolveChapterIndex(
+        book,
+        progress?.chapterId || history?.chapterId || '',
+        progress?.chapterTitle || history?.chapterTitle
+      );
+    }
+    if (chapterIndex < 0 && progress && progress.chapterIndex >= 0) {
+      chapterIndex = progress.chapterIndex;
+    }
+    if (chapterIndex < 0) return chapterRatio;
+
+    const safeIndex = Math.max(0, Math.min(chapterCount - 1, chapterIndex));
+    return Math.max(0, Math.min(1, (safeIndex + chapterRatio) / chapterCount));
   }
 
   private totalListenSeconds(): number {
