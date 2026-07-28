@@ -32,6 +32,8 @@ const CDN_BASES: string[] = [
 ];
 const THRILLER_CATEGORY_URL = 'types/14/comprehensive/p1';
 const LATEST_CATEGORY_PREFIX = 'rank/recommend_novel/latest/';
+const LATEST_CATEGORY_URL = 'rank/recommend_novel/latest/p1';
+const RECOMMEND_CATEGORY_URL = 'homepage/recommends';
 const LATEST_RANK_PAGE_SIZE = 50;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 /** 章节播放标识：tingyou://play/<albumId>/<chapterIdx> */
@@ -280,14 +282,18 @@ class TingYouFMClass implements IBuiltInSource {
     const data = await this.cdnGet('homepage');
     if (!data) return [];
     const blocks: HomeBlock[] = [];
+    const recent = parseBookArray(data.getArr('recent_updates'));
+    if (recent.length > 0) {
+      blocks.push(new HomeBlock('最近更新', recent, LATEST_CATEGORY_URL, 'horizontal'));
+    }
     const recommends = parseBookArray(data.getArr('recommends'));
-    if (recommends.length > 0) blocks.push(new HomeBlock('精品推荐', recommends, '', 'horizontal'));
+    if (recommends.length > 0) {
+      blocks.push(new HomeBlock('精品推荐', recommends, RECOMMEND_CATEGORY_URL, 'horizontal'));
+    }
     const thriller = await this.getCategoryList(THRILLER_CATEGORY_URL);
     if (thriller.books.length > 0) {
       blocks.push(new HomeBlock('恐怖惊悚', thriller.books.slice(0, 12), THRILLER_CATEGORY_URL, 'horizontal'));
     }
-    const recent = parseBookArray(data.getArr('recent_updates'));
-    if (recent.length > 0) blocks.push(new HomeBlock('最近更新', recent, '', 'horizontal'));
     return blocks;
   }
 
@@ -345,6 +351,11 @@ class TingYouFMClass implements IBuiltInSource {
    * 返回 nextUrl 指向下一页，供上层循环加载。
    */
   async getCategoryList(url: string): Promise<BuiltInCategory> {
+    if (url === RECOMMEND_CATEGORY_URL) {
+      const homepage = await this.cdnGet('homepage');
+      const books = homepage ? parseBookArray(homepage.getArr('recommends')) : [];
+      return new BuiltInCategory(books, 1, 1, url, '');
+    }
     const latest = await this.getLatestCategory(url);
     if (latest) return latest;
     const path = url.indexOf('types/') === 0 ? url : `types/${url}/comprehensive/p1`;

@@ -32,7 +32,8 @@ ListenBook/
 │   ├── src/                  # API / 聚合 / 书源同步
 │   ├── admin/                # 运维后台（Vue 3）
 │   └── deploy/               # Docker Compose + Caddy
-├── docs/                     # 设计笔记与方案
+├── docs/
+│   └── APP_UI.md             # 当前页面行为与 UI 回归基线
 ├── AppScope/                 # 全局 app 元数据与图标
 ├── CLAUDE.md                 # 本文件：项目真相源
 ├── AGENTS.md                 # 协作与工程约定
@@ -47,10 +48,10 @@ entry/src/main/ets/
 ├── entrybackupability/       # 备份扩展（EntryBackupAbility）
 ├── pages/                    # 路由页面
 │   ├── Index.ets             # 根路由 / NavPathStack
-│   ├── MainPage.ets          # 四 Tab 主框架
-│   ├── HomePage.ets          # 首页（搜索 + 区块）
+│   ├── MainPage.ets          # 四 Tab 主框架（双击当前 Tab 回顶）
+│   ├── HomePage.ets          # 首页（固定搜索/分类、骨架屏、下拉刷新、推荐区块）
 │   ├── FavoritePage.ets      # 书架
-│   ├── ReadingStatsPage.ets  # 听书记录
+│   ├── ReadingStatsPage.ets  # 听书统计与历史批量管理
 │   ├── ProfilePage.ets       # 我的（含云源地址配置）
 │   ├── PlayerPage.ets        # 播放器
 │   ├── BookDetailPage.ets    # 详情
@@ -128,8 +129,15 @@ App
 ## 页面与导航
 
 - 四 Tab：`首页` / `书架` / `记录` / `我的`
+- 首页顶栏由固定搜索框和单行横向分类组成；推荐区块在顶栏下方展示，每个区块都有“更多”入口
+- 首页首次加载推荐数据时显示骨架屏，不显示“加载推荐中”文案
+- 首页推荐态和分类态支持下拉刷新；橙色指示器位于分类栏与列表之间，刷新完成后必须恢复为隐藏状态；搜索结果态不启用下拉刷新
+- 双击任一当前 Tab 只滚动到该页顶部，不触发首页刷新
+- 记录页使用顶部“编辑”或长按记录进入多选，提供全选、删除和取消；单条记录不显示三点菜单，右侧继续播放按钮保留
 - 路由：`Index` + `NavPathStack`（detail / player / import / downloads / settings / guide / about / privacy …）
 - 全局事件：`app.navigate.to.book`、`app.nav.switchTab` 等
+
+页面级交互的现行基线见 [`docs/APP_UI.md`](docs/APP_UI.md)。
 
 ## 服务端（`server/`）
 
@@ -158,8 +166,10 @@ npm run admin:build
 - 状态：页面 `@Local` + Service 单例；不混用 V1/V2
 - 列表：长列表用 `LazyForEach` + 稳定 key（`BookDataSource` / `ChapterDataSource` 等），禁止 index 作为 key
 - 搜索：多内置源并行聚合
+- 主题：加载图标使用 `AppColor.Brand`（资源 `app_brand`，浅色主题为 `#FF6B3D`），不要回退到系统默认品牌蓝色
 - 文案：UI 文案改字符串即可，不要联动改对应 `.ets` 文件名 / 类名
 - 新增在线源：实现 `IBuiltInSource` → 在 `registerBuiltInSources()` 注册；云端规则型源优先进 `server/`，不要回退客户端规则引擎
+- 文档：产品或交互发生变化时更新已有的 `README.md`、`CLAUDE.md` 或 `docs/APP_UI.md`；完成后不再有效的一次性修复说明和日期化实施稿直接删除
 
 ## Skills（在 `.claude/skills/`）
 
@@ -190,12 +200,16 @@ cd server && npm test && npm run build:all
 - App 单测：`entry/src/test/*.test.ets`（Hypium；含 DownloadPolicy、TingYouRequestPolicy、BuiltInAudioCapability 等）
 - Server 单测：`server/test/*.test.ts`（Vitest）
 - 改播放 / 内置源 / 下载 / 云源配置后，至少在真机验证：搜索、进详情、切章、续播、下载
+- 改首页或记录页后，至少在真机验证：首次骨架屏、下拉指示器位置与消失时机、双击 Tab 回顶、编辑/长按多选和继续播放
 
 ## 当前进度
 
 - [x] 模板初始化、签名（debug + release）
 - [x] 首页 / 书架 / 记录 / 我的 四 Tab
-- [x] 播放器、详情、首页区块、自定义转场
+- [x] 首页固定搜索与横向分类、首次骨架屏、下拉刷新、区块“更多”
+- [x] 四 Tab 双击回顶
+- [x] 记录页统计摘要、编辑/长按多选、批量删除和继续播放
+- [x] 播放器、详情、自定义转场
 - [x] 听友 FM 内置源（加密协议、预热、策略重试）
 - [x] 简·欢云源 + 可配置 API 地址
 - [x] 服务端聚合、网络目录同步、运维后台、Docker 部署

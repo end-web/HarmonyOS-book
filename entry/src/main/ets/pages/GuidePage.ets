@@ -16,7 +16,7 @@ const GUIDE_GROUPS: GuideGroup[] = [
   {
     title: '首页',
     items: [
-      { action: '双击底部「首页」页签', desc: '刷新首页数据(换一批随机分类与推荐板块)' },
+      { action: '双击底部「首页」页签', desc: '快速回到首页顶部' },
     ]
   },
   {

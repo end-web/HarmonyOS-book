@@ -16,17 +16,19 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 - 云源服务只返回真实音频地址和必要请求头，不代理音频流，也不保存用户的收听记录。
 - 运维后台不是用户听书网页，它只管理服务端来源和运行状态。
 
-> 详细架构与目录约定见 [`CLAUDE.md`](CLAUDE.md)；服务端运维见 [`server/README.md`](server/README.md)；协作规范见 [`AGENTS.md`](AGENTS.md)。
+> 详细架构与目录约定见 [`CLAUDE.md`](CLAUDE.md)；App 当前交互见 [`docs/APP_UI.md`](docs/APP_UI.md)；服务端运维见 [`server/README.md`](server/README.md)；协作规范见 [`AGENTS.md`](AGENTS.md)。
 
 ## 功能特性
 
 ### 用户前台
 
 - **双路在线内容**：听友 FM 本地协议 + 简·欢云源聚合 API。
+- **首页浏览体验**：固定搜索栏、单行横向分类、首次进入骨架屏、下拉刷新和每个推荐板块的“更多”入口。
 - **完整收听流程**：多源搜索、书籍详情、章节目录、播放地址解析与续播。
 - **系统级播放**：AVPlayer、音频焦点、锁屏/控制中心、后台长时任务、倍速和睡眠定时。
 - **本地内容与离线能力**：导入音频文件、按章下载、下载管理和本地播放。
 - **个人数据**：书架、收藏、收听记录、整本书进度统计和每本书独立播放进度。
+- **记录管理**：顶部编辑或长按进入多选，支持全选和批量删除，并保留单书继续播放入口。
 - **系统集成**：桌面播放卡片、首启隐私同意、使用说明和云源地址配置。
 
 ### 运维后台
@@ -89,10 +91,11 @@ App **不执行** Legado 规则 JSON；规则只在服务端运行。
 
 | 页面或流程 | 调用层 | 接口 / 数据 |
 |---|---|---|
-| App 首页与搜索 | `BookSourceService`、内置源分发器 | 听友 FM 直连；`GET /api/v1/audio-books/search` |
+| App 首页推荐、分类与搜索 | `HomePage`、`BookSourceService`、内置源分发器 | 听友 FM 首页区块与分类直连；搜索并行调用听友 FM 和 `GET /api/v1/audio-books/search` |
 | App 书籍详情与章节 | `ServerAudioSource`、`DataService` | `GET /api/v1/audio-books/:id`、`GET /api/v1/audio-books/:id/chapters`；本地 TOC sidecar 缓存 |
 | App 播放与下载 | `AudioService`、`DownloadService` | `POST /api/v1/audio-chapters/:id/resolve`；音频直连上游或写入设备沙箱 |
-| App 书架、记录与设置 | `PreferenceService`、`StatsService` | 设备 Preferences、本地书籍索引和章节文件；不使用服务端用户表 |
+| App 收听记录 | `ReadingStatsPage`、`StatsService`、`PreferenceService` | 本地统计、播放历史和每本书进度；编辑模式批量管理，不使用服务端用户表 |
+| App 书架与设置 | `PreferenceService`、`DataService` | 设备 Preferences、本地书籍索引和章节文件；不使用服务端用户表 |
 | 后台运行概览 | Vue `DashboardView` | `GET /api/admin/summary`；`sources`、`health_events` |
 | 后台书源管理 | Vue `SourcesView` | `/api/admin/sources`、`/api/admin/source-catalogs`；`sources`、`source_versions`、`source_catalogs` |
 | 后台链路调试 | Vue `DebugView` | `GET /api/admin/debug/search`，并串联书籍、章节和播放解析能力 |
@@ -111,7 +114,8 @@ ListenBook/
 │   ├── src/                # Express API、Provider、SQLite、同步与健康检测
 │   ├── admin/              # Vue 3 运维后台
 │   └── deploy/             # Docker Compose、Caddy、备份脚本
-├── docs/                   # 设计文档
+├── docs/
+│   └── APP_UI.md           # App 当前页面与交互基线
 ├── CLAUDE.md               # 项目说明（给开发/Agent 的真相源）
 └── AGENTS.md               # 仓库协作约定
 ```
@@ -191,12 +195,15 @@ Docker 部署见 `server/deploy/` 与 `server/README.md`。
 - 只用 ArkUI V2 状态管理
 - 长列表 `LazyForEach` + 稳定 key
 - 搜索多源并行，单源失败不拖垮整体
+- 加载态使用项目主题 `AppColor.Brand`，不要直接使用鸿蒙默认品牌蓝色
+- 首页和主 Tab 交互改动需同步 [`docs/APP_UI.md`](docs/APP_UI.md)
 - 新增规则型音频源：优先加在 `server/`，App 侧只扩 `IBuiltInSource` 或继续走云源
 
 ## 测试
 
 - App：`entry/src/test/*.test.ets`（Hypium）
 - Server：`cd server && npm test`（Vitest）
+- App UI 改动还需真机检查：首页首次骨架、下拉刷新收尾、双击 Tab 回顶，以及记录页编辑/长按多选。
 
 ## 许可证
 

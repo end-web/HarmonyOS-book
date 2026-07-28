@@ -1,4 +1,4 @@
-import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { common } from '@kit.AbilityKit';
 import { UpdateService, UpdateInfo } from '../service/UpdateService';
@@ -73,7 +73,7 @@ export struct AboutPage {
       LoadingProgress()
         .width(18)
         .height(18)
-        .color($r('sys.color.font_tertiary'))
+        .color(AppColor.Brand)
     } else if (this.latestInfo && this.latestInfo.hasUpdate) {
       Row({ space: 4 }) {
         Column()

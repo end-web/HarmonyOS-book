@@ -692,15 +692,6 @@ export struct ReadingStatsPage {
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
-
-          Text('···')
-            .fontSize(20)
-            .fontColor($r('sys.color.font_tertiary'))
-            .height(24)
-            .padding({ left: AppSpace.Sm })
-            .onClick(() => {
-              if (!this.selectMode) this.toggleSelect(item.bookId);
-            })
         }
         .width('100%')
         .alignItems(VerticalAlign.Top)

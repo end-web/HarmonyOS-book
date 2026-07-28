@@ -301,7 +301,7 @@ export struct ProfilePage {
         LoadingProgress()
           .width(22)
           .height(22)
-          .color('#0A59F7')
+          .color(AppColor.Brand)
       } else {
         SymbolGlyph($r('sys.symbol.chevron_right'))
           .fontSize(14)

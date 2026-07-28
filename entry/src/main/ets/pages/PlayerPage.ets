@@ -874,7 +874,7 @@ export struct PlayerPage {
           LoadingProgress()
             .width(36)
             .height(36)
-            .color(this.playerState.hasAmbientColor ? this.playerState.ambientDarkColor : '#333333')
+            .color(AppColor.Brand)
         } else {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))

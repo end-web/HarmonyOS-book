@@ -1,7 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { emitter } from '@kit.BasicServicesKit';
-import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
-import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
+import { HdsNavigation, HdsNavigationTitleMode, hdsEffect } from '@kit.UIDesignKit';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
@@ -12,9 +11,6 @@ import { BookCard } from '../components/BookCard';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
-
-/** 双击首页 Tab 触发刷新首页数据 */
-export const EVT_REFRESH_HOME = 'app.home.refresh';
 
 /** 首页分类入口项 */
 interface HomeCategory {
@@ -46,33 +42,6 @@ const HOME_CATEGORIES: HomeCategory[] = [
   { name: '单田芳', url: 'types/1/comprehensive/p1' },
 ];
 
-/** 第一行固定入口：最新、玄幻奇幻、武侠小说（配合“推荐”凑4个）。 */
-const FIXED_CATEGORIES: HomeCategory[] = [
-  { name: '最新', url: LATEST_CATEGORY_URL },
-  { name: '玄幻奇幻', url: 'types/46/comprehensive/p1' },
-  { name: '武侠小说', url: 'types/11/comprehensive/p1' },
-];
-
-/** 第二行固定保留恐怖惊悚，再从剩余13类随机抽取3个。 */
-const SECOND_ROW_FIXED_CATEGORY: HomeCategory =
-  { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' };
-
-const RANDOM_POOL_CATEGORIES: HomeCategory[] = [
-  { name: '言情通俗', url: 'types/19/comprehensive/p1' },
-  { name: '历史军事', url: 'types/15/comprehensive/p1' },
-  { name: '官场商战', url: 'types/17/comprehensive/p1' },
-  { name: '百家讲坛', url: 'types/9/comprehensive/p1' },
-  { name: '有声文学', url: 'types/10/comprehensive/p1' },
-  { name: '刑侦反腐', url: 'types/16/comprehensive/p1' },
-  { name: '广播剧', url: 'types/36/comprehensive/p1' },
-  { name: '人物纪实', url: 'types/18/comprehensive/p1' },
-  { name: '相声小品', url: 'types/21/comprehensive/p1' },
-  { name: '健康养生', url: 'types/33/comprehensive/p1' },
-  { name: '商业财经', url: 'types/42/comprehensive/p1' },
-  { name: '童话寓言', url: 'types/20/comprehensive/p1' },
-  { name: '单田芳', url: 'types/1/comprehensive/p1' },
-];
-
 /** 听友FM内置源标识(分类入口固定走该源) */
 const TINGYOU_SOURCE_URL = 'builtin://eprendre/tingyou_fm';
 const TINGYOU_SOURCE_NAME = '听友FM';
@@ -81,6 +50,176 @@ const DOMAIN = 0x0000;
 const TAG = 'HomePage';
 
 const HEADER_TOOLBAR_HEIGHT: number = 40;
+const CATEGORY_NAV_HEIGHT: number = 34;
+const CATEGORY_NAV_WIDTH: number = 76;
+const CATEGORY_NAV_ROW_HEIGHT: number = 48;
+const CATEGORY_LIGHT_COLOR: string = '#66FFC15C';
+const CATEGORY_NAV_EFFECT: VisualEffect = new hdsEffect.HdsEffectBuilder()
+  .pressShadow(hdsEffect.PressShadowType.BLEND_GRADIENT)
+  .pointLight({
+    sourceType: hdsEffect.PointLightSourceType.SOFT,
+    illuminatedType: hdsEffect.PointLightIlluminatedType.DEFAULT_FEATHERING_BORDER,
+    options: {
+      color: CATEGORY_LIGHT_COLOR,
+      intensity: 0.35,
+      height: 24,
+      bloom: 0.2
+    }
+  })
+  .buildEffect();
+
+@ComponentV2
+struct CategoryLightNavItem {
+  @Param label: string = '';
+  @Param selected: boolean = false;
+  @Event onTap: () => void = () => {};
+
+  build() {
+    Stack({ alignContent: Alignment.Center }) {
+      Row()
+        .width('100%')
+        .height('100%')
+        .borderRadius(AppRadius.Pill)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+        .backgroundColor(this.selected ? '#33FFC15C' : '#24FFFFFF')
+
+      if (this.selected) {
+        Row()
+          .width('100%')
+          .height('100%')
+          .borderRadius(AppRadius.Pill)
+          .linearGradient({
+            angle: 120,
+            colors: [
+              ['#66FFC15C', 0.0],
+              ['#3DFF8A5A', 0.58],
+              ['#24FFFFFF', 1.0]
+            ]
+          })
+          .border({ width: 1, color: '#8CFFD98A' })
+          .shadow({ radius: 10, color: '#3DFFC15C', offsetY: 2 })
+      } else {
+        Row()
+          .width('100%')
+          .height('100%')
+          .borderRadius(AppRadius.Pill)
+          .linearGradient({
+            angle: 135,
+            colors: [
+              ['#33FFFFFF', 0.0],
+              ['#12FFFFFF', 0.52],
+              ['#0A000000', 1.0]
+            ]
+          })
+          .border({ width: 0.5, color: '#52FFFFFF' })
+          .shadow({ radius: 6, color: '#1A000000', offsetY: 1 })
+      }
+
+      Text(this.label)
+        .fontSize(13)
+        .fontColor(this.selected ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
+        .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Regular)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.Center)
+        .width('100%')
+        .padding({ left: AppSpace.Xxs, right: AppSpace.Xxs })
+    }
+    .width(CATEGORY_NAV_WIDTH)
+    .height(CATEGORY_NAV_HEIGHT)
+    .borderRadius(AppRadius.Pill)
+    .visualEffect(CATEGORY_NAV_EFFECT)
+    .animation({ duration: AppMotion.Base, curve: AppCurve.Spring })
+    .onClick(() => this.onTap())
+  }
+}
+
+@ComponentV2
+struct HomeLoadingSkeleton {
+  @Local pulsing: boolean = false;
+
+  onDidBuild(): void {
+    if (!this.pulsing) this.pulsing = true;
+  }
+
+  @Builder
+  skeletonCover() {
+    Column({ space: 6 }) {
+      Row()
+        .width('100%')
+        .aspectRatio(0.74)
+        .borderRadius(AppRadius.Sm)
+        .backgroundColor(AppColor.Divider)
+      Row()
+        .width('78%')
+        .height(12)
+        .borderRadius(AppRadius.Xs)
+        .backgroundColor(AppColor.Divider)
+      Row()
+        .width('54%')
+        .height(10)
+        .borderRadius(AppRadius.Xs)
+        .backgroundColor(HomeTheme.ProgressTrack)
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  skeletonCoverRow() {
+    Row({ space: AppSpace.Sm }) {
+      this.skeletonCover()
+      this.skeletonCover()
+      this.skeletonCover()
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+  }
+
+  @Builder
+  skeletonSection() {
+    Column({ space: AppSpace.Sm }) {
+      Row() {
+        Row()
+          .width(104)
+          .height(18)
+          .borderRadius(AppRadius.Xs)
+          .backgroundColor(AppColor.Divider)
+        Blank()
+        Row()
+          .width(38)
+          .height(12)
+          .borderRadius(AppRadius.Xs)
+          .backgroundColor(HomeTheme.ProgressTrack)
+      }
+      .width('100%')
+      this.skeletonCoverRow()
+    }
+    .width('100%')
+  }
+
+  build() {
+    Column() {
+      Column({ space: AppSpace.Lg }) {
+        this.skeletonSection()
+        this.skeletonSection()
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Md })
+      .opacity(this.pulsing ? 0.48 : 0.9)
+      .animation({
+        duration: 900,
+        curve: Curve.EaseInOut,
+        iterations: -1,
+        playMode: PlayMode.Alternate
+      })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(HomeTheme.BgNeutral)
+    .clip(true)
+  }
+}
 
 @ComponentV2
 export struct HomePage {
@@ -100,10 +239,10 @@ export struct HomePage {
   @Local categoryError: string = '';
   @Local categoryHasMore: boolean = true;
   @Local categoryNextUrl: string = '';
-  /** 固定搜索栏实测高度(含状态栏让位),用于给列表首项让出等高占位 */
+  /** 固定搜索与分类栏实测高度(含状态栏让位),用于给列表首项让出等高占位 */
   @Local searchBarHeight: number = 0;
-  /** 第二行随机分类(每次刷新时更新) */
-  @Local randomCategories: HomeCategory[] = [];
+  @Local isRefreshing: boolean = false;
+  @Local refreshStatus: RefreshStatus = RefreshStatus.Inactive;
 
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
@@ -117,57 +256,59 @@ export struct HomePage {
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private searchGen: number = 0;
   private homeGen: number = 0;
-  private refreshHandler: () => void = () => this.refreshHomeData();
+  private refreshInFlight: boolean = false;
 
   aboutToAppear(): void {
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
-    // 固定搜索栏高度初始估值(状态栏 + 搜索框约 56vp),实际以 onAreaChange 实测为准
-    this.searchBarHeight = WindowUtils.getStatusBarHeightVp() + 56;
-    this.shuffleRandomCategories();
+    // 初始估值包含搜索框和单行分类导航,实际以 onAreaChange 实测为准
+    this.searchBarHeight = WindowUtils.getStatusBarHeightVp() + 56 + CATEGORY_NAV_ROW_HEIGHT;
     this.loadHomeBlocks();
-    emitter.on(EVT_REFRESH_HOME, this.refreshHandler);
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.contentScroller);
   }
 
-  aboutToDisappear(): void {
-    emitter.off(EVT_REFRESH_HOME, this.refreshHandler);
-  }
-
-  /** 第二行保留恐怖惊悚，并从剩余池中随机选3个。 */
-  private shuffleRandomCategories(): void {
-    const pool = [...RANDOM_POOL_CATEGORIES];
-    const selected: HomeCategory[] = [SECOND_ROW_FIXED_CATEGORY];
-    for (let i = 0; i < 3 && pool.length > 0; i++) {
-      const randomIndex = Math.floor(Math.random() * pool.length);
-      selected.push(pool[randomIndex]);
-      pool.splice(randomIndex, 1);
-    }
-    this.randomCategories = selected;
-  }
-
-  /** 刷新首页数据(双击首页 Tab 触发):重抽随机分类 + 重载推荐板块 / 当前分类 */
-  private refreshHomeData(): void {
+  /** 刷新推荐板块或当前分类，保留旧内容直到新数据返回。 */
+  private async refreshHomeData(): Promise<void> {
     if (this.hasSearched) return; // 搜索结果态不刷新
-    this.shuffleRandomCategories();
     if (this.selectedCategoryIndex === -1) {
-      this.loadingHome = true; // 显示加载态,避免清空后闪现空态
-      this.loadHomeBlocks();
+      await this.loadHomeBlocks(true);
     } else {
-      // 强制重载当前分类(绕过 switchCategory 的同索引短路)
-      const idx = this.selectedCategoryIndex;
-      this.selectedCategoryIndex = -1;
-      this.switchCategory(idx);
+      await this.switchCategory(this.selectedCategoryIndex, true);
     }
   }
 
-  private async loadHomeBlocks(): Promise<void> {
+  private async handleHomeRefresh(): Promise<void> {
+    if (this.refreshInFlight) return;
+    if (this.hasSearched) {
+      this.isRefreshing = false;
+      this.refreshStatus = RefreshStatus.Inactive;
+      return;
+    }
+    this.refreshInFlight = true;
+    this.isRefreshing = true;
+    try {
+      await this.refreshHomeData();
+    } finally {
+      this.refreshInFlight = false;
+      this.isRefreshing = false;
+      this.refreshStatus = RefreshStatus.Inactive;
+    }
+  }
+
+  private shouldShowPullRefreshIndicator(): boolean {
+    return this.isRefreshing || this.refreshStatus === RefreshStatus.Drag ||
+      this.refreshStatus === RefreshStatus.OverDrag;
+  }
+
+  private async loadHomeBlocks(preserveContent: boolean = false): Promise<void> {
     hilog.info(DOMAIN, TAG, 'loadHomeBlocks START, gen=%{public}d', this.homeGen);
     this.homeGen++;
     const gen = this.homeGen;
     if (this.homeBlocks.length === 0) this.loadingHome = true;
-    this.homeBlocks = [];
-    this.homeBlockDataSource.clear();
+    if (!preserveContent) {
+      this.homeBlocks = [];
+      this.homeBlockDataSource.clear();
+    }
     hilog.info(DOMAIN, TAG, 'loadHomeBlocks: cleared data, loadingHome=%{public}s', String(this.loadingHome));
     try {
       // 只加载内置书源的首页推荐,不加载导入的书源
@@ -212,7 +353,7 @@ export struct HomePage {
       }
 
       this.homeBlocks = sections;
-      this.homeBlockDataSource.appendBlocks(sections);
+      this.homeBlockDataSource.setBlocks(sections);
       this.loadingHome = false;
       hilog.info(DOMAIN, TAG, 'loadHomeBlocks: SUCCESS, sections=%{public}d, loadingHome=false', sections.length);
 
@@ -235,8 +376,8 @@ export struct HomePage {
   }
 
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
-  private async switchCategory(index: number): Promise<void> {
-    if (this.selectedCategoryIndex === index) return; // 重复点击不处理
+  private async switchCategory(index: number, forceReload: boolean = false): Promise<void> {
+    if (this.selectedCategoryIndex === index && !forceReload) return; // 重复点击不处理
 
     this.selectedCategoryIndex = index;
 
@@ -251,8 +392,10 @@ export struct HomePage {
     const cat = HOME_CATEGORIES[index];
     if (!cat) return;
 
-    this.categoryBooks = [];
-    this.categoryDS.setBooks([]);
+    if (!forceReload) {
+      this.categoryBooks = [];
+      this.categoryDS.setBooks([]);
+    }
     this.categoryLoading = true;
     this.categoryError = '';
     this.categoryHasMore = true;
@@ -307,22 +450,13 @@ export struct HomePage {
 
   /** 通过 URL 切换分类 */
   private async switchCategoryByUrl(url: string): Promise<void> {
-    // 查找对应的索引
     const index = HOME_CATEGORIES.findIndex(cat => cat.url === url);
     if (index !== -1) {
       await this.switchCategory(index);
     }
   }
 
-  /** 判断固定分类是否选中 */
-  private getFixedCategorySelected(cat: HomeCategory): boolean {
-    if (this.selectedCategoryIndex === -1) return false;
-    const selected = HOME_CATEGORIES[this.selectedCategoryIndex];
-    return selected && selected.url === cat.url;
-  }
-
-  /** 判断随机分类是否选中 */
-  private getRandomCategorySelected(cat: HomeCategory): boolean {
+  private isCategorySelected(cat: HomeCategory): boolean {
     if (this.selectedCategoryIndex === -1) return false;
     const selected = HOME_CATEGORIES[this.selectedCategoryIndex];
     return selected && selected.url === cat.url;
@@ -440,8 +574,8 @@ export struct HomePage {
   }
 
   /**
-   * 固定搜索栏：常驻顶部、不随内容上滑，整条栏透明(悬浮无背景)。
-   * 搜索框胶囊浮在内容上方，列表从其下方滚过、四周直接透出。
+   * 固定搜索与分类栏：常驻顶部、不随内容上滑，整条栏透明(悬浮无背景)。
+   * 搜索框与光感分类胶囊浮在内容上方，列表从其下方滚过、四周直接透出。
    * expandSafeArea + padding.top 让搜索框落在状态栏下方。
    * onAreaChange 实测栏高 → 列表首项用等高占位让出空间。
    */
@@ -463,7 +597,9 @@ export struct HomePage {
         .borderRadius(AppRadius.Lg)
         .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
-      if (this.hasSearched) {
+      if (!this.hasSearched) {
+        this.buildCategoryTags()
+      } else {
         Row() {
           Text(`有声书 ${this.audioCount}`)
             .fontSize(13)
@@ -471,7 +607,7 @@ export struct HomePage {
           if (this.searching) {
             LoadingProgress()
               .width(18).height(18)
-              .color($r('sys.color.brand'))
+              .color(AppColor.Brand)
               .margin({ left: AppSpace.Xs })
           }
           Blank()
@@ -504,6 +640,22 @@ export struct HomePage {
     })
   }
 
+  /** 隐藏 Refresh 默认指示器，避免它出现在固定顶栏后方。 */
+  @Builder
+  emptyRefreshIndicator() {
+    Column().width(0).height(0)
+  }
+
+  /** 位于固定分类栏与内容列表之间的下拉刷新指示器。 */
+  @Builder
+  pullRefreshIndicator() {
+    LoadingProgress()
+      .width(24)
+      .height(24)
+      .color(AppColor.Brand)
+      .margin({ bottom: AppSpace.Sm })
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // L0 背景层（满屏，覆盖到状态栏）
@@ -524,19 +676,19 @@ export struct HomePage {
 
       // L1 原 HdsNavigation
       HdsNavigation() {
-        List({ scroller: this.contentScroller }) {
-        // 第1项:固定搜索栏的等高占位 —— 搜索栏本身常驻不滚动(见 fixedSearchBar),
-        // 这里只用等高空白把列表内容顶到固定栏下方开始。
+        Refresh({ refreshing: $$this.isRefreshing, builder: this.emptyRefreshIndicator() }) {
+          List({ scroller: this.contentScroller }) {
+        // 第1项:固定搜索与分类栏的等高占位 —— 顶栏本身常驻不滚动(见 fixedSearchBar),
+        // 下拉时刷新圈从占位项底部露出，正好位于分类栏和内容列表之间。
         ListItem() {
-          Column().height(this.searchBarHeight)
-        }
-
-        // 第1.5项：分类标签横向滚动（仅推荐态，未搜索时显示）
-        if (!this.hasSearched) {
-          ListItem() {
-            this.buildCategoryTags()
+          Column() {
+            if (this.shouldShowPullRefreshIndicator()) {
+              this.pullRefreshIndicator()
+            }
           }
-          .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm, bottom: AppSpace.Sm })
+          .width('100%')
+          .height(this.searchBarHeight)
+          .justifyContent(FlexAlign.End)
         }
 
         // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
@@ -581,16 +733,7 @@ export struct HomePage {
             // 推荐板块或空态
             if (this.loadingHome && this.homeBlocks.length === 0) {
               ListItem() {
-                Column() {
-                  LoadingProgress().width(40).height(40).color($r('sys.color.brand'))
-                  Text('加载推荐中...')
-                    .fontSize(AppFont.Body)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .margin({ top: AppSpace.Sm })
-                }
-                .width('100%')
-                .height(300)
-                .justifyContent(FlexAlign.Center)
+                Column().width('100%').height(300)
               }
             } else if (this.homeBlocks.length > 0) {
               // 推荐板块：每个板块一个 ListItem
@@ -598,7 +741,7 @@ export struct HomePage {
                 ListItem() {
                   this.buildHomeBlock(block, idx)
                 }
-                .margin({ bottom: AppSpace.Lg })
+                .margin({ top: idx === 0 ? AppSpace.Md : 0, bottom: AppSpace.Lg })
               }, (block: HomeBlockSection, idx: number) => `${block.sourceUrl}#${block.title}#${idx}`)
             } else {
               ListItem() {
@@ -625,7 +768,7 @@ export struct HomePage {
             if (this.categoryLoading && this.categoryBooks.length === 0) {
               ListItem() {
                 Column() {
-                  LoadingProgress().width(40).height(40).color($r('sys.color.brand'))
+                  LoadingProgress().width(40).height(40).color(AppColor.Brand)
                   Text('加载中...')
                     .fontSize(AppFont.Body)
                     .fontColor($r('sys.color.font_tertiary'))
@@ -685,6 +828,19 @@ export struct HomePage {
       .cachedCount(5)
       .clip(false) // 允许内容穿透到固定搜索栏下方产生毛玻璃透出
       .backgroundColor(Color.Transparent) // 让 L0 暖色渐变透出
+        }
+        .onStateChange((state: RefreshStatus) => {
+          this.refreshStatus = state;
+        })
+        .onRefreshing(() => {
+          this.handleHomeRefresh();
+        })
+        .refreshOffset(64)
+        .pullToRefresh(!this.hasSearched)
+        .width('100%')
+        .height('100%')
+        .clip(false)
+        .backgroundColor(Color.Transparent)
       }
     .titleBar({
       content: { title: { mainTitle: '' } }
@@ -692,6 +848,15 @@ export struct HomePage {
     .hideTitleBar(true) // 顶部改用固定毛玻璃搜索栏(fixedSearchBar)，HdsNavigation 标题栏不再使用
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
+
+      if (this.loadingHome && this.homeBlocks.length === 0) {
+        Column() {
+          HomeLoadingSkeleton()
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ top: this.searchBarHeight })
+      }
 
       // 固定搜索栏：常驻顶部、不随内容上滑，内容从其下方滚过被毛玻璃材质模糊透出。
       // 背景渐变由 L0 Column 的 expandSafeArea 铺到状态栏后面。
@@ -702,7 +867,7 @@ export struct HomePage {
   @Builder
   buildSearchingState() {
     Column() {
-      LoadingProgress().width(40).height(40).color($r('sys.color.brand'))
+      LoadingProgress().width(40).height(40).color(AppColor.Brand)
       Text(`正在搜索 ${TINGYOU_SOURCE_NAME}...`)
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
@@ -746,13 +911,16 @@ export struct HomePage {
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
         Blank()
-        if (block.moreUrl) {
-          Text('更多 ›')
+        Row({ space: AppSpace.Xxs }) {
+          Text('更多')
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_secondary'))
-            .padding({ left: AppSpace.Xs, right: AppSpace.Xs, top: 4, bottom: 4 })
-            .onClick(() => this.onBlockMore(block))
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(12)
+            .fontColor([$r('sys.color.font_secondary')])
         }
+        .padding({ left: AppSpace.Xs, right: AppSpace.Xs, top: 6, bottom: 6 })
+        .onClick(() => this.onBlockMore(block))
       }
       .width('100%')
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
@@ -860,61 +1028,31 @@ export struct HomePage {
 
   @Builder
   buildCategoryTags() {
-    Column({ space: AppSpace.Sm }) {
-      // 第一行：推荐 + 最新 + 两个固定分类
-      Row({ space: AppSpace.Sm }) {
-        // 推荐标签
-        Text('推荐')
-          .fontSize(AppFont.Body)
-          .fontColor(this.selectedCategoryIndex === -1 ? Color.White : $r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Regular)
-          .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
-          .borderRadius(AppRadius.Xl)
-          .backgroundColor(this.selectedCategoryIndex === -1 ? '#E87A3E' : $r('sys.color.comp_background_secondary'))
-          .textAlign(TextAlign.Center)
-          .layoutWeight(1)
-          .onClick(() => {
-            this.switchCategory(-1);
+    Scroll() {
+      Row({ space: AppSpace.Xs }) {
+        CategoryLightNavItem({
+          label: '推荐',
+          selected: this.selectedCategoryIndex === -1,
+          onTap: () => this.switchCategory(-1)
+        })
+
+        ForEach(HOME_CATEGORIES, (cat: HomeCategory) => {
+          CategoryLightNavItem({
+            label: cat.name,
+            selected: this.isCategorySelected(cat),
+            onTap: () => this.switchCategoryByUrl(cat.url)
           })
-
-        // 固定3个分类
-        ForEach(FIXED_CATEGORIES, (cat: HomeCategory) => {
-          Text(cat.name)
-            .fontSize(AppFont.Body)
-            .fontColor(this.getFixedCategorySelected(cat) ? Color.White : $r('sys.color.font_primary'))
-            .fontWeight(FontWeight.Regular)
-            .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
-            .borderRadius(AppRadius.Xl)
-            .backgroundColor(this.getFixedCategorySelected(cat) ? '#E87A3E' : $r('sys.color.comp_background_secondary'))
-            .textAlign(TextAlign.Center)
-            .layoutWeight(1)
-            .onClick(() => {
-              this.switchCategoryByUrl(cat.url);
-            })
         }, (cat: HomeCategory) => cat.url)
       }
-      .width('100%')
-
-      // 第二行：恐怖惊悚 + 随机3个分类
-      Row({ space: AppSpace.Sm }) {
-        ForEach(this.randomCategories, (cat: HomeCategory) => {
-          Text(cat.name)
-            .fontSize(AppFont.Body)
-            .fontColor(this.getRandomCategorySelected(cat) ? Color.White : $r('sys.color.font_primary'))
-            .fontWeight(FontWeight.Regular)
-            .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
-            .borderRadius(AppRadius.Xl)
-            .backgroundColor(this.getRandomCategorySelected(cat) ? '#E87A3E' : $r('sys.color.comp_background_secondary'))
-            .textAlign(TextAlign.Center)
-            .layoutWeight(1)
-            .onClick(() => {
-              this.switchCategoryByUrl(cat.url);
-            })
-        }, (cat: HomeCategory) => cat.url)
-      }
-      .width('100%')
+      .height(CATEGORY_NAV_ROW_HEIGHT)
+      .padding({ left: AppSpace.Md, right: AppSpace.Md })
+      .alignItems(VerticalAlign.Center)
     }
+    .height(CATEGORY_NAV_ROW_HEIGHT)
     .width('100%')
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
   }
 
   @Builder

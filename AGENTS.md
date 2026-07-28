@@ -19,13 +19,13 @@ ListenBook is a HarmonyOS Next Stage-mode app (ArkTS) plus an optional Node audi
 | `server/` | JianHu cloud audio API + Vue admin + Docker deploy |
 | `entry/src/test/` | Hypium unit tests |
 | `entry/src/ohosTest/` | Device/ability tests |
-| `docs/` | Design notes and specs |
+| `docs/APP_UI.md` | Current App page behavior and UI regression baseline |
 
 Treat `build/`, `.hvigor/`, `oh_modules/`, `server/node_modules/`, and `server/dist/` as generated outputs.
 
 **Content model (read this first):** the App no longer loads user Legado rule sources. Online content comes only from registered built-in sources (`builtin://eprendre/<id>`). Cloud/rule execution lives in `server/`; the App consumes stable HTTP APIs via `ServerAudioSource`.
 
-Authoritative product/architecture notes: `CLAUDE.md`. Server ops: `server/README.md`.
+Authoritative product/architecture notes: `CLAUDE.md`. Current App interactions: `docs/APP_UI.md`. Server ops: `server/README.md`.
 
 ## Build, Test, and Development Commands
 
@@ -56,6 +56,7 @@ Deploy: see `server/deploy/compose.yml` and `server/README.md`.
 - ArkUI **V2 only**: `@ComponentV2`, `@Local`, `@Param`, `@Event`, `@ObservedV2`, `@Trace`
 - Names: `PlayerPage`, `AudioService`, `ServerAudioSource` (PascalCase + clear suffix); camelCase for fields/methods
 - Prefer resource strings for user-facing copy; do not rename `.ets` files just to match label text
+- Use `AppColor.Brand` for visible loading indicators; do not rely on the HarmonyOS default brand blue
 - Long lists: `LazyForEach` + stable keys (never index keys)
 - New online sources: implement `IBuiltInSource` and register in `registerBuiltInSources()`; rule-heavy sources belong on the server
 - Do not reintroduce client-side Legado rule engines under `service/js` or `service/rule` unless explicitly designed
@@ -66,6 +67,13 @@ Deploy: see `server/deploy/compose.yml` and `server/README.md`.
 - Server: Vitest in `server/test/*.test.ts` (`npm test` under `server/`)
 - Name suites/cases by behavior (`it('quarantines unusable audio sources')`)
 - Before merging changes to playback, builtin sources, download, cloud API config, or server catalog sync: run relevant unit tests and smoke search → detail → chapter → resolve/play on device or against the API
+- For Home/record UI changes, smoke-test initial skeleton loading, pull-to-refresh completion, double-tap-to-top, edit/long-press selection, and resume playback on a device
+
+## Documentation Guidelines
+
+- Keep `README.md` as the public overview, `CLAUDE.md` as the product/architecture source of truth, `docs/APP_UI.md` as the current interaction baseline, and `server/README.md` as the deployment/operations guide.
+- Update those existing documents when behavior or architecture changes.
+- Delete obsolete one-off fix notes, abandoned research, and completed dated implementation plans instead of leaving them beside current documentation.
 
 ## Commit & Pull Request Guidelines
 

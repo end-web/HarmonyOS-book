@@ -3,7 +3,7 @@ import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
-import { HomePage, EVT_REFRESH_HOME } from './HomePage';
+import { HomePage } from './HomePage';
 import { HomeBlockSection } from '../model/BookSource';
 import { FavoritePage } from './FavoritePage';
 import { ReadingStatsPage } from './ReadingStatsPage';
@@ -279,15 +279,10 @@ export struct MainPage {
         const now = Date.now();
         const DOUBLE_TAP_DELAY = 300;
         if (index === this.lastTabClickIndex && (now - this.lastTabClickTime) < DOUBLE_TAP_DELAY) {
-          if (index === 0) {
-            // 双击首页 → 刷新首页数据(不再返回顶部)
-            emitter.emit(EVT_REFRESH_HOME);
-          } else {
-            // 双击其它 Tab → 滚动回顶部
-            const scroller = this.scrollers.get(index);
-            if (scroller) {
-              try { scroller.scrollEdge(Edge.Top); } catch (_e) { /* ignore */ }
-            }
+          // 双击当前 Tab → 滚动回顶部
+          const scroller = this.scrollers.get(index);
+          if (scroller) {
+            try { scroller.scrollEdge(Edge.Top); } catch (_e) { /* ignore */ }
           }
         }
         this.lastTabClickTime = now;

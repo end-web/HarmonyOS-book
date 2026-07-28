@@ -220,7 +220,7 @@ export struct BlockMorePage {
   @Builder
   buildLoading() {
     Column() {
-      LoadingProgress().width(40).height(40).color($r('sys.color.brand'))
+      LoadingProgress().width(40).height(40).color(AppColor.Brand)
       Text('加载中...')
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
@@ -270,7 +270,7 @@ export struct BlockMorePage {
       if (this.loadingMore) {
         GridItem() {
           Row({ space: AppSpace.Xs }) {
-            LoadingProgress().width(20).height(20).color($r('sys.color.brand'))
+            LoadingProgress().width(20).height(20).color(AppColor.Brand)
             Text('加载更多...')
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
