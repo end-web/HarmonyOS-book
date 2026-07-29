@@ -228,8 +228,30 @@ export default class EntryAbility extends UIAbility {
     return Math.min(4.0, Math.max(0.125, speed));
   }
 
+  /**
+   * postCardAction(router) 会把 params 序列化到 want.parameters.params；
+   * WantAgent 等普通启动方式则直接把业务字段放在 want.parameters。
+   */
+  private extractRouteParams(want: Want): Record<string, Object> | undefined {
+    const root = want.parameters;
+    if (!root) return undefined;
+    const nested = root['params'];
+    if (typeof nested === 'string') {
+      try {
+        return JSON.parse(nested) as Record<string, Object>;
+      } catch (err) {
+        const e = err as Error;
+        hilog.warn(DOMAIN, TAG, 'parse widget route params failed: %{public}s',
+          e?.message ?? JSON.stringify(err));
+      }
+    } else if (nested && typeof nested === 'object') {
+      return nested as Record<string, Object>;
+    }
+    return root;
+  }
+
   private consumeRouteWant(want: Want): void {
-    const params = want.parameters;
+    const params = this.extractRouteParams(want);
     if (!params) return;
     const from = params['from'] as string | undefined;
     if (from !== 'widget' && from !== 'download_notification') return;
@@ -238,6 +260,8 @@ export default class EntryAbility extends UIAbility {
     const route: WidgetRoute = { target, bookId, ts: Date.now() };
     AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
     emitter.emit(EVT_WIDGET_ROUTE, { data: { target, bookId: bookId ?? '', ts: route.ts } });
+    hilog.info(DOMAIN, TAG, 'consume route want: from=%{public}s target=%{public}s',
+      from, target);
   }
 
   private registerCallee(): void {

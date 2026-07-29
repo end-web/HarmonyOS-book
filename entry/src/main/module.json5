@@ -42,6 +42,7 @@
         "description": "$string:EntryAbility_desc",
         "icon": "$media:app_icon",
         "label": "$string:EntryAbility_label",
+        "launchType": "singleton",
         "startWindowIcon": "$media:splash_text",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,

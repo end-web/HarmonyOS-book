@@ -54,7 +54,7 @@ export class WidgetUpdater {
    * - 已下载过：直接复用
    * - 失败：返回 null（外层用 https URL 兜底）
    */
-  private static async downloadCover(url: string): Promise<string | null> {
+  private static async downloadCover(url: string, allowNetwork: boolean = true): Promise<string | null> {
     if (!url || !url.startsWith('http')) return null;
     const cached = WidgetUpdater.coverPathCache.get(url);
     if (cached) return cached;
@@ -71,6 +71,9 @@ export class WidgetUpdater {
           return filePath;
         }
       } catch (_e) { /* not exist, continue */ }
+
+      // FormExtensionAbility 生命周期很短，只允许复用已落盘封面。
+      if (!allowNetwork) return null;
 
       const httpClient = http.createHttp();
       try {
@@ -123,7 +126,7 @@ export class WidgetUpdater {
    *
    * 返回 { binding, imgFile }，调用方在 updateForm 完成后必须 close imgFile 释放 fd
    */
-  private static async buildPlayerBinding(snap: WidgetPlayerSnapshot)
+  private static async buildPlayerBinding(snap: WidgetPlayerSnapshot, allowNetwork: boolean = true)
     : Promise<BuildBindingResult> {
     const data: Record<string, Object> = WidgetUpdater.snapshotToFormData(snap);
     let imgFile: fileIo.File | null = null;
@@ -132,7 +135,7 @@ export class WidgetUpdater {
       try {
         let localPath: string | null = null;
         if (snap.cover.startsWith('http')) {
-          localPath = await WidgetUpdater.downloadCover(snap.cover);
+          localPath = await WidgetUpdater.downloadCover(snap.cover, allowNetwork);
         } else if (snap.cover.startsWith('file://')) {
           localPath = snap.cover.substring('file://'.length);
         } else if (snap.cover.startsWith('/')) {
@@ -207,9 +210,10 @@ export class WidgetUpdater {
   }
 
   /** 单卡片推送(onAddForm/onUpdateForm 用),内部走 fd 通道并自动关闭 fd */
-  static async pushPlayerSnapshotToForm(formId: string, snap: WidgetPlayerSnapshot): Promise<void> {
-    await WidgetUpdater.ensureBgColor(snap);
-    const built = await WidgetUpdater.buildPlayerBinding(snap);
+  static async pushPlayerSnapshotToForm(formId: string, snap: WidgetPlayerSnapshot,
+    allowNetwork: boolean = true): Promise<void> {
+    await WidgetUpdater.ensureBgColor(snap, allowNetwork);
+    const built = await WidgetUpdater.buildPlayerBinding(snap, allowNetwork);
     try {
       await formProvider.updateForm(formId, built.binding);
     } finally {
@@ -400,7 +404,7 @@ export class WidgetUpdater {
   }
 
   /** 异步提取封面色并补充到快照中（缓存 miss 时主动提取） */
-  private static async ensureBgColor(snap: WidgetPlayerSnapshot): Promise<void> {
+  private static async ensureBgColor(snap: WidgetPlayerSnapshot, allowNetwork: boolean = true): Promise<void> {
     if (snap.bgColor && snap.bgColor.length > 0
       && snap.bgTopColor && snap.bgTopColor.length > 0
       && snap.bgBottomColor && snap.bgBottomColor.length > 0
@@ -410,6 +414,7 @@ export class WidgetUpdater {
       return;
     }
     if (!snap.cover) return;
+    if (!allowNetwork) return;
     try {
       let palette = ColorPickerUtils.getPaletteCached(snap.cover);
       if (!palette) {

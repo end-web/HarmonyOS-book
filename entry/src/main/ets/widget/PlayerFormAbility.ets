@@ -55,7 +55,7 @@ export default class PlayerFormAbility extends FormExtensionAbility {
     }
     if (!snap) return;
     try {
-      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap);
+      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, false);
     } catch (err) {
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'first push failed: %{public}s', e?.message ?? JSON.stringify(err));
@@ -85,7 +85,7 @@ export default class PlayerFormAbility extends FormExtensionAbility {
         snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
       }
       if (!snap) return;
-      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap);
+      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, false);
     }).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'onUpdateForm failed: %{public}s',
         err?.message ?? JSON.stringify(err));

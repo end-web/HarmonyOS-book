@@ -161,11 +161,12 @@ struct PlayerCard {
           .margin({ left: 10 })
         }
         .width('100%')
-        // 卡片不支持 gesture(LongPressGesture),改成短按软拉起;
-        // 进播放器靠下方第二行右侧的展开按钮
+        // 封面与标题属于前台唤醒信息区，播控按钮仍单独走 call。
         .onClick(() => this.resumeApp())
 
         Blank()
+          .width('100%')
+          .onClick(() => this.resumeApp())
 
         // 第二行:仅展示集数/章节名
         if (this.chapterTitle.length > 0) {
@@ -175,6 +176,7 @@ struct PlayerCard {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
+            .onClick(() => this.resumeApp())
         }
 
         // 第三行:三按钮
