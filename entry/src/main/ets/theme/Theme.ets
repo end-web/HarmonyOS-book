@@ -1,4 +1,4 @@
-import { curves } from '@kit.ArkUI';
+import { curves, uiMaterial } from '@kit.ArkUI';
 
 export class AppColor {
   static readonly Brand: Resource = $r('app.color.app_brand');
@@ -16,6 +16,21 @@ export class AppColor {
   static readonly GlassBg: string = '#33FFFFFF';
   static readonly GlassBgDark: string = '#33000000';
   static readonly GlassStroke: string = '#1FFFFFFF';
+}
+
+/** HarmonyOS 7 immersive material presets shared by floating controls and sheets. */
+export class AppMaterial {
+  static readonly InteractiveThin: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THIN,
+    applyShadow: false,
+    interactive: true
+  });
+
+  static readonly SurfaceRegular: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.REGULAR,
+    materialColor: AppColor.BrandSoft,
+    applyShadow: true
+  });
 }
 
 export class AppRadius {

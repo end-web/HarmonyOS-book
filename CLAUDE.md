@@ -13,7 +13,8 @@
 
 ## 技术基线
 
-- HarmonyOS Next，`compatibleSdkVersion = 6.1.0(23)`，stage 模式
+- HarmonyOS 7 / API 26，`targetSdkVersion = compatibleSdkVersion = 26.0.0`，stage 模式
+- 当前本机 SDK 为 `HarmonyOS 26.0.0 Beta1`；代码只使用该 SDK 已声明并通过构建的 API 26 能力
 - 单 module：`entry/`（type=entry，deviceTypes=phone）
 - ArkUI 使用 **V2 装饰器**（`@ComponentV2` / `@Local` / `@Param` / `@Event` / `@ObservedV2` / `@Trace`）
 - `bundleName`: `com.ylwang.listenbook.tingyou`
@@ -21,6 +22,13 @@
 - 后台模式：`audioPlayback` + `dataTransfer` + `KEEP_BACKGROUND_RUNNING`
 - 网络：`INTERNET`；体感：`VIBRATE`
 - 签名配置属于本机私有设置，不提交证书路径、Profile 或口令；请在 DevEco Studio 的 Signing Configs 中本地配置
+
+### HarmonyOS 7 SDK 边界
+
+- UI 使用 API 26 `uiMaterial.ImmersiveMaterial` / `systemMaterial`，统一首页悬浮控件、播放器弹层和配置 Sheet。
+- `AVSessionService` 向系统媒体中心声明并处理独立的后退 10 秒、前进 30 秒命令。
+- 在线音频通过 `MediaSource.enableOfflineCache(true)` 使用系统托管缓存；用户主动下载的完整章节仍由 `DownloadService` 持久化，两者不互相替代。
+- 官方新特性页同时包含 Beta1 与 Beta2。当前 SDK 尚未声明 `setSupportedPlaySpeeds`、`setSupportedLoopModes`、`setMediaCenterControlType` 和 Beta2 下载管理接口；升级到对应 Beta2 或正式版 SDK 并重新构建前，不得提前写入这些接口。
 
 ## 仓库结构
 
@@ -108,8 +116,8 @@ App
 
 | 服务 | 职责 |
 |---|---|
-| `AudioService` | AVPlayer 单例，焦点、续播、睡眠定时、章节预解析 |
-| `AVSessionService` | 锁屏/控制中心媒体卡片 |
+| `AudioService` | AVPlayer 单例，焦点、续播、睡眠定时、在线媒体系统缓存、章节预解析 |
+| `AVSessionService` | 锁屏/控制中心媒体卡片，后退 10 秒与前进 30 秒控制 |
 | `BackgroundTaskService` | `audioPlayback` 长时任务 |
 | `BookSourceService` | 内置源门面（search/info/toc/audio/explore/home） |
 | `SourceDataService` | 仅返回已注册内置源列表（无用户规则源 CRUD） |
@@ -214,6 +222,7 @@ cd server && npm test && npm run build:all
 - [x] 简·欢云源 + 可配置 API 地址
 - [x] 服务端聚合、网络目录同步、运维后台、Docker 部署
 - [x] AudioService 焦点 / AVSession / 后台播放
+- [x] HarmonyOS 7 系统材质、AVSession 独立快退/快进、在线媒体系统缓存
 - [x] 本地播放进度恢复
 - [x] 本地音频导入
 - [x] 章节下载与下载管理

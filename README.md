@@ -23,9 +23,9 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 ### 用户前台
 
 - **双路在线内容**：听友 FM 本地协议 + 简·欢云源聚合 API。
-- **首页浏览体验**：固定搜索栏、单行横向分类、首次进入骨架屏、下拉刷新和每个推荐板块的“更多”入口。
+- **首页浏览体验**：HarmonyOS 7 沉浸材质搜索/分类控件、首次进入骨架屏、下拉刷新和每个推荐板块的“更多”入口。
 - **完整收听流程**：多源搜索、书籍详情、章节目录、播放地址解析与续播。
-- **系统级播放**：AVPlayer、音频焦点、锁屏/控制中心、后台长时任务、倍速和睡眠定时。
+- **系统级播放**：AVPlayer、音频焦点、锁屏/控制中心、独立 10 秒回退与 30 秒前进、后台长时任务、倍速和睡眠定时。
 - **本地内容与离线能力**：导入音频文件、按章下载、下载管理和本地播放。
 - **个人数据**：书架、收藏、收听记录、整本书进度统计和每本书独立播放进度。
 - **记录管理**：顶部编辑或长按进入多选，支持全选和批量删除，并保留单书继续播放入口。
@@ -52,7 +52,7 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 | 层级 | 技术 |
 |---|---|
 | App | HarmonyOS Next Stage、ArkTS、ArkUI V2 |
-| SDK | `compatibleSdkVersion 6.1.0(23)` |
+| SDK | HarmonyOS 7 / API 26，`targetSdkVersion = compatibleSdkVersion = 26.0.0` |
 | bundleName | `com.ylwang.listenbook.tingyou` |
 | 运维后台 | Vue 3、TypeScript、Vite、Pinia、Vue Router |
 | 云源服务 | Node.js 22+、Express 5、TypeScript、SQLite |
@@ -124,7 +124,7 @@ ListenBook/
 
 | 服务 | 职责 |
 |---|---|
-| `AudioService` | AVPlayer 播放核心、音频焦点、后台任务、AVSession、续播和进度落盘 |
+| `AudioService` | AVPlayer 播放核心、音频焦点、后台任务、AVSession、在线媒体系统缓存、续播和进度落盘 |
 | `BookSourceService` | 内置来源统一门面和搜索、详情、目录、播放解析分发 |
 | `BuiltInSourceRegistry` | 注册 `tingyou_fm` / `jianhu_server` |
 | `ServerAudioConfig` | 云源 API Base（默认 `https://121.196.223.85/api/v1`） |
@@ -162,8 +162,8 @@ ListenBook/
 
 ### 环境
 
-- DevEco Studio 5.0+
-- HarmonyOS SDK 6.1.0(23)
+- DevEco Studio 26.0.0 Beta1 或更新版本
+- HarmonyOS SDK 26.0.0（API 26）
 - Node.js 22+（仅改 `server/` 时需要）
 
 ### App

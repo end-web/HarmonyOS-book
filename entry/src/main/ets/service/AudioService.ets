@@ -189,6 +189,8 @@ export class AudioService {
       onPause: () => { this.pauseFromSession(); },
       onPlayNext: () => { this.playNext(); },
       onPlayPrevious: () => { this.playPrevious(); },
+      onFastForward: (ms: number) => { this.seekBy(ms); },
+      onRewind: (ms: number) => { this.seekBy(-ms); },
       onSeek: (ms: number) => { this.seek(ms); }
     };
     AVSessionService.getInstance().setCallbacks(cbs);
@@ -952,12 +954,9 @@ export class AudioService {
           hilog.error(DOMAIN, TAG, 'Invalid URL scheme: %{public}s', src.value.substring(0, 50));
           return;
         }
-        if (Object.keys(headers).length > 0) {
-          const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
-          await p.setMediaSource(mediaSource);
-        } else {
-          p.url = src.value;
-        }
+        const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
+        mediaSource.enableOfflineCache(true);
+        await p.setMediaSource(mediaSource);
       } else if (src.type === 'file') {
         // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）
         const f = await fileIo.open(src.value, fileIo.OpenMode.READ_ONLY);
@@ -1068,6 +1067,14 @@ export class AudioService {
       p.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
     }
     this.syncPlaybackState();
+  }
+
+  async seekBy(deltaMs: number): Promise<void> {
+    if (!this.state || !Number.isFinite(deltaMs)) return;
+    const currentMs = Math.max(0, this.state.progressMs);
+    const maxMs = this.state.durationMs > 0 ? this.state.durationMs : Number.MAX_SAFE_INTEGER;
+    const targetMs = Math.min(maxMs, Math.max(0, currentMs + deltaMs));
+    await this.seek(targetMs);
   }
 
   async replayCurrent(): Promise<void> {

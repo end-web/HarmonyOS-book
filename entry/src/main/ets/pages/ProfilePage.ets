@@ -1,4 +1,4 @@
-import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import {
@@ -240,7 +240,7 @@ export struct ProfilePage {
       preferType: SheetType.BOTTOM,
       showClose: false,
       dragBar: true,
-      backgroundColor: $r('sys.color.background_secondary')
+      systemMaterial: AppMaterial.SurfaceRegular
     })
   }
 

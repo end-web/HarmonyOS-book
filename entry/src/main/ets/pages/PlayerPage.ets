@@ -3,7 +3,7 @@ import { AppStorageV2, curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
-import { AppColor, AppSpace, AppFont, AppMotion, AppRadius } from '../theme/Theme';
+import { AppColor, AppSpace, AppFont, AppMotion, AppRadius, AppMaterial } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
 import { DataService } from '../service/DataService';
@@ -1008,7 +1008,7 @@ export struct PlayerPage {
           Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
             .onChange((value: string) => this.applyChapterFilter(value))
             .height(40)
-            .backgroundColor($r('sys.color.comp_background_tertiary'))
+            .systemMaterial(AppMaterial.InteractiveThin)
             .borderRadius(AppRadius.Lg)
             .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
@@ -1041,9 +1041,8 @@ export struct PlayerPage {
       }
       .width('100%')
       .height('55%')
-      .backgroundColor($r('sys.color.comp_background_primary'))
+      .systemMaterial(AppMaterial.SurfaceRegular)
       .borderRadius({ topLeft: 20, topRight: 20 })
-      .shadow({ radius: 40, color: '#33000000', offsetY: -8 })
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 })
@@ -1162,10 +1161,9 @@ export struct PlayerPage {
         }
       }
       .width('100%')
-      .backgroundColor($r('sys.color.comp_background_primary'))
+      .systemMaterial(AppMaterial.SurfaceRegular)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      .shadow({ radius: 40, color: '#33000000', offsetY: -8 })
       .transition(TransitionEffect.OPACITY.animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 }).animation({ curve: curves.springMotion(0.6, 0.9) })))
     }
@@ -1254,10 +1252,9 @@ export struct PlayerPage {
         .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .backgroundColor($r('sys.color.comp_background_primary'))
+      .systemMaterial(AppMaterial.SurfaceRegular)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      .shadow({ radius: 40, color: '#33000000', offsetY: -8 })
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 })
@@ -1331,10 +1328,9 @@ export struct PlayerPage {
         .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .backgroundColor($r('sys.color.comp_background_primary'))
+      .systemMaterial(AppMaterial.SurfaceRegular)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      .shadow({ radius: 40, color: '#33000000', offsetY: -8 })
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 })

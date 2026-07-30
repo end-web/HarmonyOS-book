@@ -14,8 +14,13 @@ export interface AVSessionCallbacks {
   onPause: () => void;
   onPlayNext: () => void;
   onPlayPrevious: () => void;
+  onFastForward: (ms: number) => void;
+  onRewind: (ms: number) => void;
   onSeek: (ms: number) => void;
 }
+
+const REWIND_INTERVAL_MS: number = 10000;
+const FAST_FORWARD_INTERVAL_MS: number = 30000;
 
 export class AVSessionService {
   private static instance: AVSessionService | null = null;
@@ -30,6 +35,8 @@ export class AVSessionService {
   private onPause: (() => void) | null = null;
   private onPlayNext: (() => void) | null = null;
   private onPlayPrevious: (() => void) | null = null;
+  private onFastForward: ((ms: number) => void) | null = null;
+  private onRewind: ((ms: number) => void) | null = null;
   private onSeek: ((ms: number) => void) | null = null;
 
   static getInstance(): AVSessionService {
@@ -44,6 +51,8 @@ export class AVSessionService {
     this.onPause = cbs.onPause;
     this.onPlayNext = cbs.onPlayNext;
     this.onPlayPrevious = cbs.onPlayPrevious;
+    this.onFastForward = cbs.onFastForward;
+    this.onRewind = cbs.onRewind;
     this.onSeek = cbs.onSeek;
   }
 
@@ -112,9 +121,20 @@ export class AVSessionService {
     this.session.on('playPrevious', () => {
       this.onPlayPrevious?.();
     });
+    this.session.on('fastForward', (time?: number) => {
+      this.onFastForward?.(this.normalizeSkipTime(time, FAST_FORWARD_INTERVAL_MS));
+    });
+    this.session.on('rewind', (time?: number) => {
+      this.onRewind?.(this.normalizeSkipTime(time, REWIND_INTERVAL_MS));
+    });
     this.session.on('seek', (timeMs: number) => {
       this.onSeek?.(timeMs);
     });
+  }
+
+  private normalizeSkipTime(time: number | undefined, fallbackMs: number): number {
+    if (time === undefined || !Number.isFinite(time) || time <= 0) return fallbackMs;
+    return time;
   }
 
   async updateMetadata(book: Book, chapter: Chapter): Promise<void> {
@@ -141,7 +161,9 @@ export class AVSessionService {
       artist: book.title,
       author: book.author,
       duration: chapter.duration > 0 ? chapter.duration * 1000 : undefined,
-      mediaImage: mediaImage
+      mediaImage: mediaImage,
+      rewindSkipIntervals: avSession.SkipIntervals.SECONDS_10,
+      fastForwardSkipIntervals: avSession.SkipIntervals.SECONDS_30
     };
     try {
       await this.session.setAVMetadata(metadata);
@@ -154,7 +176,9 @@ export class AVSessionService {
         const fallback: avSession.AVMetadata = {
           assetId: `${book.id}_${chapter.id}`,
           title: chapter.title,
-          artist: book.title
+          artist: book.title,
+          rewindSkipIntervals: avSession.SkipIntervals.SECONDS_10,
+          fastForwardSkipIntervals: avSession.SkipIntervals.SECONDS_30
         };
         await this.session.setAVMetadata(fallback);
       } catch (err2) {
@@ -178,7 +202,9 @@ export class AVSessionService {
       artist: book.title,
       author: book.author,
       duration: durationMs,
-      mediaImage: this.currentMediaImage
+      mediaImage: this.currentMediaImage,
+      rewindSkipIntervals: avSession.SkipIntervals.SECONDS_10,
+      fastForwardSkipIntervals: avSession.SkipIntervals.SECONDS_30
     };
     try {
       await this.session.setAVMetadata(metadata);
@@ -363,6 +389,8 @@ export class AVSessionService {
     this.onPause = null;
     this.onPlayNext = null;
     this.onPlayPrevious = null;
+    this.onFastForward = null;
+    this.onRewind = null;
     this.onSeek = null;
     AVSessionService.instance = null;
   }

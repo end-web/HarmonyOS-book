@@ -20,6 +20,11 @@ import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { WebEngineGate } from '../WebEngineGate';
 
+const EXTRACTOR_USER_AGENT: string =
+  'Mozilla/5.0 (Linux; U; Android 11; zh-cn; MI 8 Build/RKQ1.200826.002) ' +
+  'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/77.0.3865.120 ' +
+  'MQQBrowser/13.7 Mobile Safari/537.36';
+
 interface ExtractTask {
   url: string;
   jsExpr: string;
@@ -445,11 +450,18 @@ export struct WebViewAudioExtractorHost {
       .width(0)
       .height(0)
       .opacity(0)
+      .onControllerAttached(() => {
+        try {
+          this.controller.setCustomUserAgent(EXTRACTOR_USER_AGENT);
+        } catch (err) {
+          const e = err as BusinessError;
+          console.warn(`[WebViewExtractor] setCustomUserAgent failed: ${e.message ?? e.code}`);
+        }
+      })
       .javaScriptAccess(true)
       .domStorageAccess(true)
       .imageAccess(false)
       .onlineImageAccess(true)
-      .userAgent('Mozilla/5.0 (Linux; U; Android 11; zh-cn; MI 8 Build/RKQ1.200826.002) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/77.0.3865.120 MQQBrowser/13.7 Mobile Safari/537.36')
       // 允许 HTTP 页面加载 HTTPS iframe（悦听吧等站外层 HTTP + iframe HTTPS）
       .mixedMode(MixedMode.All)
       // 网络嗅探：onInterceptRequest 会触发主 frame + iframe + 所有子资源的请求 URL，

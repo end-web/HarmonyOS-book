@@ -1,6 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HdsNavigation, HdsNavigationTitleMode, hdsEffect } from '@kit.UIDesignKit';
-import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, HomeTheme } from '../theme/Theme';
+import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
@@ -50,23 +50,11 @@ const DOMAIN = 0x0000;
 const TAG = 'HomePage';
 
 const HEADER_TOOLBAR_HEIGHT: number = 40;
+const SEARCH_FIELD_HEIGHT: number = 40;
+const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
 const CATEGORY_NAV_WIDTH: number = 76;
 const CATEGORY_NAV_ROW_HEIGHT: number = 48;
-const CATEGORY_LIGHT_COLOR: string = '#66FFC15C';
-const CATEGORY_NAV_EFFECT: VisualEffect = new hdsEffect.HdsEffectBuilder()
-  .pressShadow(hdsEffect.PressShadowType.BLEND_GRADIENT)
-  .pointLight({
-    sourceType: hdsEffect.PointLightSourceType.SOFT,
-    illuminatedType: hdsEffect.PointLightIlluminatedType.DEFAULT_FEATHERING_BORDER,
-    options: {
-      color: CATEGORY_LIGHT_COLOR,
-      intensity: 0.35,
-      height: 24,
-      bloom: 0.2
-    }
-  })
-  .buildEffect();
 
 @ComponentV2
 struct CategoryLightNavItem {
@@ -75,60 +63,40 @@ struct CategoryLightNavItem {
   @Event onTap: () => void = () => {};
 
   build() {
-    Stack({ alignContent: Alignment.Center }) {
-      Row()
-        .width('100%')
-        .height('100%')
-        .borderRadius(AppRadius.Pill)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .backgroundColor(this.selected ? '#33FFC15C' : '#24FFFFFF')
+    Column() {
+      Row() {
+        Text(this.label)
+          .fontSize(13)
+          .fontColor(this.selected ? HomeTheme.Accent : $r('sys.color.font_secondary'))
+          .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Regular)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .padding({ left: AppSpace.Xxs, right: AppSpace.Xxs })
+      }
+      .width('100%')
+      .height(30)
+      .alignItems(VerticalAlign.Center)
 
       if (this.selected) {
         Row()
-          .width('100%')
-          .height('100%')
-          .borderRadius(AppRadius.Pill)
-          .linearGradient({
-            angle: 120,
-            colors: [
-              ['#66FFC15C', 0.0],
-              ['#3DFF8A5A', 0.58],
-              ['#24FFFFFF', 1.0]
-            ]
-          })
-          .border({ width: 1, color: '#8CFFD98A' })
-          .shadow({ radius: 10, color: '#3DFFC15C', offsetY: 2 })
+          .width(18)
+          .height(2)
+          .borderRadius(1)
+          .backgroundColor(HomeTheme.Accent)
       } else {
         Row()
-          .width('100%')
-          .height('100%')
-          .borderRadius(AppRadius.Pill)
-          .linearGradient({
-            angle: 135,
-            colors: [
-              ['#33FFFFFF', 0.0],
-              ['#12FFFFFF', 0.52],
-              ['#0A000000', 1.0]
-            ]
-          })
-          .border({ width: 0.5, color: '#52FFFFFF' })
-          .shadow({ radius: 6, color: '#1A000000', offsetY: 1 })
+          .width(18)
+          .height(2)
+          .opacity(0)
       }
-
-      Text(this.label)
-        .fontSize(13)
-        .fontColor(this.selected ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
-        .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Regular)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .textAlign(TextAlign.Center)
-        .width('100%')
-        .padding({ left: AppSpace.Xxs, right: AppSpace.Xxs })
     }
     .width(CATEGORY_NAV_WIDTH)
     .height(CATEGORY_NAV_HEIGHT)
     .borderRadius(AppRadius.Pill)
-    .visualEffect(CATEGORY_NAV_EFFECT)
+    .justifyContent(FlexAlign.Center)
+    .systemMaterial(AppMaterial.InteractiveThin)
     .animation({ duration: AppMotion.Base, curve: AppCurve.Spring })
     .onClick(() => this.onTap())
   }
@@ -239,8 +207,6 @@ export struct HomePage {
   @Local categoryError: string = '';
   @Local categoryHasMore: boolean = true;
   @Local categoryNextUrl: string = '';
-  /** 固定搜索与分类栏实测高度(含状态栏让位),用于给列表首项让出等高占位 */
-  @Local searchBarHeight: number = 0;
   @Local isRefreshing: boolean = false;
   @Local refreshStatus: RefreshStatus = RefreshStatus.Inactive;
 
@@ -260,8 +226,6 @@ export struct HomePage {
 
   aboutToAppear(): void {
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
-    // 初始估值包含搜索框和单行分类导航,实际以 onAreaChange 实测为准
-    this.searchBarHeight = WindowUtils.getStatusBarHeightVp() + 56 + CATEGORY_NAV_ROW_HEIGHT;
     this.loadHomeBlocks();
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.contentScroller);
@@ -573,29 +537,41 @@ export struct HomePage {
     return (h >>> 0).toString(36);
   }
 
+  private currentSubHeaderHeight(): number {
+    return this.hasSearched ? HEADER_TOOLBAR_HEIGHT : CATEGORY_NAV_ROW_HEIGHT;
+  }
+
+  @Computed
+  get fixedHeaderHeight(): number {
+    return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + this.currentSubHeaderHeight();
+  }
+
   /**
-   * 固定搜索与分类栏：常驻顶部、不随内容上滑，整条栏透明(悬浮无背景)。
-   * 搜索框与光感分类胶囊浮在内容上方，列表从其下方滚过、四周直接透出。
-   * expandSafeArea + padding.top 让搜索框落在状态栏下方。
-   * onAreaChange 实测栏高 → 列表首项用等高占位让出空间。
+   * 固定顶部区：页面底色保持透明，搜索框和分类标签使用鸿蒙 7 沉浸光感材质。
    */
   @Builder
   fixedSearchBar() {
     Column() {
-      Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
-        .searchButton('搜索', { fontColor: HomeTheme.Accent })
-        .onSubmit(() => this.doSearch())
-        .onChange((value: string) => {
-          this.keyword = value;
-          if (value.length === 0 && this.hasSearched) {
-            this.clearSearch();
-          }
-        })
-        .height(40)
-        // 搜索框胶囊做成磨砂玻璃：内容从其下方滚过被模糊，既有沉浸光感观感、又看得清
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .borderRadius(AppRadius.Lg)
-        .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+      Column() {
+        Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
+          .searchButton('搜索', { fontColor: HomeTheme.Accent })
+          .placeholderColor($r('sys.color.font_tertiary'))
+          .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
+          .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
+          .onSubmit(() => this.doSearch())
+          .onChange((value: string) => {
+            this.keyword = value;
+            if (value.length === 0 && this.hasSearched) {
+              this.clearSearch();
+            }
+          })
+          .height(SEARCH_FIELD_HEIGHT)
+          .systemMaterial(AppMaterial.InteractiveThin)
+          .borderRadius(AppRadius.Lg)
+          .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+      }
+      .width('100%')
+      .height(SEARCH_FIELD_ROW_HEIGHT)
 
       if (!this.hasSearched) {
         this.buildCategoryTags()
@@ -618,8 +594,7 @@ export struct HomePage {
             .fontColor([$r('sys.color.font_primary')])
             .padding(8)
             .borderRadius(18)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-            .backgroundColor('rgba(255,255,255,0.3)')
+            .backgroundColor(Color.Transparent)
             .onClick(() => {
               this.getUIContext()?.animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard },
                 () => { this.viewMode = this.viewMode === 0 ? 1 : 0; });
@@ -633,11 +608,9 @@ export struct HomePage {
     }
     .width('100%')
     .padding({ top: WindowUtils.getStatusBarHeightVp() })
-    // 悬浮无背景：整条栏透明，搜索框胶囊浮在内容上方，四周直接透出滚动内容
+    // 悬浮无背景：只保留控件自身边界和文字状态,避免顶部与列表底色出现色差。
+    .backgroundColor(Color.Transparent)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
-    .onAreaChange((_o: Area, n: Area) => {
-      this.searchBarHeight = n.height as number;
-    })
   }
 
   /** 隐藏 Refresh 默认指示器，避免它出现在固定顶栏后方。 */
@@ -658,20 +631,11 @@ export struct HomePage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // L0 背景层（满屏，覆盖到状态栏）
-      // 浅色模式为暖色渐变,深色模式三色统一为中性色(等效纯色)
+      // 页面与列表共用同一底色，并延伸到状态栏，避免顶部出现色差。
       Column()
         .width('100%')
         .height('100%')
-        .linearGradient({
-          angle: 180,
-          colors: [
-            [HomeTheme.BgWarmTop, 0.0],
-            [HomeTheme.BgWarmMid, 0.35],
-            [HomeTheme.BgNeutral, 1.0]
-          ]
-        })
-        // 仅让背景渐变铺到状态栏后面，不影响 HdsNavigation 自身的状态栏避让
+        .backgroundColor(HomeTheme.BgNeutral)
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
       // L1 原 HdsNavigation
@@ -687,7 +651,7 @@ export struct HomePage {
             }
           }
           .width('100%')
-          .height(this.searchBarHeight)
+          .height(this.fixedHeaderHeight)
           .justifyContent(FlexAlign.End)
         }
 
@@ -826,8 +790,8 @@ export struct HomePage {
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .cachedCount(5)
-      .clip(false) // 允许内容穿透到固定搜索栏下方产生毛玻璃透出
-      .backgroundColor(Color.Transparent) // 让 L0 暖色渐变透出
+      .clip(false)
+      .backgroundColor(Color.Transparent)
         }
         .onStateChange((state: RefreshStatus) => {
           this.refreshStatus = state;
@@ -848,6 +812,7 @@ export struct HomePage {
     .hideTitleBar(true) // 顶部改用固定毛玻璃搜索栏(fixedSearchBar)，HdsNavigation 标题栏不再使用
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
+    .backgroundColor(Color.Transparent)
 
       if (this.loadingHome && this.homeBlocks.length === 0) {
         Column() {
@@ -855,11 +820,10 @@ export struct HomePage {
         }
         .width('100%')
         .height('100%')
-        .padding({ top: this.searchBarHeight })
+        .padding({ top: this.fixedHeaderHeight })
       }
 
-      // 固定搜索栏：常驻顶部、不随内容上滑，内容从其下方滚过被毛玻璃材质模糊透出。
-      // 背景渐变由 L0 Column 的 expandSafeArea 铺到状态栏后面。
+      // 顶部浮层保持固定，暂不启用滚动折叠和标签吸顶。
       this.fixedSearchBar()
     }
   }
