@@ -1,7 +1,7 @@
 {
   "modelVersion": "6.1.0",
   "name": "listenbook",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "听书 App（HarmonyOS Next 纯血鸿蒙）",
   "dependencies": {
   },

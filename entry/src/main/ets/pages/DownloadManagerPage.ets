@@ -1,5 +1,7 @@
 import { emitter } from '@kit.BasicServicesKit';
+import { common } from '@kit.AbilityKit';
 import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
+import { DownloadExportResult, DownloadExportService } from '../service/DownloadExportService';
 import { DownloadBookRecord, DownloadBookStatus } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
 import { AppCurve, AppFont, AppMotion, AppRadius, AppSpace } from '../theme/Theme';
@@ -24,6 +26,7 @@ struct DownloadBookItem {
   @Local totalBytes: number = 0;
   @Local progressPercent: number = 0;
   @Local failureText: string = '';
+  @Local exporting: boolean = false;
 
   private downloadHandler = (evt: emitter.EventData): void => {
     const data = evt.data as DownloadUpdatePayload;
@@ -116,6 +119,25 @@ struct DownloadBookItem {
     this.navStack.pushPathByName('detail', record.bookId);
   }
 
+  private async exportBook(record: DownloadBookRecord): Promise<void> {
+    if (this.exporting || record.downloadedCount === 0) return;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.exporting = true;
+    try {
+      const result: DownloadExportResult = await DownloadExportService.exportBook(context, record);
+      if (result.exportedCount === 0 && result.failedCount === 0) return;
+      if (result.failedCount === 0) {
+        this.showToast(`已导出 ${result.exportedCount} 个音频到文件管理`);
+      } else {
+        this.showToast(`已导出 ${result.exportedCount} 个，失败 ${result.failedCount} 个`);
+      }
+    } catch (_e) {
+      // Closing the system picker without selecting a location is a normal cancellation.
+    } finally {
+      this.exporting = false;
+    }
+  }
+
   build() {
     if (this.available && this.record()) {
       this.buildRecord(this.record()!)
@@ -167,6 +189,10 @@ struct DownloadBookItem {
         } else if (this.status === 'paused' || this.failedCount > 0) {
           this.buildAction($r('sys.symbol.play_fill'), this.failedCount > 0 ? '重试' : '继续',
             () => this.resume(record), false)
+        }
+        if (this.downloadedCount > 0) {
+          this.buildAction($r('sys.symbol.arrow_right'), this.exporting ? '导出中' : '导出',
+            () => { this.exportBook(record); }, false)
         }
         this.buildAction($r('sys.symbol.trash'), '删除', () => this.confirmDelete(record), true)
       }

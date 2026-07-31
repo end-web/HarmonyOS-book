@@ -9,12 +9,12 @@
 | `tingyou_fm` | 听友 FM | App 本地直连 `www.tingyou.fm`（加密协议 + CDN） |
 | `jianhu_server` | 简·欢云源 | 调用自建 `server/` 聚合服务；阅读规则在服务端执行 |
 
-本地导入音频、章节下载离线、桌面播放卡片、隐私同意与使用说明已落地。TV/Pad 暂不做。
+本地导入音频、章节下载离线与文件管理导出、桌面播放卡片、隐私同意与使用说明已落地。TV/Pad 暂不做。
 
 ## 技术基线
 
 - HarmonyOS 7 / API 26，`targetSdkVersion = compatibleSdkVersion = 26.0.0`，stage 模式
-- 当前本机 SDK 为 `HarmonyOS 26.0.0 Beta1`；代码只使用该 SDK 已声明并通过构建的 API 26 能力
+- 当前本机 SDK 为 `HarmonyOS 26.0.0.32 Beta2`；代码只使用该 SDK 已声明并通过构建的 API 26 能力
 - 单 module：`entry/`（type=entry，deviceTypes=phone）
 - ArkUI 使用 **V2 装饰器**（`@ComponentV2` / `@Local` / `@Param` / `@Event` / `@ObservedV2` / `@Trace`）
 - `bundleName`: `com.ylwang.listenbook.tingyou`
@@ -26,9 +26,10 @@
 ### HarmonyOS 7 SDK 边界
 
 - UI 使用 API 26 `uiMaterial.ImmersiveMaterial` / `systemMaterial`，统一首页悬浮控件、播放器弹层和配置 Sheet。
-- `AVSessionService` 向系统媒体中心声明并处理独立的后退 10 秒、前进 30 秒命令。
+- `AVSessionService` 向系统媒体中心声明独立的后退 10 秒、前进 30 秒、倍速和循环模式控件，并处理相应命令。
 - 在线音频通过 `MediaSource.enableOfflineCache(true)` 使用系统托管缓存；用户主动下载的完整章节仍由 `DownloadService` 持久化，两者不互相替代。
-- 官方新特性页同时包含 Beta1 与 Beta2。当前 SDK 尚未声明 `setSupportedPlaySpeeds`、`setSupportedLoopModes`、`setMediaCenterControlType` 和 Beta2 下载管理接口；升级到对应 Beta2 或正式版 SDK 并重新构建前，不得提前写入这些接口。
+- Beta2 已接入 `setSupportedPlaySpeeds`、`setSupportedLoopModes` 和 `setMediaCenterControlType`；这些增强能力失败时按单项降级，不阻断 AVSession 激活。
+- 普通应用不能通过 `fileAccess` 将整个私有沙箱挂载到文件管理；完整下载仍保存在 `context.filesDir`，用户可在下载管理页通过系统 `DocumentViewPicker` 选择目标位置并导出音频副本。
 
 ## 仓库结构
 
@@ -117,7 +118,7 @@ App
 | 服务 | 职责 |
 |---|---|
 | `AudioService` | AVPlayer 单例，焦点、续播、睡眠定时、在线媒体系统缓存、章节预解析 |
-| `AVSessionService` | 锁屏/控制中心媒体卡片，后退 10 秒与前进 30 秒控制 |
+| `AVSessionService` | 锁屏/控制中心媒体卡片，快退/快进、倍速与循环模式控制 |
 | `BackgroundTaskService` | `audioPlayback` 长时任务 |
 | `BookSourceService` | 内置源门面（search/info/toc/audio/explore/home） |
 | `SourceDataService` | 仅返回已注册内置源列表（无用户规则源 CRUD） |
@@ -126,6 +127,7 @@ App
 | `DataService` | 收藏 / 历史 / 书架本地数据 |
 | `PlaybackStore` | 当前播放会话与进度 |
 | `DownloadService` / `DownloadStore` / `DownloadPolicy` | 章节下载、策略与持久化 |
+| `DownloadExportService` | 通过系统文件选择器将已下载章节导出到文件管理 |
 | `ChapterCacheService` | 章节/目录缓存 |
 | `PreferenceService` | 偏好（焦点、默认 Tab、云源地址、隐私同意版本等） |
 | `AuthService` | 华为账号（入口默认关闭，需配 AGC client_id） |
@@ -222,10 +224,10 @@ cd server && npm test && npm run build:all
 - [x] 简·欢云源 + 可配置 API 地址
 - [x] 服务端聚合、网络目录同步、运维后台、Docker 部署
 - [x] AudioService 焦点 / AVSession / 后台播放
-- [x] HarmonyOS 7 系统材质、AVSession 独立快退/快进、在线媒体系统缓存
+- [x] HarmonyOS 7 系统材质、AVSession 快退/快进/倍速/循环控制、在线媒体系统缓存
 - [x] 本地播放进度恢复
 - [x] 本地音频导入
-- [x] 章节下载与下载管理
+- [x] 章节下载、下载管理与文件管理导出
 - [x] 首启隐私政策同意页、关于/使用说明
 - [x] 桌面播放卡片 Widget
 - [x] 部分单测（App + Server）

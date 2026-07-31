@@ -17,10 +17,26 @@ export interface AVSessionCallbacks {
   onFastForward: (ms: number) => void;
   onRewind: (ms: number) => void;
   onSeek: (ms: number) => void;
+  onSetSpeed: (speed: number) => void;
+  onSetLoopMode: (mode: avSession.LoopMode) => void;
 }
 
 const REWIND_INTERVAL_MS: number = 10000;
 const FAST_FORWARD_INTERVAL_MS: number = 30000;
+const SUPPORTED_PLAY_SPEEDS: number[] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
+const SUPPORTED_LOOP_MODES: avSession.LoopMode[] = [
+  avSession.LoopMode.LOOP_MODE_SEQUENCE,
+  avSession.LoopMode.LOOP_MODE_LIST,
+  avSession.LoopMode.LOOP_MODE_SINGLE
+];
+const MEDIA_CENTER_CONTROLS: avSession.AVMediaCenterControlType[] = [
+  'rewind',
+  'fastForward',
+  'playPrevious',
+  'playNext',
+  'setSpeed',
+  'setLoopMode'
+];
 
 export class AVSessionService {
   private static instance: AVSessionService | null = null;
@@ -38,6 +54,8 @@ export class AVSessionService {
   private onFastForward: ((ms: number) => void) | null = null;
   private onRewind: ((ms: number) => void) | null = null;
   private onSeek: ((ms: number) => void) | null = null;
+  private onSetSpeed: ((speed: number) => void) | null = null;
+  private onSetLoopMode: ((mode: avSession.LoopMode) => void) | null = null;
 
   static getInstance(): AVSessionService {
     if (!AVSessionService.instance) {
@@ -54,6 +72,8 @@ export class AVSessionService {
     this.onFastForward = cbs.onFastForward;
     this.onRewind = cbs.onRewind;
     this.onSeek = cbs.onSeek;
+    this.onSetSpeed = cbs.onSetSpeed;
+    this.onSetLoopMode = cbs.onSetLoopMode;
   }
 
   init(context: common.UIAbilityContext): Promise<void> {
@@ -68,6 +88,7 @@ export class AVSessionService {
     try {
       this.session = await avSession.createAVSession(context, 'ListenBook', 'audio');
       this.registerCommands();
+      await this.configureMediaCenter();
       await this.session.activate();
       await this.setupLaunchAbility(context);
     } catch (err) {
@@ -130,6 +151,47 @@ export class AVSessionService {
     this.session.on('seek', (timeMs: number) => {
       this.onSeek?.(timeMs);
     });
+    this.session.on('setSpeed', (speed: number) => {
+      this.onSetSpeed?.(speed);
+    });
+    this.session.on('setLoopMode', (mode: avSession.LoopMode) => {
+      this.onSetLoopMode?.(mode);
+    });
+  }
+
+  private async configureMediaCenter(): Promise<void> {
+    if (!this.session) return;
+    try {
+      await this.session.setSupportedPlaySpeeds(SUPPORTED_PLAY_SPEEDS);
+    } catch (err) {
+      this.logMediaCenterWarning('setSupportedPlaySpeeds', err);
+    }
+    try {
+      await this.session.setSupportedLoopModes(SUPPORTED_LOOP_MODES);
+    } catch (err) {
+      this.logMediaCenterWarning('setSupportedLoopModes', err);
+    }
+    try {
+      await this.session.setMediaCenterControlType(MEDIA_CENTER_CONTROLS);
+    } catch (err) {
+      this.logMediaCenterWarning('setMediaCenterControlType', err);
+    }
+  }
+
+  async updateLoopMode(mode: avSession.LoopMode): Promise<void> {
+    if (!await this.ensureReady() || !this.session) return;
+    const playbackState: avSession.AVPlaybackState = { loopMode: mode };
+    try {
+      await this.session.setAVPlaybackState(playbackState);
+    } catch (err) {
+      this.logMediaCenterWarning('setAVPlaybackState.loopMode', err);
+    }
+  }
+
+  private logMediaCenterWarning(operation: string, err: Object): void {
+    const error = err as Error;
+    hilog.warn(DOMAIN, TAG, '%{public}s failed: %{public}s', operation,
+      error?.message ?? JSON.stringify(err));
   }
 
   private normalizeSkipTime(time: number | undefined, fallbackMs: number): number {

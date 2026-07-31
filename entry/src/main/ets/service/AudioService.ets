@@ -4,6 +4,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
+import { avSession } from '@kit.AVSessionKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { PlayerState, PlayMode } from '../model/PlayerState';
@@ -191,7 +192,9 @@ export class AudioService {
       onPlayPrevious: () => { this.playPrevious(); },
       onFastForward: (ms: number) => { this.seekBy(ms); },
       onRewind: (ms: number) => { this.seekBy(-ms); },
-      onSeek: (ms: number) => { this.seek(ms); }
+      onSeek: (ms: number) => { this.seek(ms); },
+      onSetSpeed: (speed: number) => { this.setSpeed(speed); },
+      onSetLoopMode: (mode: avSession.LoopMode) => { this.setPlayMode(this.fromAVSessionLoopMode(mode)); }
     };
     AVSessionService.getInstance().setCallbacks(cbs);
     AVSessionService.getInstance().init(this.context).catch((err: Error) => {
@@ -1085,6 +1088,20 @@ export class AudioService {
   setPlayMode(mode: PlayMode): void {
     if (!this.state) return;
     this.state.playMode = mode;
+    AVSessionService.getInstance().updateLoopMode(this.toAVSessionLoopMode(mode))
+      .catch((_e: Error): void => {});
+  }
+
+  private fromAVSessionLoopMode(mode: avSession.LoopMode): PlayMode {
+    if (mode === avSession.LoopMode.LOOP_MODE_SINGLE) return PlayMode.SingleLoop;
+    if (mode === avSession.LoopMode.LOOP_MODE_LIST) return PlayMode.ListLoop;
+    return PlayMode.Sequence;
+  }
+
+  private toAVSessionLoopMode(mode: PlayMode): avSession.LoopMode {
+    if (mode === PlayMode.SingleLoop) return avSession.LoopMode.LOOP_MODE_SINGLE;
+    if (mode === PlayMode.ListLoop) return avSession.LoopMode.LOOP_MODE_LIST;
+    return avSession.LoopMode.LOOP_MODE_SEQUENCE;
   }
 
   /** 归一化倍速:缺省/NaN/Infinity/非正数一律回 1.0,其余 clamp 到 AVPlayer 合法区间 [0.125, 4.0]。

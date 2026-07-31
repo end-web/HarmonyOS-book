@@ -45,7 +45,7 @@
       },
       {
         "name": "release",
-        "signingConfig": "release",
+        "signingConfig": "default",
         "bundleName": "com.ylwang.listenbook.tingyou",
         "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "26.0.0",
