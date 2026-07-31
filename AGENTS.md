@@ -1,96 +1,102 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Build & Run Flow
 
-ListenBook is a HarmonyOS Next Stage-mode app (ArkTS) plus an optional Node audio aggregation server.
+Agents should use the provided tools, not raw `hvigorw`:
 
-| Path | Role |
-|---|---|
-| `entry/src/main/ets/pages/` | Routed screens (`MainPage` tabs, player, detail, import, downloads, settings…) |
-| `entry/src/main/ets/components/` | Reusable ArkUI widgets (`MiniPlayer`, `BookCard`) |
-| `entry/src/main/ets/service/` | Business services (playback, download, prefs, builtin sources) |
-| `entry/src/main/ets/service/builtin/` | Built-in audio sources (`TingYouFM`, `ServerAudioSource`, registry/dispatcher) |
-| `entry/src/main/ets/model/` | Domain types (`Book`, `BookSource`, `PlayerState`) |
-| `entry/src/main/ets/theme/` | Shared theme tokens |
-| `entry/src/main/ets/utils/` | Helpers (`SearchCache`, lazy data sources, window utils) |
-| `entry/src/main/ets/widget/` | Form widget / desktop player card |
-| `entry/src/main/resources/` | App resources |
-| `AppScope/` | Global metadata and icons |
-| `server/` | JianHu cloud audio API + Vue admin + Docker deploy |
-| `entry/src/test/` | Hypium unit tests |
-| `entry/src/ohosTest/` | Device/ability tests |
-| `docs/APP_UI.md` | Current App page behavior and UI regression baseline |
+1. **`arkts_check`** on changed `.ets` files — catches ArkTS strict-mode violations faster than full build
+2. **`build_project`** — incremental build by default; only pass `clean=true` if cache corruption is suspected
+3. **`start_app`** — launch on device/emulator; requires prior successful build
 
-Treat `build/`, `.hvigor/`, `oh_modules/`, `server/node_modules/`, and `server/dist/` as generated outputs.
+If `arkts_check` or `build_project` fails with ArkTS errors, load the `arkts-error-fixes` skill before retrying.
 
-**Content model (read this first):** the App no longer loads user Legado rule sources. Online content comes only from registered built-in sources (`builtin://eprendre/<id>`). Cloud/rule execution lives in `server/`; the App consumes stable HTTP APIs via `ServerAudioSource`.
-
-Authoritative product/architecture notes: `CLAUDE.md`. Current App interactions: `docs/APP_UI.md`. Server ops: `server/README.md`.
-
-## Build, Test, and Development Commands
-
-### App
-
-- `ohpm install` — install HarmonyOS package deps from `oh-package.json5`
-- `hvigorw assembleHap --mode module -p product=default` — debug/default HAP
+Raw commands (if tools unavailable):
+- `ohpm install` — install HarmonyOS deps from `oh-package.json5`
+- `hvigorw assembleHap --mode module -p product=default` — debug HAP
 - `hvigorw assembleHap --mode module -p product=release` — release HAP
 - `hvigorw clean` — remove build artifacts
 
-If `hvigorw` is missing, use DevEco Studio Build/Clean/Test.
+## ArkTS Strict-Mode Constraints
 
-### Server
+ArkTS is **not** TypeScript. These rules trip up agents most often:
 
-```bash
-cd server
-npm install && npm --prefix admin install
-npm run typecheck
-npm test
-npm run admin:build
-```
+- **No `any` or `unknown`** — use explicit types
+- **No `as` type assertions** — use explicit class constructors or conversion methods
+- **No structural typing** — use explicit `class extends` / `implements`
+- **No dynamic property access** (`obj[dynamicKey]`) — use typed accessors
+- **Object literals must have explicit type context** — assign to typed variable or pass as typed parameter
+- **Use `class` not `interface` for data carriers** — ArkTS requires instantiable types; see `IBuiltInSource.ets` for the pattern
+- Load the `arkts-grammar-standards` skill before writing your first `.ets` file
 
-Deploy: see `server/deploy/compose.yml` and `server/README.md`.
+## ArkUI V2 Only
 
-## Coding Style & Naming Conventions
+Never mix V1 and V2 decorators:
 
-- ArkTS, 2-space indent, explicit imports
-- ArkUI **V2 only**: `@ComponentV2`, `@Local`, `@Param`, `@Event`, `@ObservedV2`, `@Trace`
-- Names: `PlayerPage`, `AudioService`, `ServerAudioSource` (PascalCase + clear suffix); camelCase for fields/methods
-- Prefer resource strings for user-facing copy; do not rename `.ets` files just to match label text
-- Use `AppColor.Brand` for visible loading indicators; do not rely on the HarmonyOS default brand blue
-- Long lists: `LazyForEach` + stable keys (never index keys)
-- New online sources: implement `IBuiltInSource` and register in `registerBuiltInSources()`; rule-heavy sources belong on the server
-- Do not reintroduce client-side Legado rule engines under `service/js` or `service/rule` unless explicitly designed
+- **Use**: `@ComponentV2`, `@Local`, `@Param`, `@Event`, `@ObservedV2`, `@Trace`
+- **Never use**: `@Component`, `@State`, `@Prop`, `@Link`, `@Provide`, `@Consume`, `@Watch`, `@ObjectLink`
 
-## Testing Guidelines
+Pages hold `@Local` state + Service singletons. No V1 viewmodel layer exists.
 
-- App: Hypium in `entry/src/test/*.test.ets` and `entry/src/ohosTest/ets/test/*.test.ets`
-- Server: Vitest in `server/test/*.test.ts` (`npm test` under `server/`)
-- Name suites/cases by behavior (`it('quarantines unusable audio sources')`)
-- Before merging changes to playback, builtin sources, download, cloud API config, or server catalog sync: run relevant unit tests and smoke search → detail → chapter → resolve/play on device or against the API
-- For Home/record UI changes, smoke-test initial skeleton loading, pull-to-refresh completion, double-tap-to-top, edit/long-press selection, and resume playback on a device
+## Critical Coding Rules
 
-## Documentation Guidelines
+- **Loading indicators**: always set `.color(AppColor.Brand)` — never rely on HarmonyOS default brand blue
+- **Long lists**: `LazyForEach` + stable keys (e.g. `bookUrl`). Never use index as key
+- **UI copy**: change resource strings only; do not rename `.ets` files to match label text
+- **New audio sources**: implement `IBuiltInSource` interface → register in `registerBuiltInSources()` (in `service/builtin/index.ets`). Rule-heavy sources go in `server/`, not the App
+- **No client-side rule engine**: Legado/Reader rules run only in `server/`; do not reintroduce `service/js` or `service/rule`
 
-- Keep `README.md` as the public overview, `CLAUDE.md` as the product/architecture source of truth, `docs/APP_UI.md` as the current interaction baseline, and `server/README.md` as the deployment/operations guide.
-- Update those existing documents when behavior or architecture changes.
-- Delete obsolete one-off fix notes, abandoned research, and completed dated implementation plans instead of leaving them beside current documentation.
+## Content Architecture (read this first)
 
-## Commit & Pull Request Guidelines
+The App **no longer loads user Legado rule sources**. Online content comes only from registered built-in sources (`builtin://eprendre/<id>`):
 
-Use Conventional Commits (`feat:`, `fix:`, `fix(player):`, `feat(server):` …); Chinese or English summaries are fine.
+| Source ID | Name | How it works |
+|---|---|---|
+| `tingyou_fm` | TingYou FM | App connects directly to `www.tingyou.fm` (encrypted protocol + CDN) |
+| `jianhu_server` | JianHu Cloud | HTTP to `ServerAudioConfig.apiBase` (default `https://121.196.223.85/api/v1`) |
 
-PRs should include:
+Search is multi-source parallel; results are deduplicated by `sourceUrl + bookUrl`. Cloud source only routes — search result `sourceName` reflects the actual upstream audio source, not "JianHu Cloud".
 
-1. Purpose
-2. Major files / modules touched (App vs `server/`)
-3. Verification performed (commands + device/API checks)
-4. Screenshots/clips for UI changes
-5. Callouts for signing, permissions, cloud API defaults, deploy/env, or external source parsing
+Third-party closed backends (other "听书" APK plugin hosts) are **not** compatible with this API shape — do not suggest substituting their URLs into `ServerAudioConfig`.
 
-## Security & Configuration Tips
+## Project Structure
 
-- Do not commit personal signing material, admin password hashes intended for production, session secrets, or machine-specific paths
-- Cloud API base default is `https://121.196.223.85/api/v1` (`ServerAudioConfig`); user overrides are stored via `PreferenceService`
-- Third-party closed backends (e.g. other “听书” APK plugin hosts) are **not** drop-in replacements for this API shape
-- Review `build-profile.json5`, network config, and permission resources when changing release builds or external data access
-- Reader/Legado engine used by the server must stay internal to Docker; do not expose raw `/reader3` to the public internet
+Single HarmonyOS module (`entry/`) + optional Node server (`server/`):
+
+- `entry/src/main/ets/pages/` — routed screens
+- `entry/src/main/ets/service/` — business services (singular `service/`, not `services/`)
+- `entry/src/main/ets/service/builtin/` — built-in audio source system (registry, dispatcher, source implementations)
+- `entry/src/main/ets/model/` — domain types (`Book`, `BookSource`, `PlayerState`)
+- `entry/src/main/ets/components/` — reusable widgets
+- `entry/src/main/ets/theme/` — theme tokens (`AppColor`, `AppMaterial`)
+- `entry/src/main/ets/widget/` — desktop form widget
+- `server/` — JianHu cloud API + Vue admin + Docker deploy
+
+Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, `server/node_modules/`, `server/dist/`
+
+## Testing
+
+- **App unit tests**: `entry/src/test/*.test.ets` (Hypium framework) — covers `DownloadPolicy`, `TingYouRequestPolicy`, `BuiltInAudioCapability`, `AsyncSingleFlight`
+- **App device tests**: `entry/src/ohosTest/ets/test/*.test.ets`
+- **Server tests**: `cd server && npm test` (Vitest) — 7 test files covering catalog, providers, auth, DB, sync
+- After changing playback/builtin sources/download/cloud config: smoke-test search → detail → chapter → play on device
+- After changing Home/Record UI: verify skeleton loading, pull-to-refresh, double-tap-to-top, edit/long-press selection
+
+## Security & Config
+
+- **`build-profile.json5` contains signing secrets** (key passwords, cert paths) — never commit changes to this file; signing is machine-specific and configured via DevEco Studio
+- `code-linter.json5` enforces crypto security rules (no unsafe AES/RSA/DSA/DH/3DES) on all `.ets` files
+- Cloud API base default is `https://121.196.223.85/api/v1` (`ServerAudioConfig`); user overrides via `PreferenceService`
+- Server's Reader/Legado engine must stay internal to Docker; never expose `/reader3` to the public internet
+
+## Reference Documents
+
+- **`CLAUDE.md`** — product/architecture source of truth (content model, services, page flow, SDK baseline)
+- **`docs/APP_UI.md`** — current UI interaction baseline and regression checklist
+- **`server/README.md`** — server deployment and operations guide
+
+## Conventions
+
+- **Commits**: Conventional Commits (`feat:`, `fix:`, `fix(player):`, `feat(server):` …); Chinese or English summaries OK
+- **Naming**: `XxxPage`, `XxxService`, `XxxComponent` (PascalCase + suffix); camelCase for fields/methods
+- **SDK**: HarmonyOS 7 / API 26; `targetSdkVersion = compatibleSdkVersion = 26.0.0`; `bundleName: com.ylwang.listenbook.tingyou`
+- **Device types**: phone only (`deviceTypes: ["phone"]`)
