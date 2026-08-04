@@ -94,6 +94,10 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 - **`docs/APP_UI.md`** — current UI interaction baseline and regression checklist
 - **`server/README.md`** — server deployment and operations guide
 
+## Language
+
+- **回复语言**: 始终使用中文回复用户
+
 ## Conventions
 
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `fix(player):`, `feat(server):` …); Chinese or English summaries OK
