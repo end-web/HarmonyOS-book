@@ -10,44 +10,6 @@ export struct MiniPlayer {
   @Event onNext: () => void = () => {};
   @Event onExpand: () => void = () => {};
 
-  @Local coverAngle: number = 0;
-  private rotateTimer: number = -1;
-
-  aboutToAppear(): void {
-    if (this.playerState.isPlaying) {
-      this.startRotate();
-    }
-  }
-
-  aboutToDisappear(): void {
-    this.stopRotate();
-  }
-
-  @Monitor('playerState.isPlaying')
-  onPlayingChange(): void {
-    if (this.playerState.isPlaying) {
-      this.startRotate();
-    } else {
-      this.stopRotate();
-    }
-  }
-
-  private startRotate(): void {
-    if (this.rotateTimer >= 0) return;
-    // 20秒转360度 = 每帧(16.67ms@60fps)转0.3度
-    this.rotateTimer = setInterval(() => {
-      this.coverAngle = (this.coverAngle + 0.3) % 360;
-    }, 16);
-  }
-
-  private stopRotate(): void {
-    if (this.rotateTimer >= 0) {
-      clearInterval(this.rotateTimer);
-      this.rotateTimer = -1;
-    }
-    // 保持当前角度,不回正
-  }
-
   @Builder
   coverImageBuilder(): void {
     if (this.playerState.currentBook) {
@@ -56,9 +18,7 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
-          // 与书架/收藏/首页列表统一 sourceSize,命中同一份已解码缓存,切换 minibar 不再重新加载
           .sourceSize({ width: 300, height: 400 })
-          .rotate({ angle: this.coverAngle })
           .id('mini-cover-img')
       } else if (this.playerState.currentBook.cover
         && (this.playerState.currentBook.cover.startsWith('/') || this.playerState.currentBook.cover.startsWith('file://'))) {
@@ -68,9 +28,6 @@ export struct MiniPlayer {
           .height('100%')
           .objectFit(ImageFit.Cover)
           .sourceSize({ width: 300, height: 400 })
-          // 本地文件解码快,同步加载消除重挂时的闪烁(官方推荐做法)
-          .syncLoad(true)
-          .rotate({ angle: this.coverAngle })
           .id('mini-cover-img-file')
       } else if (this.playerState.currentBook.cover) {
         // rawfile 分支不设 sourceSize:列表(BookCard/FavoritePage)的 rawfile 分支也没设,保持缓存一致
@@ -78,7 +35,6 @@ export struct MiniPlayer {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
-          .rotate({ angle: this.coverAngle })
           .id('mini-cover-img-raw')
       } else {
         // 无封面:用 app 图标占位(替代旧的绿色书形占位)
@@ -102,6 +58,7 @@ export struct MiniPlayer {
         .borderRadius(this.collapsed ? 999 : 22)
         .backgroundColor($r('sys.color.comp_background_tertiary'))
         .clip(true)
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
         .onClick(() => {
           if (this.collapsed) {
             this.onExpand();

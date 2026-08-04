@@ -259,6 +259,8 @@ export class DownloadService {
     this.notificationBookIds.clear();
     const root = DownloadStore.getAudioRootPath();
     if (root) await this.deleteDirChildren(root, false);
+    const legacyRoot = DownloadStore.getLegacyDownloadRootPath();
+    if (legacyRoot) await this.deleteDirChildren(legacyRoot, true);
     await DownloadStore.clearAll();
     this.emitRawUpdate('', undefined, 'cleared', 0, 0, 0);
     await DownloadNotificationService.cancel();

@@ -240,7 +240,8 @@ export struct ProfilePage {
       preferType: SheetType.BOTTOM,
       showClose: false,
       dragBar: true,
-      systemMaterial: AppMaterial.SurfaceRegular
+      backgroundColor: Color.Transparent,
+      systemMaterial: AppMaterial.SurfaceClean
     })
   }
 

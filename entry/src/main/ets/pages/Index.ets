@@ -12,6 +12,7 @@ import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
+import { HdsNavDestination, hdsMaterial } from '@kit.UIDesignKit';
 
 interface WidgetRouteEvent {
   target: string;
@@ -24,11 +25,7 @@ interface WidgetRouteEvent {
 struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local playerTranslateY: string = '0';
-  @Local playerBorderRadius: number = 0;
-  // 层叠下沉:player 升起时底层首页缩小+圆角+压暗,沉到后面去
-  @Local homeScale: number = 1;
-  @Local homeRadius: number = 0;
-  @Local homeBrightness: number = 1;
+  @Local playerRenderGroup: boolean = false;
   // detail 路由自定义转场:缩放淡入,无方向位移
   @Local detailScale: number = 1;
   @Local detailOpacity: number = 1;
@@ -63,6 +60,13 @@ struct Index {
       } catch (_e) { /* ignore */ }
       this.widgetSubscribed = false;
     }
+  }
+
+  private resolveParam(param: object, key: string): string {
+    if (typeof param === 'string') return '';
+    const r = param as Record<string, Object>;
+    const v = r[key];
+    return typeof v === 'string' ? v : '';
   }
 
   /** EntryAbility.onCreate 写入路由后,Index 首次挂载时消费一次 */
@@ -106,14 +110,7 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
-      // 作为根/底层页:被任何子页覆盖时保持静止,不走系统默认 push 的左移视差。
-      // 否则 player 上滑升起时,底下首页会跟着向左滑一下。
       .systemTransition(NavigationSystemTransitionType.NONE)
-      // 层叠下沉:player 升起时随之缩小+圆角+压暗(由 player 的 customTransition 联动驱动)
-      .scale({ x: this.homeScale, y: this.homeScale })
-      .borderRadius(this.homeRadius)
-      .clip(true)
-      .brightness(this.homeBrightness)
       .onBackPressed((): boolean => {
         // 根页返回:移到后台而不是 pop,保证退出应用
         try {
@@ -185,47 +182,35 @@ struct Index {
         return false;
       })
       .backgroundColor('#000000')
+      .renderGroup(this.playerRenderGroup)
       .translate({ y: this.playerTranslateY })
-      .borderRadius(this.playerBorderRadius)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        // 所有入口统一走上滑(进)/下滑(返回)转场,同时联动底层 home 缩小下沉
         if (op === NavigationOperation.PUSH && isEnter) {
+          this.playerRenderGroup = true;
           this.playerTranslateY = '100%';
-          this.playerBorderRadius = 20;
           return [{
-            duration: 380,
-            curve: Curve.Friction,
-            event: () => {
-              // player 上滑归位
-              this.playerTranslateY = '0';
-              this.playerBorderRadius = 0;
-              // 同时 home 下沉:缩到 0.93,圆角 16,亮度降到 0.7(压暗)
-              this.homeScale = 0.93;
-              this.homeRadius = 16;
-              this.homeBrightness = 0.7;
-            },
-            onTransitionEnd: () => {}
-          }];
-        } else if (op === NavigationOperation.POP && !isEnter) {
-          this.playerTranslateY = '0';
-          this.playerBorderRadius = 0;
-          return [{
-            duration: 320,
+            duration: 300,
             curve: Curve.FastOutSlowIn,
             event: () => {
-              // player 下滑退场
-              this.playerTranslateY = '100%';
-              this.playerBorderRadius = 20;
-              // 同时 home 弹回:恢复 scale=1,圆角=0,亮度=1
-              this.homeScale = 1;
-              this.homeRadius = 0;
-              this.homeBrightness = 1;
+              this.playerTranslateY = '0';
             },
             onTransitionEnd: () => {
-              // POP 动画结束后必须把状态归零,否则下次 push(尤其 animated:false 的 widget 入口)
-              // 会拿到上次 POP 留下的 '100%',NavDestination 整页向下偏导致白屏。
+              this.playerRenderGroup = false;
+              PlayerEntryDecider.markEntered();
+            }
+          }];
+        } else if (op === NavigationOperation.POP && !isEnter) {
+          this.playerRenderGroup = true;
+          this.playerTranslateY = '0';
+          return [{
+            duration: 260,
+            curve: Curve.FastOutSlowIn,
+            event: () => {
+              this.playerTranslateY = '100%';
+            },
+            onTransitionEnd: () => {
               this.playerTranslateY = '0';
-              this.playerBorderRadius = 0;
+              this.playerRenderGroup = false;
             }
           }];
         }

@@ -51,7 +51,7 @@
 - 浅色主题的 `app_brand` 当前为 `#FF6B3D`；深浅模式都应读取资源，不在页面内复制颜色值。
 - 新增或修改 `LoadingProgress` 时必须显式设置 `.color(AppColor.Brand)`，避免出现 HarmonyOS 默认蓝色。
 - HarmonyOS 7 需要材质层次的悬浮控件使用 `AppMaterial.InteractiveThin`，播放器弹层和配置 Sheet 使用 `AppMaterial.SurfaceRegular`。
-- 首页搜索框和分类标签使用 `AppMaterial.InteractiveThin` 原生沉浸光感材质，不注入品牌材质色且不叠加底部阴影；仅选中标签的文字和下划线使用主题色。暂不启用滚动折叠和标签吸顶。
+- 首页搜索框使用透明无赋色的原生沉浸光感材质，分类标签使用 `AppMaterial.InteractiveThin` 原生沉浸光感材质；两者均不设置底色、不注入品牌材质色且不叠加底部阴影，仅选中标签的文字和下划线使用主题色。暂不启用滚动折叠和标签吸顶。
 
 ## 播放器与系统控制
 

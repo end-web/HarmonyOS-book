@@ -48,6 +48,15 @@ export class DownloadPolicy {
     return `${bookId}|${pageUrl}`;
   }
 
+  static rebaseStoragePath(path: string, sourceRoot: string, destinationRoot: string): string {
+    if (!path || !sourceRoot || !destinationRoot) return path;
+    if (path === sourceRoot) return destinationRoot;
+    const sourcePrefix = sourceRoot.endsWith('/') ? sourceRoot : sourceRoot + '/';
+    if (!path.startsWith(sourcePrefix)) return path;
+    const destinationPrefix = destinationRoot.endsWith('/') ? destinationRoot : destinationRoot + '/';
+    return destinationPrefix + path.substring(sourcePrefix.length);
+  }
+
   static matchesChapter(chapterId: string, pageUrl: string, targetChapterId: string,
     targetPageUrl: string): boolean {
     const sourceUrl = (pageUrl || '').trim();

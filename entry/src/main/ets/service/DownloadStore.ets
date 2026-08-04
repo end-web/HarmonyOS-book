@@ -4,6 +4,7 @@ import { fileIo } from '@kit.CoreFileKit';
 import { Book, Chapter } from '../model/Book';
 import { DownloadBookDerivedStatus, DownloadChapterDerivedStatus, DownloadFailureCode,
   DownloadFileProbeResult, DownloadPolicy } from './DownloadPolicy';
+import { StorageMigrationService } from './StorageMigrationService';
 
 export type DownloadBookStatus = DownloadBookDerivedStatus;
 export type DownloadChapterStatus = DownloadChapterDerivedStatus;
@@ -55,6 +56,7 @@ export class DownloadStore {
   private static records: DownloadBookRecord[] | null = null;
   private static writeChain: Promise<void> = Promise.resolve();
   private static persistUnsafe: boolean = false;
+  private static migrationPromise: Promise<void> | null = null;
 
   /**
    * 启动轻量初始化：只建目录 + 读 JSON。
@@ -62,7 +64,8 @@ export class DownloadStore {
    * 必须延后到首帧之后，否则章节一多会主线程卡死触发 AppFreeze。
    */
   static async init(ctx: common.Context): Promise<void> {
-    DownloadStore.ctx = ctx;
+    DownloadStore.setContext(ctx);
+    await DownloadStore.ensureStorageMigrated();
     await DownloadStore.ensureBaseDirs();
     await DownloadStore.ensureLoaded();
   }
@@ -128,10 +131,13 @@ export class DownloadStore {
 
   static setContext(ctx: common.Context): void {
     DownloadStore.ctx = ctx;
+    if (DownloadStore.migrationPromise === null) {
+      DownloadStore.migrationPromise = DownloadStore.migrateLegacyStorage();
+    }
   }
 
   static getDownloadRootPath(): string | null {
-    return DownloadStore.ctx ? `${DownloadStore.ctx.filesDir}/${DOWNLOAD_ROOT_DIR}` : null;
+    return DownloadStore.ctx ? `${DownloadStore.ctx.cacheDir}/${DOWNLOAD_ROOT_DIR}` : null;
   }
 
   static getAudioRootPath(): string | null {
@@ -398,7 +404,18 @@ export class DownloadStore {
 
   private static async ensureLoaded(): Promise<void> {
     if (DownloadStore.records !== null) return;
-    const read = await DownloadStore.readFileSafe(DownloadStore.storePath());
+    await DownloadStore.ensureStorageMigrated();
+    const primaryRead = await DownloadStore.readFileSafe(DownloadStore.storePath());
+    let read = primaryRead;
+    let usingLegacyFile = false;
+    if (!primaryRead.existed || !primaryRead.ok || !primaryRead.json) {
+      const legacyRead = await DownloadStore.readFileSafe(DownloadStore.legacyStorePath());
+      if (legacyRead.existed && legacyRead.ok && legacyRead.json) {
+        read = legacyRead;
+        usingLegacyFile = true;
+      }
+    }
+    if (primaryRead.existed && !primaryRead.ok) DownloadStore.persistUnsafe = true;
     if (!read.ok) {
       DownloadStore.persistUnsafe = true;
       DownloadStore.records = [];
@@ -414,6 +431,11 @@ export class DownloadStore {
     } catch (_e) {
       DownloadStore.persistUnsafe = true;
       DownloadStore.records = [];
+      return;
+    }
+    const pathsRebased = await DownloadStore.rebaseLegacyPaths(DownloadStore.records);
+    if (pathsRebased || usingLegacyFile) {
+      try { await DownloadStore.saveAll(); } catch (_e) {}
     }
   }
 
@@ -477,6 +499,56 @@ export class DownloadStore {
       await fileIo.mkdir(dir);
     } catch (_e) {
       // already exists or unavailable; later file operations will surface real errors
+    }
+  }
+
+  static getLegacyDownloadRootPath(): string | null {
+    return DownloadStore.ctx ? `${DownloadStore.ctx.filesDir}/${DOWNLOAD_ROOT_DIR}` : null;
+  }
+
+  private static legacyStorePath(): string | null {
+    const root = DownloadStore.getLegacyDownloadRootPath();
+    return root ? `${root}/${DOWNLOAD_STORE_FILE}` : null;
+  }
+
+  private static ensureStorageMigrated(): Promise<void> {
+    if (DownloadStore.migrationPromise === null) {
+      DownloadStore.migrationPromise = DownloadStore.migrateLegacyStorage();
+    }
+    return DownloadStore.migrationPromise;
+  }
+
+  private static async migrateLegacyStorage(): Promise<void> {
+    const legacyRoot = DownloadStore.getLegacyDownloadRootPath();
+    const cacheRoot = DownloadStore.getDownloadRootPath();
+    if (legacyRoot && cacheRoot) {
+      await StorageMigrationService.migrateDirectory(legacyRoot, cacheRoot);
+    }
+  }
+
+  private static async rebaseLegacyPaths(records: DownloadBookRecord[]): Promise<boolean> {
+    const legacyRoot = DownloadStore.getLegacyDownloadRootPath();
+    const cacheRoot = DownloadStore.getDownloadRootPath();
+    if (!legacyRoot || !cacheRoot) return false;
+    let changed = false;
+    for (const book of records) {
+      for (const chapter of book.chapters) {
+        const rebased = DownloadPolicy.rebaseStoragePath(chapter.filePath, legacyRoot, cacheRoot);
+        if (rebased !== chapter.filePath && await DownloadStore.isMigratedFile(rebased)) {
+          chapter.filePath = rebased;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  private static async isMigratedFile(path: string): Promise<boolean> {
+    try {
+      const stat = await fileIo.stat(path);
+      return !stat.isDirectory() && stat.size > 0;
+    } catch (_e) {
+      return false;
     }
   }
 }

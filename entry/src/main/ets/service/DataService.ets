@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { Book, Chapter } from '../model/Book';
 import { PreferenceService } from './PreferenceService';
+import { StorageMigrationService } from './StorageMigrationService';
 
 /** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
 const CACHED_BOOKS_FILE = 'cached_books_v1.json';
@@ -45,18 +46,57 @@ export class DataService {
   private static persistUnsafe: boolean = false;
   /** sidecar 目录是否已确保存在(避免每次写都 mkdir) */
   private static tocDirReady: boolean = false;
+  private static migrationPromise: Promise<void> | null = null;
 
   /** 由 EntryAbility 启动时注入,用于缓存书文件读写 */
   static setContext(c: common.Context): void {
     DataService.ctx = c;
+    if (DataService.migrationPromise === null) {
+      DataService.migrationPromise = DataService.migrateLegacyStorage();
+    }
   }
 
   private static cachedFilePath(): string | null {
-    return DataService.ctx ? `${DataService.ctx.filesDir}/${CACHED_BOOKS_FILE}` : null;
+    return DataService.ctx ? `${DataService.ctx.cacheDir}/${CACHED_BOOKS_FILE}` : null;
   }
 
   private static tocDirPath(): string | null {
+    return DataService.ctx ? `${DataService.ctx.cacheDir}/${CACHED_TOC_DIR}` : null;
+  }
+
+  private static legacyCachedFilePath(): string | null {
+    return DataService.ctx ? `${DataService.ctx.filesDir}/${CACHED_BOOKS_FILE}` : null;
+  }
+
+  private static legacyTocDirPath(): string | null {
     return DataService.ctx ? `${DataService.ctx.filesDir}/${CACHED_TOC_DIR}` : null;
+  }
+
+  private static legacyTocPath(id: string): string | null {
+    const dir = DataService.legacyTocDirPath();
+    if (!dir || !id) return null;
+    const safe = id.replace(/[^A-Za-z0-9_.-]/g, '_');
+    return `${dir}/${safe}.json`;
+  }
+
+  private static ensureStorageMigrated(): Promise<void> {
+    if (DataService.migrationPromise === null) {
+      DataService.migrationPromise = DataService.migrateLegacyStorage();
+    }
+    return DataService.migrationPromise;
+  }
+
+  private static async migrateLegacyStorage(): Promise<void> {
+    const legacyFile = DataService.legacyCachedFilePath();
+    const cacheFile = DataService.cachedFilePath();
+    if (legacyFile && cacheFile) {
+      await StorageMigrationService.migrateFile(legacyFile, cacheFile);
+    }
+    const legacyToc = DataService.legacyTocDirPath();
+    const cacheToc = DataService.tocDirPath();
+    if (legacyToc && cacheToc) {
+      await StorageMigrationService.migrateDirectory(legacyToc, cacheToc);
+    }
   }
 
   private static tocPath(id: string): string | null {
@@ -132,7 +172,12 @@ export class DataService {
 
   /** 读取某本书的本地章节目录(瞬时,无网络)。没有则返回空数组。 */
   static async getChaptersForBook(id: string): Promise<Chapter[]> {
-    const read = await DataService.readFileSafe(DataService.tocPath(id));
+    await DataService.ensureStorageMigrated();
+    let read = await DataService.readFileSafe(DataService.tocPath(id));
+    if (!read.existed || !read.ok || !read.json) {
+      const legacyRead = await DataService.readFileSafe(DataService.legacyTocPath(id));
+      if (legacyRead.existed && legacyRead.ok && legacyRead.json) read = legacyRead;
+    }
     if (!read.ok || !read.json) return [];
     try {
       const parsed: Object = JSON.parse(read.json) as Object;
@@ -195,12 +240,22 @@ export class DataService {
 
   private static async loadCachedBooks(): Promise<Book[]> {
     if (DataService.cachedBooksMem) return DataService.cachedBooksMem;
+    await DataService.ensureStorageMigrated();
 
-    const read = await DataService.readFileSafe(DataService.cachedFilePath());
+    const primaryRead = await DataService.readFileSafe(DataService.cachedFilePath());
+    let read = primaryRead;
+    let usingLegacyFile = false;
+    if (!primaryRead.existed || !primaryRead.ok || !primaryRead.json) {
+      const legacyRead = await DataService.readFileSafe(DataService.legacyCachedFilePath());
+      if (legacyRead.existed && legacyRead.ok && legacyRead.json) {
+        read = legacyRead;
+        usingLegacyFile = true;
+      }
+    }
     let fileBooks = DataService.parseBookList(read.json);
 
     // 现有索引存在但读 IO 失败:本会话禁止覆盖写,避免把可能完好的磁盘数据冲掉。
-    if (read.existed && !read.ok) {
+    if (primaryRead.existed && !primaryRead.ok) {
       DataService.persistUnsafe = true;
     }
     // 读到内容但解析为空、且原文不是合法空数组 → 文件损坏(旧版本并发写遗留)。
@@ -212,6 +267,7 @@ export class DataService {
       DataService.cachedBooksMem = fileBooks;
       // 旧格式(章节内联)→ 拆 sidecar + 瘦身索引(一次性)
       await DataService.migrateInlineChaptersIfAny(fileBooks);
+      if (usingLegacyFile) await DataService.writeIndex(fileBooks);
       return DataService.cachedBooksMem;
     }
 
@@ -245,6 +301,7 @@ export class DataService {
 
     DataService.cachedBooksMem = fileBooks;
     await DataService.migrateInlineChaptersIfAny(fileBooks);
+    if (usingLegacyFile) await DataService.writeIndex(fileBooks);
     return DataService.cachedBooksMem;
   }
 
@@ -409,6 +466,7 @@ export class DataService {
 
   /** 清空缓存书池(索引 + sidecar 目录 + 内存),用于"清空书架"。 */
   static async clearCachedBooks(): Promise<void> {
+    await DataService.ensureStorageMigrated();
     DataService.cachedBooksMem = [];
     DataService.persistUnsafe = false; // 用户主动清空,解除读失败保护
     const path = DataService.cachedFilePath();
@@ -419,6 +477,15 @@ export class DataService {
     const dir = DataService.tocDirPath();
     if (dir) {
       try { await fileIo.rmdir(dir); } catch (_e) { /* ignore */ }
+    }
+    const legacyPath = DataService.legacyCachedFilePath();
+    if (legacyPath) {
+      try { await fileIo.unlink(legacyPath); } catch (_e) { /* ignore */ }
+      try { await fileIo.unlink(legacyPath + '.tmp'); } catch (_e) { /* ignore */ }
+    }
+    const legacyDir = DataService.legacyTocDirPath();
+    if (legacyDir) {
+      try { await fileIo.rmdir(legacyDir); } catch (_e) { /* ignore */ }
     }
     DataService.tocDirReady = false;
   }

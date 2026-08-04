@@ -10,14 +10,19 @@ import {
 } from '../service/StatsService';
 import {
   PlayHistoryItem,
-  PlayProgress,
   PreferenceService
 } from '../service/PreferenceService';
 import { Book } from '../model/Book';
 import { DataService } from '../service/DataService';
+import {
+  ListeningHistoryPolicy,
+  ListeningRecordCandidate,
+  MergedListeningRecord
+} from '../service/ListeningHistoryPolicy';
 
 interface ListenRecordView {
   bookId: string;
+  aliasBookIds: string[];
   title: string;
   author: string;
   cover: string;
@@ -100,55 +105,94 @@ export struct ReadingStatsPage {
 
   private async buildRecordViews(context: common.UIAbilityContext, stats: BookUsageStats[],
     history: PlayHistoryItem[]): Promise<ListenRecordView[]> {
-    const statMap: Record<string, BookUsageStats> = {};
+    const statsMap = new Map<string, BookUsageStats[]>();
+    const historyMap = new Map<string, PlayHistoryItem>();
+    const bookIds = new Set<string>();
     for (const item of stats) {
-      statMap[item.bookId] = item;
+      if (!item || !item.bookId || item.listenSeconds <= 0 || this.isLegacyTextBook(item.bookId)) continue;
+      let bookStats = statsMap.get(item.bookId);
+      if (!bookStats) {
+        bookStats = [];
+        statsMap.set(item.bookId, bookStats);
+      }
+      bookStats.push(item);
+      bookIds.add(item.bookId);
     }
-
-    const used = new Set<string>();
-    const views: ListenRecordView[] = [];
     for (const item of history) {
-      if (!item || !item.bookId || used.has(item.bookId)) continue;
-      if (item.bookId.startsWith('search_text_') || item.bookId.startsWith('home_text_')) continue;
-      used.add(item.bookId);
-      const progress = await PreferenceService.getProgress(item.bookId);
-      const book = await DataService.getBookById(context, item.bookId) ?? null;
-      views.push(this.createRecordView(item.bookId, statMap[item.bookId], item, progress, book));
+      if (!item || !item.bookId || this.isLegacyTextBook(item.bookId)) continue;
+      const current = historyMap.get(item.bookId);
+      if (!current || item.updatedAt >= current.updatedAt) historyMap.set(item.bookId, item);
+      bookIds.add(item.bookId);
     }
 
-    for (const item of stats) {
-      if (!item || !item.bookId || used.has(item.bookId)) continue;
-      if (item.bookId.startsWith('search_text_') || item.bookId.startsWith('home_text_')) continue;
-      if (item.listenSeconds <= 0) continue;
-      views.push(this.createRecordView(item.bookId, item, null, null, null));
+    const candidates: ListeningRecordCandidate[] = [];
+    const books = new Map<string, Book>();
+    for (const bookId of bookIds) {
+      const candidate = new ListeningRecordCandidate(bookId);
+      const bookStats = statsMap.get(bookId) ?? [];
+      for (const stat of bookStats) {
+        candidate.addStats(stat.listenSeconds, stat.updatedAt, stat.title, stat.author, stat.cover);
+      }
+      const historyItem = historyMap.get(bookId);
+      if (historyItem) {
+        candidate.setHistory(historyItem.chapterId, historyItem.chapterTitle ?? '', historyItem.progressMs,
+          historyItem.durationMs ?? 0, historyItem.updatedAt);
+      }
+      const progress = await PreferenceService.getProgress(bookId);
+      if (progress) {
+        candidate.setProgress(progress.chapterId, progress.chapterTitle, progress.positionMs, progress.durationMs,
+          progress.chapterIndex, progress.updatedAt);
+      }
+      const book = await DataService.getBookById(context, bookId) ?? null;
+      if (book) {
+        books.set(bookId, book);
+        candidate.setBook(book.sourceUrl, book.bookUrl, book.title, book.author || book.narrator, book.cover);
+      }
+      candidates.push(candidate);
     }
 
+    const merged = ListeningHistoryPolicy.merge(candidates);
+    const views: ListenRecordView[] = [];
+    for (const item of merged) {
+      views.push(this.createRecordView(item, books.get(item.bookId) ?? null));
+    }
     return views.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  private createRecordView(bookId: string, stat: BookUsageStats | undefined,
-    history: PlayHistoryItem | null, progress: PlayProgress | null, book: Book | null): ListenRecordView {
-    const progressMs = progress?.positionMs ?? history?.progressMs ?? 0;
-    const durationMs = progress?.durationMs ?? history?.durationMs ?? 0;
-    const ratio = this.calculateBookProgress(book, progress, history, progressMs, durationMs);
-    const listenSeconds = stat?.listenSeconds ?? 0;
+  private isLegacyTextBook(bookId: string): boolean {
+    return bookId.startsWith('search_text_') || bookId.startsWith('home_text_');
+  }
+
+  private createRecordView(item: MergedListeningRecord, book: Book | null): ListenRecordView {
+    let chapterId = item.chapterId;
+    let chapterIndex = item.chapterIndex;
+    if (book && book.chapters && book.chapters.length > 0) {
+      const resolvedIndex = DataService.resolveChapterIndex(book, item.chapterId, item.chapterTitle);
+      if (resolvedIndex >= 0) {
+        chapterIndex = resolvedIndex;
+        chapterId = book.chapters[resolvedIndex].id;
+      }
+    }
+    const ratio = this.calculateBookProgress(book, chapterId, item.chapterTitle, chapterIndex,
+      item.progressMs, item.durationMs);
     return {
-      bookId,
-      title: stat?.title || '未知书籍',
-      author: stat?.author || '未知作者',
-      cover: stat?.cover || '',
-      chapterId: progress?.chapterId || history?.chapterId || '',
-      chapterTitle: progress?.chapterTitle || history?.chapterTitle || '',
-      progressMs,
-      durationMs,
+      bookId: item.bookId,
+      aliasBookIds: item.aliasBookIds,
+      title: book?.title || item.title || '未知书籍',
+      author: book?.author || book?.narrator || item.author || '未知作者',
+      cover: book?.cover || item.cover || '',
+      chapterId,
+      chapterTitle: item.chapterTitle,
+      progressMs: item.progressMs,
+      durationMs: item.durationMs,
       progressPercent: Math.round(ratio * 100),
-      listenSeconds,
-      updatedAt: progress?.updatedAt || history?.updatedAt || stat?.updatedAt || Date.now()
+      listenSeconds: item.listenSeconds,
+      updatedAt: item.updatedAt || Date.now()
     };
   }
 
-  private calculateBookProgress(book: Book | null, progress: PlayProgress | null,
-    history: PlayHistoryItem | null, progressMs: number, durationMs: number): number {
+  private calculateBookProgress(book: Book | null, chapterId: string, chapterTitle: string,
+    savedChapterIndex: number, progressMs: number, durationMs: number): number {
     const chapterRatio = durationMs > 0 ? Math.max(0, Math.min(1, progressMs / durationMs)) : 0;
     if (!book) return chapterRatio;
 
@@ -159,13 +203,11 @@ export struct ReadingStatsPage {
     if (book.chapters && book.chapters.length > 0) {
       chapterIndex = DataService.resolveChapterIndex(
         book,
-        progress?.chapterId || history?.chapterId || '',
-        progress?.chapterTitle || history?.chapterTitle
+        chapterId,
+        chapterTitle
       );
     }
-    if (chapterIndex < 0 && progress && progress.chapterIndex >= 0) {
-      chapterIndex = progress.chapterIndex;
-    }
+    if (chapterIndex < 0 && savedChapterIndex >= 0) chapterIndex = savedChapterIndex;
     if (chapterIndex < 0) return chapterRatio;
 
     const safeIndex = Math.max(0, Math.min(chapterCount - 1, chapterIndex));
@@ -256,7 +298,13 @@ export struct ReadingStatsPage {
   }
 
   private async deleteSelected(): Promise<void> {
-    const ids = Array.from(this.selectedIds);
+    const deletedIds = new Set<string>();
+    for (const item of this.records) {
+      if (!this.selectedIds.has(item.bookId)) continue;
+      for (const aliasBookId of item.aliasBookIds) deletedIds.add(aliasBookId);
+    }
+    for (const selectedId of this.selectedIds) deletedIds.add(selectedId);
+    const ids = Array.from(deletedIds);
     await StatsService.removeBookStats(ids);
     for (const id of ids) {
       await PreferenceService.removeHistory(id);

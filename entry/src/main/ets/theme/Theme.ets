@@ -1,5 +1,7 @@
 import { curves, uiMaterial } from '@kit.ArkUI';
 
+const APP_LIGHT_EFFECT: uiMaterial.LightEffectOptions = {};
+
 export class AppColor {
   static readonly Brand: Resource = $r('app.color.app_brand');
   static readonly BrandHover: Resource = $r('app.color.app_brand_hover');
@@ -8,7 +10,6 @@ export class AppColor {
   static readonly BrandSoft: Resource = $r('app.color.app_brand_soft');
   static readonly BrandDark: Resource = $r('app.color.app_brand_dark');
   static readonly OnBrand: Resource = $r('app.color.app_on_brand');
-
   static readonly Divider: Resource = $r('app.color.app_divider');
   static readonly Shadow: Resource = $r('app.color.app_shadow');
 
@@ -24,6 +25,30 @@ export class AppMaterial {
     style: uiMaterial.ImmersiveStyle.THIN,
     applyShadow: false,
     interactive: true
+  });
+
+  static readonly InteractiveClean: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THIN,
+    applyShadow: false,
+    interactive: true,
+    lightEffect: APP_LIGHT_EFFECT
+  });
+
+  static readonly SurfaceClean: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.THIN,
+    applyShadow: false
+  });
+
+  static readonly FloatingControl: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+    applyShadow: true,
+    interactive: true,
+    lightEffect: APP_LIGHT_EFFECT
+  });
+
+  static readonly DialogUltraThick: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+    style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
+    applyShadow: true
   });
 
   static readonly SurfaceRegular: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({

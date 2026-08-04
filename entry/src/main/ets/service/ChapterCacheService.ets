@@ -103,7 +103,7 @@ export class ChapterCacheService {
     await ChapterCacheService.deleteEntries(ctx.cacheDir, false);
   }
 
-  /** readerScope=true:删 filesDir 里 reader_/widget_cover_;false:删 cacheDir 里 chap_/image_file_cache */
+  /** readerScope=true:删 filesDir 里的旧缓存;false:删 cacheDir 里的章节/图片/卡片封面缓存 */
   private static async deleteEntries(dir: string, readerScope: boolean): Promise<void> {
     let names: string[] = [];
     try {
@@ -114,7 +114,7 @@ export class ChapterCacheService {
     for (const name of names) {
       const hit = readerScope
         ? (name.startsWith('reader_') || name.startsWith('widget_cover_'))
-        : (name.startsWith('chap_') || name === 'image_file_cache');
+        : (name.startsWith('chap_') || name.startsWith('widget_cover_') || name === 'image_file_cache');
       if (!hit) continue;
       const p = `${dir}/${name}`;
       try {

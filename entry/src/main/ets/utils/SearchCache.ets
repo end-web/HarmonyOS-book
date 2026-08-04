@@ -8,6 +8,13 @@ const searchCache: Map<string, Book> = new Map();
 export class SearchCache {
   static put(book: Book): void {
     const id = book.id;
+    const existing = searchCache.get(id);
+    if (existing && existing.chapters.length > 0 && book.chapters.length === 0) {
+      book.chapters = existing.chapters;
+      if (book.chapterCount < existing.chapters.length) {
+        book.chapterCount = existing.chapters.length;
+      }
+    }
     // 若已存在先删除，确保重新插入后在 Map 末尾（LRU 顺序）
     if (searchCache.has(id)) {
       searchCache.delete(id);

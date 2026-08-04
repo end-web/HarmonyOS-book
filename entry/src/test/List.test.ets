@@ -3,6 +3,8 @@ import downloadPolicyTest from './DownloadPolicy.test';
 import asyncSingleFlightTest from './AsyncSingleFlight.test';
 import builtInAudioCapabilityTest from './BuiltInAudioCapability.test';
 import tingYouRequestPolicyTest from './TingYouRequestPolicy.test';
+import searchCacheTest from './SearchCache.test';
+import listeningHistoryPolicyTest from './ListeningHistoryPolicy.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -10,4 +12,6 @@ export default function testsuite() {
   asyncSingleFlightTest();
   builtInAudioCapabilityTest();
   tingYouRequestPolicyTest();
+  searchCacheTest();
+  listeningHistoryPolicyTest();
 }

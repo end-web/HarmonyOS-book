@@ -13,6 +13,7 @@ import { DownloadService } from '../service/DownloadService';
 import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
+import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -44,6 +45,8 @@ export default class EntryAbility extends UIAbility {
   private downloadRecoveryScheduled: boolean = false;
 
   onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+    // Must run before the first Web component initializes ArkWeb. Do not eagerly initialize the engine here.
+    configureArkWebSecurity();
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
@@ -55,7 +58,7 @@ export default class EntryAbility extends UIAbility {
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
     DownloadService.getInstance().setContext(this.context);
-    // 缓存书改用文件持久化,注入 context 供 filesDir 读写
+    // 缓存书改用文件持久化,注入 context 供 cacheDir 读写
     DataService.setContext(this.context);
 
     // 关键修复:限时初始化,避免后台恢复时阻塞过久导致系统 watchdog 杀进程

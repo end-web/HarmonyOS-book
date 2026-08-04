@@ -8,6 +8,7 @@ import { PreferenceService, WidgetPlayerSnapshot } from './PreferenceService';
 import { Book, Chapter } from '../model/Book';
 import { PlayerState } from '../model/PlayerState';
 import { ColorPickerUtils } from '../utils/ColorPickerUtils';
+import { StorageMigrationService } from './StorageMigrationService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Widget';
@@ -44,9 +45,14 @@ export class WidgetUpdater {
   /** 乐观更新的保护期：在此时间内不允许 updatePlayerCard 覆盖 */
   private static optimisticUpdateUntil: number = 0;
   private static readonly OPTIMISTIC_GUARD_MS: number = 500;
+  private static coverMigrationPromise: Promise<void> | null = null;
 
   static setContext(ctx: common.Context): void {
     WidgetUpdater.appContext = ctx;
+    if (WidgetUpdater.coverMigrationPromise === null) {
+      WidgetUpdater.coverMigrationPromise = StorageMigrationService.migrateFilesWithPrefix(
+        ctx.filesDir, ctx.cacheDir, 'widget_cover_');
+    }
   }
 
   /**
@@ -57,12 +63,20 @@ export class WidgetUpdater {
   private static async downloadCover(url: string, allowNetwork: boolean = true): Promise<string | null> {
     if (!url || !url.startsWith('http')) return null;
     const cached = WidgetUpdater.coverPathCache.get(url);
-    if (cached) return cached;
+    if (cached) {
+      try {
+        const stat = await fileIo.stat(cached);
+        if (stat.size > 0) return cached;
+      } catch (_e) {}
+      WidgetUpdater.coverPathCache.delete(url);
+      WidgetUpdater.coverSizeCache.delete(url);
+    }
     if (!WidgetUpdater.appContext) return null;
+    if (WidgetUpdater.coverMigrationPromise) await WidgetUpdater.coverMigrationPromise;
     try {
-      const filesDir = WidgetUpdater.appContext.filesDir;
+      const cacheDir = WidgetUpdater.appContext.cacheDir;
       const fileName = `widget_cover_${WidgetUpdater.hash(url)}.img`;
-      const filePath = `${filesDir}/${fileName}`;
+      const filePath = `${cacheDir}/${fileName}`;
       try {
         const stat = await fileIo.stat(filePath);
         if (stat.size > 0) {
@@ -71,6 +85,21 @@ export class WidgetUpdater {
           return filePath;
         }
       } catch (_e) { /* not exist, continue */ }
+      const legacyPath = `${WidgetUpdater.appContext.filesDir}/${fileName}`;
+      if (await StorageMigrationService.migrateFile(legacyPath, filePath)) {
+        try {
+          const stat = await fileIo.stat(filePath);
+          if (stat.size > 0) {
+            WidgetUpdater.coverPathCache.set(url, filePath);
+            WidgetUpdater.coverSizeCache.set(url, stat.size);
+            return filePath;
+          }
+        } catch (_e) {}
+      }
+      try {
+        const legacyStat = await fileIo.stat(legacyPath);
+        if (legacyStat.size > 0) return legacyPath;
+      } catch (_e) {}
 
       // FormExtensionAbility 生命周期很短，只允许复用已落盘封面。
       if (!allowNetwork) return null;

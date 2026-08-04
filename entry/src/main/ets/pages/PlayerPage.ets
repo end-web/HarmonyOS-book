@@ -5,10 +5,13 @@ import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius, AppMaterial } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
+import { TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
+import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { AudioPlayFailedPayload, AudioService, EVT_AUDIO_PLAY_FAILED } from '../service/AudioService';
 import { PreferenceService } from '../service/PreferenceService';
+import { SourceDataService } from '../service/SourceDataService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
 import { DownloadChapterRecord } from '../service/DownloadStore';
@@ -49,6 +52,7 @@ export class PlayerEntryDecider {
   private static cancelPendingClearHandler: (() => void) | null = null;
   /** 标记 PlayerPage 即将离开,让 loadBook 异步链提前退出 */
   private static markLeavingHandler: (() => void) | null = null;
+  private static enteredHandler: (() => void) | null = null;
 
   static setCancelPendingClear(h: (() => void) | null): void {
     PlayerEntryDecider.cancelPendingClearHandler = h;
@@ -56,6 +60,10 @@ export class PlayerEntryDecider {
 
   static setMarkLeaving(h: (() => void) | null): void {
     PlayerEntryDecider.markLeavingHandler = h;
+  }
+
+  static setEntered(h: (() => void) | null): void {
+    PlayerEntryDecider.enteredHandler = h;
   }
 
   /** 返回前调用,取消 pending 的延迟加载 timer */
@@ -69,6 +77,12 @@ export class PlayerEntryDecider {
   static markLeaving(): void {
     if (PlayerEntryDecider.markLeavingHandler) {
       PlayerEntryDecider.markLeavingHandler();
+    }
+  }
+
+  static markEntered(): void {
+    if (PlayerEntryDecider.enteredHandler) {
+      PlayerEntryDecider.enteredHandler();
     }
   }
 }
@@ -126,8 +140,9 @@ export struct PlayerPage {
   private deferredLoadTimerId: number = -1;
   /** 用户已触发返回,loadBook 异步链应在 await 后检查并提前退出,避免阻塞主线程 */
   private isLeaving: boolean = false;
-  /** 错落渐显:控制内容进场动画,进入后延迟触发 */
-  @Local contentVisible: boolean = false;
+  private chapterLoadInProgress: boolean = false;
+  private entryFinished: boolean = false;
+  @Local highQualityCover: boolean = false;
 
   /** 取消 pending 的延迟加载 timer,返回前调用避免阻塞返回响应 */
   private cancelPendingClearTimers(): void {
@@ -138,43 +153,50 @@ export struct PlayerPage {
   }
 
   aboutToAppear(): void {
+    this.isLeaving = false;
+    this.entryFinished = false;
+    this.highQualityCover = false;
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
     PlayerEntryDecider.setMarkLeaving(() => { this.isLeaving = true; });
+    PlayerEntryDecider.setEntered(() => this.finishEntering());
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
-    emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
-    emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
-    emitter.on(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
-    WindowUtils.setStatusBarLight(true);
-    // 错落渐显:进场后下一帧触发内容动画
-    setTimeout(() => { this.contentVisible = true; }, 16);
     this.deferredLoadTimerId = setTimeout(() => {
-      this.deferredLoadTimerId = -1;
-      this.loadBook();
-    }, AppMotion.Page);
+      this.finishEntering();
+    }, AppMotion.Page + 80);
   }
 
-  /** 同步从 SearchCache + ColorPickerUtils 缓存取得 book/cover/color，避免首帧默认色闪烁 */
+  /** 同步从 SearchCache 取得 book，避免首帧空白 */
   private primeFromCache(): void {
     let b = SearchCache.get(this.bookId);
-    if (!b && this.playerState.currentBook) {
-      b = this.playerState.currentBook;
+    const current = this.playerState.currentBook;
+    if (b && current && this.isSameBook(b, current)
+      && b.chapters.length === 0 && current.chapters.length > 0) {
+      b = current;
+    } else if (!b && current) {
+      b = current;
     }
     if (!b) return;
     this.book = b;
-    AudioService.getInstance().prewarmBookSource(b);
-    if (!b.cover) return;
+  }
 
-    const palette = ColorPickerUtils.getPaletteCached(b.cover);
-    if (!palette) {
-      // 分区取色缓存未命中:不设置 lastCoverKey，让后续 extractCoverColor 正常执行
-      return;
-    }
-
-    // 缓存命中:立即同步设置融合色,避免灰色过渡
-    this.applyCoverPalette(palette, b.cover);
-    this.lastCoverKey = b.cover;
+  private finishEntering(): void {
+    if (this.entryFinished || this.isLeaving) return;
+    this.entryFinished = true;
+    this.cancelPendingClearTimers();
+    WindowUtils.setStatusBarLight(true);
+    emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
+    emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
+    emitter.on(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
+    setTimeout(() => {
+      if (this.isLeaving) return;
+      this.loadBook();
+    }, 32);
+    setTimeout(() => {
+      if (this.isLeaving) return;
+      this.highQualityCover = true;
+    }, 96);
   }
 
   aboutToDisappear(): void {
@@ -182,10 +204,13 @@ export struct PlayerPage {
     PlayerBackInterceptor.set(null);
     PlayerEntryDecider.setCancelPendingClear(null);
     PlayerEntryDecider.setMarkLeaving(null);
+    PlayerEntryDecider.setEntered(null);
     this.cancelPendingClearTimers();
-    emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
-    emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
-    emitter.off(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
+    if (this.entryFinished) {
+      emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
+      emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
+      emitter.off(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
+    }
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
   }
@@ -229,24 +254,42 @@ export struct PlayerPage {
     await AudioService.getInstance().whenReady();
     if (this.isLeaving) return;
     let b = SearchCache.get(this.bookId);
-    if (!b) {
-      b = await DataService.getBookById(this.context!, this.bookId) || null;
-      if (this.isLeaving) return;
+    const current = this.playerState.currentBook;
+    if (b && current && this.isSameBook(b, current)
+      && b.chapters.length === 0 && current.chapters.length > 0) {
+      b = current;
     }
-    if (!b && this.playerState.currentBook) {
+    if (!b || b.chapters.length === 0) {
+      const stored = await DataService.getBookById(this.context!, this.bookId) || null;
+      if (this.isLeaving) return;
+      if (!b || (stored && this.isSameBook(b, stored)
+        && b.chapters.length === 0 && stored.chapters.length > 0)) {
+        b = stored;
+      }
+    }
+    if (!b && current) {
       // 不强制 id 匹配:卡片语义就是"打开正在播放的书",不同会话间 id 可能因
       // hash 算法差异而不一致(home_audio_xxx / search_audio_xxx),只要有 currentBook 就用
-      b = this.playerState.currentBook;
+      b = current;
     }
     if (!b) {
       console.error('[PlayerPage] loadBook failed, book not found');
       this.navStack.pop();
       return;
     }
+    if (b.chapters.length === 0) {
+      b = await this.hydrateBookChapters(b);
+      if (this.isLeaving) return;
+    }
     // 独立 KV 为权威:贴回 skip,纠正冷启动缓存书壳可能丢失的跳过头尾
     await PreferenceService.applySkipConfig(b);
     if (this.isLeaving) return;
     this.book = b;
+    this.chapterDataSource.setChapters(b.chapters);
+    if (current && this.isSameBook(current, b)
+      && current.chapters.length === 0 && b.chapters.length > 0) {
+      this.playerState.currentBook = b;
+    }
     AudioService.getInstance().prewarmBookSource(b);
     this.isFavorite = await PreferenceService.isFavorite(b.id);
     if (this.isLeaving) return;
@@ -259,6 +302,83 @@ export struct PlayerPage {
     if (this.resumeChapterId && !this.isLeaving) {
       await this.tryResumePlay(b);
     }
+  }
+
+  private isSameBook(left: Book, right: Book): boolean {
+    if (left.id === right.id) return true;
+    return left.bookUrl.length > 0 && left.bookUrl === right.bookUrl && left.sourceUrl === right.sourceUrl;
+  }
+
+  private cloneBookWithChapters(book: Book, chapters: Chapter[], intro: string,
+    variables: Record<string, string> | undefined): Book {
+    const hydrated: Book = {
+      id: book.id,
+      contentType: book.contentType,
+      title: book.title,
+      author: book.author,
+      narrator: book.narrator,
+      cover: book.cover,
+      category: book.category,
+      intro: intro,
+      totalDuration: book.totalDuration,
+      chapterCount: chapters.length,
+      rating: book.rating,
+      tags: book.tags,
+      chapters: chapters,
+      bookUrl: book.bookUrl,
+      sourceUrl: book.sourceUrl,
+      variables: variables,
+      skipIntro: book.skipIntro,
+      skipOutro: book.skipOutro
+    };
+    return hydrated;
+  }
+
+  private async hydrateBookChapters(book: Book): Promise<Book> {
+    if (book.chapters.length > 0 || this.chapterLoadInProgress) return book;
+    this.chapterLoadInProgress = true;
+    try {
+      const localChapters = await DataService.getChaptersForBook(book.id);
+      if (localChapters.length > 0) {
+        const localBook = this.cloneBookWithChapters(book, localChapters, book.intro, book.variables);
+        SearchCache.put(localBook);
+        return localBook;
+      }
+      if (!book.bookUrl || !book.sourceUrl) return book;
+      const sources = await SourceDataService.getSources();
+      const source = sources.find((item) => item.bookSourceUrl === book.sourceUrl);
+      if (!source) return book;
+      const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+      const tocUrl = bookInfo?.tocUrl || book.bookUrl;
+      const variables = bookInfo?.variables || book.variables;
+      const tocItems = await BookSourceService.getBookToc(source, tocUrl, variables, book.title);
+      if (tocItems.length === 0) return book;
+      const chapters = tocItems.map((item: TocItem, index: number): Chapter => ({
+        id: `${book.id}-c${index}`,
+        index: index + 1,
+        title: item.name,
+        duration: item.duration || 0,
+        source: { type: 'url', value: item.url },
+        originSourceValue: item.url
+      }));
+      const hydrated = this.cloneBookWithChapters(book, chapters, bookInfo?.intro || book.intro, variables);
+      await DataService.upsertCachedBook(hydrated);
+      SearchCache.put(hydrated);
+      return hydrated;
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'hydrate chapters failed: %{public}s', String(e));
+      return book;
+    } finally {
+      this.chapterLoadInProgress = false;
+    }
+  }
+
+  private async reloadEmptyChapterList(book: Book): Promise<void> {
+    const hydrated = await this.hydrateBookChapters(book);
+    if (this.isLeaving || hydrated.chapters.length === 0) return;
+    this.book = hydrated;
+    this.chapterDataSource.setChapters(hydrated.chapters);
+    this.scrollToCurrentChapter();
   }
 
   private async tryResumePlay(book: Book): Promise<void> {
@@ -451,6 +571,9 @@ export struct PlayerPage {
     this.chapterSearchKeyword = '';
     if (!this.book) return;
     this.chapterDataSource.setChapters(this.book.chapters);
+    if (this.book.chapters.length === 0) {
+      this.reloadEmptyChapterList(this.book);
+    }
     this.scrollToCurrentChapter();
   }
 
@@ -544,6 +667,11 @@ export struct PlayerPage {
 
   private playModeColor(): string {
     return this.playerState.playMode === PlayMode.Sequence ? '#FFFFFF' : '#FFD480';
+  }
+
+  private hasCurrentAmbientColor(): boolean {
+    return this.book !== null && this.book.cover.length > 0 && this.playerState.hasAmbientColor
+      && this.playerState.ambientCover === this.book.cover;
   }
 
   private openBookDetail(): void {
@@ -676,7 +804,7 @@ export struct PlayerPage {
         .height('100%')
         .linearGradient({
           angle: 180,
-          colors: this.playerState.hasAmbientColor
+          colors: this.hasCurrentAmbientColor()
             ? [[this.playerState.ambientMainColor, 0],
                [ColorPickerUtils.withAlpha(this.playerState.ambientMainColor, '73'), 0.42],
                [ColorPickerUtils.withAlpha(this.playerState.ambientMainColor, '00'), 0.88]]
@@ -690,20 +818,32 @@ export struct PlayerPage {
   @Builder
   buildTopBar() {
     Row() {
-      SymbolGlyph($r('sys.symbol.chevron_down'))
-        .fontSize(24)
-        .fontColor(['#FFFFFF'])
-        .onClick(() => {
-          // 立即标记离开,让 loadBook 异步链提前退出,不阻塞主线程
-          this.isLeaving = true;
-          // 统一走 customTransition 下滑退场
-          this.navStack.pop();
-        })
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.chevron_down'))
+          .fontSize(24)
+          .fontColor(['#FFFFFF'])
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .systemMaterial(AppMaterial.FloatingControl)
+      .onClick(() => {
+        // 立即标记离开,让 loadBook 异步链提前退出,不阻塞主线程
+        this.isLeaving = true;
+        // 统一走 customTransition 下滑退场
+        this.navStack.pop();
+      })
       Blank()
-      SymbolGlyph($r('sys.symbol.info_circle'))
-        .fontSize(24)
-        .fontColor(['#FFFFFF'])
-        .onClick(() => this.openBookDetail())
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.info_circle'))
+          .fontSize(24)
+          .fontColor(['#FFFFFF'])
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .systemMaterial(AppMaterial.FloatingControl)
+      .onClick(() => this.openBookDetail())
     }
     .width('100%')
     .height(48)
@@ -716,17 +856,18 @@ export struct PlayerPage {
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Cover)
+        .sourceSize({ width: 300, height: 300 })
         .alt($r('app.media.app_icon_legacy'))
         .onError(() => {
           console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
         })
     } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
       // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
-      // 大封面不设 sourceSize:全屏展示需要原图清晰度
       Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Cover)
+        .sourceSize({ width: 300, height: 300 })
     } else if (this.book!.cover) {
       Image($rawfile(this.book!.cover))
         .width('100%')
@@ -742,24 +883,39 @@ export struct PlayerPage {
   }
 
   @Builder
+  highQualityCoverContent() {
+    if (this.book!.cover && this.book!.cover.startsWith('http')) {
+      Image(this.book!.cover)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .sourceSize({ width: 960, height: 960 })
+    } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
+      Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .sourceSize({ width: 960, height: 960 })
+    }
+  }
+
+  @Builder
   buildCover() {
     Column() {
       Stack() {
         this.coverContent()
+        if (this.highQualityCover) {
+          this.highQualityCoverContent()
+        }
       }
       .width('100%')
       .aspectRatio(1)
       .borderRadius(16)
       .clip(true)
-      .shadow({ radius: 32, color: '#55000000', offsetY: 12 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
     .margin({ top: AppSpace.Lg })
-    // 错落渐显:封面先入场(50ms delay)
-    .opacity(this.contentVisible ? 1 : 0)
-    .translate({ y: this.contentVisible ? 0 : 20 })
-    .animation({ duration: 400, delay: 50, curve: Curve.Sharp })
   }
 
   @Builder
@@ -781,9 +937,10 @@ export struct PlayerPage {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
-        SymbolGlyph(this.isFavorite ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
+        SymbolGlyph(this.isFavorite ? $r('sys.symbol.archivebox_fill') : $r('sys.symbol.archivebox'))
           .fontSize(24)
-          .fontColor([this.isFavorite ? '#FF6B8A' : '#FFFFFF'])
+          .fontColor([this.isFavorite ? AppColor.Brand : '#FFFFFF'])
+          .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
           .onClick(() => this.toggleFavorite())
       }
       .width('100%')
@@ -839,10 +996,6 @@ export struct PlayerPage {
     }
     .width('100%')
     .padding({ bottom: AppSpace.Md })
-    // 错落渐显:进度条第二入场(100ms delay)
-    .opacity(this.contentVisible ? 1 : 0)
-    .translate({ y: this.contentVisible ? 0 : 20 })
-    .animation({ duration: 400, delay: 100, curve: Curve.Sharp })
   }
 
   @Builder
@@ -879,7 +1032,7 @@ export struct PlayerPage {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
             .fontSize(30)
-            .fontColor([this.playerState.hasAmbientColor ? this.playerState.ambientDarkColor : '#333333'])
+            .fontColor([this.hasCurrentAmbientColor() ? this.playerState.ambientDarkColor : '#333333'])
         }
       }
       .width(64)
@@ -909,10 +1062,6 @@ export struct PlayerPage {
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-    // 错落渐显:控制条最后入场(150ms delay)
-    .opacity(this.contentVisible ? 1 : 0)
-    .translate({ y: this.contentVisible ? 0 : 20 })
-    .animation({ duration: 400, delay: 150, curve: Curve.Sharp })
   }
 
   @Builder
@@ -1041,7 +1190,7 @@ export struct PlayerPage {
       }
       .width('100%')
       .height('55%')
-      .systemMaterial(AppMaterial.SurfaceRegular)
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
@@ -1161,7 +1310,7 @@ export struct PlayerPage {
         }
       }
       .width('100%')
-      .systemMaterial(AppMaterial.SurfaceRegular)
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       .transition(TransitionEffect.OPACITY.animation({ curve: curves.springMotion(0.6, 0.9) })
@@ -1252,7 +1401,7 @@ export struct PlayerPage {
         .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .systemMaterial(AppMaterial.SurfaceRegular)
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       .transition(TransitionEffect.OPACITY
@@ -1328,7 +1477,7 @@ export struct PlayerPage {
         .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .systemMaterial(AppMaterial.SurfaceRegular)
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       .transition(TransitionEffect.OPACITY

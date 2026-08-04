@@ -1,4 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -11,6 +12,7 @@ import { BookCard } from '../components/BookCard';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
+import { BookIdentity } from '../utils/BookIdentity';
 
 /** 首页分类入口项 */
 interface HomeCategory {
@@ -428,9 +430,8 @@ export struct HomePage {
 
   private homeBookFromResult(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
-    const idHash = this.hashSearchKey(r.sourceUrl || '', r.bookUrl || r.name);
     const book: Book = {
-      id: `home_audio_${idHash}`,
+      id: BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
       title: r.name,
       author: r.author || '未知',
       narrator: r.sourceName,
@@ -505,9 +506,8 @@ export struct HomePage {
 
   private searchResultToBook(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
-    const idHash = this.hashSearchKey(r.sourceUrl || '', r.bookUrl || r.name);
     const book: Book = {
-      id: `search_audio_${idHash}`,
+      id: BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
       title: r.name,
       author: r.author || '未知',
       narrator: r.sourceName,
@@ -526,15 +526,6 @@ export struct HomePage {
     };
     SearchCache.put(book);
     return book;
-  }
-
-  private hashSearchKey(sourceUrl: string, bookUrl: string): string {
-    const raw = `${sourceUrl}::${bookUrl}`;
-    let h: number = 5381;
-    for (let i = 0; i < raw.length; i++) {
-      h = (((h << 5) + h) + raw.charCodeAt(i)) | 0;
-    }
-    return (h >>> 0).toString(36);
   }
 
   private currentSubHeaderHeight(): number {
@@ -566,7 +557,8 @@ export struct HomePage {
             }
           })
           .height(SEARCH_FIELD_HEIGHT)
-          .systemMaterial(AppMaterial.InteractiveThin)
+          .backgroundColor(Color.Transparent)
+          .systemMaterial(AppMaterial.InteractiveClean)
           .borderRadius(AppRadius.Lg)
           .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
       }
@@ -667,21 +659,17 @@ export struct HomePage {
         } else if (this.hasSearched) {
           // 搜索结果：直接渲染为 ListItem
           if (this.viewMode === 0) {
-            // Grid 模式：用单个 ListItem 包裹 Grid
-            ListItem() {
-              Grid() {
-                LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
-                  GridItem() {
-                    BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
-                  }
-                }, (book: Book) => book.id)
-              }
-              .columnsTemplate('1fr 1fr 1fr')
-              .columnsGap(AppSpace.Sm)
-              .rowsGap(AppSpace.Md)
-              .width('100%')
-              .padding({ left: AppSpace.Md, right: AppSpace.Md })
+            // API 26:直接使用外层 List 的视口按需创建网格项。
+            LazyVGridLayout() {
+              LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
+                BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
+              }, (book: Book) => book.id)
             }
+            .columnsTemplate('1fr 1fr 1fr')
+            .columnsGap(LengthMetrics.vp(AppSpace.Sm))
+            .rowsGap(LengthMetrics.vp(AppSpace.Md))
+            .width('100%')
+            .padding({ left: AppSpace.Md, right: AppSpace.Md })
           } else {
             // List 模式：每本书一个 ListItem
             LazyForEach(this.audioDataSource, (book: Book) => {
@@ -758,24 +746,20 @@ export struct HomePage {
                 .justifyContent(FlexAlign.Center)
               }
             } else if (this.categoryBooks.length > 0) {
-              ListItem() {
-                Grid() {
-                  LazyForEach(this.categoryDS, (book: Book, idx: number) => {
-                    GridItem() {
-                      BookCard({
-                        book: book,
-                        indexHint: idx,
-                        onTap: () => this.onBookTap(book.id)
-                      })
-                    }
-                  }, (book: Book) => book.id)
-                }
-                .columnsTemplate('1fr 1fr 1fr')
-                .columnsGap(AppSpace.Sm)
-                .rowsGap(AppSpace.Md)
-                .width('100%')
-                .padding({ left: AppSpace.Md, right: AppSpace.Md })
+              LazyVGridLayout() {
+                LazyForEach(this.categoryDS, (book: Book, idx: number) => {
+                  BookCard({
+                    book: book,
+                    indexHint: idx,
+                    onTap: () => this.onBookTap(book.id)
+                  })
+                }, (book: Book) => book.id)
               }
+              .columnsTemplate('1fr 1fr 1fr')
+              .columnsGap(LengthMetrics.vp(AppSpace.Sm))
+              .rowsGap(LengthMetrics.vp(AppSpace.Md))
+              .width('100%')
+              .padding({ left: AppSpace.Md, right: AppSpace.Md })
             }
           }
         }
@@ -787,6 +771,7 @@ export struct HomePage {
       }
       .width('100%')
       .height('100%')
+      .listDirection(Axis.Vertical)
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .cachedCount(5)

@@ -1,4 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType, hdsMaterial } from '@kit.UIDesignKit';
 import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { SearchResult } from '../model/BookSource';
@@ -9,6 +10,7 @@ import { BookDataSource } from '../utils/BookDataSource';
 import { BookCard } from '../components/BookCard';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PlaybackStore } from '../service/PlaybackStore';
+import { BookIdentity } from '../utils/BookIdentity';
 
 const DOMAIN = 0x0000;
 const TAG = 'BlockMorePage';
@@ -97,20 +99,10 @@ export struct BlockMorePage {
     }
   }
 
-  private hashSearchKey(sourceUrl: string, bookUrl: string): string {
-    const raw = `${sourceUrl}::${bookUrl}`;
-    let h: number = 5381;
-    for (let i = 0; i < raw.length; i++) {
-      h = (((h << 5) + h) + raw.charCodeAt(i)) | 0;
-    }
-    return (h >>> 0).toString(36);
-  }
-
   private searchResultToBook(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
-    const idHash = this.hashSearchKey(r.sourceUrl || '', r.bookUrl || r.name);
     const book: Book = {
-      id: `home_audio_${idHash}`,
+      id: BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
       title: r.name,
       author: r.author || '未知',
       narrator: r.sourceName,
@@ -140,53 +132,54 @@ export struct BlockMorePage {
   }
 
   build() {
-    Column() {
-      Row({ space: AppSpace.Sm }) {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(24)
-          .fontColor([$r('sys.color.font_primary')])
-          .padding(4)
-          .onClick(() => this.navStack.pop())
-        Column({ space: 2 }) {
-          Text(this.title || '更多')
-            .fontSize(AppFont.Title)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('sys.color.font_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-          if (this.sourceName) {
-            Text(this.sourceName)
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-          }
+    HdsNavigation() {
+      Column() {
+        if (this.loading && this.books.length === 0) {
+          this.buildLoading()
+        } else if (this.errorMsg && this.books.length === 0) {
+          this.buildError()
+        } else if (this.books.length === 0) {
+          this.buildEmpty()
+        } else {
+          this.buildGrid()
         }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
       }
       .width('100%')
-      .padding({
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
-        left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Sm
-      })
-
-      if (this.loading && this.books.length === 0) {
-        this.buildLoading()
-      } else if (this.errorMsg && this.books.length === 0) {
-        this.buildError()
-      } else if (this.books.length === 0) {
-        this.buildEmpty()
-      } else {
-        this.buildGrid()
-      }
+      .height('100%')
+      .backgroundColor($r('sys.color.background_primary'))
     }
+    .mode(NavigationMode.Stack)
+    .titleBar({
+      avoidLayoutSafeArea: true,
+      enableComponentSafeArea: true,
+      content: {
+        title: {
+          mainTitle: this.title || '更多',
+          subTitle: this.sourceName
+        },
+        backIcon: {
+          icon: $r('sys.symbol.chevron_left'),
+          action: () => this.navStack.pop()
+        }
+      },
+      style: {
+        scrollEffectOpts: {
+          enableScrollEffect: true,
+          scrollEffectType: ScrollEffectType.GRADIENT_BLUR
+        },
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        }
+      }
+    })
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .hideBackButton(false)
+    .bindToScrollable([this.scroller])
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .width('100%')
     .height('100%')
-    .backgroundColor($r('sys.color.background_primary'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .backgroundColor(Color.Transparent)
   }
 
   @Builder
