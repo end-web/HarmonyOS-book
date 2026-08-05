@@ -13,12 +13,6 @@ struct PlayerCard {
   @LocalStorageProp('imgName') imgName: string = '';
   @LocalStorageProp('chapterTitle') chapterTitle: string = '';
   @LocalStorageProp('isPlaying') isPlaying: number = 0;
-  @LocalStorageProp('bgColor') bgColor: string = '';
-  @LocalStorageProp('bgTopColor') bgTopColor: string = '';
-  @LocalStorageProp('bgBottomColor') bgBottomColor: string = '';
-  @LocalStorageProp('bgLeftColor') bgLeftColor: string = '';
-  @LocalStorageProp('bgRightColor') bgRightColor: string = '';
-  @LocalStorageProp('bgDarkColor') bgDarkColor: string = '';
 
   private postCall(method: string): void {
     postCardAction(this, {
@@ -53,55 +47,30 @@ struct PlayerCard {
     return 'memory://' + this.imgName;
   }
 
-  /** '#RRGGBB' → '#00RRGGBB'：主色向下消散渐变的透明终点 */
-  private toTransparent(hex: string): string {
-    if (hex.length === 7) return '#00' + hex.substring(1);
-    if (hex.length === 9) return '#00' + hex.substring(3);
-    return hex;
-  }
-
   build() {
     Stack() {
       // 背景层：优先"深底 + 封面主色从顶部消散"(背景跟随主题色)；
       // 取色未就绪时用糊化封面兜底；都没有则默认渐变
       // 不加 borderRadius，由最外层 Stack 统一 clip，避免多层裁剪产生毛边
-      if (this.bgColor.length > 0) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#15171B')
-        Column()
-          .width('100%')
-          .height('100%')
-          .linearGradient({
-            angle: 180,
-            colors: [[this.bgColor, 0], [this.toTransparent(this.bgColor), 0.85]]
-          })
-      } else if (this.hasCover()) {
+      if (this.hasCover()) {
         Image(this.coverSrc())
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
           .syncLoad(true)
-          // 背景只要颜色不要细节:96px 微缩解码省内存,比例变形被糊化完全掩盖
           .sourceSize({ width: 96, height: 96 })
           .blur(40)
           .scale({ x: 1.25, y: 1.25 })
         Column()
           .width('100%')
           .height('100%')
-          .linearGradient({
-            angle: 180,
-            colors: [['#40000000', 0], ['#73000000', 1]]
-          })
+          .backgroundColor('#0D0D0D')
+          .opacity(0.7)
       } else {
         Column()
           .width('100%')
           .height('100%')
-          .linearGradient({
-            angle: 135,
-            colors: [['#FF2A2A3E', 0], ['#FF1A1A2E', 1]]
-          })
+          .backgroundColor('#3B4650')
       }
 
       Column() {

@@ -131,17 +131,18 @@ export struct ReadingStatsPage {
       const candidate = new ListeningRecordCandidate(bookId);
       const bookStats = statsMap.get(bookId) ?? [];
       for (const stat of bookStats) {
-        candidate.addStats(stat.listenSeconds, stat.updatedAt, stat.title, stat.author, stat.cover);
+        candidate.addStats(stat.listenSeconds, stat.updatedAt, stat.title, stat.author, stat.cover,
+          stat.sourceUrl, stat.bookUrl);
       }
       const historyItem = historyMap.get(bookId);
       if (historyItem) {
         candidate.setHistory(historyItem.chapterId, historyItem.chapterTitle ?? '', historyItem.progressMs,
-          historyItem.durationMs ?? 0, historyItem.updatedAt);
+          historyItem.durationMs ?? 0, historyItem.updatedAt, historyItem.sourceUrl, historyItem.bookUrl);
       }
       const progress = await PreferenceService.getProgress(bookId);
       if (progress) {
         candidate.setProgress(progress.chapterId, progress.chapterTitle, progress.positionMs, progress.durationMs,
-          progress.chapterIndex, progress.updatedAt);
+          progress.chapterIndex, progress.updatedAt, progress.sourceUrl, progress.bookUrl);
       }
       const book = await DataService.getBookById(context, bookId) ?? null;
       if (book) {
@@ -326,7 +327,9 @@ export struct ReadingStatsPage {
       'chapterId': item.chapterId,
       'progressMs': item.progressMs
     };
-    this.navStack.pushPathByName('player', params);
+    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.navStack.pushPathByName('player', params, false);
+    });
   }
 
   build() {

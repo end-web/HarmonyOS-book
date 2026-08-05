@@ -28,7 +28,7 @@ const GUIDE_GROUPS: GuideGroup[] = [
   {
     title: '书架',
     items: [
-      { action: '下拉', desc: '从听友 FM 刷新在线书籍的最新数据' },
+      { action: '下拉', desc: '从欢 FM 刷新在线书籍的最新数据' },
       { action: '长按书籍并拖到底部删除区', desc: '移出书架(可选仅移除,或删除本地文件)' },
     ]
   },

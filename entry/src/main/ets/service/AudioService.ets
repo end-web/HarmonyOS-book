@@ -82,6 +82,9 @@ export class AudioService {
    *  正在解析音频 URL（耗时长，比如 WebView 嗅探）的旧任务跑完后会用这个比对，
    *  如果不是最新代次就直接丢弃，不再装载到 AVPlayer，避免"切了新章节但旧的还在响"。 */
   private playGen: number = 0;
+  /** 持久化代次：clearOnlineFavoritesAndHistory 期间冻结写入，防止清理后被 tick/persistHistory 写回。 */
+  private persistGen: number = 0;
+  private frozenPersistGen: number = -1;
 
   static getInstance(): AudioService {
     if (!AudioService.instance) {
@@ -194,7 +197,8 @@ export class AudioService {
       onRewind: (ms: number) => { this.seekBy(-ms); },
       onSeek: (ms: number) => { this.seek(ms); },
       onSetSpeed: (speed: number) => { this.setSpeed(speed); },
-      onSetLoopMode: (mode: avSession.LoopMode) => { this.setPlayMode(this.fromAVSessionLoopMode(mode)); }
+      onSetLoopMode: (mode: avSession.LoopMode) => { this.setPlayMode(this.fromAVSessionLoopMode(mode)); },
+      onCollection: () => { this.toggleFavoriteFromSession(); }
     };
     AVSessionService.getInstance().setCallbacks(cbs);
     AVSessionService.getInstance().init(this.context).catch((err: Error) => {
@@ -210,11 +214,15 @@ export class AudioService {
   private async syncPlaybackStateNow(forceWidget: boolean): Promise<void> {
     if (!this.state) return;
     try {
+      const isFav = this.state.currentBook
+        ? await PreferenceService.isFavorite(this.state.currentBook.id)
+        : false;
       await AVSessionService.getInstance().updatePlaybackState(
         this.state.isPlaying,
         this.state.progressMs,
         this.state.speed,
-        this.state.durationMs
+        this.state.durationMs,
+        isFav
       );
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'updatePlaybackState failed: %{public}s',
@@ -506,13 +514,16 @@ export class AudioService {
       bookId: book.id,
       title: book.title,
       author: book.author || book.narrator || '',
-      cover: book.cover || ''
+      cover: book.cover || '',
+      sourceUrl: book.sourceUrl || '',
+      bookUrl: book.bookUrl || ''
     }).catch((err: Error) => {
       hilog.warn(DOMAIN, TAG, 'recordListenUsage failed: %{public}s', err?.message ?? JSON.stringify(err));
     });
   }
 
   private async persistHistory(): Promise<void> {
+    if (this.frozenPersistGen >= 0) return;
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const book = this.state.currentBook;
     const chapter = this.state.currentChapter;
@@ -527,7 +538,9 @@ export class AudioService {
       progressMs,
       updatedAt: Date.now(),
       chapterTitle,
-      durationMs
+      durationMs,
+      sourceUrl: book.sourceUrl || '',
+      bookUrl: book.bookUrl || ''
     });
     await PreferenceService.setLastPlayed(book.id, chapterId, progressMs, chapterTitle, durationMs, this.state.speed);
     // 每本书独立的最新进度,切书前 reset AVPlayer 之前必须把这条落盘,
@@ -540,7 +553,9 @@ export class AudioService {
       positionMs: progressMs,
       durationMs,
       updatedAt: Date.now(),
-      speed: this.state.speed
+      speed: this.state.speed,
+      sourceUrl: book.sourceUrl || '',
+      bookUrl: book.bookUrl || ''
     };
     await PreferenceService.saveProgress(progress);
     await DataService.upsertCachedBook(book);
@@ -1004,6 +1019,16 @@ export class AudioService {
     }
   }
 
+  private async toggleFavoriteFromSession(): Promise<void> {
+    const book = this.state?.currentBook;
+    if (!book) return;
+    const isFav = await PreferenceService.toggleFavorite(book.id);
+    if (isFav) {
+      await DataService.upsertCachedBook(book);
+    }
+    this.syncPlaybackState();
+  }
+
   async toggle(): Promise<void> {
     // 用户主动操作，清除焦点暂停标记
     this.pausedByFocus = false;
@@ -1215,6 +1240,37 @@ export class AudioService {
     this.lastProgressWriteAt = 0;
     this.lastPersistAt = 0;
     AudioService.instance = null;
+  }
+
+  freezePersist(): void {
+    this.frozenPersistGen = ++this.persistGen;
+    this.stopTick();
+    this.cancelSleepTimer();
+    this.cancelExternalMediaWatch();
+  }
+
+  unfreezePersist(): void {
+    this.frozenPersistGen = -1;
+  }
+
+  async stopForClear(): Promise<void> {
+    this.freezePersist();
+    if (this.player && this.player.state !== 'idle' && this.player.state !== 'released') {
+      try { await this.player.reset(); } catch (_e) { /* ignore */ }
+    }
+    this.closeCurrentFile();
+    if (this.state) {
+      this.state.isPlaying = false;
+      this.state.isLoading = false;
+      this.state.currentBook = null;
+      this.state.currentChapter = null;
+      this.state.progressMs = 0;
+      this.state.durationMs = 0;
+      this.state.savedDurationMs = 0;
+    }
+    PlaybackStore.getInstance().clear();
+    await AVSessionService.getInstance().updatePlaybackState(false, 0, 1.0, 0, false).catch(() => {});
+    try { await WidgetUpdater.updatePlayerCard(null, true); } catch (_e) { /* ignore */ }
   }
 
   /** 片尾跳过：检测当前播放位置是否到达片尾区域，到达则自动跳下一章 */

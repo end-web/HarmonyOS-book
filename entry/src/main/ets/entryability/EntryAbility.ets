@@ -53,7 +53,7 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     WidgetUpdater.setContext(this.context);
-    // 注册唯一在线内容源：听友 FM。
+    // 注册唯一在线内容源：欢 FM。
     registerBuiltInSources();
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);

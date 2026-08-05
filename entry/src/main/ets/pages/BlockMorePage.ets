@@ -68,7 +68,7 @@ export struct BlockMorePage {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === this.sourceUrl);
       if (!source) {
-        this.errorMsg = '听友 FM 暂不可用';
+        this.errorMsg = '欢 FM 暂不可用';
         this.hasMore = false;
         return;
       }
@@ -125,7 +125,9 @@ export struct BlockMorePage {
 
   private handleBookTap(bookId: string): void {
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      this.navStack.pushPathByName('player', bookId);
+      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+        this.navStack.pushPathByName('player', bookId, false);
+      });
       return;
     }
     this.navStack.pushPathByName('detail', bookId);

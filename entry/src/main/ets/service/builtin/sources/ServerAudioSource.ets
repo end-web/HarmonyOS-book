@@ -2,7 +2,7 @@
  * 简·欢云源 - 服务端聚合音频源。
  *
  * App 只消费稳定的搜索、详情、章节和播放解析接口；阅读音频规则在服务器执行。
- * 听友 FM 仍由原实现独立直连，两者没有协议依赖。
+ * 欢 FM 仍由原实现独立直连，两者没有协议依赖。
  */
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {

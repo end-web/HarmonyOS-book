@@ -13,6 +13,7 @@ import { DownloadBookRecord, DownloadChapterRecord, DownloadStore } from './Down
 import { SourceDataService } from './SourceDataService';
 import { DownloadNotificationService, DownloadNotificationSummary } from './DownloadNotificationService';
 import { BackgroundTaskService } from './BackgroundTaskService';
+import { SearchCache } from '../utils/SearchCache';
 
 const DOMAIN = 0x0001;
 const TAG = 'DownloadService';
@@ -690,7 +691,12 @@ export class DownloadService {
 
   /** 恢复任务时带回在线内容参数，避免音频地址解析所需信息缺失。 */
   private async bookFromRecordWithVariables(record: DownloadBookRecord): Promise<Book> {
-    const book = this.bookFromRecord(record);
+    const book = this.recordToBook(record);
+    if (book.variables && Object.keys(book.variables).length > 0) return book;
+    const cachedSearch = SearchCache.get(record.bookId);
+    if (cachedSearch?.variables && Object.keys(cachedSearch.variables).length > 0) {
+      book.variables = cachedSearch.variables;
+    }
     if (!this.ctx) return book;
     try {
       const cached = await DataService.getBookById(this.ctx, record.bookId);
@@ -700,7 +706,6 @@ export class DownloadService {
       if (cached?.contentType) book.contentType = cached.contentType;
       if (cached?.category) book.category = cached.category;
     } catch (_e) {
-      // 缓存书缺失时仍用 store 记录继续下载
     }
     return book;
   }
@@ -981,7 +986,7 @@ export class DownloadService {
     };
   }
 
-  private bookFromRecord(record: DownloadBookRecord): Book {
+  recordToBook(record: DownloadBookRecord): Book {
     return {
       id: record.bookId,
       contentType: 'audio',
@@ -997,7 +1002,8 @@ export class DownloadService {
       tags: [],
       chapters: record.chapters.map((item: DownloadChapterRecord) => this.chapterFromRecord(item)),
       bookUrl: record.bookUrl,
-      sourceUrl: record.sourceUrl
+      sourceUrl: record.sourceUrl,
+      variables: record.variables
     };
   }
 

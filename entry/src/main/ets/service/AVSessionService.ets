@@ -19,6 +19,7 @@ export interface AVSessionCallbacks {
   onSeek: (ms: number) => void;
   onSetSpeed: (speed: number) => void;
   onSetLoopMode: (mode: avSession.LoopMode) => void;
+  onCollection: () => void;
 }
 
 const REWIND_INTERVAL_MS: number = 10000;
@@ -30,10 +31,9 @@ const SUPPORTED_LOOP_MODES: avSession.LoopMode[] = [
   avSession.LoopMode.LOOP_MODE_SINGLE
 ];
 const MEDIA_CENTER_CONTROLS: avSession.AVMediaCenterControlType[] = [
-  'rewind',
-  'fastForward',
   'playPrevious',
   'playNext',
+  'toggleFavorite',
   'setSpeed',
   'setLoopMode'
 ];
@@ -56,6 +56,7 @@ export class AVSessionService {
   private onSeek: ((ms: number) => void) | null = null;
   private onSetSpeed: ((speed: number) => void) | null = null;
   private onSetLoopMode: ((mode: avSession.LoopMode) => void) | null = null;
+  private onCollection: (() => void) | null = null;
 
   static getInstance(): AVSessionService {
     if (!AVSessionService.instance) {
@@ -74,6 +75,7 @@ export class AVSessionService {
     this.onSeek = cbs.onSeek;
     this.onSetSpeed = cbs.onSetSpeed;
     this.onSetLoopMode = cbs.onSetLoopMode;
+    this.onCollection = cbs.onCollection;
   }
 
   init(context: common.UIAbilityContext): Promise<void> {
@@ -157,6 +159,9 @@ export class AVSessionService {
     this.session.on('setLoopMode', (mode: avSession.LoopMode) => {
       this.onSetLoopMode?.(mode);
     });
+    this.session.on('toggleFavorite', () => {
+      this.onCollection?.();
+    });
   }
 
   private async configureMediaCenter(): Promise<void> {
@@ -224,8 +229,6 @@ export class AVSessionService {
       author: book.author,
       duration: chapter.duration > 0 ? chapter.duration * 1000 : undefined,
       mediaImage: mediaImage,
-      rewindSkipIntervals: avSession.SkipIntervals.SECONDS_10,
-      fastForwardSkipIntervals: avSession.SkipIntervals.SECONDS_30
     };
     try {
       await this.session.setAVMetadata(metadata);
@@ -233,14 +236,11 @@ export class AVSessionService {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'setAVMetadata failed: %{public}s',
         e?.message ?? JSON.stringify(err));
-      // 失败再降级一次,只保留必要字段重试
       try {
         const fallback: avSession.AVMetadata = {
           assetId: `${book.id}_${chapter.id}`,
           title: chapter.title,
           artist: book.title,
-          rewindSkipIntervals: avSession.SkipIntervals.SECONDS_10,
-          fastForwardSkipIntervals: avSession.SkipIntervals.SECONDS_30
         };
         await this.session.setAVMetadata(fallback);
       } catch (err2) {
@@ -265,8 +265,6 @@ export class AVSessionService {
       author: book.author,
       duration: durationMs,
       mediaImage: this.currentMediaImage,
-      rewindSkipIntervals: avSession.SkipIntervals.SECONDS_10,
-      fastForwardSkipIntervals: avSession.SkipIntervals.SECONDS_30
     };
     try {
       await this.session.setAVMetadata(metadata);
@@ -278,7 +276,7 @@ export class AVSessionService {
   }
 
   async updatePlaybackState(isPlaying: boolean, progressMs: number, speed: number,
-    durationMs: number): Promise<void> {
+    durationMs: number, isFavorite: boolean = false): Promise<void> {
     if (!await this.ensureReady() || !this.session) return;
     let state: avSession.PlaybackState = avSession.PlaybackState.PLAYBACK_STATE_PAUSE;
     if (isPlaying) {
@@ -291,7 +289,8 @@ export class AVSessionService {
         elapsedTime: progressMs,
         updateTime: Date.now()
       },
-      duration: durationMs > 0 ? durationMs : undefined
+      duration: durationMs > 0 ? durationMs : undefined,
+      isFavorite: isFavorite
     };
     try {
       await this.session.setAVPlaybackState(playbackState);

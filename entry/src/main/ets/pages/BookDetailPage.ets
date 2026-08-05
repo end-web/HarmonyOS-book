@@ -11,7 +11,7 @@ import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService
 import { SourceDataService } from '../service/SourceDataService';
 import { AudioService } from '../service/AudioService';
 import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
-import { DownloadBookRecord, DownloadChapterRecord } from '../service/DownloadStore';
+import { DownloadStore, DownloadBookRecord, DownloadChapterRecord } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
@@ -141,7 +141,10 @@ export struct BookDetailPage {
     if (cached) return cached;
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const imported = await DataService.getBookById(ctx, id);
-    return imported || null;
+    if (imported) return imported;
+    const record = await DownloadStore.getBook(id);
+    if (record) return DownloadService.getInstance().recordToBook(record);
+    return null;
   }
 
   private async loadTocFromSource(book: Book): Promise<void> {
@@ -550,7 +553,9 @@ export struct BookDetailPage {
       && PlaybackStore.getInstance().isCurrentChapter(this.book.id, target.id)) {
       // 详情页入口,清理栈避免重复 player
       this.cleanStackBeforePushPlayer();
-      this.navStack.pushPathByName('player', this.bookId);
+      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+        this.navStack.pushPathByName('player', this.bookId, false);
+      });
       this.isStartingPlay = false;
       return;
     }
@@ -561,7 +566,9 @@ export struct BookDetailPage {
     };
     // 详情页入口,清理栈避免重复 player
     this.cleanStackBeforePushPlayer();
-    this.navStack.pushPathByName('player', playerParams);
+    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.navStack.pushPathByName('player', playerParams, false);
+    });
     this.isStartingPlay = false;
   }
 

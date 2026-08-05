@@ -1,11 +1,14 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
-import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
+import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
 import { PreferenceService } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { DataService } from '../service/DataService';
 import { DownloadService } from '../service/DownloadService';
+import { StatsService } from '../service/StatsService';
+import { SearchCache } from '../utils/SearchCache';
+import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface ThemeOption {
@@ -65,6 +68,9 @@ export struct SettingsPage {
   @Local autoResume: boolean = true;
   @Local preloadCount: number = 3;
   @Local isLoaded: boolean = false;
+  @Local isClearingCache: boolean = false;
+  @Local isClearingBookshelf: boolean = false;
+  @Local isClearingDownloads: boolean = false;
 
   aboutToAppear(): void {
     this.loadPrefs();
@@ -104,19 +110,27 @@ export struct SettingsPage {
     ChapterCacheService.getInstance().setPreloadCount(count);
   }
 
-  private clearCache(): void {
-    ChapterCacheService.getInstance().clearAllCache();
+  private async clearCache(): Promise<void> {
+    if (this.isClearingCache) return;
+    this.isClearingCache = true;
     try {
-      this.getUIContext().getPromptAction().showToast({ message: '缓存已清除' });
-    } catch (_e) { /* ignore */ }
+      const result = await ChapterCacheService.getInstance().clearAllCache();
+      const msg = result.failed > 0
+        ? `已清除 ${result.deleted} 项，${result.failed} 项失败`
+        : `已清除 ${result.deleted} 项`;
+      try { this.getUIContext().getPromptAction().showToast({ message: msg }); } catch (_e) { /* ignore */ }
+    } catch (_e) {
+      try { this.getUIContext().getPromptAction().showToast({ message: '清除失败，请重试' }); } catch (_e2) { /* ignore */ }
+    } finally {
+      this.isClearingCache = false;
+    }
   }
 
-  /** 二次确认后清空书架与历史，保留应用设置。 */
   private confirmClearBookshelf(): void {
     const prompt = this.getUIContext().getPromptAction();
     prompt.showDialog({
-      title: '清空书架与历史',
-      message: '将清除全部收藏、缓存书与播放记录(进度/历史)。应用设置会保留。此操作不可恢复,确定吗?',
+      title: '清空在线收藏与播放记录',
+      message: '将清除在线收藏、播放记录与进度。本地导入、下载内容和跳过头尾设置会保留。此操作不可恢复,确定吗?',
       buttons: [
         { text: '取消', color: '#8F8F8F' },
         { text: '清空', color: '#FF4444' }
@@ -127,13 +141,24 @@ export struct SettingsPage {
   }
 
   private async doClearBookshelf(): Promise<void> {
-    await PreferenceService.clearBookshelfAndHistory();
-    await DataService.clearCachedBooks();
-    await ChapterCacheService.getInstance().wipeDiskCaches();
-    await DownloadService.getInstance().clearAllDownloads();
+    if (this.isClearingBookshelf) return;
+    this.isClearingBookshelf = true;
     try {
-      this.getUIContext().getPromptAction().showToast({ message: '书架与历史已清空' });
-    } catch (_e) { /* ignore */ }
+      const audioService = AudioService.getInstance();
+      await audioService.stopForClear();
+      await PreferenceService.clearOnlineFavoritesAndHistory();
+      await DataService.clearCachedBooks();
+      await ChapterCacheService.getInstance().wipeDiskCaches();
+      await StatsService.clearBookStats();
+      SearchCache.clear();
+      audioService.unfreezePersist();
+      try { this.getUIContext().getPromptAction().showToast({ message: '在线收藏与播放记录已清空' }); } catch (_e) { /* ignore */ }
+    } catch (_e) {
+      AudioService.getInstance().unfreezePersist();
+      try { this.getUIContext().getPromptAction().showToast({ message: '清空失败，请重试' }); } catch (_e2) { /* ignore */ }
+    } finally {
+      this.isClearingBookshelf = false;
+    }
   }
 
   private async setColorMode(mode: number): Promise<void> {
@@ -168,10 +193,16 @@ export struct SettingsPage {
   }
 
   private async doClearDownloads(): Promise<void> {
-    await DownloadService.getInstance().clearAllDownloads();
+    if (this.isClearingDownloads) return;
+    this.isClearingDownloads = true;
     try {
-      this.getUIContext().getPromptAction().showToast({ message: '下载内容已清除' });
-    } catch (_e) { /* ignore */ }
+      await DownloadService.getInstance().clearAllDownloads();
+      try { this.getUIContext().getPromptAction().showToast({ message: '下载内容已清除' }); } catch (_e) { /* ignore */ }
+    } catch (_e) {
+      try { this.getUIContext().getPromptAction().showToast({ message: '清除失败，请重试' }); } catch (_e2) { /* ignore */ }
+    } finally {
+      this.isClearingDownloads = false;
+    }
   }
 
   build() {
@@ -341,15 +372,15 @@ export struct SettingsPage {
 
         this.buildDivider()
 
-        this.buildActionItem('清除预加载缓存', '释放已缓存的章节音频', () => this.clearCache())
+        this.buildActionItem('清除预加载缓存', '释放已缓存的章节音频', () => this.clearCache(), this.isClearingCache)
 
         this.buildDivider()
 
-        this.buildActionItem('清除下载内容', '删除整本/单章离线音频，保留书架和记录', () => this.confirmClearDownloads())
+        this.buildActionItem('清除下载内容', '删除整本/单章离线音频，保留书架和记录', () => this.confirmClearDownloads(), this.isClearingDownloads)
 
         this.buildDivider()
 
-        this.buildActionItem('清空书架与历史', '清除收藏 / 缓存书 / 播放记录，保留设置', () => this.confirmClearBookshelf())
+        this.buildActionItem('清空在线收藏与播放记录', '清除在线收藏 / 缓存书 / 播放记录，保留导入和下载', () => this.confirmClearBookshelf(), this.isClearingBookshelf)
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))
@@ -434,7 +465,7 @@ export struct SettingsPage {
   }
 
   @Builder
-  buildActionItem(title: string, subtitle: string, onAction: () => void) {
+  buildActionItem(title: string, subtitle: string, onAction: () => void, isClearing: boolean = false) {
     Row() {
       Column({ space: 2 }) {
         Text(title)
@@ -449,9 +480,16 @@ export struct SettingsPage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      SymbolGlyph($r('sys.symbol.trash'))
-        .fontSize(18)
-        .fontColor([$r('sys.color.font_tertiary')])
+      if (isClearing) {
+        LoadingProgress()
+          .width(18)
+          .height(18)
+          .color(AppColor.Brand)
+      } else {
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(18)
+          .fontColor([$r('sys.color.font_tertiary')])
+      }
     }
     .width('100%')
     .padding({
@@ -461,6 +499,8 @@ export struct SettingsPage {
       bottom: AppSpace.Sm
     })
     .constraintSize({ minHeight: 56 })
+    .enabled(!this.isClearingCache && !this.isClearingBookshelf && !this.isClearingDownloads)
+    .opacity((this.isClearingCache || this.isClearingBookshelf || this.isClearingDownloads) ? 0.5 : 1.0)
     .onClick(() => onAction())
   }
 }

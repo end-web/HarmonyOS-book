@@ -39,6 +39,7 @@ export interface DownloadBookRecord {
   status: DownloadBookStatus;
   updatedAt: number;
   chapters: DownloadChapterRecord[];
+  variables?: Record<string, string>;
 }
 
 interface DownloadStoreRead {
@@ -137,6 +138,10 @@ export class DownloadStore {
   }
 
   static getDownloadRootPath(): string | null {
+    return DownloadStore.ctx ? `${DownloadStore.ctx.filesDir}/${DOWNLOAD_ROOT_DIR}` : null;
+  }
+
+  static getCacheDownloadRootPath(): string | null {
     return DownloadStore.ctx ? `${DownloadStore.ctx.cacheDir}/${DOWNLOAD_ROOT_DIR}` : null;
   }
 
@@ -238,7 +243,8 @@ export class DownloadStore {
         totalBytes: 0,
         status: 'idle',
         updatedAt: Date.now(),
-        chapters: []
+        chapters: [],
+        variables: book.variables
       };
       list.push(record);
       DownloadStore.records = list;
@@ -503,11 +509,11 @@ export class DownloadStore {
   }
 
   static getLegacyDownloadRootPath(): string | null {
-    return DownloadStore.ctx ? `${DownloadStore.ctx.filesDir}/${DOWNLOAD_ROOT_DIR}` : null;
+    return DownloadStore.getCacheDownloadRootPath();
   }
 
   private static legacyStorePath(): string | null {
-    const root = DownloadStore.getLegacyDownloadRootPath();
+    const root = DownloadStore.getCacheDownloadRootPath();
     return root ? `${root}/${DOWNLOAD_STORE_FILE}` : null;
   }
 

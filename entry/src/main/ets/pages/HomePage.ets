@@ -17,7 +17,7 @@ import { BookIdentity } from '../utils/BookIdentity';
 /** 首页分类入口项 */
 interface HomeCategory {
   name: string;
-  /** 分类列表 URL（听友FM 的 types/<typeId>/comprehensive/p1 路径） */
+  /** 分类列表 URL（欢FM 的 types/<typeId>/comprehensive/p1 路径） */
   url: string;
 }
 
@@ -44,9 +44,9 @@ const HOME_CATEGORIES: HomeCategory[] = [
   { name: '单田芳', url: 'types/1/comprehensive/p1' },
 ];
 
-/** 听友FM内置源标识(分类入口固定走该源) */
-const TINGYOU_SOURCE_URL = 'builtin://eprendre/tingyou_fm';
-const TINGYOU_SOURCE_NAME = '听友FM';
+/** 欢FM内置源标识(分类入口固定走该源) */
+const HUAN_SOURCE_URL = 'builtin://eprendre/huan_fm';
+const HUAN_SOURCE_NAME = '欢FM';
 
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
@@ -278,7 +278,7 @@ export struct HomePage {
     hilog.info(DOMAIN, TAG, 'loadHomeBlocks: cleared data, loadingHome=%{public}s', String(this.loadingHome));
     try {
       // 只加载内置书源的首页推荐,不加载导入的书源
-      const plugin = BuiltInSourceRegistry.getByUrl(TINGYOU_SOURCE_URL);
+      const plugin = BuiltInSourceRegistry.getByUrl(HUAN_SOURCE_URL);
       if (!plugin) {
         hilog.warn(DOMAIN, TAG, 'loadHomeBlocks: Built-in source not available');
         this.loadingHome = false;
@@ -305,7 +305,7 @@ export struct HomePage {
             kind: book.status || '',
             lastChapter: '',
             sourceName: plugin.name,
-            sourceUrl: TINGYOU_SOURCE_URL
+            sourceUrl: HUAN_SOURCE_URL
           });
         }
         sections.push({
@@ -314,7 +314,7 @@ export struct HomePage {
           moreUrl: b.moreUrl,
           layout: b.layout,
           sourceName: plugin.name,
-          sourceUrl: TINGYOU_SOURCE_URL
+          sourceUrl: HUAN_SOURCE_URL
         });
       }
 
@@ -368,10 +368,10 @@ export struct HomePage {
     this.categoryNextUrl = '';
 
     try {
-      const plugin = BuiltInSourceRegistry.getByUrl(TINGYOU_SOURCE_URL);
+      const plugin = BuiltInSourceRegistry.getByUrl(HUAN_SOURCE_URL);
       if (!plugin) {
         this.categoryLoading = false;
-        this.categoryError = '听友FM源不可用';
+        this.categoryError = '欢FM源不可用';
         return;
       }
 
@@ -388,7 +388,7 @@ export struct HomePage {
           const sr: SearchResult = {
             name: b.title, author: b.author, coverUrl: b.coverUrl,
             bookUrl: b.bookUrl, intro: b.intro, kind: b.status, lastChapter: '',
-            sourceName: plugin.name, sourceUrl: TINGYOU_SOURCE_URL,
+            sourceName: plugin.name, sourceUrl: HUAN_SOURCE_URL,
           };
           books.push(this.homeBookFromResult(sr));
         }
@@ -705,7 +705,7 @@ export struct HomePage {
                     .fontSize(AppFont.Body)
                     .fontColor($r('sys.color.font_tertiary'))
                     .margin({ top: AppSpace.Md })
-                  Text(TINGYOU_SOURCE_NAME)
+                  Text(HUAN_SOURCE_NAME)
                     .fontSize(AppFont.Caption)
                     .fontColor($r('sys.color.font_tertiary'))
                     .margin({ top: AppSpace.Xs })
@@ -817,7 +817,7 @@ export struct HomePage {
   buildSearchingState() {
     Column() {
       LoadingProgress().width(40).height(40).color(AppColor.Brand)
-      Text(`正在搜索 ${TINGYOU_SOURCE_NAME}...`)
+      Text(`正在搜索 ${HUAN_SOURCE_NAME}...`)
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Sm })

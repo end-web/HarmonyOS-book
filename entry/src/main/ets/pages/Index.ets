@@ -24,8 +24,8 @@ interface WidgetRouteEvent {
 @ComponentV2
 struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
-  @Local playerTranslateY: string = '0';
   @Local playerRenderGroup: boolean = false;
+  @Local playerOpacity: number = 1;
   // detail 路由自定义转场:缩放淡入,无方向位移
   @Local detailScale: number = 1;
   @Local detailOpacity: number = 1;
@@ -89,7 +89,9 @@ struct Index {
         // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
         const cur = this.navStack.getAllPathName();
         if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
-        this.navStack.pushPathByName('player', bookId, false);
+        animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+          this.navStack.pushPathByName('player', bookId, false);
+        });
       }
       // 无 bookId 时停在主页,避免黑屏
     } else if (target === 'detail') {
@@ -174,25 +176,25 @@ struct Index {
       .systemTransition(NavigationSystemTransitionType.NONE)
       // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
       .onBackPressed((): boolean => {
-        // 优先关抽屉
         if (PlayerBackInterceptor.consume()) return true;
-        // 立即标记 PlayerPage 离开,让 loadBook 异步链提前退出,不阻塞返回响应
         PlayerEntryDecider.markLeaving();
-        // 放行,由 customTransition 播放下滑退场
-        return false;
+        animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
+          this.navStack.pop(false);
+        });
+        return true;
       })
       .backgroundColor('#000000')
       .renderGroup(this.playerRenderGroup)
-      .translate({ y: this.playerTranslateY })
+      .opacity(this.playerOpacity)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
         if (op === NavigationOperation.PUSH && isEnter) {
           this.playerRenderGroup = true;
-          this.playerTranslateY = '100%';
+          this.playerOpacity = 0;
           return [{
-            duration: 300,
+            duration: 400,
             curve: Curve.FastOutSlowIn,
             event: () => {
-              this.playerTranslateY = '0';
+              this.playerOpacity = 1;
             },
             onTransitionEnd: () => {
               this.playerRenderGroup = false;
@@ -201,15 +203,15 @@ struct Index {
           }];
         } else if (op === NavigationOperation.POP && !isEnter) {
           this.playerRenderGroup = true;
-          this.playerTranslateY = '0';
+          this.playerOpacity = 1;
           return [{
-            duration: 260,
-            curve: Curve.FastOutSlowIn,
+            duration: 300,
+            curve: Curve.FastOutLinearIn,
             event: () => {
-              this.playerTranslateY = '100%';
+              this.playerOpacity = 0;
             },
             onTransitionEnd: () => {
-              this.playerTranslateY = '0';
+              this.playerOpacity = 1;
               this.playerRenderGroup = false;
             }
           }];
@@ -279,6 +281,7 @@ struct Index {
     Navigation(this.navStack) {
       // home 已在 aboutToAppear 中 push,根内容留空
     }
+    .backgroundColor('#000000')
     .navDestination(this.routerMap)
     .hideTitleBar(true)
     .mode(NavigationMode.Stack)

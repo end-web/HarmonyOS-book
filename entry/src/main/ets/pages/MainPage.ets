@@ -91,18 +91,20 @@ export struct MainPage {
       return;
     }
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      // 点击当前正在播放的书,直接进播放页
-      this.navStack.pushPathByName('player', bookId);
+      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+        this.navStack.pushPathByName('player', bookId, false);
+      });
       return;
     }
     if (chapterId) {
-      // 从详情页进入指定章节
       const params: Record<string, Object> = {
         'bookId': bookId,
         'chapterId': chapterId,
         'progressMs': progressMs
       };
-      this.navStack.pushPathByName('player', params);
+      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+        this.navStack.pushPathByName('player', params, false);
+      });
       return;
     }
     this.navStack.pushPathByName('detail', bookId);
@@ -298,7 +300,7 @@ export struct MainPage {
       .backgroundColor(HomeTheme.BgNeutral)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      // 听友部分音频地址需要 ArkWeb 兜底提取，按需创建隐藏宿主。
+      // 欢部分音频地址需要 ArkWeb 兜底提取，按需创建隐藏宿主。
       if (this.gate.needAudioExtractor) {
         WebViewAudioExtractorHost()
       }
@@ -333,10 +335,9 @@ export struct MainPage {
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
     const bookId = this.playerState.currentBook.id;
-    // mini→player:走与其他入口一致的 customTransition 上滑转场。
-    // (放弃跨 NavDestination 的 geometryTransition 共享元素——它在 push/pop 反复时
-    //  绑定表错乱,返回动画正常/异常交替,且非官方推荐用法。)
-    this.navStack.pushPathByName('player', bookId);
+    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.navStack.pushPathByName('player', bookId, false);
+    });
   }
 
   private playNext(): void {

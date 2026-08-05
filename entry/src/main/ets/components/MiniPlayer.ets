@@ -58,6 +58,7 @@ export struct MiniPlayer {
         .borderRadius(this.collapsed ? 999 : 22)
         .backgroundColor($r('sys.color.comp_background_tertiary'))
         .clip(true)
+        .geometryTransition('player-cover')
         .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
         .onClick(() => {
           if (this.collapsed) {

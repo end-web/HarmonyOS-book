@@ -12,6 +12,8 @@ export interface BookUsageInput {
   title: string;
   author?: string;
   cover?: string;
+  sourceUrl?: string;
+  bookUrl?: string;
 }
 
 export interface BookUsageDay {
@@ -27,6 +29,8 @@ export interface BookUsageStats {
   listenSeconds: number;
   updatedAt: number;
   days: BookUsageDay[];
+  sourceUrl?: string;
+  bookUrl?: string;
 }
 
 export interface DailyUsageStats {
@@ -102,7 +106,9 @@ export class StatsService {
         cover: book.cover || '',
         listenSeconds: 0,
         updatedAt: Date.now(),
-        days: []
+        days: [],
+        sourceUrl: book.sourceUrl || '',
+        bookUrl: book.bookUrl || ''
       };
       records.push(rec);
     }
@@ -111,6 +117,8 @@ export class StatsService {
     rec.author = book.author || rec.author;
     rec.cover = book.cover || rec.cover;
     rec.updatedAt = Date.now();
+    if (book.sourceUrl) rec.sourceUrl = book.sourceUrl;
+    if (book.bookUrl) rec.bookUrl = book.bookUrl;
     let dayItem = rec.days.find((item) => item.day === day);
     if (!dayItem) {
       dayItem = { day, listenSeconds: 0 };
@@ -142,7 +150,9 @@ export class StatsService {
             cover: item.cover || '',
             listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0)),
             updatedAt: item.updatedAt || 0,
-            days: StatsService.trimDays(days)
+            days: StatsService.trimDays(days),
+            sourceUrl: item.sourceUrl || '',
+            bookUrl: item.bookUrl || ''
           };
         })
         .sort((a, b) => b.updatedAt - a.updatedAt);

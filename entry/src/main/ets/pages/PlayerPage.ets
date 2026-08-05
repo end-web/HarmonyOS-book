@@ -274,7 +274,9 @@ export struct PlayerPage {
     }
     if (!b) {
       console.error('[PlayerPage] loadBook failed, book not found');
-      this.navStack.pop();
+      animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
+        this.navStack.pop(false);
+      });
       return;
     }
     if (b.chapters.length === 0) {
@@ -792,24 +794,40 @@ export struct PlayerPage {
   @Builder
   buildAmbientBackground() {
     Stack() {
-      // 深色安静底:全屏白字/白控件的可读性基座
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#15171B')
+      if (this.book && this.book.cover) {
+        if (this.book.cover.startsWith('http')) {
+          Image(this.book.cover)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 120, height: 120 })
+            .blur(40)
+        } else if (this.book.cover.startsWith('/') || this.book.cover.startsWith('file://')) {
+          Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 120, height: 120 })
+            .blur(40)
+        } else {
+          Image($rawfile(this.book.cover))
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .blur(40)
+        }
+      } else {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#3B4650')
+      }
 
-      // 封面主色从顶部向下 alpha 消散融入深底:背景跟随封面主题色,换书由 animateTo 平滑过渡
       Column()
         .width('100%')
         .height('100%')
-        .linearGradient({
-          angle: 180,
-          colors: this.hasCurrentAmbientColor()
-            ? [[this.playerState.ambientMainColor, 0],
-               [ColorPickerUtils.withAlpha(this.playerState.ambientMainColor, '73'), 0.42],
-               [ColorPickerUtils.withAlpha(this.playerState.ambientMainColor, '00'), 0.88]]
-            : [['#3B4650', 0], ['#733B4650', 0.42], ['#003B4650', 0.88]]
-        })
+        .backgroundColor('#0D0D0D')
+        .opacity(0.7)
     }
     .width('100%')
     .height('100%')
@@ -828,10 +846,10 @@ export struct PlayerPage {
       .borderRadius(20)
       .systemMaterial(AppMaterial.FloatingControl)
       .onClick(() => {
-        // 立即标记离开,让 loadBook 异步链提前退出,不阻塞主线程
         this.isLeaving = true;
-        // 统一走 customTransition 下滑退场
-        this.navStack.pop();
+        animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
+          this.navStack.pop(false);
+        });
       })
       Blank()
       Stack({ alignContent: Alignment.Center }) {
@@ -912,6 +930,7 @@ export struct PlayerPage {
       .aspectRatio(1)
       .borderRadius(16)
       .clip(true)
+      .geometryTransition('player-cover')
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -1017,29 +1036,23 @@ export struct PlayerPage {
       Blank()
 
       Stack({ alignContent: Alignment.Center }) {
-        Column()
-          .width(64)
-          .height(64)
-          .borderRadius(32)
-          .backgroundColor('#FFFFFF')
-          .shadow({ radius: 16, color: '#44FFFFFF', offsetY: 4 })
         if (this.playerState.isLoading) {
           LoadingProgress()
             .width(36)
             .height(36)
-            .color(AppColor.Brand)
+            .color('#FFFFFF')
         } else {
           SymbolGlyph(this.playerState.isPlaying
-            ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
-            .fontSize(30)
-            .fontColor([this.hasCurrentAmbientColor() ? this.playerState.ambientDarkColor : '#333333'])
+            ? $r('sys.symbol.pause_round_triangle_fill') : $r('sys.symbol.play_round_triangle_fill'))
+            .fontSize(64)
+            .fontColor(['#FFFFFF'])
+            .symbolEffect(new BounceSymbolEffect())
         }
       }
       .width(64)
       .height(64)
-      .clickEffect({ level: ClickEffectLevel.MIDDLE, scale: 0.92 })
+      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.92 })
       .onClick(() => {
-        // 加载中禁止重复触发
         if (!this.playerState.isLoading) this.togglePlay();
       })
 

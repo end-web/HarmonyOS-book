@@ -1,7 +1,7 @@
 /**
- * TingYouFM - 听友FM (https://www.tingyou.fm)
+ * HuanFM - 欢FM (https://www.tingyou.fm)
  *
- * Nuxt SPA + 加密 API（协议见 TingYouCrypto / reference_tingyou_fm_protocol 记忆）：
+ * Nuxt SPA + 加密 API（协议见 TingYouCrypto / reference_huan_fm_protocol 记忆）：
  * - 静态 GET（CDN，无需鉴权）：album_info/<id>、album_chapters/<id>、homepage
  * - 动态 POST（www.tingyou.fm/api/，需 guest Bearer token）：search、play_token
  * - guest token：先试原生 POST /api/me；被 bot 拦时用隐藏 WebView 读 localStorage.auth
@@ -21,7 +21,7 @@ import { getWebViewAudioExtractor } from '../WebViewAudioExtractor';
 import { AsyncSingleFlight } from '../../../utils/AsyncSingleFlight';
 import { TingYouRequestPolicy, TingYouRetryAction } from './TingYouRequestPolicy';
 
-const TAG = 'TingYouFM';
+const TAG = 'HuanFM';
 const SITE = 'https://www.tingyou.fm';
 const API = SITE + '/api';
 /** 静态 JSON CDN（三镜像，依次兜底） */
@@ -72,9 +72,9 @@ function parseBookArray(arr: JsonArr): BuiltInBook[] {
   return out;
 }
 
-class TingYouFMClass implements IBuiltInSource {
-  readonly id: string = 'tingyou_fm';
-  readonly name: string = '听友FM';
+class HuanFMClass implements IBuiltInSource {
+  readonly id: string = 'huan_fm';
+  readonly name: string = '欢FM';
   readonly url: string = SITE;
   readonly desc: string = '推荐指数:5星 ⭐⭐⭐⭐⭐\n来源：www.tingyou.fm';
   readonly searchable: boolean = true;
@@ -369,4 +369,4 @@ class TingYouFMClass implements IBuiltInSource {
   }
 }
 
-export const TingYouFM: IBuiltInSource = new TingYouFMClass();
+export const HuanFM: IBuiltInSource = new HuanFMClass();

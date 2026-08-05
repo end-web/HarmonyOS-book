@@ -466,28 +466,32 @@ export class DataService {
 
   /** 清空缓存书池(索引 + sidecar 目录 + 内存),用于"清空书架"。 */
   static async clearCachedBooks(): Promise<void> {
-    await DataService.ensureStorageMigrated();
-    DataService.cachedBooksMem = [];
-    DataService.persistUnsafe = false; // 用户主动清空,解除读失败保护
-    const path = DataService.cachedFilePath();
-    if (path) {
-      try { await fileIo.unlink(path); } catch (_e) { /* ignore */ }
-      try { await fileIo.unlink(path + '.tmp'); } catch (_e) { /* ignore */ }
-    }
-    const dir = DataService.tocDirPath();
-    if (dir) {
-      try { await fileIo.rmdir(dir); } catch (_e) { /* ignore */ }
-    }
-    const legacyPath = DataService.legacyCachedFilePath();
-    if (legacyPath) {
-      try { await fileIo.unlink(legacyPath); } catch (_e) { /* ignore */ }
-      try { await fileIo.unlink(legacyPath + '.tmp'); } catch (_e) { /* ignore */ }
-    }
-    const legacyDir = DataService.legacyTocDirPath();
-    if (legacyDir) {
-      try { await fileIo.rmdir(legacyDir); } catch (_e) { /* ignore */ }
-    }
-    DataService.tocDirReady = false;
+    const task = DataService.writeChain.then(async () => {
+      await DataService.ensureStorageMigrated();
+      DataService.cachedBooksMem = [];
+      DataService.persistUnsafe = false;
+      const path = DataService.cachedFilePath();
+      if (path) {
+        try { await fileIo.unlink(path); } catch (_e) { /* ignore */ }
+        try { await fileIo.unlink(path + '.tmp'); } catch (_e) { /* ignore */ }
+      }
+      const dir = DataService.tocDirPath();
+      if (dir) {
+        try { await fileIo.rmdir(dir); } catch (_e) { /* ignore */ }
+      }
+      const legacyPath = DataService.legacyCachedFilePath();
+      if (legacyPath) {
+        try { await fileIo.unlink(legacyPath); } catch (_e) { /* ignore */ }
+        try { await fileIo.unlink(legacyPath + '.tmp'); } catch (_e) { /* ignore */ }
+      }
+      const legacyDir = DataService.legacyTocDirPath();
+      if (legacyDir) {
+        try { await fileIo.rmdir(legacyDir); } catch (_e) { /* ignore */ }
+      }
+      DataService.tocDirReady = false;
+    });
+    DataService.writeChain = task.then(() => {}, () => {});
+    await task;
   }
 
   static async removeCachedBook(bookId: string): Promise<void> {

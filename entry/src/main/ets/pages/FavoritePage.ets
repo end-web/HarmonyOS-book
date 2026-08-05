@@ -291,7 +291,7 @@ export struct FavoritePage {
     return book.tags ? book.tags.includes('cache_alias') : false;
   }
 
-  /** 仅展示本地音频和当前内置听友源，屏蔽升级前遗留的文本书与规则源缓存。 */
+  /** 仅展示本地音频和当前内置欢源，屏蔽升级前遗留的文本书与规则源缓存。 */
   private isSupportedBook(book: Book): boolean {
     if (book.contentType === 'text' || book.category === 'text') return false;
     if (!book.sourceUrl) return true;
@@ -535,7 +535,9 @@ export struct FavoritePage {
     SearchCache.put(book);
     // 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state。
     if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
-      this.navStack.pushPathByName('player', book.id, onPop);
+      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+        this.navStack.pushPathByName('player', book.id, onPop, false);
+      });
       return;
     }
     // 直接用已缓存的 historyMap,避免每次点击都 IO
@@ -569,7 +571,9 @@ export struct FavoritePage {
       'chapterId': resolved.id as Object,
       'progressMs': history.progressMs as Object
     };
-    this.navStack.pushPathByName('player', params, onPop);
+    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.navStack.pushPathByName('player', params, onPop, false);
+    });
   }
 
   /** 老收藏的在线书没缓存章节时,先拉 toc 再恢复进度;期间禁用重复点击 */
@@ -592,7 +596,9 @@ export struct FavoritePage {
             'chapterId': resolvedLocal.id as Object,
             'progressMs': history.progressMs as Object
           };
-          this.navStack.pushPathByName('player', localParams, onPop);
+          animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+            this.navStack.pushPathByName('player', localParams, onPop, false);
+          });
           return;
         }
         // 本地目录命中但定位不到章节(可能已下架/重排)→ 落到下面联网重拉刷新
@@ -650,7 +656,9 @@ export struct FavoritePage {
         'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
-      this.navStack.pushPathByName('player', params, onPop);
+    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.navStack.pushPathByName('player', params, onPop, false);
+    });
     } catch (_e) {
       try {
         this.getUIContext().getPromptAction().showToast({ message: '章节加载失败' });
@@ -718,24 +726,22 @@ export struct FavoritePage {
 
   private async doRemove(bookId: string, deleteFiles: boolean): Promise<void> {
     if (!this.context) return;
-    let downloadCleanupFailed = false;
     try {
-      await DownloadService.getInstance().deleteBookDownload(bookId);
+      if (deleteFiles) {
+        await DownloadService.getInstance().deleteBookDownload(bookId);
+        if (bookId.startsWith('import_')) {
+          await DataService.removeImportedBook(bookId);
+        }
+      }
+      await PreferenceService.removeFavorite(bookId);
+      if (!bookId.startsWith('import_')) {
+        await DataService.removeCachedBook(bookId);
+      }
+      await this.loadFavorites();
     } catch (_e) {
-      downloadCleanupFailed = true;
-    }
-    if (deleteFiles) {
-      await DataService.removeImportedBook(bookId);
-    }
-    await PreferenceService.removeFavorite(bookId);
-    if (!bookId.startsWith('import_')) {
-      await DataService.removeCachedBook(bookId);
-    }
-    await this.loadFavorites();
-    if (downloadCleanupFailed) {
       try {
-        this.getUIContext().getPromptAction().showToast({ message: '书籍已移除，部分下载文件清理失败' });
-      } catch (_e) { /* ignore */ }
+        this.getUIContext().getPromptAction().showToast({ message: '移除失败，请重试' });
+      } catch (_e2) { /* ignore */ }
     }
   }
 
@@ -774,7 +780,7 @@ export struct FavoritePage {
           bottom: AppSpace.Sm
         })
 
-        Refresh({ refreshing: $$this.isRefreshing }) {
+        Refresh({ refreshing: $$this.isRefreshing, builder: this.refreshIndicator() }) {
           Grid(this.listScroller) {
             LazyForEach(this.bookDataSource, (book: Book) => {
               GridItem() {
@@ -829,6 +835,18 @@ export struct FavoritePage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  refreshIndicator() {
+    Row() {
+      LoadingProgress()
+        .width(24)
+        .height(24)
+        .color(AppColor.Brand)
+    }
+    .height(56)
+    .justifyContent(FlexAlign.Center)
   }
 
   @Builder

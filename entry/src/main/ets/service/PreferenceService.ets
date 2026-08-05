@@ -40,10 +40,10 @@ export interface PlayHistoryItem {
   chapterId: string;
   progressMs: number;
   updatedAt: number;
-  // 章节标题:TOC 刷新/连载更新导致位置索引漂移时,用标题重新定位章节(id 兜底)
   chapterTitle?: string;
-  // 章节真实时长(ms):有声书 TOC 不带时长,prepared 时回写,用于冷启动滑块/百分比
   durationMs?: number;
+  sourceUrl?: string;
+  bookUrl?: string;
 }
 
 export interface LastPlayedItem {
@@ -70,13 +70,13 @@ export interface PlayProgress {
   bookId: string;
   chapterId: string;
   chapterTitle: string;
-  /** 章节在 book.chapters 中的索引(便于快速渲染"X集/总集数") */
   chapterIndex: number;
   positionMs: number;
   durationMs: number;
   updatedAt: number;
-  // 该书上次使用的播放倍速(每本书独立记忆),缺省视为 1.0
   speed?: number;
+  sourceUrl?: string;
+  bookUrl?: string;
 }
 
 /** 卡片侧需要的最小快照,主进程写,FormExtensionAbility 读后渲染 */
@@ -520,6 +520,34 @@ export class PreferenceService {
     } catch (_e) { /* ignore */ }
     PreferenceService.progressMemo.clear();
     PreferenceService.skipMemo.clear();
+    await s.flush();
+    PreferenceService.notifyFavoriteChanged();
+    PreferenceService.notifyHistoryChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });
+  }
+
+  /** 清空在线收藏与播放记录，保留本地导入书的收藏和每本书的跳过头尾设置。 */
+  static async clearOnlineFavoritesAndHistory(): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    // 保留 import_* 收藏 ID
+    const ids = await PreferenceService.getFavorites();
+    const importIds = ids.filter((id: string) => id.startsWith('import_'));
+    await s.put(KEY_FAVORITES, JSON.stringify(importIds));
+    await s.delete(KEY_HISTORY);
+    await s.delete(KEY_LAST_PLAYED);
+    await s.delete(KEY_WIDGET_PLAYER_SNAPSHOT);
+    await s.delete(KEY_CACHED_BOOKS);
+    // 仅删 progress_v1_*，保留 skip_v1_*
+    try {
+      const all = await s.getAll() as Record<string, Object>;
+      for (const key of Object.keys(all)) {
+        if (key.startsWith(KEY_PROGRESS_PREFIX)) {
+          await s.delete(key);
+        }
+      }
+    } catch (_e) { /* ignore */ }
+    PreferenceService.progressMemo.clear();
+    // skipMemo 不清——跳过头尾设置是用户主动配置
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
     PreferenceService.notifyHistoryChanged();

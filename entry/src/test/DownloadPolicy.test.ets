@@ -32,14 +32,14 @@ export default function downloadPolicyTest() {
     });
 
     it('rebases only paths inside the legacy download root', 0, () => {
-      const legacyRoot = '/data/storage/el2/base/files/downloads';
       const cacheRoot = '/data/storage/el2/base/cache/downloads';
-      expect(DownloadPolicy.rebaseStoragePath(`${legacyRoot}/audio/book/chapter.mp3`, legacyRoot, cacheRoot))
-        .assertEqual(`${cacheRoot}/audio/book/chapter.mp3`);
-      expect(DownloadPolicy.rebaseStoragePath(legacyRoot, legacyRoot, cacheRoot)).assertEqual(cacheRoot);
-      expect(DownloadPolicy.rebaseStoragePath(`${legacyRoot}_backup/audio.mp3`, legacyRoot, cacheRoot))
-        .assertEqual(`${legacyRoot}_backup/audio.mp3`);
-      expect(DownloadPolicy.rebaseStoragePath('', legacyRoot, cacheRoot)).assertEqual('');
+      const filesRoot = '/data/storage/el2/base/files/downloads';
+      expect(DownloadPolicy.rebaseStoragePath(`${cacheRoot}/audio/book/chapter.mp3`, cacheRoot, filesRoot))
+        .assertEqual(`${filesRoot}/audio/book/chapter.mp3`);
+      expect(DownloadPolicy.rebaseStoragePath(cacheRoot, cacheRoot, filesRoot)).assertEqual(filesRoot);
+      expect(DownloadPolicy.rebaseStoragePath(`${cacheRoot}_backup/audio.mp3`, cacheRoot, filesRoot))
+        .assertEqual(`${cacheRoot}_backup/audio.mp3`);
+      expect(DownloadPolicy.rebaseStoragePath('', cacheRoot, filesRoot)).assertEqual('');
     });
 
     it('rejects hls and non audio responses', 0, () => {

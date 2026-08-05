@@ -22,6 +22,11 @@ const MAX_URL_CACHE_SIZE = 50;
 const MAX_FILE_CACHE_COUNT = 12;      // 最多缓存 12 个音频文件（约 200MB 量级）
 const PRELOAD_FAILURE_COOLDOWN_MS = 30000;
 
+class ClearCacheResult {
+  deleted: number = 0;
+  failed: number = 0;
+}
+
 interface CacheEntry {
   resolvedUrl: string;
   headers: Record<string, string>;
@@ -51,6 +56,7 @@ export class ChapterCacheService {
   private fileRunningCount: number = 0;
   private fileQueue: Array<() => Promise<void>> = [];
   private appContext: common.Context | null = null;
+  private clearGen: number = 0;
 
   static getInstance(): ChapterCacheService {
     if (!ChapterCacheService.instance) {
@@ -82,21 +88,40 @@ export class ChapterCacheService {
     return this.durationCache.get(chapterId) ?? 0;
   }
 
-  clearAllCache(): void {
+  async clearAllCache(): Promise<ClearCacheResult> {
+    const myGen = ++this.clearGen;
     this.audioCache.clear();
     this.durationCache.clear();
     this.preloadFailureAt.clear();
+    this.queue = [];
+    this.fileQueue = [];
+    this.pendingTasks.clear();
+    const result = new ClearCacheResult();
+    const unlinkPromises: Promise<void>[] = [];
     for (const entry of this.fileCache.values()) {
-      this.deleteFileSafely(entry.filePath);
+      unlinkPromises.push(fileIo.unlink(entry.filePath).then((): void => { result.deleted++; }).catch((): void => { result.failed++; }));
     }
     this.fileCache.clear();
+    const ctx = this.appContext;
+    if (ctx) {
+      try {
+        const names = await fileIo.listFile(ctx.cacheDir);
+        for (const name of names) {
+          if (!name.startsWith('chap_')) continue;
+          const p = `${ctx.cacheDir}/${name}`;
+          unlinkPromises.push(fileIo.unlink(p).then((): void => { result.deleted++; }).catch((): void => { result.failed++; }));
+        }
+      } catch (_e) { /* ignore */ }
+    }
+    await Promise.all(unlinkPromises);
+    return result;
   }
 
   /**
    * 物理清除磁盘上的章节音频与图片缓存，并顺带清理旧版本遗留的 reader 文件。
    */
   async wipeDiskCaches(): Promise<void> {
-    this.clearAllCache();
+    await this.clearAllCache();
     const ctx = this.appContext;
     if (!ctx) return;
     await ChapterCacheService.deleteEntries(ctx.filesDir, true);
@@ -272,6 +297,7 @@ export class ChapterCacheService {
   /* ───────────── 内部：解析 + 下载 ───────────── */
 
   private async resolveAudioAndDownload(book: Book, chapter: Chapter): Promise<void> {
+    const myClearGen = this.clearGen;
     const taskKey = `audio_${chapter.id}`;
     this.pendingTasks.add(taskKey);
     try {
@@ -290,7 +316,9 @@ export class ChapterCacheService {
           timestamp: Date.now()
         });
         // URL 拿到后顺手把文件也下了
-        this.enqueueFile(() => this.downloadFile(book, chapter, audioUrl, requestInfo.headers));
+        if (myClearGen === this.clearGen) {
+          this.enqueueFile(() => this.downloadFileCheckGen(book, chapter, audioUrl, requestInfo.headers, myClearGen));
+        }
       } else {
         throw new Error('预加载未获取到有效音频地址');
       }
@@ -304,11 +332,18 @@ export class ChapterCacheService {
     }
   }
 
+  private downloadFileCheckGen(book: Book, chapter: Chapter, audioUrl: string,
+    headers: Record<string, string>, gen: number): Promise<void> {
+    if (gen !== this.clearGen) return Promise.resolve();
+    return this.downloadFile(book, chapter, audioUrl, headers);
+  }
+
   private async downloadFile(book: Book, chapter: Chapter, audioUrl: string,
     headers: Record<string, string> = {}): Promise<void> {
     if (!this.appContext) return;
     if (!audioUrl || !audioUrl.startsWith('http')) return;
     if (this.fileCache.has(chapter.id)) return;
+    const capturedGen = this.clearGen;
     const taskKey = `file_${chapter.id}`;
     this.pendingTasks.add(taskKey);
     let httpClient: http.HttpRequest | null = null;
@@ -343,6 +378,7 @@ export class ChapterCacheService {
       await fileIo.write(f.fd, buf);
       await fileIo.close(f);
       f = null;
+      if (capturedGen !== this.clearGen) return;
       this.fileCache.set(chapter.id, {
         filePath,
         pageUrl,

@@ -35,33 +35,40 @@ export class ListeningRecordCandidate {
     if (cover) this.cover = cover;
   }
 
-  addStats(listenSeconds: number, updatedAt: number, title: string, author: string, cover: string): void {
+  addStats(listenSeconds: number, updatedAt: number, title: string, author: string, cover: string,
+    sourceUrl?: string, bookUrl?: string): void {
     this.listenSeconds += Math.max(0, listenSeconds);
     if (updatedAt >= this.statsUpdatedAt) {
       this.statsUpdatedAt = updatedAt;
       if (title) this.title = title;
       if (author) this.author = author;
       if (cover) this.cover = cover;
+      if (sourceUrl) this.sourceUrl = sourceUrl;
+      if (bookUrl) this.bookUrl = bookUrl;
     }
   }
 
   setHistory(chapterId: string, chapterTitle: string, progressMs: number, durationMs: number,
-    updatedAt: number): void {
+    updatedAt: number, sourceUrl?: string, bookUrl?: string): void {
     this.historyChapterId = chapterId;
     this.historyChapterTitle = chapterTitle;
     this.historyProgressMs = progressMs;
     this.historyDurationMs = durationMs;
     this.historyUpdatedAt = updatedAt;
+    if (sourceUrl) this.sourceUrl = sourceUrl;
+    if (bookUrl) this.bookUrl = bookUrl;
   }
 
   setProgress(chapterId: string, chapterTitle: string, positionMs: number, durationMs: number,
-    chapterIndex: number, updatedAt: number): void {
+    chapterIndex: number, updatedAt: number, sourceUrl?: string, bookUrl?: string): void {
     this.progressChapterId = chapterId;
     this.progressChapterTitle = chapterTitle;
     this.progressPositionMs = positionMs;
     this.progressDurationMs = durationMs;
     this.progressChapterIndex = chapterIndex;
     this.progressUpdatedAt = updatedAt;
+    if (sourceUrl) this.sourceUrl = sourceUrl;
+    if (bookUrl) this.bookUrl = bookUrl;
   }
 }
 

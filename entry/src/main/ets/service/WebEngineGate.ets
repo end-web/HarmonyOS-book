@@ -1,7 +1,7 @@
 /**
  * WebEngineGate - 隐藏 Web 宿主的按需挂载门控
  *
- * 听友 FM 在直链解析失败时会使用隐藏 WebView 提取音频地址。
+ * 欢 FM 在直链解析失败时会使用隐藏 WebView 提取音频地址。
  * 本门控让宿主仅在首次真正需要时挂载。单调置位（false→true 永不回退），挂上不卸，
  * 避免卸载→controller 野引用的竞态。
  *
@@ -18,6 +18,6 @@ export class WebEngineGate {
     return WebEngineGate._instance;
   }
 
-  /** 需要听友音频嗅探 WebView。 */
+  /** 需要欢音频嗅探 WebView。 */
   @Trace needAudioExtractor: boolean = false;
 }

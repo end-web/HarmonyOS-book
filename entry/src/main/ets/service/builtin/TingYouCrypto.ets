@@ -1,5 +1,5 @@
 /**
- * TingYouCrypto - 听友FM(tingyou.fm) 接口加解密
+ * TingYouCrypto - 欢FM(tingyou.fm) 接口加解密
  *
  * 协议（已抓包逆向验证）：
  * - 响应体：XChaCha20-Poly1305，密文 hex 包在 {"payload":"<hex>"}。

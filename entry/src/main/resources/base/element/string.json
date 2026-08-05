@@ -130,7 +130,7 @@
     },
     {
       "name": "cloud_source_sheet_desc",
-      "value": "用于简·欢云源的搜索、书籍详情、章节和播放解析。听友 FM 不受此设置影响。"
+      "value": "用于简·欢云源的搜索、书籍详情、章节和播放解析。欢 FM 不受此设置影响。"
     },
     {
       "name": "cloud_source_api_label",
