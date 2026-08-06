@@ -8,6 +8,7 @@
  */
 
 import { rcp } from '@kit.RemoteCommunicationKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CharsetCodec } from '../../utils/CharsetCodec';
 
 const DEFAULT_UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
@@ -42,6 +43,32 @@ function getSession(): rcp.Session {
 }
 
 export class HttpClient {
+  /**
+   * 预建链：与目标域名的连接与业务逻辑并行建立，此后再用同一 session 访问同域
+   * 可跳过 DNS/TCP/TLS 握手。仅建立连接，不发送请求体、不接收响应。
+   *
+   * 复用条件（官方约束）：同一 session + 同一域名 + 网络状态未变化。
+   * 这里使用共享 sharedSession，保证与 request() 的连接池一致，天然可复用。
+   */
+  static preconnect(origin: string): void {
+    try {
+      const session = getSession();
+      const request = new rcp.Request(origin, 'GET');
+      request.connectOnly = true;
+      session.fetch(request).then((): void => {
+        // 仅表示连接已缓存，无业务响应
+      }).catch((err: Error) => {
+        const e = err as Error;
+        hilog.warn(0x11, 'HttpPreconnect', 'preconnect %{public}s failed: %{public}s',
+          origin, e?.message ?? JSON.stringify(err));
+      });
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(0x11, 'HttpPreconnect', 'preconnect %{public}s threw: %{public}s',
+        origin, e?.message ?? JSON.stringify(err));
+    }
+  }
+
   static async request(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
     const session = getSession();
 

@@ -14,6 +14,8 @@ import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
 import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
+import { NetworkPreconnect } from '../service/http/NetworkPreconnect';
+import { ServerAudioConfig } from '../service/builtin/ServerAudioConfig';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -55,6 +57,8 @@ export default class EntryAbility extends UIAbility {
     WidgetUpdater.setContext(this.context);
     // 注册唯一在线内容源：欢 FM。
     registerBuiltInSources();
+    // 冷启预建链：固定域名（欢FM 站点 + CDN）立即建链，与首屏请求并行。
+    NetworkPreconnect.prewarmBuiltIns();
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
     DownloadService.getInstance().setContext(this.context);
@@ -104,6 +108,9 @@ export default class EntryAbility extends UIAbility {
 
     await PreferenceService.init(this.context);
     hilog.info(DOMAIN, TAG, 'initServicesCore: PreferenceService ready, elapsed=%{public}dms', Date.now() - startTime);
+
+    // 云源地址此时才从 Preferences 读到真实值，用它预建链；否则自定义地址会失效。
+    NetworkPreconnect.prewarmCloud(await ServerAudioConfig.getApiBase());
 
     try {
       await StatsService.init(this.context);

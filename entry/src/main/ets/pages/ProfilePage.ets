@@ -6,6 +6,7 @@ import {
   ServerAudioConfig,
   ServerAudioConfigErrorCode
 } from '../service/builtin/ServerAudioConfig';
+import { NetworkPreconnect } from '../service/http/NetworkPreconnect';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
@@ -100,6 +101,7 @@ export struct ProfilePage {
       this.serverApiBase = normalized;
       this.serverApiDraft = normalized;
       this.isServerConfigVisible = false;
+      NetworkPreconnect.prewarmCustomHost(normalized);
       this.showToast($r('app.string.cloud_source_saved'));
     } catch (e) {
       this.showServerConfigError(e, true);
