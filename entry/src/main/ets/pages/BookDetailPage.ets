@@ -17,8 +17,8 @@ import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
-import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
+import { ChapterListItem, ChapterBadge, mapChapterBadge } from '../components/ChapterListItem';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -39,17 +39,18 @@ export struct BookDetailPage {
   @Local chapterQuery: string = '';
   @Local downloadTick: number = 0;
   @Local chapterDownloadTick: number = 0;
-  /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
+/** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
   private chapterListScroller: Scroller = new Scroller();
-  private chapterDataSource: ChapterDataSource = new ChapterDataSource();
+  /** @ReusableV2 章节列表：Repeat 入参。过滤后的展示数组；下载/播放状态变化时浅拷贝重建引用以触发重渲染。 */
+  @Local displayedChapters: Chapter[] = [];
   private downloadHandler = (evt: emitter.EventData): void => {
     const data = evt.data as DownloadUpdatePayload;
     if (!data || data.bookId !== this.bookId) return;
     this.downloadTick = this.downloadTick + 1;
     if (!data.progressOnly) {
       this.chapterDownloadTick = this.chapterDownloadTick + 1;
-      this.chapterDataSource.notifyDataReloaded();
+      this.refreshDisplayedChapters(this.displayedChapters);
     }
   };
 
@@ -69,8 +70,8 @@ export struct BookDetailPage {
     const cached = SearchCache.get(this.bookId);
     if (cached) {
       this.book = cached;
-      AudioService.getInstance().prewarmBookSource(cached);
-      this.chapterDataSource.setChapters(cached.chapters);
+AudioService.getInstance().prewarmBookSource(cached);
+      this.refreshDisplayedChapters(cached.chapters);
       const cachedRgb = ColorPickerUtils.getCached(cached.cover);
       if (cachedRgb) {
         this.applyCoverColor(cachedRgb);
@@ -91,7 +92,7 @@ export struct BookDetailPage {
       // 先快速渲染基础信息
       this.book = b;
       AudioService.getInstance().prewarmBookSource(b);
-      this.chapterDataSource.setChapters(b.chapters);
+      this.refreshDisplayedChapters(b.chapters);
       DownloadService.getInstance().hydrateBookDurations(b.id).catch((_e: Error): void => {});
       this.isFavorite = await PreferenceService.isFavorite(b.id);
       // 加载播放历史，用于"继续播放"入口
@@ -229,7 +230,7 @@ export struct BookDetailPage {
           skipOutro: book.skipOutro
         };
         this.book = cloned;
-        this.chapterDataSource.setChapters(cloned.chapters);
+        this.refreshDisplayedChapters(cloned.chapters);
         SearchCache.put(cloned);
         // 已收藏的在线书：同步把最新 toc 写回 cachedBooks,保证书架直接进播放器有完整章节
         if (this.isFavorite) {
@@ -314,16 +315,22 @@ export struct BookDetailPage {
     }, 50);
   }
 
-  /** 按关键词过滤章节,刷新 LazyForEach 数据源。空关键词回到完整列表。 */
+  /** 过滤后的章节展示数组（Repeat 入参）。返回新引用以触发 @ReusableV2 行重渲染。 */
+  private refreshDisplayedChapters(list: Chapter[]): void {
+    // 浅拷贝一份，保证 Repeat 通过数组引用变化重算每行（badge/进度/播放态）
+    this.displayedChapters = list.slice();
+  }
+
+  /** 按关键词过滤章节。空关键词回到完整列表，再推送展示数组给 Repeat。 */
   private applyChapterFilter(): void {
     if (!this.book) return;
     const q = this.chapterQuery.trim();
     if (!q) {
-      this.chapterDataSource.setChapters(this.book.chapters);
+      this.refreshDisplayedChapters(this.book.chapters);
       return;
     }
     const filtered = this.book.chapters.filter((c) => c.title.indexOf(q) >= 0);
-    this.chapterDataSource.setChapters(filtered);
+    this.refreshDisplayedChapters(filtered);
   }
 
   private async toggleFavorite(): Promise<void> {
@@ -991,7 +998,7 @@ export struct BookDetailPage {
       // 章节头部
       Row() {
         Text(this.chapterQuery.trim().length > 0
-          ? `匹配 ${this.chapterDataSource.totalCount()} 集`
+          ? `匹配 ${this.displayedChapters.length} 集`
           : `共 ${this.book!.chapters.length} 集`)
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
@@ -1037,7 +1044,7 @@ export struct BookDetailPage {
           }
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
-      } else if (this.chapterQuery.trim().length > 0 && this.chapterDataSource.totalCount() === 0) {
+      } else if (this.chapterQuery.trim().length > 0 && this.displayedChapters.length === 0) {
         Column() {
           Text('无匹配章节')
             .fontSize(AppFont.Body)
@@ -1047,11 +1054,15 @@ export struct BookDetailPage {
       } else {
         Stack({ alignContent: Alignment.BottomEnd }) {
           List({ space: 0, scroller: this.chapterListScroller }) {
-            LazyForEach(this.chapterDataSource, (ch: Chapter) => {
-              ListItem() {
-                this.buildChapterItem(ch)
-              }
-            }, (ch: Chapter) => this.chapterListKey(ch))
+            Repeat<Chapter>(this.displayedChapters)
+              .each((ri: RepeatItem<Chapter>) => {
+                ListItem() {
+                  // Repeat 与 @Builder 混用必须整体传 RepeatItem，只传 .item 会导致节点复用时渲染乱序
+                  this.buildChapterItem(ri)
+                }
+              })
+              .key((ch: Chapter) => this.chapterListKey(ch))
+              .virtualScroll({ reusable: true })
           }
           .width('100%')
           .height('100%')
@@ -1098,69 +1109,18 @@ export struct BookDetailPage {
   }
 
   @Builder
-  buildChapterItem(ch: Chapter) {
-    Row() {
-      Column({ space: 2 }) {
-        Text(ch.title)
-          .fontSize(AppFont.BodyL)
-          .fontColor(this.isPlayingChapter(ch) ? '#D4380D' : $r('sys.color.font_primary'))
-          .fontWeight(this.isPlayingChapter(ch) ? FontWeight.Medium : FontWeight.Normal)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Row({ space: AppSpace.Xs }) {
-          if (this.chapterDuration(ch) > 0) {
-            Text(this.formatDuration(this.chapterDuration(ch)))
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
-          }
-          if (this.isChapterDownloaded(ch) && (this.chapterDownloadRecord(ch)?.bytes ?? 0) > 0) {
-            Text(this.formatBytes(this.chapterDownloadRecord(ch)?.bytes ?? 0))
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
-          }
-          if (this.getPlayProgress(ch) > 0) {
-            Text(`已播 ${this.getPlayProgress(ch)}%`)
-              .fontSize(AppFont.Caption)
-              .fontColor('#D4380D')
-          }
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Row({ space: AppSpace.Xs }) {
-        if (this.isChapterDownloaded(ch)) {
-          Text($r('app.string.chapter_downloaded'))
-            .fontSize(AppFont.Caption)
-            .fontColor('#248A3D')
-            .backgroundColor('#14248A3D')
-            .borderRadius(AppRadius.Xs)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-        } else if (this.isChapterDownloading(ch)) {
-          Text($r('app.string.chapter_downloading'))
-            .fontSize(AppFont.Caption)
-            .fontColor(AppColor.Brand)
-            .backgroundColor('#140A84FF')
-            .borderRadius(AppRadius.Xs)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-        } else if (this.isChapterDownloadFailed(ch)) {
-          Text($r('app.string.chapter_download_failed'))
-            .fontSize(AppFont.Caption)
-            .fontColor('#D03050')
-            .backgroundColor('#14D03050')
-            .borderRadius(AppRadius.Xs)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-        }
-        if (this.isPlayingChapter(ch)) {
-          SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
-            .fontSize(18).fontColor(['#D4380D'])
-        }
-      }
-    }
-    .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: 14, bottom: 14 })
-    .onClick(() => this.openPrimaryAction(ch))
+  buildChapterItem(ri: RepeatItem<Chapter>) {
+    ChapterListItem({
+      title: ri.item.title,
+      isPlaying: this.isPlayingChapter(ri.item),
+      durationText: this.chapterDuration(ri.item) > 0 ? this.formatDuration(this.chapterDuration(ri.item)) : '',
+      bytesText: this.isChapterDownloaded(ri.item) && (this.chapterDownloadRecord(ri.item)?.bytes ?? 0) > 0
+        ? this.formatBytes(this.chapterDownloadRecord(ri.item)?.bytes ?? 0)
+        : '',
+      progressText: this.getPlayProgress(ri.item) > 0 ? `${this.getPlayProgress(ri.item)}%` : '',
+      badge: mapChapterBadge(this.isChapterDownloaded(ri.item), this.isChapterDownloading(ri.item), this.isChapterDownloadFailed(ri.item)),
+      onTap: () => this.openPrimaryAction(ri.item)
+    })
   }
 
   @Builder

@@ -6,6 +6,7 @@ import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Them
  * 点击进入详情；按压有微缩反馈；封面通过 geometryTransition 飞向详情页
  */
 @ComponentV2
+@ReusableV2
 export struct BookCard {
   @Param book: Book = {} as Book;
   @Param cardWidth: number = 110;
@@ -31,6 +32,13 @@ export struct BookCard {
     } else {
       this.appeared = true;
     }
+  }
+
+  /** 复用（滚出再滚入）时不重放入场动画；同时重置上一本书的图片加载失败态。 */
+  aboutToReuse(): void {
+    this.pressed = false;
+    this.imageLoadFailed = false;
+    this.appeared = true;
   }
 
   static resetAnimations(): void {

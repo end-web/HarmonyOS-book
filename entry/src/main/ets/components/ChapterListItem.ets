@@ -1,0 +1,105 @@
+/**
+ * ChapterListItem - 详情页/播放器章节列表项（复用组件）
+ *
+ * 所有依赖父页面的派生展示值（播放中、已下载、下载中、失败、已播进度、音长）均为 @Param，
+ * 由父组件算好传入，本组件只做静态渲染与点击转发，避免在复用节点上重跑父页面查询逻辑。
+ *
+ * @ReusableV2 复用与回收自动重置内部状态；本组件无可变 @Local 依赖，
+ * aboutToReuse 无需手动清理（官方保证复用前状态已重置）。
+ */
+import { AppFont, AppSpace, AppRadius, AppColor } from '../theme/Theme';
+
+export enum ChapterBadge {
+  None = 0,
+  Downloaded = 1,
+  Downloading = 2,
+  Failed = 3
+}
+
+@ComponentV2
+@ReusableV2
+export struct ChapterListItem {
+  @Param title: string = '';
+  @Param isPlaying: boolean = false;
+  /** 时长文案；为空则隐藏该行 */
+  @Param durationText: string = '';
+  /** 已下载体积文案；为空则隐藏 */
+  @Param bytesText: string = '';
+  /** 已播进度百分比文案；为空则隐藏 */
+  @Param progressText: string = '';
+  @Param badge: ChapterBadge = ChapterBadge.None;
+  @Event onTap: () => void = () => {};
+
+  build() {
+    Row() {
+      Column({ space: 2 }) {
+        Text(this.title)
+          .fontSize(AppFont.BodyL)
+          .fontColor(this.isPlaying ? '#D4380D' : $r('sys.color.font_primary'))
+          .fontWeight(this.isPlaying ? FontWeight.Medium : FontWeight.Normal)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Row({ space: AppSpace.Xs }) {
+          if (this.durationText.length > 0) {
+            Text(this.durationText)
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
+          if (this.bytesText.length > 0) {
+            Text(this.bytesText)
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
+          if (this.progressText.length > 0) {
+            Text(`已播 ${this.progressText}`)
+              .fontSize(AppFont.Caption)
+              .fontColor('#D4380D')
+          }
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Row({ space: AppSpace.Xs }) {
+        if (this.badge === ChapterBadge.Downloaded) {
+          Text($r('app.string.chapter_downloaded'))
+            .fontSize(AppFont.Caption)
+            .fontColor('#248A3D')
+            .backgroundColor('#14248A3D')
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        } else if (this.badge === ChapterBadge.Downloading) {
+          Text($r('app.string.chapter_downloading'))
+            .fontSize(AppFont.Caption)
+            .fontColor(AppColor.Brand)
+            .backgroundColor('#140A84FF')
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        } else if (this.badge === ChapterBadge.Failed) {
+          Text($r('app.string.chapter_download_failed'))
+            .fontSize(AppFont.Caption)
+            .fontColor('#D03050')
+            .backgroundColor('#14D03050')
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        }
+        if (this.isPlaying) {
+          SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
+            .fontSize(18).fontColor(['#D4380D'])
+        }
+      }
+    }
+    .width('100%')
+    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: 14, bottom: 14 })
+    .onClick(() => this.onTap())
+  }
+}
+
+/** 便捷工厂：把父页面派生值映射成本组件的 badge 入参。 */
+export function mapChapterBadge(downloaded: boolean, downloading: boolean, failed: boolean): ChapterBadge {
+  if (downloaded) return ChapterBadge.Downloaded;
+  if (downloading) return ChapterBadge.Downloading;
+  if (failed) return ChapterBadge.Failed;
+  return ChapterBadge.None;
+}
