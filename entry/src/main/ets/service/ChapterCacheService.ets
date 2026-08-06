@@ -68,10 +68,19 @@ export class ChapterCacheService {
   setPreloadCount(forward: number, backward: number = 0): void {
     PRE_DOWNLOAD_FORWARD = forward;
     PRE_DOWNLOAD_BACKWARD = backward;
+    if (forward <= 0) {
+      // 不预加载时丢弃尚未开始的 URL 解析任务；正在执行的请求自然结束。
+      this.queue = [];
+      this.fileQueue = [];
+    }
   }
 
   getPreloadForward(): number {
     return PRE_DOWNLOAD_FORWARD;
+  }
+
+  isPreloadEnabled(): boolean {
+    return PRE_DOWNLOAD_FORWARD > 0;
   }
 
   isChapterCached(chapterId: string): boolean {
@@ -189,7 +198,7 @@ export class ChapterCacheService {
   }
 
   preloadAudioChapters(book: Book, currentIndex: number): void {
-    if (!book.sourceUrl) return;
+    if (!book.sourceUrl || PRE_DOWNLOAD_FORWARD <= 0) return;
     const start = Math.max(0, currentIndex - PRE_DOWNLOAD_BACKWARD);
     const end = Math.min(book.chapters.length - 1, currentIndex + PRE_DOWNLOAD_FORWARD);
     for (let i = start; i <= end; i++) {
@@ -245,6 +254,7 @@ export class ChapterCacheService {
   /** 主动给某个章节下载文件（AudioService 在 playChapter 时调用，让当前章节也能落盘） */
   ensureFileCached(book: Book, chapter: Chapter, resolvedUrl: string,
     headers: Record<string, string> = {}): void {
+    if (!this.isPreloadEnabled()) return;
     if (!resolvedUrl || !resolvedUrl.startsWith('http')) return;
     const pageUrl = chapter.originSourceValue || chapter.source.value;
     if (this.getAudioFilePath(book.id, chapter.id, pageUrl)) return;

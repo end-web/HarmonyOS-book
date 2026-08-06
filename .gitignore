@@ -43,3 +43,9 @@ reader_shot.png
 
 # skill 本地依赖
 .claude/skills/*/node_modules/
+
+# 本地缓存与工具目录
+/.cache/
+/.deveco/
+/icon_backup/
+/icon_backup_entry/

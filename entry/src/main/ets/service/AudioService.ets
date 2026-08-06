@@ -82,6 +82,16 @@ export class AudioService {
    *  正在解析音频 URL（耗时长，比如 WebView 嗅探）的旧任务跑完后会用这个比对，
    *  如果不是最新代次就直接丢弃，不再装载到 AVPlayer，避免"切了新章节但旧的还在响"。 */
   private playGen: number = 0;
+  /** 已解析 URL 加载失败(临时签名链接过期等)时的自动重试限流:
+   *  同一章节在冷却时间内只自动重试一次,避免 AVPlayer error → 重试 → error 死循环 */
+  private autoRetryChapterId: string = '';
+  private autoRetryAt: number = 0;
+  private static readonly AUTO_RETRY_COOLDOWN_MS: number = 3000;
+
+  private canAutoRetryLoad(chapterId: string): boolean {
+    return this.autoRetryChapterId !== chapterId
+      || Date.now() - this.autoRetryAt >= AudioService.AUTO_RETRY_COOLDOWN_MS;
+  }
   /** 持久化代次：clearOnlineFavoritesAndHistory 期间冻结写入，防止清理后被 tick/persistHistory 写回。 */
   private persistGen: number = 0;
   private frozenPersistGen: number = -1;
@@ -360,16 +370,31 @@ export class AudioService {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'AVPlayer error: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
-      if (this.state) {
-        this.state.isLoading = false;
-        this.state.isPlaying = false;
-        // 解析后的临时音频 URL 可能已过期（如 aikeu 的签名链接），把这个章节的缓存清掉，
-        // 用户下次按播放会用 originSourceValue 重新去解析一份新的音频 URL。
-        const ch = this.state.currentChapter;
-        if (ch && ch.originSourceValue) {
-          try { ChapterCacheService.getInstance().clearChapter(ch.id); } catch (_e) { /* ignore */ }
-          ch.source = { type: 'url', value: ch.originSourceValue };
-        }
+      if (!this.state) return;
+      const ch = this.state.currentChapter;
+      const book = this.state.currentBook;
+      // 是否在用"已解析/缓存过的 URL"（值 != 原始章节页 URL）加载
+      const usingResolvedUrl = !!ch && ch.source.type === 'url'
+        && !!ch.originSourceValue && ch.source.value !== ch.originSourceValue;
+      this.state.isLoading = false;
+      this.state.isPlaying = false;
+      // 解析后的临时音频 URL 可能已过期（如 aikeu 的签名链接），把这个章节的缓存清掉，
+      // 之后用 originSourceValue 重新解析一份新的音频 URL。
+      if (ch && ch.originSourceValue) {
+        try { ChapterCacheService.getInstance().clearChapter(ch.id); } catch (_e) { /* ignore */ }
+        ch.source = { type: 'url', value: ch.originSourceValue };
+      }
+      // 加载/解析过的 URL 失效（缓存或上次解析的临时链接）:清缓存后自动重新解析一次再播，
+      // loading 不会提前消失（playChapter 内会重新置 true）；重试仍失败则由限流阻止再次自动重试。
+      if (book && ch && usingResolvedUrl && this.canAutoRetryLoad(ch.id)) {
+        this.autoRetryChapterId = ch.id;
+        this.autoRetryAt = Date.now();
+        hilog.warn(DOMAIN, TAG, 'AVPlayer error with resolved URL, auto re-resolve chapter: %{public}s', ch.title);
+        this.playChapter(book, ch).catch((err2: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'auto retry playChapter failed: %{public}s',
+            err2 && err2.message ? err2.message : JSON.stringify(err2));
+        });
+        return;
       }
       this.stopTick();
     });
@@ -629,10 +654,17 @@ export class AudioService {
       await this.replaySameChapterFromStart();
       return;
     }
+    // 先翻转加载状态，覆盖进度落盘、播放器 reset 和 URL 解析的等待时间。
+    this.beginChapterLoading();
     // 切书或切章节前先把上一进度落盘,避免 reset 后丢数据
-    await this.flushBeforeSwitch(book, chapter);
-    const skipIntroMs = (book.skipIntro ?? 0) * 1000;
-    return this.doPlayChapter(book, chapter, skipIntroMs);
+    try {
+      await this.flushBeforeSwitch(book, chapter);
+      const skipIntroMs = (book.skipIntro ?? 0) * 1000;
+      return await this.doPlayChapter(book, chapter, skipIntroMs);
+    } catch (err) {
+      if (this.state) this.state.isLoading = false;
+      throw err as Error;
+    }
   }
 
   /** 同书+同章节复用:不 reset。视 player 状态决定 seek/play */
@@ -774,9 +806,12 @@ export class AudioService {
    * 给用户"瞬间切换"的观感。
    */
   private isFastSwitchPath(book: Book, chapter: Chapter): boolean {
-    if (chapter.source.type === 'file' || chapter.source.type === 'rawfile') return true;
+    if (chapter.source.type === 'rawfile') return true;
     if (DownloadService.getInstance().getDownloadedFilePath(book.id, chapter)) return true;
     const cache = ChapterCacheService.getInstance();
+    // 关闭预加载后，临时章节缓存不参与切章命中，确保每次切章都重新请求书源接口。
+    if (!cache.isPreloadEnabled()) return false;
+    if (chapter.source.type === 'file') return true;
     const pageUrl = chapter.originSourceValue || chapter.source.value;
     if (cache.getAudioFilePath(book.id, chapter.id, pageUrl)) return true;
     if (cache.getAudioUrl(chapter.id)) return true;
@@ -817,9 +852,10 @@ export class AudioService {
       this.state.durationMs = 0;
       this.state.isPlaying = false;
       this.applyCachedCoverColor(book.cover);
-      // 快路径:不显示 loading,UI 直接用 savedDurationMs + progressMs 撑住,
-      // 等 prepared 回调把 durationMs/playing 翻新即可,观感"瞬间切换"
-      this.state.isLoading = !fastPath;
+      // 切章/切书一律翻 loading:即使 URL 已缓存(快路径),音频仍要缓冲/落盘,
+      // 页面若无提示用户会以为卡死。真正出声(prepared→playing)后清掉,
+      // 本地文件秒切时只是闪一下,不影响"瞬间切换"观感。
+      this.state.isLoading = true;
       AVSessionService.getInstance().updateMetadata(book, chapter);
       // 早写 PlaybackStore:让正在等待的页面立刻看到"当前书已切换"
       PlaybackStore.getInstance().update(
@@ -828,20 +864,27 @@ export class AudioService {
         chapter.source?.value ?? '', false
       );
 
-      // 2) 解析音频 URL
-      const audioHeaders = await this.resolveAudioUrl(book, chapter);
-      if (myGen !== this.playGen) {
-        // 被抢占:如果新 gen 走的也是慢路径,它的 isLoading 已经是 true;
-        // 如果新 gen 走快路径,它的 isLoading 已经是 false。
-        // 这里不碰 isLoading,交给新 gen 管理。
-        return;
+      // 2) 解析音频 URL（首次解析未变化时自动重试一次）
+      const maxAttempts: number = 2;
+      let audioHeaders: Record<string, string> = {};
+      let resolved: boolean = false;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        audioHeaders = await this.resolveAudioUrl(book, chapter);
+        if (myGen !== this.playGen) {
+          return;
+        }
+        if (chapter.source.type !== 'url' || !chapter.originSourceValue
+          || chapter.source.value !== chapter.originSourceValue) {
+          resolved = true;
+          break;
+        }
+        if (attempt < maxAttempts - 1) {
+          hilog.warn(DOMAIN, TAG, 'resolveAudioUrl source unchanged (attempt %d/%d), retrying',
+            attempt + 1, maxAttempts);
+        }
       }
-      // URL 解析失败兜底：cancelPending 可能把正在跑的 WebView 嗅探取消掉，
-      // resolveAudioUrl 内部 catch 后不抛异常，chapter.source 仍是原始页面 URL。
-      // 此时不能把页面 URL 当音频 URL 喂给 AVPlayer——player 会无限卡在 loading。
-      if (chapter.source.type === 'url' && chapter.originSourceValue
-        && chapter.source.value === chapter.originSourceValue) {
-        hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed (source unchanged), aborting playback');
+      if (!resolved) {
+        hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed after %d attempts, aborting playback', maxAttempts);
         this.state.isLoading = false;
         this.state.isPlaying = false;
         this.emitPlayFailed(book.id, chapter.id, '音频地址获取失败，请点击重试');
@@ -883,35 +926,47 @@ export class AudioService {
    * 重启后这条 URL 已过期，必须用 originSourceValue 里保存的章节页 URL 重新解析。
    */
   private async resolveAudioUrl(book: Book, chapter: Chapter): Promise<Record<string, string>> {
-    if (chapter.source.type !== 'url') return {};
+    const cache = ChapterCacheService.getInstance();
+    if (chapter.source.type !== 'url') {
+      // 预加载曾把章节改成本地临时文件；关闭预加载后恢复章节页 URL，
+      // 避免旧缓存绕过本次接口请求。整本下载/本地导入不受影响。
+      const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
+      if (chapter.source.type === 'file' && !downloadedPath && !cache.isPreloadEnabled()
+        && chapter.originSourceValue) {
+        chapter.source = { type: 'url', value: chapter.originSourceValue };
+      } else {
+        return {};
+      }
+    }
     if (!book.sourceUrl) return {};
     // 第一次解析，把当前的 source.value 备份成 originSourceValue（永远是章节页 URL）
     if (!chapter.originSourceValue) {
       chapter.originSourceValue = chapter.source.value;
     }
-    const cache = ChapterCacheService.getInstance();
     // 1) 优先看长期下载文件，保证整本下载后离线播放稳定
     const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
     if (downloadedPath) {
       chapter.source = { type: 'file', value: downloadedPath };
       return {};
     }
-    // 2) 再看临时本地音频文件缓存（预加载到沙箱），最快路径，离线也能播
-    const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
-    if (filePath) {
-      chapter.source = { type: 'file', value: filePath };
-      return {};
+    if (cache.isPreloadEnabled()) {
+      // 2) 再看临时本地音频文件缓存（预加载到沙箱），最快路径，离线也能播
+      const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
+      if (filePath) {
+        chapter.source = { type: 'file', value: filePath };
+        return {};
+      }
+      // 3) URL 缓存命中
+      const cachedUrl = cache.getAudioUrl(chapter.id);
+      if (cachedUrl) {
+        chapter.source = { type: 'url', value: cachedUrl };
+        const cachedHeaders = cache.getAudioHeaders(chapter.id);
+        // 顺手把这个章节的文件也缓到本地
+        cache.ensureFileCached(book, chapter, cachedUrl, cachedHeaders);
+        return cachedHeaders;
+      }
     }
-    // 3) URL 缓存命中
-    const cachedUrl = cache.getAudioUrl(chapter.id);
-    if (cachedUrl) {
-      chapter.source = { type: 'url', value: cachedUrl };
-      const cachedHeaders = cache.getAudioHeaders(chapter.id);
-      // 顺手把这个章节的文件也缓到本地
-      cache.ensureFileCached(book, chapter, cachedUrl, cachedHeaders);
-      return cachedHeaders;
-    }
-    // 4) 都没有，从书源解析
+    // 4) 未启用预加载时也会从这里进入，每次切章重新调用书源解析接口。
     try {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
@@ -1327,8 +1382,20 @@ export class AudioService {
       await this.seekAndPlaySameChapter(seekMs);
       return;
     }
-    await this.flushBeforeSwitch(book, chapter);
-    return this.doPlayChapter(book, chapter, seekMs);
+    this.beginChapterLoading();
+    try {
+      await this.flushBeforeSwitch(book, chapter);
+      return await this.doPlayChapter(book, chapter, seekMs);
+    } catch (err) {
+      if (this.state) this.state.isLoading = false;
+      throw err as Error;
+    }
+  }
+
+  private beginChapterLoading(): void {
+    if (!this.state) return;
+    this.state.isLoading = true;
+    this.state.isPlaying = false;
   }
 
   /** 同书+同章节复用:仅 seek + 让它播 */

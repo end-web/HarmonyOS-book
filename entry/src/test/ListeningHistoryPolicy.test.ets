@@ -53,5 +53,25 @@ export default function listeningHistoryPolicyTest(): void {
         .assertEqual('search_audio_same-c8');
       expect(BookIdentity.chapterIndexFromId('search_audio_same-c8')).assertEqual(8);
     });
+
+    it('merges record with source identity and record without via derived id', 0, () => {
+      const derivedId = BookIdentity.onlineAudioBookId('builtin://source', 'book/200');
+      const oldItem = candidate(derivedId, '', '', false);
+      oldItem.addStats(20, 100, '旧记录', '', '');
+      const newItem = candidate('some_other_id', 'builtin://source', 'book/200', false);
+      newItem.addStats(30, 200, '新记录', '', '', 'builtin://source', 'book/200');
+      const merged = ListeningHistoryPolicy.merge([oldItem, newItem]);
+      expect(merged.length).assertEqual(1);
+      expect(merged[0].listenSeconds).assertEqual(50);
+    });
+
+    it('does not merge when one side has source identity that maps to a different book', 0, () => {
+      const oldItem = candidate('search_audio_unrelated', '', '', false);
+      oldItem.addStats(10, 100, '无关旧记录', '', '');
+      const newItem = candidate('another_id', 'builtin://source', 'book/999', false);
+      newItem.addStats(20, 200, '新记录', '', '', 'builtin://source', 'book/999');
+      const merged = ListeningHistoryPolicy.merge([oldItem, newItem]);
+      expect(merged.length).assertEqual(2);
+    });
   });
 }

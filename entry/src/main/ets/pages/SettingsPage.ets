@@ -50,6 +50,7 @@ interface PreloadOption {
 }
 
 const PRELOAD_OPTIONS: PreloadOption[] = [
+  { count: 0, label: '不预加载' },
   { count: 1, label: '1章' },
   { count: 3, label: '3章' },
   { count: 5, label: '5章' },
@@ -364,7 +365,7 @@ export struct SettingsPage {
 
         this.buildSelectItem(
           '预加载章节数',
-          '收听时提前缓存后续音频章节',
+          this.preloadCount === 0 ? '每次切换章节时重新请求音频地址' : '收听时提前缓存后续音频章节',
           PRELOAD_OPTIONS.map((opt: PreloadOption): SelectOption => { return { value: opt.label }; }),
           PRELOAD_OPTIONS.findIndex((opt: PreloadOption) => opt.count === this.preloadCount),
           (index: number) => this.setPreloadCount(PRELOAD_OPTIONS[index].count)

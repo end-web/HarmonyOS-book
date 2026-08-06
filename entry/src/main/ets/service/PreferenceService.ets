@@ -610,7 +610,11 @@ export class PreferenceService {
 
   static async getPreloadChapters(): Promise<number> {
     const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_PRELOAD_CHAPTERS, 3) as number;
+    const count = await s.get(KEY_PRELOAD_CHAPTERS, 3) as number;
+    if (count === 0 || count === 1 || count === 3 || count === 5 || count === 10) {
+      return count;
+    }
+    return 3;
   }
 
   static async setPreloadChapters(count: number): Promise<void> {

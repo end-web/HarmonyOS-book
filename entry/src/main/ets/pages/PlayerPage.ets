@@ -420,6 +420,13 @@ export struct PlayerPage {
     return this.playerState.savedDurationMs;
   }
 
+  /** 加载中或尚未拿到真实时长时，进度始终从 0 开始，避免沿用上一章的末尾位置。 */
+  private progressValueMs(): number {
+    if (this.playerState.isLoading || this.playerState.durationMs <= 0) return 0;
+    const value = this.seeking ? this.seekValueMs : this.playerState.progressMs;
+    return Math.max(0, Math.min(value, this.playerState.durationMs));
+  }
+
   private async togglePlay(): Promise<void> {
     await AudioService.getInstance().toggle();
   }
@@ -972,10 +979,8 @@ export struct PlayerPage {
   buildProgress() {
     Column({ space: AppSpace.Xxs }) {
       Slider({
-        value: this.seeking ? this.seekValueMs : this.playerState.progressMs,
+        value: this.progressValueMs(),
         min: 0,
-        // savedDurationMs 兜底:prepared 之前 durationMs=0 会让滑块停在 0,视觉像"从头加载",
-        // 用持久化的旧时长撑住,prepared 后 durationMs 一变就被覆盖
         max: this.sliderMaxMs(),
         step: 1000,
         style: SliderStyle.OutSet
@@ -985,7 +990,7 @@ export struct PlayerPage {
         .blockColor('#FFFFFF')
         .blockSize({ width: 18, height: 18 })
         .trackThickness(6)
-        .enabled(this.playerState.durationMs > 0)
+        .enabled(this.playerState.durationMs > 0 && !this.playerState.isLoading)
         .onChange((value: number, mode: SliderChangeMode) => {
           if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
             this.seeking = true;
@@ -993,13 +998,12 @@ export struct PlayerPage {
           } else if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
             this.seekValueMs = value;
             AudioService.getInstance().seek(value);
-            // 留 200ms 给 AVPlayer 真正 seek 完成,避免旧 timeUpdate 让滑块回弹
             setTimeout(() => { this.seeking = false; }, 200);
           }
         })
 
       Row() {
-        Text(this.formatMs(this.seeking ? this.seekValueMs : this.playerState.progressMs))
+        Text(this.formatMs(this.progressValueMs()))
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF')
         Blank()
@@ -1008,9 +1012,7 @@ export struct PlayerPage {
           .fontColor('#FFFFFF')
       }
       .width('100%')
-      // 左右内缩 ~ block 半径,让时间对齐到轨道两端而非贴边
       .padding({ left: 9, right: 9 })
-      // 再往上靠一点点,缩小与进度条的间距
       .margin({ top: -3 })
     }
     .width('100%')

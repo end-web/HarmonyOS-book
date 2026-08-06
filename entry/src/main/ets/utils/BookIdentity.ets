@@ -19,9 +19,24 @@ export class BookIdentity {
     if (leftHasSourceIdentity && rightHasSourceIdentity) {
       return leftSourceUrl === rightSourceUrl && leftBookUrl === rightBookUrl;
     }
+    if (leftHasSourceIdentity) {
+      const derivedId = BookIdentity.onlineAudioBookId(leftSourceUrl, leftBookUrl);
+      if (derivedId === rightId || BookIdentity.legacyIdMatches(derivedId, rightId)) return true;
+    }
+    if (rightHasSourceIdentity) {
+      const derivedId = BookIdentity.onlineAudioBookId(rightSourceUrl, rightBookUrl);
+      if (derivedId === leftId || BookIdentity.legacyIdMatches(derivedId, leftId)) return true;
+    }
     const leftAlias = BookIdentity.legacyAudioAlias(leftId);
     const rightAlias = BookIdentity.legacyAudioAlias(rightId);
     return leftAlias.length > 0 && leftAlias === rightAlias;
+  }
+
+  private static legacyIdMatches(derivedId: string, candidateId: string): boolean {
+    if (derivedId === candidateId) return true;
+    const derivedAlias = BookIdentity.legacyAudioAlias(derivedId);
+    const candidateAlias = BookIdentity.legacyAudioAlias(candidateId);
+    return derivedAlias.length > 0 && derivedAlias === candidateAlias;
   }
 
   static legacyAudioAlias(bookId: string): string {
