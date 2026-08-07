@@ -502,6 +502,23 @@ export class DataService {
     await DataService.deleteToc(bookId);
   }
 
+  /** 系统备份只带在线书元数据壳，章节在目标设备按需重新获取。 */
+  static async exportBackupBookShells(): Promise<Book[]> {
+    const books = await DataService.loadCachedBooks();
+    return books
+      .filter((book: Book) => !!book && !!book.id && !book.id.startsWith('import_'))
+      .map((book: Book): Book => DataService.slimBook(book));
+  }
+
+  static async restoreBackupBookShells(books: Book[]): Promise<void> {
+    const current = await DataService.loadCachedBooks();
+    const restored = books
+      .filter((book: Book) => !!book && !!book.id && !book.id.startsWith('import_'))
+      .map((book: Book): Book => DataService.slimBook(book));
+    DataService.cachedBooksMem = DataService.mergeBookLists(restored, current).slice(0, MAX_CACHED_BOOKS);
+    await DataService.writeIndex(DataService.cachedBooksMem);
+  }
+
   /**
    * 在 book.chapters 中定位历史记录对应的章节索引。
    * 章节 id 是位置型(`${book.id}-c${idx}`),连载更新/TOC 重排后会漂移,

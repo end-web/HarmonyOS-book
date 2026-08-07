@@ -10,6 +10,7 @@ import { StatsService } from '../service/StatsService';
 import { SearchCache } from '../utils/SearchCache';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 
 interface ThemeOption {
   mode: number;
@@ -72,9 +73,44 @@ export struct SettingsPage {
   @Local isClearingCache: boolean = false;
   @Local isClearingBookshelf: boolean = false;
   @Local isClearingDownloads: boolean = false;
+  @Local viewportWidth: number = 0;
+  @Local viewportHeight: number = 0;
+  private viewportUpdateTimerId: number = -1;
 
   aboutToAppear(): void {
     this.loadPrefs();
+  }
+
+  aboutToDisappear(): void {
+    this.cancelViewportUpdateTimer();
+  }
+
+  private cancelViewportUpdateTimer(): void {
+    if (this.viewportUpdateTimerId !== -1) {
+      clearTimeout(this.viewportUpdateTimerId);
+      this.viewportUpdateTimerId = -1;
+    }
+  }
+
+  private handleViewportSizeChange(newValue: SizeOptions): void {
+    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number') return;
+    const width: number = newValue.width;
+    const height: number = newValue.height;
+    if (Math.abs(width - this.viewportWidth) < 1 && Math.abs(height - this.viewportHeight) < 1) return;
+    this.cancelViewportUpdateTimer();
+    this.viewportUpdateTimerId = setTimeout(() => {
+      this.viewportUpdateTimerId = -1;
+      this.viewportWidth = width;
+      this.viewportHeight = height;
+    }, 0);
+  }
+
+  private isCompactLayout(): boolean {
+    return AdaptiveLayout.isCompact(this.viewportWidth, this.viewportHeight);
+  }
+
+  private horizontalPadding(): number {
+    return AdaptiveLayout.isCompact(this.viewportWidth, this.viewportHeight) ? AppSpace.Sm : AppSpace.Md;
   }
 
   private async loadPrefs(): Promise<void> {
@@ -125,6 +161,25 @@ export struct SettingsPage {
     } finally {
       this.isClearingCache = false;
     }
+  }
+
+  private showAudioStorageCleanup(): void {
+    const prompt = this.getUIContext().getPromptAction();
+    prompt.showDialog({
+      title: $r('app.string.settings_audio_storage_cleanup'),
+      message: $r('app.string.settings_audio_storage_cleanup_message'),
+      buttons: [
+        { text: $r('app.string.common_cancel'), color: '#8F8F8F' },
+        { text: $r('app.string.settings_clear_preload_cache'), color: AppColor.Brand },
+        { text: $r('app.string.settings_clear_downloads'), color: '#FF4444' }
+      ]
+    }).then((result) => {
+      if (result.index === 1) {
+        this.clearCache();
+      } else if (result.index === 2) {
+        this.confirmClearDownloads();
+      }
+    }).catch(() => { /* ignore */ });
   }
 
   private confirmClearBookshelf(): void {
@@ -212,16 +267,16 @@ export struct SettingsPage {
 
       if (this.isLoaded) {
         Scroll() {
-          Column({ space: AppSpace.Lg }) {
+          Column({ space: AdaptiveLayout.sectionSpacing(this.viewportWidth, this.viewportHeight) }) {
             this.buildAppearanceGroup()
             this.buildLaunchGroup()
             this.buildPlaybackGroup()
           }
           .width('100%')
           .padding({
-            left: AppSpace.Md,
-            right: AppSpace.Md,
-            top: AppSpace.Sm,
+            left: this.horizontalPadding(),
+            right: this.horizontalPadding(),
+            top: this.isCompactLayout() ? 0 : AppSpace.Sm,
             bottom: AppSpace.Xl
           })
         }
@@ -234,6 +289,9 @@ export struct SettingsPage {
     .height('100%')
     .backgroundColor($r('sys.color.background_secondary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
+      this.handleViewportSizeChange(newValue);
+    })
   }
 
   @Builder
@@ -254,7 +312,7 @@ export struct SettingsPage {
       top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
       left: AppSpace.Md,
       right: AppSpace.Md,
-      bottom: AppSpace.Md
+      bottom: this.isCompactLayout() ? AppSpace.Sm : AppSpace.Md
     })
   }
 
@@ -373,11 +431,12 @@ export struct SettingsPage {
 
         this.buildDivider()
 
-        this.buildActionItem('清除预加载缓存', '释放已缓存的章节音频', () => this.clearCache(), this.isClearingCache)
-
-        this.buildDivider()
-
-        this.buildActionItem('清除下载内容', '删除整本/单章离线音频，保留书架和记录', () => this.confirmClearDownloads(), this.isClearingDownloads)
+        this.buildActionItem(
+          $r('app.string.settings_audio_storage_cleanup'),
+          $r('app.string.settings_audio_storage_cleanup_desc'),
+          () => this.showAudioStorageCleanup(),
+          this.isClearingCache || this.isClearingDownloads
+        )
 
         this.buildDivider()
 
@@ -466,17 +525,15 @@ export struct SettingsPage {
   }
 
   @Builder
-  buildActionItem(title: string, subtitle: string, onAction: () => void, isClearing: boolean = false) {
+  buildActionItem(title: ResourceStr, subtitle: ResourceStr, onAction: () => void, isClearing: boolean = false) {
     Row() {
       Column({ space: 2 }) {
         Text(title)
           .fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary'))
-        if (subtitle.length > 0) {
-          Text(subtitle)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-        }
+        Text(subtitle)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)

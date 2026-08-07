@@ -21,6 +21,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
 import { ChapterCacheService, EVT_CHAPTER_DURATION_UPDATED } from '../service/ChapterCacheService';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
@@ -113,6 +114,9 @@ export struct PlayerPage {
   @Local listOffsetFromCurrent: number = 0;
   /** 章节搜索关键词；非空时章节列表按标题过滤 */
   @Local chapterSearchKeyword: string = '';
+  /** 根容器实时尺寸，用于跟随小窗缩放切换紧凑布局。 */
+  @Local viewportWidth: number = 0;
+  @Local viewportHeight: number = 0;
 
   private context: common.UIAbilityContext | null = null;
   private lastCoverKey: string = '';
@@ -142,6 +146,8 @@ export struct PlayerPage {
   };
   /** 延迟加载 timer id,用户立即返回时需要 cancel,避免阻塞返回响应 */
   private deferredLoadTimerId: number = -1;
+  /** onSizeChange 需要异步更新状态，保存 timer 以便离场时清理。 */
+  private viewportUpdateTimerId: number = -1;
   /** 用户已触发返回,loadBook 异步链应在 await 后检查并提前退出,避免阻塞主线程 */
   private isLeaving: boolean = false;
   private chapterLoadInProgress: boolean = false;
@@ -153,6 +159,13 @@ export struct PlayerPage {
     if (this.deferredLoadTimerId !== -1) {
       clearTimeout(this.deferredLoadTimerId);
       this.deferredLoadTimerId = -1;
+    }
+  }
+
+  private cancelViewportUpdateTimer(): void {
+    if (this.viewportUpdateTimerId !== -1) {
+      clearTimeout(this.viewportUpdateTimerId);
+      this.viewportUpdateTimerId = -1;
     }
   }
 
@@ -211,6 +224,7 @@ export struct PlayerPage {
     PlayerEntryDecider.setMarkLeaving(null);
     PlayerEntryDecider.setEntered(null);
     this.cancelPendingClearTimers();
+    this.cancelViewportUpdateTimer();
     if (this.entryFinished) {
       emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
       emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
@@ -219,6 +233,43 @@ export struct PlayerPage {
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
     this.coverProcessed = false;  // 供下次进入时重置
+  }
+
+  private handleViewportSizeChange(newValue: SizeOptions): void {
+    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number') return;
+    const width: number = newValue.width;
+    const height: number = newValue.height;
+    if (Math.abs(width - this.viewportWidth) < 1 && Math.abs(height - this.viewportHeight) < 1) return;
+    this.cancelViewportUpdateTimer();
+    // onSizeChange 在布局阶段同步触发，按官方建议延迟状态更新，避免被并入布局动画。
+    this.viewportUpdateTimerId = setTimeout(() => {
+      this.viewportUpdateTimerId = -1;
+      if (this.isLeaving) return;
+      this.viewportWidth = width;
+      this.viewportHeight = height;
+    }, 0);
+  }
+
+  private isCompactPlayer(): boolean {
+    return AdaptiveLayout.isCompact(this.viewportWidth, this.viewportHeight);
+  }
+
+  private playerHorizontalPadding(): number {
+    return AdaptiveLayout.horizontalPadding(this.viewportWidth, this.viewportHeight);
+  }
+
+  private playerTopPadding(): number {
+    const spacing = AdaptiveLayout.playerTopSpacing(this.viewportWidth, this.viewportHeight);
+    return WindowUtils.getStatusBarHeightVp() + spacing;
+  }
+
+  private playerBottomPadding(): number {
+    const spacing = AdaptiveLayout.playerBottomSpacing(this.viewportWidth, this.viewportHeight);
+    return WindowUtils.getBottomSafeVp() + spacing;
+  }
+
+  private compactCoverSize(): number {
+    return AdaptiveLayout.playerCoverSize(this.viewportWidth, this.viewportHeight);
   }
 
   /**
@@ -285,7 +336,7 @@ export struct PlayerPage {
       });
       return;
     }
-    if (b.chapters.length === 0) {
+    if (this.needsChapterHydration(b)) {
       b = await this.hydrateBookChapters(b);
       if (this.isLeaving) return;
     }
@@ -295,8 +346,13 @@ export struct PlayerPage {
     this.book = b;
     this.chapterDataSource.setChapters(b.chapters);
     if (current && this.isSameBook(current, b)
-      && current.chapters.length === 0 && b.chapters.length > 0) {
+      && current.chapters.length < b.chapters.length) {
       this.playerState.currentBook = b;
+      if (this.playerState.currentChapter) {
+        const currentIndex = DataService.resolveChapterIndex(
+          b, this.playerState.currentChapter.id, this.playerState.currentChapter.title);
+        if (currentIndex >= 0) this.playerState.currentChapter = b.chapters[currentIndex];
+      }
     }
     AudioService.getInstance().prewarmBookSource(b);
     this.isFavorite = await PreferenceService.isFavorite(b.id);
@@ -315,6 +371,10 @@ export struct PlayerPage {
   private isSameBook(left: Book, right: Book): boolean {
     if (left.id === right.id) return true;
     return left.bookUrl.length > 0 && left.bookUrl === right.bookUrl && left.sourceUrl === right.sourceUrl;
+  }
+
+  private needsChapterHydration(book: Book): boolean {
+    return book.chapters.length === 0 || (book.chapters.length === 1 && book.chapterCount > 1);
   }
 
   private cloneBookWithChapters(book: Book, chapters: Chapter[], intro: string,
@@ -343,11 +403,12 @@ export struct PlayerPage {
   }
 
   private async hydrateBookChapters(book: Book): Promise<Book> {
-    if (book.chapters.length > 0 || this.chapterLoadInProgress) return book;
+    if (!this.needsChapterHydration(book) || this.chapterLoadInProgress) return book;
     this.chapterLoadInProgress = true;
     try {
       const localChapters = await DataService.getChaptersForBook(book.id);
-      if (localChapters.length > 0) {
+      if (localChapters.length > 0
+        && !(localChapters.length === 1 && book.chapterCount > 1)) {
         const localBook = this.cloneBookWithChapters(book, localChapters, book.intro, book.variables);
         SearchCache.put(localBook);
         return localBook;
@@ -403,6 +464,11 @@ export struct PlayerPage {
     // 切到不同章节(可能不同书) → AudioService 内部会 same-book/same-chapter 短路或 reset
     SearchCache.put(book);
     await AudioService.getInstance().playChapterAndSeek(book, target, this.resumeProgressMs);
+  }
+
+  private async openCastPicker(): Promise<void> {
+    const opened = await AudioService.getInstance().openCastPicker();
+    if (!opened) this.showToast($r('app.string.player_cast_unavailable'));
   }
 
   private formatMs(ms: number): string {
@@ -523,7 +589,7 @@ export struct PlayerPage {
     return DownloadService.getInstance().getChapterStatus(this.book.id, ch);
   }
 
-  private showToast(message: string): void {
+  private showToast(message: ResourceStr): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message });
     } catch (_e) {
@@ -768,13 +834,20 @@ export struct PlayerPage {
       // 内容层
       Column() {
         if (this.book) {
-          this.buildTopBar()
-          this.buildCover()
-          this.buildMeta()
-          Blank()
-          this.buildProgress()
-          this.buildControls()
-          this.buildBottomBar()
+          if (this.isCompactPlayer()) {
+            Scroll() {
+              Column() {
+                this.buildPlayerContent(true)
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .height('100%')
+            .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring)
+          } else {
+            this.buildPlayerContent(false)
+          }
         } else {
           Column()
             .width('100%')
@@ -784,10 +857,10 @@ export struct PlayerPage {
       .width('100%')
       .height('100%')
       .padding({
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
-        bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg,
-        left: AppSpace.Lg,
-        right: AppSpace.Lg
+        top: this.playerTopPadding(),
+        bottom: this.playerBottomPadding(),
+        left: this.playerHorizontalPadding(),
+        right: this.playerHorizontalPadding()
       })
 
       if (this.showChapterList && this.book) {
@@ -806,6 +879,24 @@ export struct PlayerPage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
+      this.handleViewportSizeChange(newValue);
+    })
+  }
+
+  @Builder
+  buildPlayerContent(compact: boolean) {
+    this.buildTopBar()
+    this.buildCover()
+    this.buildMeta()
+    if (compact) {
+      Blank().height(AppSpace.Sm)
+    } else {
+      Blank()
+    }
+    this.buildProgress()
+    this.buildControls()
+    this.buildBottomBar()
   }
 
   @Builder
@@ -943,7 +1034,7 @@ export struct PlayerPage {
           this.highQualityCoverContent()
         }
       }
-      .width('100%')
+      .width(this.isCompactPlayer() ? this.compactCoverSize() : '100%')
       .aspectRatio(1)
       .borderRadius(16)
       .clip(true)
@@ -951,7 +1042,7 @@ export struct PlayerPage {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
-    .margin({ top: AppSpace.Lg })
+    .margin({ top: this.isCompactPlayer() ? AppSpace.Xs : AppSpace.Lg })
   }
 
   @Builder
@@ -982,7 +1073,7 @@ export struct PlayerPage {
       .width('100%')
     }
     .width('100%')
-    .padding({ top: AppSpace.Lg })
+    .padding({ top: this.isCompactPlayer() ? AppSpace.Xs : AppSpace.Lg })
   }
 
   @Builder
@@ -1026,7 +1117,7 @@ export struct PlayerPage {
       .margin({ top: -3 })
     }
     .width('100%')
-    .padding({ bottom: AppSpace.Md })
+    .padding({ bottom: this.isCompactPlayer() ? AppSpace.Sm : AppSpace.Md })
   }
 
   @Builder
@@ -1040,7 +1131,7 @@ export struct PlayerPage {
       Blank()
 
       SymbolGlyph($r('sys.symbol.backward_end_fill'))
-        .fontSize(32)
+        .fontSize(this.isCompactPlayer() ? 28 : 32)
         .fontColor(['#FFFFFF'])
         .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
         .onClick(() => this.playPrev())
@@ -1052,17 +1143,17 @@ export struct PlayerPage {
           LoadingProgress()
             .width(36)
             .height(36)
-            .color('#FFFFFF')
+            .color(AppColor.Brand)
         } else {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_round_triangle_fill') : $r('sys.symbol.play_round_triangle_fill'))
-            .fontSize(64)
+            .fontSize(this.isCompactPlayer() ? 56 : 64)
             .fontColor(['#FFFFFF'])
             .symbolEffect(new BounceSymbolEffect())
         }
       }
-      .width(64)
-      .height(64)
+      .width(this.isCompactPlayer() ? 56 : 64)
+      .height(this.isCompactPlayer() ? 56 : 64)
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.92 })
       .onClick(() => {
         if (!this.playerState.isLoading) this.togglePlay();
@@ -1071,7 +1162,7 @@ export struct PlayerPage {
       Blank()
 
       SymbolGlyph($r('sys.symbol.forward_end_fill'))
-        .fontSize(32)
+        .fontSize(this.isCompactPlayer() ? 28 : 32)
         .fontColor(['#FFFFFF'])
         .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
         .onClick(() => this.playNext())
@@ -1086,7 +1177,8 @@ export struct PlayerPage {
     .width('100%')
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
-    .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+    .padding({ left: this.isCompactPlayer() ? AppSpace.Xs : AppSpace.Sm,
+      right: this.isCompactPlayer() ? AppSpace.Xs : AppSpace.Sm })
   }
 
   @Builder
@@ -1150,9 +1242,20 @@ export struct PlayerPage {
           this.skipOutroValue = 0;
         }
       }))
+
+      Column({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.airplayaudio'))
+          .fontSize(22)
+          .fontColor(['#FFFFFF'])
+        Text($r('app.string.player_cast'))
+          .fontSize(AppFont.Caption)
+          .fontColor('#FFFFFF')
+      }
+      .layoutWeight(1)
+      .onClick(() => this.openCastPicker())
     }
     .width('100%')
-    .padding({ top: AppSpace.Lg })
+    .padding({ top: this.isCompactPlayer() ? AppSpace.Sm : AppSpace.Lg })
   }
 
   @Builder

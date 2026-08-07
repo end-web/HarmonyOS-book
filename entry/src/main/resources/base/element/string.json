@@ -1,6 +1,14 @@
 {
   "string": [
     {
+      "name": "player_cast",
+      "value": "投播"
+    },
+    {
+      "name": "player_cast_unavailable",
+      "value": "当前内容暂不支持投播"
+    },
+    {
       "name": "module_desc",
       "value": "听书主模块"
     },
@@ -91,6 +99,26 @@
     {
       "name": "common_cancel",
       "value": "取消"
+    },
+    {
+      "name": "settings_audio_storage_cleanup",
+      "value": "清理音频存储"
+    },
+    {
+      "name": "settings_audio_storage_cleanup_desc",
+      "value": "清除预加载缓存或离线下载"
+    },
+    {
+      "name": "settings_audio_storage_cleanup_message",
+      "value": "请选择要清理的内容。预加载缓存可重新生成，离线下载删除后需要重新下载。"
+    },
+    {
+      "name": "settings_clear_preload_cache",
+      "value": "清除缓存"
+    },
+    {
+      "name": "settings_clear_downloads",
+      "value": "删除下载"
     },
     {
       "name": "download_delete_confirm",

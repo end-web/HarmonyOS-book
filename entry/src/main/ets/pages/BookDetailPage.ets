@@ -19,6 +19,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { ChapterListItem, ChapterBadge, mapChapterBadge } from '../components/ChapterListItem';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 
 @ComponentV2
 export struct BookDetailPage {
@@ -41,6 +42,9 @@ export struct BookDetailPage {
   @Local chapterDownloadTick: number = 0;
   /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
+  @Local viewportWidth: number = 0;
+  @Local viewportHeight: number = 0;
+  private viewportUpdateTimerId: number = -1;
   private chapterListScroller: Scroller = new Scroller();
   /** @ReusableV2 章节列表：Repeat 入参。过滤后的展示数组；下载/播放状态变化时浅拷贝重建引用以触发重渲染。 */
   @Local displayedChapters: Chapter[] = [];
@@ -80,8 +84,49 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   aboutToDisappear(): void {
+    this.cancelViewportUpdateTimer();
     emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(false);
+  }
+
+  private cancelViewportUpdateTimer(): void {
+    if (this.viewportUpdateTimerId !== -1) {
+      clearTimeout(this.viewportUpdateTimerId);
+      this.viewportUpdateTimerId = -1;
+    }
+  }
+
+  private handleViewportSizeChange(newValue: SizeOptions): void {
+    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number') return;
+    const width: number = newValue.width;
+    const height: number = newValue.height;
+    if (Math.abs(width - this.viewportWidth) < 1 && Math.abs(height - this.viewportHeight) < 1) return;
+    this.cancelViewportUpdateTimer();
+    this.viewportUpdateTimerId = setTimeout(() => {
+      this.viewportUpdateTimerId = -1;
+      this.viewportWidth = width;
+      this.viewportHeight = height;
+    }, 0);
+  }
+
+  private isCompactLayout(): boolean {
+    return AdaptiveLayout.isCompact(this.viewportWidth, this.viewportHeight);
+  }
+
+  private horizontalPadding(): number {
+    return AdaptiveLayout.horizontalPadding(this.viewportWidth, this.viewportHeight);
+  }
+
+  private detailHeroHeight(): number {
+    return AdaptiveLayout.detailHeroHeight(this.viewportWidth, this.viewportHeight);
+  }
+
+  private detailCoverWidth(): number {
+    return AdaptiveLayout.detailCoverWidth(this.viewportWidth, this.viewportHeight);
+  }
+
+  private detailCoverHeight(): number {
+    return AdaptiveLayout.detailCoverHeight(this.viewportWidth, this.viewportHeight);
   }
 
   private async loadBook(): Promise<void> {
@@ -105,7 +150,8 @@ AudioService.getInstance().prewarmBookSource(cached);
       // 取色异步执行,不阻塞首屏
       this.extractCoverColor(b.cover);
       // 章节懒加载
-      if (b.chapters.length === 0 && b.bookUrl && b.sourceUrl) {
+      if ((b.chapters.length === 0 || (b.chapters.length === 1 && b.chapterCount > 1))
+        && b.bookUrl && b.sourceUrl) {
         this.loadTocFromSource(b);
       } else {
         this.scrollToCurrentChapter();
@@ -648,7 +694,7 @@ AudioService.getInstance().prewarmBookSource(cached);
           // 沉浸式背景:封面主色→深色纵向渐变,与下方正文底色保持明确分界(用户定调:不做消散融合)
           Column()
             .width('100%')
-            .height(320)
+            .height(this.detailHeroHeight())
             .linearGradient({
               angle: 180,
               colors: [[this.bgColor, 0.0], [this.bgColorDark, 1.0]]
@@ -683,6 +729,9 @@ AudioService.getInstance().prewarmBookSource(cached);
     .height('100%')
     .backgroundColor($r('sys.color.background_primary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
+      this.handleViewportSizeChange(newValue);
+    })
   }
 
   @Builder
@@ -712,7 +761,7 @@ AudioService.getInstance().prewarmBookSource(cached);
     }
     .width('100%')
     .height(48)
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+    .padding({ left: this.horizontalPadding(), right: this.horizontalPadding() })
   }
 
   @Builder
@@ -722,8 +771,8 @@ AudioService.getInstance().prewarmBookSource(cached);
       Stack() {
         if (this.book!.cover && this.book!.cover.startsWith('http')) {
           Image(this.book!.cover)
-            .width(100)
-            .height(130)
+            .width(this.detailCoverWidth())
+            .height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
             // 与列表统一解码尺寸,复用同一份解码缓存(100x130vp 显示足够清晰)
@@ -732,23 +781,23 @@ AudioService.getInstance().prewarmBookSource(cached);
         } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
           // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
           Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
-            .width(100)
-            .height(130)
+            .width(this.detailCoverWidth())
+            .height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
             .sourceSize({ width: 300, height: 400 })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else if (this.book!.cover) {
           Image($rawfile(this.book!.cover))
-            .width(100)
-            .height(130)
+            .width(this.detailCoverWidth())
+            .height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else {
           // 无封面:用 app 图标占位(替代旧的书形占位)
           Image($r('app.media.app_icon_legacy'))
-            .width(100).height(130)
+            .width(this.detailCoverWidth()).height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Cover)
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
@@ -786,7 +835,11 @@ AudioService.getInstance().prewarmBookSource(cached);
       .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+    .padding({
+      left: this.horizontalPadding(),
+      right: this.horizontalPadding(),
+      top: this.isCompactLayout() ? AppSpace.Xs : AppSpace.Md
+    })
   }
 
   @Builder
@@ -831,7 +884,12 @@ AudioService.getInstance().prewarmBookSource(cached);
       .layoutWeight(1)
     }
     .width('100%')
-    .padding({ left: AppSpace.Xl, right: AppSpace.Xl, top: AppSpace.Lg, bottom: AppSpace.Lg })
+    .padding({
+      left: this.isCompactLayout() ? AppSpace.Lg : AppSpace.Xl,
+      right: this.isCompactLayout() ? AppSpace.Lg : AppSpace.Xl,
+      top: this.isCompactLayout() ? AppSpace.Sm : AppSpace.Lg,
+      bottom: this.isCompactLayout() ? AppSpace.Sm : AppSpace.Lg
+    })
   }
 
   @Builder

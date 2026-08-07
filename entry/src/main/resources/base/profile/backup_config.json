@@ -1,3 +1,9 @@
 {
-  "allowToBackupRestore": true
+  "allowToBackupRestore": true,
+  "includes": [
+    "/data/storage/el2/base/files/backup/listenbook_state.json"
+  ],
+  "excludes": [],
+  "fullBackupOnly": false,
+  "restoreDeps": ""
 }

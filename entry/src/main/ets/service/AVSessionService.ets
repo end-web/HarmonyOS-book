@@ -20,6 +20,7 @@ export interface AVSessionCallbacks {
   onSetSpeed: (speed: number) => void;
   onSetLoopMode: (mode: avSession.LoopMode) => void;
   onCollection: () => void;
+  onCastConnected: () => void;
 }
 
 const REWIND_INTERVAL_MS: number = 10000;
@@ -46,6 +47,10 @@ export class AVSessionService {
   private currentBook: Book | null = null;
   private currentChapter: Chapter | null = null;
   private currentMediaImage: string | image.PixelMap | undefined;
+  private currentCastUrl: string = '';
+  private currentProgressMs: number = 0;
+  private currentDurationMs: number = 0;
+  private castController: avSession.AVCastController | null = null;
   private onPlay: (() => void) | null = null;
   private onPause: (() => void) | null = null;
   private onPlayNext: (() => void) | null = null;
@@ -56,6 +61,17 @@ export class AVSessionService {
   private onSetSpeed: ((speed: number) => void) | null = null;
   private onSetLoopMode: ((mode: avSession.LoopMode) => void) | null = null;
   private onCollection: (() => void) | null = null;
+  private onCastConnected: (() => void) | null = null;
+  private outputDeviceChangeHandler = (state: avSession.ConnectionState,
+    _device: avSession.OutputDeviceInfo): void => {
+    if (state === avSession.ConnectionState.STATE_CONNECTED) {
+      this.startCurrentCast().catch((err: Error) => {
+        this.logMediaCenterWarning('startCurrentCast', err);
+      });
+    } else if (state === avSession.ConnectionState.STATE_DISCONNECTED) {
+      this.castController = null;
+    }
+  };
 
   static getInstance(): AVSessionService {
     if (!AVSessionService.instance) {
@@ -75,6 +91,7 @@ export class AVSessionService {
     this.onSetSpeed = cbs.onSetSpeed;
     this.onSetLoopMode = cbs.onSetLoopMode;
     this.onCollection = cbs.onCollection;
+    this.onCastConnected = cbs.onCastConnected;
   }
 
   init(context: common.UIAbilityContext): Promise<void> {
@@ -90,6 +107,7 @@ export class AVSessionService {
       this.session = await avSession.createAVSession(context, 'ListenBook', 'audio');
       this.registerCommands();
       await this.configureMediaCenter();
+      await this.configureUrlCasting();
       await this.session.activate();
       await this.setupLaunchAbility(context);
     } catch (err) {
@@ -161,6 +179,17 @@ export class AVSessionService {
     this.session.on('toggleFavorite', () => {
       this.onCollection?.();
     });
+    this.session.on('outputDeviceChange', this.outputDeviceChangeHandler);
+  }
+
+  private async configureUrlCasting(): Promise<void> {
+    if (!this.session) return;
+    try {
+      const extras: Record<string, Object> = { 'url-cast': true };
+      await this.session.setExtras(extras);
+    } catch (err) {
+      this.logMediaCenterWarning('setExtras.url-cast', err);
+    }
   }
 
   private async configureMediaCenter(): Promise<void> {
@@ -218,6 +247,10 @@ export class AVSessionService {
         hilog.warn(DOMAIN, TAG, 'updateMetadata cover decode failed, mediaImage=undefined');
       }
     }
+    const previousAssetId = this.currentBook && this.currentChapter
+      ? `${this.currentBook.id}_${this.currentChapter.id}` : '';
+    const nextAssetId = `${book.id}_${chapter.id}`;
+    if (previousAssetId !== nextAssetId) this.currentCastUrl = '';
     this.currentBook = book;
     this.currentChapter = chapter;
     this.currentMediaImage = mediaImage;
@@ -255,6 +288,7 @@ export class AVSessionService {
     if (!await this.ensureReady() || !this.session) return;
     if (!this.currentBook || !this.currentChapter) return;
     if (durationMs <= 0) return;
+    this.currentDurationMs = durationMs;
     const book = this.currentBook;
     const chapter = this.currentChapter;
     const metadata: avSession.AVMetadata = {
@@ -277,6 +311,8 @@ export class AVSessionService {
   async updatePlaybackState(isPlaying: boolean, progressMs: number, speed: number,
     durationMs: number, isFavorite: boolean = false): Promise<void> {
     if (!await this.ensureReady() || !this.session) return;
+    this.currentProgressMs = progressMs;
+    this.currentDurationMs = durationMs;
     let state: avSession.PlaybackState = avSession.PlaybackState.PLAYBACK_STATE_PAUSE;
     if (isPlaying) {
       state = avSession.PlaybackState.PLAYBACK_STATE_PLAY;
@@ -298,6 +334,58 @@ export class AVSessionService {
       hilog.error(DOMAIN, TAG, 'setAVPlaybackState failed: %{public}s',
         e?.message ?? JSON.stringify(err));
     }
+  }
+
+  updateCastMediaSource(book: Book, chapter: Chapter, url: string): void {
+    if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+    if (this.currentBook && this.currentChapter
+      && this.currentBook.id === book.id && this.currentChapter.id === chapter.id) {
+      this.currentCastUrl = url;
+    }
+  }
+
+  currentCastMediaSource(bookId: string, chapterId: string): string {
+    if (!this.currentBook || !this.currentChapter) return '';
+    if (this.currentBook.id !== bookId || this.currentChapter.id !== chapterId) return '';
+    return this.currentCastUrl;
+  }
+
+  async openCastPicker(): Promise<boolean> {
+    if (!await this.ensureReady() || !this.context || !this.currentCastUrl) return false;
+    try {
+      const helper = new avSession.AVCastPickerHelper(this.context);
+      const options: avSession.AVCastPickerOptions = { sessionType: 'audio' };
+      await helper.select(options);
+      return true;
+    } catch (err) {
+      this.logMediaCenterWarning('AVCastPickerHelper.select', err);
+      return false;
+    }
+  }
+
+  private async startCurrentCast(): Promise<void> {
+    if (!this.session || !this.currentBook || !this.currentChapter || !this.currentCastUrl) return;
+    const book = this.currentBook;
+    const chapter = this.currentChapter;
+    const description: avSession.AVMediaDescription = {
+      assetId: `${book.id}_${chapter.id}`,
+      title: chapter.title,
+      subtitle: book.title,
+      artist: book.author,
+      albumTitle: book.title,
+      mediaImage: book.cover.startsWith('http://') || book.cover.startsWith('https://')
+        ? book.cover : undefined,
+      mediaUri: this.currentCastUrl,
+      startPosition: Math.max(0, this.currentProgressMs),
+      duration: this.currentDurationMs > 0 ? this.currentDurationMs : undefined
+    };
+    const item: avSession.AVQueueItem = {
+      itemId: Math.max(0, chapter.index),
+      description: description
+    };
+    this.castController = await this.session.getAVCastController();
+    await this.castController.start(item);
+    this.onCastConnected?.();
   }
 
   private async loadCover(cover: string): Promise<image.PixelMap | null> {
@@ -430,6 +518,7 @@ export class AVSessionService {
   async destroy(): Promise<void> {
     if (this.session) {
       try {
+        this.session.off('outputDeviceChange', this.outputDeviceChangeHandler);
         await this.session.deactivate();
         await this.session.destroy();
       } catch (_e) { /* ignore */ }
@@ -445,6 +534,10 @@ export class AVSessionService {
     this.currentBook = null;
     this.currentChapter = null;
     this.currentMediaImage = undefined;
+    this.currentCastUrl = '';
+    this.currentProgressMs = 0;
+    this.currentDurationMs = 0;
+    this.castController = null;
     this.onPlay = null;
     this.onPause = null;
     this.onPlayNext = null;
@@ -452,6 +545,10 @@ export class AVSessionService {
     this.onFastForward = null;
     this.onRewind = null;
     this.onSeek = null;
+    this.onSetSpeed = null;
+    this.onSetLoopMode = null;
+    this.onCollection = null;
+    this.onCastConnected = null;
     AVSessionService.instance = null;
   }
 }

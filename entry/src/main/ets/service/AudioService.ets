@@ -142,6 +142,17 @@ export class AudioService {
     });
   }
 
+  async openCastPicker(): Promise<boolean> {
+    if (!this.context || !this.state || !this.state.currentBook || !this.state.currentChapter) return false;
+    const book = this.state.currentBook;
+    const chapter = this.state.currentChapter;
+    let castUrl = AVSessionService.getInstance().currentCastMediaSource(book.id, chapter.id);
+    if (!castUrl) castUrl = await this.resolveCastUrl(book, chapter);
+    if (!castUrl) return false;
+    AVSessionService.getInstance().updateCastMediaSource(book, chapter, castUrl);
+    return AVSessionService.getInstance().openCastPicker();
+  }
+
   private async prepareBookSource(sourceUrl: string): Promise<void> {
     await BookSourceService.prepareAudioSource(sourceUrl);
   }
@@ -213,7 +224,8 @@ export class AudioService {
       onSeek: (ms: number) => { this.seek(ms); },
       onSetSpeed: (speed: number) => { this.setSpeed(speed); },
       onSetLoopMode: (mode: avSession.LoopMode) => { this.setPlayMode(this.fromAVSessionLoopMode(mode)); },
-      onCollection: () => { this.toggleFavoriteFromSession(); }
+      onCollection: () => { this.toggleFavoriteFromSession(); },
+      onCastConnected: () => { this.pause(); }
     };
     AVSessionService.getInstance().setCallbacks(cbs);
     AVSessionService.getInstance().init(this.context).catch((err: Error) => {
@@ -897,6 +909,7 @@ export class AudioService {
         this.emitPlayFailed(book.id, chapter.id, '无法获取音频地址，请检查网络或稍后重试');
         return;
       }
+      this.syncCastMediaSource(book, chapter);
 
       // 3) 装载
       const p = await this.ensurePlayer();
@@ -1044,6 +1057,42 @@ export class AudioService {
       return await Promise.race([BookSourceService.resolveAudioRequest(source, pageUrl, variables), timeout]);
     } finally {
       if (timerId >= 0) clearTimeout(timerId);
+    }
+  }
+
+  private isHttpUrl(value: string): boolean {
+    return value.startsWith('http://') || value.startsWith('https://');
+  }
+
+  private syncCastMediaSource(book: Book, chapter: Chapter): void {
+    let url = '';
+    if (chapter.source.type === 'url' && this.isHttpUrl(chapter.source.value)
+      && chapter.source.value !== chapter.originSourceValue) {
+      url = chapter.source.value;
+    }
+    if (!url) url = ChapterCacheService.getInstance().getAudioUrl(chapter.id) ?? '';
+    if (this.isHttpUrl(url)) {
+      AVSessionService.getInstance().updateCastMediaSource(book, chapter, url);
+    }
+  }
+
+  private async resolveCastUrl(book: Book, chapter: Chapter): Promise<string> {
+    const cachedUrl = ChapterCacheService.getInstance().getAudioUrl(chapter.id) ?? '';
+    if (this.isHttpUrl(cachedUrl)) return cachedUrl;
+    if (!book.sourceUrl) return '';
+    const pageUrl = chapter.originSourceValue || chapter.source.value;
+    if (!this.isHttpUrl(pageUrl)) return '';
+    try {
+      const sources = await SourceDataService.getSources();
+      const source = sources.find((item: BookSource) => item.bookSourceUrl === book.sourceUrl);
+      if (!source) return '';
+      const requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables);
+      return this.isHttpUrl(requestInfo.url) ? requestInfo.url : '';
+    } catch (err) {
+      const error = err as Error;
+      hilog.warn(DOMAIN, TAG, 'resolveCastUrl failed: %{public}s',
+        error?.message ?? JSON.stringify(err));
+      return '';
     }
   }
 

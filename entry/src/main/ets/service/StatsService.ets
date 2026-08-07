@@ -178,6 +178,15 @@ export class StatsService {
     emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
   }
 
+  static async restoreBackupStats(records: BookUsageStats[]): Promise<void> {
+    const s = await StatsService.ensureStore();
+    const safeRecords = records.filter((item: BookUsageStats) =>
+      !!item && !!item.bookId && !item.bookId.startsWith('import_'));
+    await s.put(KEY_BOOK_USAGE, JSON.stringify(safeRecords));
+    await s.flush();
+    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
+  }
+
   static async getAllDailyStats(): Promise<DailyUsageStats[]> {
     return StatsService.aggregateDaily(await StatsService.getBookStats());
   }

@@ -16,6 +16,7 @@ import { registerBuiltInSources } from '../service/builtin';
 import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
 import { NetworkPreconnect } from '../service/http/NetworkPreconnect';
 import { ServerAudioConfig } from '../service/builtin/ServerAudioConfig';
+import { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -45,8 +46,9 @@ class AckParcelable implements rpc.Parcelable {
 export default class EntryAbility extends UIAbility {
   /** 防止 timeout 路径与正常完成路径重复调度下载恢复 */
   private downloadRecoveryScheduled: boolean = false;
+  private pendingContinuationPayload: string = '';
 
-  onCreate(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+  onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // Must run before the first Web component initializes ArkWeb. Do not eagerly initialize the engine here.
     configureArkWebSecurity();
     try {
@@ -64,6 +66,7 @@ export default class EntryAbility extends UIAbility {
     DownloadService.getInstance().setContext(this.context);
     // 缓存书改用文件持久化,注入 context 供 cacheDir 读写
     DataService.setContext(this.context);
+    this.captureContinuation(want, launchParam);
 
     // 关键修复:限时初始化,避免后台恢复时阻塞过久导致系统 watchdog 杀进程
     this.initServicesWithTimeout().catch((err: Error) => {
@@ -130,6 +133,7 @@ export default class EntryAbility extends UIAbility {
     // 提前把 PlayerState 还原到全局 AppStorage,这样卡片 call 进来时
     // AudioService 已经有 currentBook/Chapter,play() 才能正常工作
     await this.bootstrapAudioService();
+    await this.restoreContinuationIfNeeded();
     hilog.info(DOMAIN, TAG, 'initServicesCore: AudioService bootstrapped, elapsed=%{public}dms', Date.now() - startTime);
 
     // 启动时把 lastPlayed 推一份到卡片,避免冷启动卡片显示空态。
@@ -158,8 +162,46 @@ export default class EntryAbility extends UIAbility {
   }
 
   /** 卡片或通知跳转 / 已存活时的拉起,统一在 onNewWant 处理 */
-  onNewWant(want: Want, _launchParam: AbilityConstant.LaunchParam): void {
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    this.captureContinuation(want, launchParam);
+    this.restoreContinuationIfNeeded().catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'Restore continuation from new want failed: %{public}s',
+        err?.message ?? JSON.stringify(err));
+    });
     this.consumeRouteWant(want);
+  }
+
+  private captureContinuation(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (launchParam.launchReason !== AbilityConstant.LaunchReason.CONTINUATION || !want.parameters) return;
+    const payload = want.parameters[CONTINUATION_PAYLOAD_KEY];
+    if (typeof payload === 'string') this.pendingContinuationPayload = payload;
+  }
+
+  private async restoreContinuationIfNeeded(): Promise<void> {
+    if (!this.pendingContinuationPayload) return;
+    const payload = this.pendingContinuationPayload;
+    this.pendingContinuationPayload = '';
+    const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+    const bookId = await ContinuationService.restorePayload(this.context, state, payload);
+    if (!bookId) return;
+    const route: WidgetRoute = { target: 'player', bookId: bookId, ts: Date.now() };
+    AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
+    emitter.emit(EVT_WIDGET_ROUTE, { data: { target: 'player', bookId: bookId, ts: route.ts } });
+  }
+
+  async onContinue(wantParam: Record<string, Object>): Promise<AbilityConstant.OnContinueResult> {
+    try {
+      await AudioService.getInstance().flushHistory();
+      const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+      const payload = ContinuationService.createPayload(state);
+      if (payload) wantParam[CONTINUATION_PAYLOAD_KEY] = payload;
+      return AbilityConstant.OnContinueResult.AGREE;
+    } catch (err) {
+      const error = err as Error;
+      hilog.error(DOMAIN, TAG, 'Prepare continuation failed: %{public}s',
+        error?.message ?? JSON.stringify(err));
+      return AbilityConstant.OnContinueResult.REJECT;
+    }
   }
 
   /**
@@ -350,6 +392,14 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
+    this.loadMainWindow(windowStage);
+  }
+
+  onWindowStageRestore(windowStage: window.WindowStage): void {
+    this.loadMainWindow(windowStage);
+  }
+
+  private loadMainWindow(windowStage: window.WindowStage): void {
     WindowUtils.setupImmersive(windowStage, this.context.config.colorMode).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'Immersive setup failed: %{public}s', JSON.stringify(err));
     });

@@ -61,6 +61,27 @@ export interface SkipConfig {
   skipOutro: number;
 }
 
+export class BookSkipBackup {
+  bookId: string = '';
+  skipIntro: number = 0;
+  skipOutro: number = 0;
+}
+
+export class PreferenceBackupSnapshot {
+  favorites: string[] = [];
+  history: PlayHistoryItem[] = [];
+  lastPlayed: LastPlayedItem | null = null;
+  progresses: PlayProgress[] = [];
+  skipConfigs: BookSkipBackup[] = [];
+  colorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
+  defaultTab: number = 0;
+  audioInterruptMode: number = 0;
+  audioAutoResume: boolean = true;
+  homeGridColumns: number = 3;
+  preloadChapters: number = 3;
+  serverAudioApiBase: string = '';
+}
+
 /**
  * 单本书的最新播放进度。
  * 与 PlayHistoryItem 的差异:per-book 一书一槽,永不溢出 50 条上限,
@@ -638,6 +659,107 @@ export class PreferenceService {
     const s = await PreferenceService.ensureStore();
     await s.delete(KEY_SERVER_AUDIO_API_BASE);
     await s.flush();
+  }
+
+  /** 导出允许跨设备迁移的白名单偏好，不包含账号、卡片和本地导入数据。 */
+  static async exportBackupSnapshot(): Promise<PreferenceBackupSnapshot> {
+    const snapshot = new PreferenceBackupSnapshot();
+    snapshot.favorites = (await PreferenceService.getFavorites())
+      .filter((id: string) => !id.startsWith('import_'));
+    snapshot.history = (await PreferenceService.getHistory())
+      .filter((item: PlayHistoryItem) => !item.bookId.startsWith('import_'));
+    const lastPlayed = await PreferenceService.getLastPlayed();
+    snapshot.lastPlayed = lastPlayed && !lastPlayed.bookId.startsWith('import_') ? lastPlayed : null;
+    snapshot.colorMode = await PreferenceService.getColorMode();
+    snapshot.defaultTab = await PreferenceService.getDefaultTab();
+    snapshot.audioInterruptMode = await PreferenceService.getAudioInterruptMode();
+    snapshot.audioAutoResume = await PreferenceService.getAudioAutoResume();
+    snapshot.homeGridColumns = await PreferenceService.getHomeGridColumns();
+    snapshot.preloadChapters = await PreferenceService.getPreloadChapters();
+    snapshot.serverAudioApiBase = await PreferenceService.getServerAudioApiBase();
+
+    const s = await PreferenceService.ensureStore();
+    const all = await s.getAll() as Record<string, Object>;
+    for (const key of Object.keys(all)) {
+      if (key.startsWith(KEY_PROGRESS_PREFIX)) {
+        const bookId = key.substring(KEY_PROGRESS_PREFIX.length);
+        if (bookId.startsWith('import_')) continue;
+        const progress = await PreferenceService.getProgress(bookId);
+        if (progress) snapshot.progresses.push(progress);
+      } else if (key.startsWith(KEY_SKIP_PREFIX)) {
+        const bookId = key.substring(KEY_SKIP_PREFIX.length);
+        if (bookId.startsWith('import_')) continue;
+        const config = await PreferenceService.getSkipConfig(bookId);
+        if (config) {
+          const backup = new BookSkipBackup();
+          backup.bookId = bookId;
+          backup.skipIntro = config.skipIntro;
+          backup.skipOutro = config.skipOutro;
+          snapshot.skipConfigs.push(backup);
+        }
+      }
+    }
+    return snapshot;
+  }
+
+  /** 恢复跨设备偏好，保留目标设备已有的本地导入书数据。 */
+  static async restoreBackupSnapshot(snapshot: PreferenceBackupSnapshot): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    const localFavorites = (await PreferenceService.getFavorites())
+      .filter((id: string) => id.startsWith('import_'));
+    const localHistory = (await PreferenceService.getHistory())
+      .filter((item: PlayHistoryItem) => item.bookId.startsWith('import_'));
+    const restoredFavorites = snapshot.favorites
+      .filter((id: string) => !!id && !id.startsWith('import_'));
+    const restoredHistory = snapshot.history
+      .filter((item: PlayHistoryItem) => !!item && !!item.bookId && !item.bookId.startsWith('import_'));
+    await s.put(KEY_FAVORITES, JSON.stringify(localFavorites.concat(restoredFavorites)));
+    await s.put(KEY_HISTORY, JSON.stringify(localHistory.concat(restoredHistory).slice(0, 50)));
+    if (snapshot.lastPlayed && !snapshot.lastPlayed.bookId.startsWith('import_')) {
+      await s.put(KEY_LAST_PLAYED, JSON.stringify(snapshot.lastPlayed));
+    } else {
+      await s.delete(KEY_LAST_PLAYED);
+    }
+
+    const all = await s.getAll() as Record<string, Object>;
+    for (const key of Object.keys(all)) {
+      if (key.startsWith(KEY_PROGRESS_PREFIX)) {
+        const bookId = key.substring(KEY_PROGRESS_PREFIX.length);
+        if (!bookId.startsWith('import_')) await s.delete(key);
+      } else if (key.startsWith(KEY_SKIP_PREFIX)) {
+        const bookId = key.substring(KEY_SKIP_PREFIX.length);
+        if (!bookId.startsWith('import_')) await s.delete(key);
+      }
+    }
+    PreferenceService.progressMemo.clear();
+    PreferenceService.skipMemo.clear();
+    for (const progress of snapshot.progresses) {
+      if (!progress || !progress.bookId || progress.bookId.startsWith('import_')) continue;
+      PreferenceService.progressMemo.set(progress.bookId, progress);
+      await s.put(KEY_PROGRESS_PREFIX + progress.bookId, JSON.stringify(progress));
+    }
+    for (const skip of snapshot.skipConfigs) {
+      if (!skip || !skip.bookId || skip.bookId.startsWith('import_')) continue;
+      const config: SkipConfig = { skipIntro: skip.skipIntro, skipOutro: skip.skipOutro };
+      PreferenceService.skipMemo.set(skip.bookId, config);
+      await s.put(KEY_SKIP_PREFIX + skip.bookId, JSON.stringify(config));
+    }
+
+    await s.put(KEY_COLOR_MODE, snapshot.colorMode);
+    await s.put(KEY_DEFAULT_TAB, snapshot.defaultTab);
+    await s.put(KEY_AUDIO_INTERRUPT_MODE, snapshot.audioInterruptMode);
+    await s.put(KEY_AUDIO_AUTO_RESUME, snapshot.audioAutoResume);
+    await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
+    await s.put(KEY_PRELOAD_CHAPTERS, snapshot.preloadChapters);
+    if (snapshot.serverAudioApiBase) {
+      await s.put(KEY_SERVER_AUDIO_API_BASE, snapshot.serverAudioApiBase);
+    } else {
+      await s.delete(KEY_SERVER_AUDIO_API_BASE);
+    }
+    await s.flush();
+    PreferenceService.notifyFavoriteChanged();
+    PreferenceService.notifyHistoryChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });
   }
 
 }
