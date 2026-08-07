@@ -5,7 +5,6 @@ import {
   HdsTabsController,
   hdsMaterial,
   HdsBarStyle,
-  HdsAnimationMode,
   HdsTabsBarChangeMode
 } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
@@ -64,7 +63,6 @@ export struct MainPage {
   private lastTabClickTime: number = 0;
   private lastTabClickIndex: number = -1;
   private viewportUpdateTimerId: number = -1;
-  private tabRestoreTimerId: number = -1;
   private restoreTabBarOnWindowGrow: boolean = false;
   private tabCollapseViewportWidth: number = 0;
   private tabCollapseViewportHeight: number = 0;
@@ -93,10 +91,6 @@ export struct MainPage {
     if (this.viewportUpdateTimerId !== -1) {
       clearTimeout(this.viewportUpdateTimerId);
       this.viewportUpdateTimerId = -1;
-    }
-    if (this.tabRestoreTimerId !== -1) {
-      clearTimeout(this.tabRestoreTimerId);
-      this.tabRestoreTimerId = -1;
     }
   }
 
@@ -136,14 +130,6 @@ export struct MainPage {
     this.tabCollapseViewportWidth = 0;
     this.tabCollapseViewportHeight = 0;
     this.miniBarCollapsed = false;
-    if (this.tabRestoreTimerId !== -1) clearTimeout(this.tabRestoreTimerId);
-    // 等 HdsTabs 完成窗口重排，再覆盖小窗阶段遗留的折叠与贴底状态。
-    this.tabRestoreTimerId = setTimeout(() => {
-      this.tabRestoreTimerId = -1;
-      this.miniBarCollapsed = false;
-      this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
-      this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
-    }, 120);
   }
 
   private navigateBookHandler: (e: emitter.EventData) => void = (e) => this.onNavigateBookEvent(e);
@@ -342,8 +328,6 @@ export struct MainPage {
         // 迷你栏配置:HdsTabs 会自动管理折叠/展开
         miniBar: this.playerState.currentBook ? {
           miniBarBuilder: () => this.miniBarBuilder(),
-          // 跟随当前实际状态,避免主题切换等重建把迷你栏强制重置回展开态
-          miniBarStyle: this.miniBarCollapsed ? HdsBarStyle.COLLAPSE : HdsBarStyle.EXPAND,
           enableMiniBarBackground: true,
           enableMiniBarClip: true,
           // 系统切换样式时同步给 MiniPlayer,让它切换内部布局(折叠态只显示封面)

@@ -69,6 +69,7 @@ const FEATURED_ROW_HEIGHT: number = 72;
 const FEATURED_COVER_SIZE: number = 60;
 const FEATURED_NEXT_PEEK: number = 32;
 const HOME_COVER_CARD_SIZE: number = 128;
+const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
 
 @ComponentV2
 struct CategoryLightNavItem {
@@ -1091,6 +1092,7 @@ export struct HomePage {
       .width('100%')
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
       .alignItems(VerticalAlign.Center)
+      .translate({ y: blockIdx === 0 ? HOME_FIRST_BLOCK_TITLE_OFFSET : 0 })
 
       // 首板块采用每屏三条的横向轮播，形成参考图中的紧凑私享列表。
       if (blockIdx === 0) {
