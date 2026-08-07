@@ -1,6 +1,13 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
-import { HdsTabs, HdsTabsController, hdsMaterial, HdsBarStyle } from '@kit.UIDesignKit';
+import {
+  HdsTabs,
+  HdsTabsController,
+  hdsMaterial,
+  HdsBarStyle,
+  HdsAnimationMode,
+  HdsTabsBarChangeMode
+} from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { HomePage } from './HomePage';
@@ -33,6 +40,8 @@ export interface NavigateToBookPayload {
 }
 
 const FLOATING_BOTTOM: number = 4;
+const TAB_RESTORE_WIDTH_GROWTH: number = 48;
+const TAB_RESTORE_HEIGHT_GROWTH: number = 80;
 
 @ComponentV2
 export struct MainPage {
@@ -41,6 +50,8 @@ export struct MainPage {
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
   @Local miniBarCollapsed: boolean = false;
+  @Local viewportWidth: number = 0;
+  @Local viewportHeight: number = 0;
 
   /** 隐藏 Web 宿主的按需挂载门控:引擎首次被调用时置位,据此条件渲染对应 Host */
   private gate: WebEngineGate = WebEngineGate.instance;
@@ -52,6 +63,11 @@ export struct MainPage {
   /** 上一次 Tab 点击时间,用于双击检测 */
   private lastTabClickTime: number = 0;
   private lastTabClickIndex: number = -1;
+  private viewportUpdateTimerId: number = -1;
+  private tabRestoreTimerId: number = -1;
+  private restoreTabBarOnWindowGrow: boolean = false;
+  private tabCollapseViewportWidth: number = 0;
+  private tabCollapseViewportHeight: number = 0;
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -68,8 +84,66 @@ export struct MainPage {
   }
 
   aboutToDisappear(): void {
+    this.cancelLayoutTimers();
     emitter.off(EVT_SWITCH_TAB, this.switchTabHandler);
     emitter.off(EVT_NAVIGATE_TO_BOOK, this.navigateBookHandler);
+  }
+
+  private cancelLayoutTimers(): void {
+    if (this.viewportUpdateTimerId !== -1) {
+      clearTimeout(this.viewportUpdateTimerId);
+      this.viewportUpdateTimerId = -1;
+    }
+    if (this.tabRestoreTimerId !== -1) {
+      clearTimeout(this.tabRestoreTimerId);
+      this.tabRestoreTimerId = -1;
+    }
+  }
+
+  private handleViewportSizeChange(newValue: SizeOptions): void {
+    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number') return;
+    const width: number = newValue.width;
+    const height: number = newValue.height;
+    if (Math.abs(width - this.viewportWidth) < 1 && Math.abs(height - this.viewportHeight) < 1) return;
+    const shouldRestoreTabBar: boolean = this.restoreTabBarOnWindowGrow &&
+      (width >= this.tabCollapseViewportWidth + TAB_RESTORE_WIDTH_GROWTH ||
+        height >= this.tabCollapseViewportHeight + TAB_RESTORE_HEIGHT_GROWTH);
+    if (this.viewportUpdateTimerId !== -1) clearTimeout(this.viewportUpdateTimerId);
+    this.viewportUpdateTimerId = setTimeout(() => {
+      this.viewportUpdateTimerId = -1;
+      this.viewportWidth = width;
+      this.viewportHeight = height;
+      if (shouldRestoreTabBar) this.restoreExpandedTabBars();
+    }, 0);
+  }
+
+  private handleBarStyleChange(miniStyle: HdsBarStyle, tabStyle: HdsBarStyle,
+    _miniBarWidth: number, _tabBarWidth: number, mode: HdsTabsBarChangeMode): void {
+    this.miniBarCollapsed = miniStyle === HdsBarStyle.COLLAPSE;
+    if (tabStyle === HdsBarStyle.EXPAND) {
+      this.restoreTabBarOnWindowGrow = false;
+      return;
+    }
+    if (mode === HdsTabsBarChangeMode.USER_CLICK) {
+      this.restoreTabBarOnWindowGrow = true;
+      this.tabCollapseViewportWidth = this.viewportWidth;
+      this.tabCollapseViewportHeight = this.viewportHeight;
+    }
+  }
+
+  private restoreExpandedTabBars(): void {
+    this.restoreTabBarOnWindowGrow = false;
+    this.tabCollapseViewportWidth = 0;
+    this.tabCollapseViewportHeight = 0;
+    this.miniBarCollapsed = false;
+    if (this.tabRestoreTimerId !== -1) clearTimeout(this.tabRestoreTimerId);
+    // 等 HdsTabs 完成窗口重排，再覆盖小窗阶段遗留的折叠与贴底状态。
+    this.tabRestoreTimerId = setTimeout(() => {
+      this.tabRestoreTimerId = -1;
+      this.miniBarCollapsed = false;
+      this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
+      this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
+    }, 120);
   }
 
   private navigateBookHandler: (e: emitter.EventData) => void = (e) => this.onNavigateBookEvent(e);
@@ -91,7 +165,7 @@ export struct MainPage {
       return;
     }
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
         this.navStack.pushPathByName('player', bookId, false);
       });
       return;
@@ -102,7 +176,7 @@ export struct MainPage {
         'chapterId': chapterId,
         'progressMs': progressMs
       };
-      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
         this.navStack.pushPathByName('player', params, false);
       });
       return;
@@ -273,8 +347,9 @@ export struct MainPage {
           enableMiniBarBackground: true,
           enableMiniBarClip: true,
           // 系统切换样式时同步给 MiniPlayer,让它切换内部布局(折叠态只显示封面)
-          onBarStyleChange: (miniStyle: HdsBarStyle, _tabStyle: HdsBarStyle) => {
-            this.miniBarCollapsed = miniStyle === HdsBarStyle.COLLAPSE;
+          onBarStyleChange: (miniStyle: HdsBarStyle, tabStyle: HdsBarStyle,
+            miniBarWidth: number, tabBarWidth: number, mode: HdsTabsBarChangeMode) => {
+            this.handleBarStyleChange(miniStyle, tabStyle, miniBarWidth, tabBarWidth, mode);
           }
         } : undefined
       })
@@ -307,6 +382,9 @@ export struct MainPage {
     }
     .width('100%')
     .height('100%')
+    .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
+      this.handleViewportSizeChange(newValue);
+    })
   }
 
   private openBlockMore(block: HomeBlockSection): void {
@@ -335,7 +413,7 @@ export struct MainPage {
   private navigateToPlayer(): void {
     if (!this.playerState.currentBook) return;
     const bookId = this.playerState.currentBook.id;
-    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+    this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', bookId, false);
     });
   }

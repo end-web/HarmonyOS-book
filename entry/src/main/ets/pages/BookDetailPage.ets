@@ -610,7 +610,7 @@ AudioService.getInstance().prewarmBookSource(cached);
       && PlaybackStore.getInstance().isCurrentChapter(this.book.id, target.id)) {
       // 详情页入口,清理栈避免重复 player
       this.cleanStackBeforePushPlayer();
-      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
         this.navStack.pushPathByName('player', this.bookId, false);
       });
       this.isStartingPlay = false;
@@ -623,7 +623,7 @@ AudioService.getInstance().prewarmBookSource(cached);
     };
     // 详情页入口,清理栈避免重复 player
     this.cleanStackBeforePushPlayer();
-    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+    this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', playerParams, false);
     });
     this.isStartingPlay = false;

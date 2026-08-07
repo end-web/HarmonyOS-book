@@ -331,7 +331,7 @@ export struct PlayerPage {
     }
     if (!b) {
       console.error('[PlayerPage] loadBook failed, book not found');
-      animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
+      this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
         this.navStack.pop(false);
       });
       return;
@@ -955,7 +955,7 @@ export struct PlayerPage {
       .systemMaterial(AppMaterial.FloatingControl)
       .onClick(() => {
         this.isLeaving = true;
-        animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
+        this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
           this.navStack.pop(false);
         });
       })

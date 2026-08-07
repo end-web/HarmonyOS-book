@@ -133,7 +133,7 @@ category: r.kind || 'audio',
 
   private handleBookTap(bookId: string): void {
     if (PlaybackStore.getInstance().isCurrentBook(bookId)) {
-      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
         this.navStack.pushPathByName('player', bookId, false);
       });
       return;

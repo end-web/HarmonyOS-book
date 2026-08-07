@@ -542,7 +542,7 @@ export struct FavoritePage {
     SearchCache.put(book);
     // 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state。
     if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
-      animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
         this.navStack.pushPathByName('player', book.id, onPop, false);
       });
       return;
@@ -578,7 +578,7 @@ export struct FavoritePage {
       'chapterId': resolved.id as Object,
       'progressMs': history.progressMs as Object
     };
-    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+    this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', params, onPop, false);
     });
   }
@@ -603,7 +603,7 @@ export struct FavoritePage {
             'chapterId': resolvedLocal.id as Object,
             'progressMs': history.progressMs as Object
           };
-          animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+          this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
             this.navStack.pushPathByName('player', localParams, onPop, false);
           });
           return;
@@ -663,7 +663,7 @@ export struct FavoritePage {
         'chapterId': resolved.id as Object,
         'progressMs': history.progressMs as Object
       };
-    animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+    this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', params, onPop, false);
     });
     } catch (_e) {

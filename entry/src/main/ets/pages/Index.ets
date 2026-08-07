@@ -89,7 +89,7 @@ struct Index {
         // 防止已经在播放页时又重复 push 一份空白的（widget 反复点击）
         const cur = this.navStack.getAllPathName();
         if (cur && cur.length > 0 && cur[cur.length - 1] === 'player') return;
-        animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
+        this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
           this.navStack.pushPathByName('player', bookId, false);
         });
       }
@@ -178,7 +178,7 @@ struct Index {
       .onBackPressed((): boolean => {
         if (PlayerBackInterceptor.consume()) return true;
         PlayerEntryDecider.markLeaving();
-        animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
+        this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
           this.navStack.pop(false);
         });
         return true;
