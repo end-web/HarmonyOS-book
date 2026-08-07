@@ -43,4 +43,6 @@ export interface Book {
   skipIntro?: number;
   /** 跳过片尾秒数（每本书独立设置） */
   skipOutro?: number;
+  /** 是否完结（源端 status=1；用于详情页"状态"展示） */
+  completed?: boolean;
 }

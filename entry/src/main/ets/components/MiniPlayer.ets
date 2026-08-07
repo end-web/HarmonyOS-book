@@ -1,3 +1,4 @@
+import { AnimatorOptions, AnimatorResult } from '@kit.ArkUI';
 import { AppSpace, AppFont } from '../theme/Theme';
 import { PlayerState } from '../model/PlayerState';
 
@@ -9,6 +10,67 @@ export struct MiniPlayer {
   @Event onToggle: () => void = () => {};
   @Event onNext: () => void = () => {};
   @Event onExpand: () => void = () => {};
+  @Local coverRotationAngle: number = 0;
+
+  private coverAnimator: AnimatorResult | null = null;
+  private coverAnimatorPlaying: boolean = false;
+
+  aboutToAppear(): void {
+    this.initCoverAnimator();
+  }
+
+  aboutToDisappear(): void {
+    this.disposeCoverAnimator();
+  }
+
+  @Monitor('playerState.isPlaying')
+  private onPlayingStateChanged(_monitor: IMonitor): void {
+    this.syncCoverAnimator();
+  }
+
+  private initCoverAnimator(): void {
+    if (this.coverAnimator !== null) return;
+    const startAngle: number = this.coverRotationAngle;
+    const options: AnimatorOptions = {
+      duration: 20000,
+      easing: 'linear',
+      delay: 0,
+      fill: 'forwards',
+      direction: 'normal',
+      iterations: -1,
+      begin: startAngle,
+      end: startAngle + 360
+    };
+    const animator: AnimatorResult = this.getUIContext().createAnimator(options);
+    animator.onFrame = (angle: number): void => {
+      this.coverRotationAngle = angle;
+    };
+    this.coverAnimator = animator;
+    this.syncCoverAnimator();
+  }
+
+  private syncCoverAnimator(): void {
+    const animator = this.coverAnimator;
+    if (animator === null) return;
+    if (this.playerState.isPlaying) {
+      if (!this.coverAnimatorPlaying) {
+        animator.play();
+        this.coverAnimatorPlaying = true;
+      }
+      return;
+    }
+    if (this.coverAnimatorPlaying) {
+      animator.pause();
+      this.coverAnimatorPlaying = false;
+    }
+  }
+
+  private disposeCoverAnimator(): void {
+    if (this.coverAnimator === null) return;
+    this.coverAnimator.cancel();
+    this.coverAnimator = null;
+    this.coverAnimatorPlaying = false;
+  }
 
   @Builder
   coverImageBuilder(): void {
@@ -51,13 +113,18 @@ export struct MiniPlayer {
     if (this.playerState.currentBook) {
       Row({ space: this.collapsed ? 0 : AppSpace.Sm }) {
         Stack() {
-          this.coverImageBuilder()
+          Stack() {
+            this.coverImageBuilder()
+          }
+          .width('100%')
+          .height('100%')
+          .borderRadius(this.collapsed ? 999 : 22)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          .clip(true)
+          .rotate({ angle: this.coverRotationAngle })
         }
         .width(this.collapsed ? '100%' : 44)
         .height(this.collapsed ? '100%' : 44)
-        .borderRadius(this.collapsed ? 999 : 22)
-        .backgroundColor($r('sys.color.comp_background_tertiary'))
-        .clip(true)
         .geometryTransition('player-cover')
         .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
         .onClick(() => {

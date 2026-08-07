@@ -42,9 +42,6 @@ export class WidgetUpdater {
   private static coverPathCache: Map<string, string> = new Map();
   /** url -> 文件大小（字节），>MAX_IMG_BYTES 的不走 FD 通道 */
   private static coverSizeCache: Map<string, number> = new Map();
-  /** 乐观更新的保护期：在此时间内不允许 updatePlayerCard 覆盖 */
-  private static optimisticUpdateUntil: number = 0;
-  private static readonly OPTIMISTIC_GUARD_MS: number = 500;
   private static coverMigrationPromise: Promise<void> | null = null;
 
   static setContext(ctx: common.Context): void {
@@ -194,11 +191,15 @@ export class WidgetUpdater {
 
   /** 把当前 PlayerState 写入快照,并广播给所有听书卡片 */
   static async updatePlayerCard(state: PlayerState | null, force: boolean = false): Promise<void> {
-    // 乐观更新保护期：如果刚刚执行过 optimisticSetPlaying，跳过本次更新避免覆盖
-    if (!force && Date.now() < WidgetUpdater.optimisticUpdateUntil) {
-      return;
-    }
     const snap = WidgetUpdater.buildSnapshot(state);
+    if (!force) {
+      const existing = await PreferenceService.getWidgetPlayerSnapshot();
+      if (existing && snap.bookId === existing.bookId
+        && snap.isPlaying === existing.isPlaying
+        && Math.abs(snap.updatedAt - existing.updatedAt) < 100) {
+        return;
+      }
+    }
     await WidgetUpdater.ensureBgColor(snap);
     await PreferenceService.setWidgetPlayerSnapshot(snap);
     // form-id 列表是 FormExtensionAbility 进程写的,主进程的 preferences 内存缓存
@@ -329,44 +330,22 @@ export class WidgetUpdater {
   static async optimisticSetPlaying(isPlaying: boolean): Promise<void> {
     if (!WidgetUpdater.appContext) return;
 
-    // 设置保护期：在接下来的 500ms 内，updatePlayerCard 会被跳过
-    WidgetUpdater.optimisticUpdateUntil = Date.now() + WidgetUpdater.OPTIMISTIC_GUARD_MS;
-
     try {
-      // 直接读取当前快照
       const snap = await PreferenceService.getWidgetPlayerSnapshot();
       if (!snap || snap.bookId.length === 0 || snap.isPlaying === isPlaying) {
         return;
       }
 
-      // 更新状态
       snap.isPlaying = isPlaying;
       snap.updatedAt = Date.now();
       await PreferenceService.setWidgetPlayerSnapshot(snap);
 
-      // 获取卡片ID列表
       const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
       if (ids.length === 0) return;
 
-      // 最小数据包：只更新 isPlaying
-      const data: Record<string, Object> = {
-        'hasBook': 1,
-        'bookId': snap.bookId,
-        'bookTitle': snap.bookTitle,
-        'author': snap.author,
-        'cover': snap.cover,
-        'chapterTitle': snap.chapterTitle,
-        'isPlaying': isPlaying ? 1 : 0,
-        'bgColor': snap.bgColor || '',
-        'bgTopColor': snap.bgTopColor || '',
-        'bgBottomColor': snap.bgBottomColor || '',
-        'bgLeftColor': snap.bgLeftColor || '',
-        'bgRightColor': snap.bgRightColor || '',
-        'bgDarkColor': snap.bgDarkColor || '',
-      };
+      const data: Record<string, Object> = WidgetUpdater.snapshotToFormData(snap);
       const binding = formBindingData.createFormBindingData(data);
 
-      // 推送到所有卡片
       for (const id of ids) {
         try {
           await formProvider.updateForm(id, binding);
@@ -377,6 +356,10 @@ export class WidgetUpdater {
           }
         }
       }
+
+      setTimeout(() => {
+        WidgetUpdater.pushSnapshotToCards().catch(() => {});
+      }, 600);
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'optimisticSetPlaying failed: %{public}s',
         (err as Error)?.message ?? '');

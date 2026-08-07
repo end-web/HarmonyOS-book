@@ -119,6 +119,8 @@ export class HomeTheme {
   static readonly BgWarmTop: Resource = $r('app.color.home_bg_warm_top');
   static readonly BgWarmMid: Resource = $r('app.color.home_bg_warm_mid');
   static readonly BgNeutral: Resource = $r('app.color.home_bg_neutral');
+  /** 状态栏窄条：与 BgNeutral 同色半透明，配合 backdropBlur */
+  static readonly StatusScrim: Resource = $r('app.color.home_status_scrim');
   static readonly Accent: Resource = $r('app.color.home_accent');
   static readonly AccentSoft: Resource = $r('app.color.home_accent_soft');
   static readonly CardSurface: Resource = $r('app.color.home_card_surface');

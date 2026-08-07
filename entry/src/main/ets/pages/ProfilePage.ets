@@ -1,4 +1,10 @@
 import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
+import {
+  HdsNavigation,
+  HdsNavigationTitleMode,
+  ScrollEffectType,
+  hdsMaterial
+} from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import {
@@ -29,6 +35,7 @@ const SYSTEM_ITEMS: ProfileItem[] = [
 ];
 
 const ROW_INDENT: number = AppSpace.Md;
+const MINI_TITLE_BAR_HEIGHT: number = 56;
 
 /** 华为账号登录入口开关:AGC(手动签名+指纹+client_id)配好后改 true 即显示 */
 const ENABLE_HW_LOGIN: boolean = false;
@@ -210,29 +217,75 @@ export struct ProfilePage {
           ]
         })
 
-      Scroll(this.scrollScroller) {
-        Column({ space: AppSpace.Lg }) {
-          this.buildHeader()
-          if (ENABLE_HW_LOGIN) {
-            this.buildAccountCard()
+      HdsNavigation() {
+        Scroll(this.scrollScroller) {
+          Column({ space: AppSpace.Lg }) {
+            if (ENABLE_HW_LOGIN) {
+              this.buildAccountCard()
+            }
+            this.buildServerGroup()
+            this.buildGroup('我的内容', CONTENT_ITEMS)
+            this.buildGroup('系统', SYSTEM_ITEMS)
           }
-          this.buildServerGroup()
-          this.buildGroup('我的内容', CONTENT_ITEMS)
-          this.buildGroup('系统', SYSTEM_ITEMS)
+          .width('100%')
+          .padding({
+            left: AppSpace.Md,
+            right: AppSpace.Md,
+            top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
+            bottom: WindowUtils.getFloatingTabBottomVp()
+          })
         }
         .width('100%')
-        .padding({
-          left: AppSpace.Md,
-          right: AppSpace.Md,
-          bottom: WindowUtils.getFloatingTabBottomVp()
-        })
+        .height('100%')
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .backgroundColor(Color.Transparent)
+        .align(Alignment.Top)
       }
+      .mode(NavigationMode.Stack)
+      .titleBar({
+        avoidLayoutSafeArea: true,
+        content: {
+          title: {
+            mainTitle: '我的'
+          }
+        },
+        style: {
+          scrollEffectOpts: {
+            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          },
+          originalStyle: {
+            backgroundStyle: {
+              backgroundColor: Color.Transparent
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary')
+              }
+            }
+          },
+          scrollEffectStyle: {
+            backgroundStyle: {
+              backgroundColor: Color.Transparent
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary')
+              }
+            }
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
+        }
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(true)
+      .bindToScrollable([this.scrollScroller])
       .width('100%')
       .height('100%')
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
       .backgroundColor(Color.Transparent)
-      .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')
@@ -244,23 +297,6 @@ export struct ProfilePage {
       dragBar: true,
       backgroundColor: Color.Transparent,
       systemMaterial: AppMaterial.SurfaceClean
-    })
-  }
-
-  @Builder
-  buildHeader() {
-    Column() {
-      Text('我的')
-        .fontSize(AppFont.TitleL)
-        .fontColor($r('sys.color.font_primary'))
-        .fontWeight(FontWeight.Bold)
-        .width('100%')
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({
-      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
-      bottom: AppSpace.Sm
     })
   }
 

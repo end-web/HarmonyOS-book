@@ -202,7 +202,10 @@ struct Index {
             }
           }];
         } else if (op === NavigationOperation.POP && !isEnter) {
-          this.playerRenderGroup = true;
+          // 出:淡出下滑。不启用 renderGroup——共享元素转场的"源"(播放页封面)若被离屏
+          // 合成拍扁,框架无法从中抽取封面做回飞形变,会变成一卡一卡;
+          // pop 时页面内容静止,直接合成即可,不依赖离屏缓冲。
+          this.playerRenderGroup = false;
           this.playerOpacity = 1;
           return [{
             duration: 300,

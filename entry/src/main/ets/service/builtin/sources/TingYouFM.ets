@@ -59,7 +59,8 @@ function jsonToBook(o: JsonObj): BuiltInBook | null {
   const b = new BuiltInBook(cover, id, title, author, teller);
   b.intro = o.getString('description', '') || o.getString('synopsis', '') || o.getString('intro', '');
   b.status = o.getString('type', '');
-  b.completed = o.getInt('status', 0) === 1;
+  // 完结判定实测：album/搜索接口 status=0 为"已完结"，status=1 为"连载中"（与站点页面一致）
+  b.completed = o.getInt('status', 1) === 0;
   return b;
 }
 

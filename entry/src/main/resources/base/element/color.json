@@ -12,6 +12,7 @@
     { "name": "home_bg_warm_top", "value": "#F5F5F5" },
     { "name": "home_bg_warm_mid", "value": "#F5F5F5" },
     { "name": "home_bg_neutral", "value": "#F5F5F5" },
+    { "name": "home_status_scrim", "value": "#E6F5F5F5" },
     { "name": "home_accent", "value": "#FF6B3D" },
     { "name": "home_accent_soft", "value": "#1AFF6B3D" },
     { "name": "home_card_surface", "value": "#FFFFFF" },

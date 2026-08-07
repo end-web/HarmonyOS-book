@@ -31,11 +31,10 @@ const SUPPORTED_LOOP_MODES: avSession.LoopMode[] = [
   avSession.LoopMode.LOOP_MODE_SINGLE
 ];
 const MEDIA_CENTER_CONTROLS: avSession.AVMediaCenterControlType[] = [
+  'setSpeed',
   'playPrevious',
   'playNext',
-  'toggleFavorite',
-  'setSpeed',
-  'setLoopMode'
+  'toggleFavorite'
 ];
 
 export class AVSessionService {

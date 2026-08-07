@@ -11,9 +11,11 @@ import { BookCard } from '../components/BookCard';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { BookIdentity } from '../utils/BookIdentity';
+import { CoverPrefetcher } from '../service/CoverPrefetcher';
 
 const DOMAIN = 0x0000;
 const TAG = 'BlockMorePage';
+const MINI_TITLE_BAR_HEIGHT: number = 56;
 
 @ComponentV2
 export struct BlockMorePage {
@@ -91,6 +93,11 @@ export struct BlockMorePage {
       }
       this.nextUrl = nextUrl;
       this.hasMore = this.nextUrl.length > 0 && newBooks.length > 0;
+      const covers: string[] = [];
+      for (const b of newBooks) {
+        if (b.cover && b.cover.startsWith('http')) covers.push(b.cover);
+      }
+      CoverPrefetcher.prefetchMany(covers, 16);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       hilog.error(DOMAIN, TAG, 'fetchPage failed: %{public}s', msg);
@@ -107,7 +114,7 @@ export struct BlockMorePage {
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: 'audio',
+category: r.kind || 'audio',
       contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,
@@ -118,6 +125,7 @@ export struct BlockMorePage {
       bookUrl: r.bookUrl,
       sourceUrl: r.sourceUrl,
       variables: r.variables,
+      completed: r.completed,
     };
     SearchCache.put(book);
     return book;
@@ -153,11 +161,9 @@ export struct BlockMorePage {
     .mode(NavigationMode.Stack)
     .titleBar({
       avoidLayoutSafeArea: true,
-      enableComponentSafeArea: true,
       content: {
         title: {
-          mainTitle: this.title || '更多',
-          subTitle: this.sourceName
+          mainTitle: this.title || '更多'
         },
         backIcon: {
           icon: $r('sys.symbol.chevron_left'),
@@ -166,11 +172,38 @@ export struct BlockMorePage {
       },
       style: {
         scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.GRADIENT_BLUR
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: Color.Transparent
+          },
+          contentStyle: {
+            titleStyle: {
+              mainTitleColor: $r('sys.color.font_primary'),
+              subTitleColor: $r('sys.color.font_secondary')
+            },
+            backIconStyle: {
+              iconColor: $r('sys.color.icon_primary')
+            }
+          }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: {
+            backgroundColor: Color.Transparent
+          },
+          contentStyle: {
+            titleStyle: {
+              mainTitleColor: $r('sys.color.font_primary'),
+              subTitleColor: $r('sys.color.font_secondary')
+            },
+            backIconStyle: {
+              iconColor: $r('sys.color.icon_primary')
+            }
+          }
         },
         systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
         }
       }
@@ -178,7 +211,7 @@ export struct BlockMorePage {
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(false)
     .bindToScrollable([this.scroller])
-    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
     .width('100%')
     .height('100%')
     .backgroundColor(Color.Transparent)
@@ -297,7 +330,7 @@ export struct BlockMorePage {
     .edgeEffect(EdgeEffect.Spring)
     .padding({
       left: AppSpace.Md, right: AppSpace.Md,
-      top: AppSpace.Sm,
+      top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
       bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg
     })
     .onReachEnd(() => this.loadNextPage())

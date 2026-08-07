@@ -15,6 +15,8 @@ export interface SearchResult {
   bookUrl: string;
   intro: string;
   kind: string;
+  /** 是否完结（源端 status=1） */
+  completed?: boolean;
   lastChapter: string;
   wordCount?: string;
   sourceName: string;
@@ -38,6 +40,8 @@ export interface BookInfo {
   coverUrl: string;
   intro: string;
   kind: string;
+  /** 是否完结 */
+  completed?: boolean;
   wordCount: string;
   lastChapter: string;
   tocUrl: string;

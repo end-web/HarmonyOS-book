@@ -118,6 +118,10 @@ export struct PlayerPage {
   private lastCoverKey: string = '';
   /** 正在取色的封面 key,防止异步取色并发重复触发(取色成功才写 lastCoverKey,失败可重试) */
   private pickingCover: string = '';
+  /** 封面已处理标记，用于返回导航时快速复用，避免重走取色/水合链路导致的卡顿
+   * 配合 lastCoverKey + AudioService 缓存，实现丝滑返回（尤其是折叠Tab展开/缩回场景）
+   */
+  private coverProcessed: boolean = false;
   private chapterListScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
@@ -156,6 +160,7 @@ export struct PlayerPage {
     this.isLeaving = false;
     this.entryFinished = false;
     this.highQualityCover = false;
+    this.coverProcessed = false;  // 重置返回导航时的处理标记
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
     PlayerEntryDecider.setMarkLeaving(() => { this.isLeaving = true; });
@@ -213,6 +218,7 @@ export struct PlayerPage {
     }
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
+    this.coverProcessed = false;  // 供下次进入时重置
   }
 
   /**
@@ -710,6 +716,8 @@ export struct PlayerPage {
   }
 
   private async extractCoverColor(cover: string): Promise<void> {
+    if (this.coverProcessed) return;
+
     // 已成功取过色 / 正在取这张图 → 跳过
     if (!cover || cover === this.lastCoverKey || cover === this.pickingCover) return;
 
@@ -718,6 +726,7 @@ export struct PlayerPage {
     if (cachedPalette) {
       this.applyCoverPalette(cachedPalette, cover);
       this.lastCoverKey = cover;
+      this.coverProcessed = true;
       return;
     }
 
@@ -747,6 +756,7 @@ export struct PlayerPage {
 
       this.applyCoverPalette(palette, cover);
       this.lastCoverKey = cover;   // ★ 成功后才标记,失败可重试
+      this.coverProcessed = true;
       this.pickingCover = '';
     }, 100);
   }

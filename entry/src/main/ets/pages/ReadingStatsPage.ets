@@ -1,5 +1,11 @@
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
+import {
+  HdsNavigation,
+  HdsNavigationTitleMode,
+  ScrollEffectType,
+  hdsMaterial
+} from '@kit.UIDesignKit';
 import { AppColor, AppCurve, AppFont, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import {
@@ -36,6 +42,7 @@ interface ListenRecordView {
 }
 
 const AVERAGE_BOOK_SECONDS: number = 8 * 60 * 60;
+const MINI_TITLE_BAR_HEIGHT: number = 56;
 
 @ComponentV2
 export struct ReadingStatsPage {
@@ -346,70 +353,100 @@ export struct ReadingStatsPage {
           ]
         })
 
-      Scroll(this.scroller) {
-        Column({ space: AppSpace.Md }) {
-          this.buildHeader()
-          this.buildSummaryCard()
-          this.buildRecordList()
+      HdsNavigation() {
+        Scroll(this.scroller) {
+          Column({ space: AppSpace.Md }) {
+            this.buildSummaryCard()
+            this.buildRecordList()
+          }
+          .width('100%')
+          .padding({
+            left: AppSpace.Md,
+            right: AppSpace.Md,
+            top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
+            bottom: this.inTab ? WindowUtils.getFloatingTabBottomVp() : WindowUtils.getBottomSafeVp() + AppSpace.Xl
+          })
         }
         .width('100%')
-        .padding({
-          left: AppSpace.Md,
-          right: AppSpace.Md,
-          bottom: this.inTab ? WindowUtils.getFloatingTabBottomVp() : WindowUtils.getBottomSafeVp() + AppSpace.Xl
-        })
+        .height('100%')
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .backgroundColor(Color.Transparent)
+        .align(Alignment.Top)
       }
+      .mode(NavigationMode.Stack)
+      .titleBar({
+        avoidLayoutSafeArea: true,
+        content: {
+          title: {
+            mainTitle: '收听记录'
+          },
+          backIcon: {
+            icon: $r('sys.symbol.chevron_left'),
+            action: () => this.navStack.pop()
+          },
+          menu: {
+            value: [{
+              content: {
+                icon: $r('sys.symbol.clock'),
+                label: '收听记录',
+                action: () => {}
+              }
+            }]
+          }
+        },
+        style: {
+          scrollEffectOpts: {
+            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          },
+          originalStyle: {
+            backgroundStyle: {
+              backgroundColor: Color.Transparent
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary')
+              },
+              backIconStyle: {
+                iconColor: $r('sys.color.icon_primary')
+              },
+              menuStyle: {
+                iconColor: $r('sys.color.icon_primary')
+              }
+            }
+          },
+          scrollEffectStyle: {
+            backgroundStyle: {
+              backgroundColor: Color.Transparent
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary')
+              },
+              backIconStyle: {
+                iconColor: $r('sys.color.icon_primary')
+              },
+              menuStyle: {
+                iconColor: $r('sys.color.icon_primary')
+              }
+            }
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
+        }
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(this.inTab)
+      .bindToScrollable([this.scroller])
       .width('100%')
       .height('100%')
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
       .backgroundColor(Color.Transparent)
-      .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-  }
-
-  @Builder
-  buildHeader() {
-    Row() {
-      if (!this.inTab) {
-        Stack() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(22)
-            .fontColor([$r('sys.color.font_primary')])
-        }
-        .width(34)
-        .height(34)
-        .borderRadius(17)
-        .margin({ right: AppSpace.Xs })
-        .onClick(() => this.navStack.pop())
-      }
-
-      Text('收听记录')
-        .fontSize(AppFont.TitleL)
-        .fontColor($r('sys.color.font_primary'))
-        .fontWeight(FontWeight.Bold)
-
-      Blank()
-
-      Stack() {
-        SymbolGlyph($r('sys.symbol.clock'))
-          .fontSize(22)
-          .fontColor([$r('sys.color.font_primary')])
-      }
-      .width(34)
-      .height(34)
-      .borderRadius(17)
-      .clickEffect({ level: ClickEffectLevel.LIGHT })
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-    .padding({
-      top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
-      bottom: AppSpace.Xxs
-    })
   }
 
   @Builder

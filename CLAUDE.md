@@ -26,9 +26,10 @@
 ### HarmonyOS 7 SDK 边界
 
 - UI 使用 API 26 `uiMaterial.ImmersiveMaterial` / `systemMaterial`，统一首页悬浮控件、播放器弹层和配置 Sheet。
-- `AVSessionService` 向系统媒体中心声明独立的后退 10 秒、前进 30 秒、倍速和循环模式控件，并处理相应命令。
+- `MiniPlayer` 的小圆封面由官方 `Animator` 驱动：播放时旋转，暂停时定格，继续播放时从当前角度续转；完整播放页封面不旋转。
+- `AVSessionService` 向系统媒体中心声明倍速、上一集、下一集和收藏控件，不在系统卡片显示循环模式；倍速变更与 App 播放状态双向同步。
 - 在线音频通过 `MediaSource.enableOfflineCache(true)` 使用系统托管缓存；用户主动下载的完整章节仍由 `DownloadService` 持久化，两者不互相替代。
-- Beta2 已接入 `setSupportedPlaySpeeds`、`setSupportedLoopModes` 和 `setMediaCenterControlType`；这些增强能力失败时按单项降级，不阻断 AVSession 激活。
+- Beta2 已接入 `setSupportedPlaySpeeds`、`setSupportedLoopModes` 和 `setMediaCenterControlType`；媒体中心控件优先展示倍速，循环模式仅保留 App 内控制。这些增强能力失败时按单项降级，不阻断 AVSession 激活。
 - 普通应用不能通过 `fileAccess` 将整个私有沙箱挂载到文件管理；完整下载仍保存在 `context.filesDir`，用户可在下载管理页通过系统 `DocumentViewPicker` 选择目标位置并导出音频副本。
 
 ## 仓库结构
@@ -118,7 +119,7 @@ App
 | 服务 | 职责 |
 |---|---|
 | `AudioService` | AVPlayer 单例，焦点、续播、睡眠定时、在线媒体系统缓存、章节预解析 |
-| `AVSessionService` | 锁屏/控制中心媒体卡片，快退/快进、倍速与循环模式控制 |
+| `AVSessionService` | 锁屏/控制中心媒体卡片，倍速、上一集、下一集与收藏控制 |
 | `BackgroundTaskService` | `audioPlayback` 长时任务 |
 | `BookSourceService` | 内置源门面（search/info/toc/audio/explore/home） |
 | `SourceDataService` | 仅返回已注册内置源列表（无用户规则源 CRUD） |
@@ -224,7 +225,7 @@ cd server && npm test && npm run build:all
 - [x] 简·欢云源 + 可配置 API 地址
 - [x] 服务端聚合、网络目录同步、运维后台、Docker 部署
 - [x] AudioService 焦点 / AVSession / 后台播放
-- [x] HarmonyOS 7 系统材质、AVSession 快退/快进/倍速/循环控制、在线媒体系统缓存
+- [x] HarmonyOS 7 系统材质、迷你封面播放旋转、AVSession 倍速/上下集/收藏控制、在线媒体系统缓存
 - [x] 本地播放进度恢复
 - [x] 本地音频导入
 - [x] 章节下载、下载管理与文件管理导出

@@ -13,6 +13,12 @@ struct PlayerCard {
   @LocalStorageProp('imgName') imgName: string = '';
   @LocalStorageProp('chapterTitle') chapterTitle: string = '';
   @LocalStorageProp('isPlaying') isPlaying: number = 0;
+  @LocalStorageProp('bgColor') bgColor: string = '';
+  @LocalStorageProp('bgTopColor') bgTopColor: string = '';
+  @LocalStorageProp('bgBottomColor') bgBottomColor: string = '';
+  @LocalStorageProp('bgLeftColor') bgLeftColor: string = '';
+  @LocalStorageProp('bgRightColor') bgRightColor: string = '';
+  @LocalStorageProp('bgDarkColor') bgDarkColor: string = '';
 
   private postCall(method: string): void {
     postCardAction(this, {
@@ -22,18 +28,15 @@ struct PlayerCard {
     });
   }
 
-  /**
-   * 短按封面/标题:软拉起,回到用户上次离开的位置(对齐控制中心规范)。
-   * 应用在后台 → 直接拉起停在当前页;冷启动 → 停在主 Tab。
-   * 卡片不再提供"直接进播放器"入口,用户进 App 后自己判断要不要进。
-   */
-  private resumeApp(): void {
+  /** 点击卡片信息区时打开当前书的播放页；无播放记录时回到应用主页。 */
+  private openPlayer(): void {
+    const target: string = this.hasBook === 1 && this.bookId.length > 0 ? 'player' : 'home';
     postCardAction(this, {
       action: 'router',
       abilityName: 'EntryAbility',
       params: {
         from: 'widget',
-        target: 'resume',
+        target: target,
         bookId: this.bookId
       }
     });
@@ -41,6 +44,10 @@ struct PlayerCard {
 
   private hasCover(): boolean {
     return this.imgName.length > 0;
+  }
+
+  private hasBgColor(): boolean {
+    return this.bgColor.length > 0 && this.bgDarkColor.length > 0;
   }
 
   private coverSrc(): string {
@@ -52,7 +59,24 @@ struct PlayerCard {
       // 背景层：优先"深底 + 封面主色从顶部消散"(背景跟随主题色)；
       // 取色未就绪时用糊化封面兜底；都没有则默认渐变
       // 不加 borderRadius，由最外层 Stack 统一 clip，避免多层裁剪产生毛边
-      if (this.hasCover()) {
+      if (this.hasBgColor()) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .linearGradient({
+            angle: 180,
+            colors: [
+              [this.bgTopColor.length > 0 ? this.bgTopColor : this.bgColor, 0.0],
+              [this.bgColor, 0.45],
+              [this.bgDarkColor, 1.0]
+            ]
+          })
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#0D0D0D')
+          .opacity(0.35)
+      } else if (this.hasCover()) {
         Image(this.coverSrc())
           .width('100%')
           .height('100%')
@@ -130,12 +154,12 @@ struct PlayerCard {
           .margin({ left: 10 })
         }
         .width('100%')
-        // 封面与标题属于前台唤醒信息区，播控按钮仍单独走 call。
-        .onClick(() => this.resumeApp())
+        // 封面与标题打开播放页，播控按钮仍单独走 call。
+        .onClick(() => this.openPlayer())
 
         Blank()
           .width('100%')
-          .onClick(() => this.resumeApp())
+          .onClick(() => this.openPlayer())
 
         // 第二行:仅展示集数/章节名
         if (this.chapterTitle.length > 0) {
@@ -145,7 +169,7 @@ struct PlayerCard {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
-            .onClick(() => this.resumeApp())
+            .onClick(() => this.openPlayer())
         }
 
         // 第三行:三按钮
@@ -168,7 +192,7 @@ struct PlayerCard {
           .backgroundColor(Color.White)
           .onClick(() => {
             if (this.hasBook !== 1) {
-              this.resumeApp();
+              this.openPlayer();
               return;
             }
             this.postCall(this.isPlaying === 1 ? 'pause' : 'play');
@@ -200,7 +224,7 @@ struct PlayerCard {
     .height(36)
     .onClick(() => {
       if (this.hasBook !== 1) {
-        this.resumeApp();
+        this.openPlayer();
         return;
       }
       this.postCall(method);

@@ -1,12 +1,12 @@
 import { Book } from '../model/Book';
 import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
+import { CoverImage } from './CoverImage';
 
 /**
  * 书架卡片：封面 + 标题 + 作者
  * 点击进入详情；按压有微缩反馈；封面通过 geometryTransition 飞向详情页
  */
 @ComponentV2
-@ReusableV2
 export struct BookCard {
   @Param book: Book = {} as Book;
   @Param cardWidth: number = 110;
@@ -34,13 +34,6 @@ export struct BookCard {
     }
   }
 
-  /** 复用（滚出再滚入）时不重放入场动画；同时重置上一本书的图片加载失败态。 */
-  aboutToReuse(): void {
-    this.pressed = false;
-    this.imageLoadFailed = false;
-    this.appeared = true;
-  }
-
   static resetAnimations(): void {
     BookCard.shownIds.clear();
   }
@@ -58,30 +51,28 @@ export struct BookCard {
   build() {
     Column({ space: AppSpace.Xs }) {
       Stack({ alignContent: Alignment.BottomStart }) {
-        if (this.book.cover && this.book.cover.startsWith('http') && !this.imageLoadFailed) {
-          Image(this.book.cover)
-            .width('100%')
-            .aspectRatio(0.75)
-            .borderRadius(AppRadius.Md)
-            .objectFit(ImageFit.Cover)
-            // 按封面卡显示尺寸解码，避免原图(常 800×1200+)整张解码进内存
-            .sourceSize({ width: 300, height: 400 })
-            .alt($r('app.media.app_icon_legacy'))
-            .onError(() => {
-              this.imageLoadFailed = true;
-            })
+        if (this.book.cover && this.book.cover.startsWith('http')) {
+          CoverImage({
+            url: this.book.cover,
+            imgWidth: '100%',
+            aspectRatioValue: 1,
+            radius: AppRadius.Md,
+            decodeW: 300,
+            decodeH: 300,
+            highPriority: this.indexHint < 24
+          })
         } else if (this.book.cover && this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
             .width('100%')
-            .aspectRatio(0.75)
+            .aspectRatio(1)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: 400 })
+            .sourceSize({ width: 300, height: 300 })
             .onError(() => { this.imageLoadFailed = true; })
         } else if (this.book.cover && !this.book.cover.startsWith('http') && !this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image($rawfile(this.book.cover))
             .width('100%')
-            .aspectRatio(0.75)
+            .aspectRatio(1)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .onError(() => { this.imageLoadFailed = true; })
@@ -89,7 +80,7 @@ export struct BookCard {
           // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
           Image($r('app.media.app_icon_legacy'))
             .width('100%')
-            .aspectRatio(0.75)
+            .aspectRatio(1)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }

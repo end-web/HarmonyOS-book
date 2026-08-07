@@ -19,7 +19,7 @@ let PRE_DOWNLOAD_BACKWARD = 0;
 const MAX_CONCURRENT = 2;             // URL 解析（WebView/HTTP）最多 2 并发
 const MAX_FILE_CONCURRENT = 2;        // 音频文件下载最多 2 并发
 const MAX_URL_CACHE_SIZE = 50;
-const MAX_FILE_CACHE_COUNT = 12;      // 最多缓存 12 个音频文件（约 200MB 量级）
+const MAX_FILE_CACHE_BYTES = 1024 * 1024 * 1024; // 章节临时音频缓存上限 1GB
 const PRELOAD_FAILURE_COOLDOWN_MS = 30000;
 
 class ClearCacheResult {
@@ -38,6 +38,12 @@ interface FileCacheEntry {
   filePath: string;
   /** 对应章节页 URL（书源解析的入口）— 用于命中校验 */
   pageUrl: string;
+  bytes: number;
+  timestamp: number;
+}
+
+interface DiskCacheEntry {
+  filePath: string;
   bytes: number;
   timestamp: number;
 }
@@ -164,6 +170,7 @@ export class ChapterCacheService {
 
   setContext(ctx: common.Context): void {
     this.appContext = ctx;
+    this.enforceDiskCacheLimit().catch((): void => { /* 系统缓存目录不可用时交由系统回收 */ });
   }
 
   getAudioUrl(chapterId: string): string | null {
@@ -183,6 +190,10 @@ export class ChapterCacheService {
     if (entry) {
       // pageUrl 不一致说明缓存对应的章节不同（书源 toc 重排过），失效
       if (entry.pageUrl === safePageUrl && this.isUsableFile(entry.filePath)) {
+        entry.timestamp = Date.now();
+        try {
+          fileIo.utimes(entry.filePath, entry.timestamp);
+        } catch (_e) { /* 文件可能刚被系统缓存清理 */ }
         return entry.filePath;
       }
       this.fileCache.delete(chapterId);
@@ -397,6 +408,7 @@ export class ChapterCacheService {
       });
       this.preloadFailureAt.delete(chapter.id);
       this.evictFileCache();
+      await this.enforceDiskCacheLimit();
       this.extractDuration(chapter, filePath);
     } catch (err) {
       this.markPreloadFailure(chapter.id);
@@ -434,15 +446,78 @@ export class ChapterCacheService {
     if (!first.done) this.audioCache.delete(first.value);
   }
 
-  /** 文件缓存满了，从最旧的开始删 */
+  /** 文件缓存超过 1GB 后，按最近访问时间淘汰最久未使用的章节。 */
   private evictFileCache(): void {
-    while (this.fileCache.size > MAX_FILE_CACHE_COUNT) {
-      const first = this.fileCache.keys().next();
-      if (first.done) return;
-      const id = first.value as string;
-      const entry = this.fileCache.get(id);
-      if (entry) this.deleteFileSafely(entry.filePath);
-      this.fileCache.delete(id);
+    let totalBytes: number = 0;
+    for (const entry of this.fileCache.values()) {
+      totalBytes += Math.max(0, entry.bytes);
+    }
+    while (totalBytes > MAX_FILE_CACHE_BYTES) {
+      let oldestId: string | null = null;
+      let oldestTimestamp: number = Number.MAX_SAFE_INTEGER;
+      for (const id of this.fileCache.keys()) {
+        const candidate = this.fileCache.get(id);
+        if (candidate && candidate.timestamp < oldestTimestamp) {
+          oldestId = id;
+          oldestTimestamp = candidate.timestamp;
+        }
+      }
+      if (oldestId === null) return;
+      const entry = this.fileCache.get(oldestId);
+      if (entry) {
+        totalBytes -= Math.max(0, entry.bytes);
+        this.deleteFileSafely(entry.filePath);
+      }
+      this.fileCache.delete(oldestId);
+    }
+  }
+
+  /** 冷启动时按磁盘实际大小执行 1GB 上限，避免上个进程遗留文件脱离内存索引。 */
+  private async enforceDiskCacheLimit(): Promise<void> {
+    const ctx = this.appContext;
+    if (!ctx) return;
+    let names: string[] = [];
+    try {
+      names = await fileIo.listFile(ctx.cacheDir);
+    } catch (_e) {
+      return;
+    }
+    const entries: DiskCacheEntry[] = [];
+    let totalBytes: number = 0;
+    for (const name of names) {
+      if (!name.startsWith('chap_')) continue;
+      const filePath = `${ctx.cacheDir}/${name}`;
+      try {
+        const stat = await fileIo.stat(filePath);
+        if (stat.isDirectory()) continue;
+        const entry: DiskCacheEntry = {
+          filePath,
+          bytes: Math.max(0, stat.size),
+          timestamp: stat.mtime,
+        };
+        entries.push(entry);
+        totalBytes += entry.bytes;
+      } catch (_e) { /* 文件可能被系统并发清理 */ }
+    }
+    if (totalBytes <= MAX_FILE_CACHE_BYTES) return;
+    entries.sort((left: DiskCacheEntry, right: DiskCacheEntry): number => left.timestamp - right.timestamp);
+    for (const entry of entries) {
+      if (totalBytes <= MAX_FILE_CACHE_BYTES) return;
+      try {
+        await fileIo.unlink(entry.filePath);
+        totalBytes -= entry.bytes;
+        this.removeFileCacheEntry(entry.filePath);
+      } catch (_e) { /* 正在使用或已经被系统删除 */ }
+    }
+  }
+
+  private removeFileCacheEntry(filePath: string): void {
+    for (const chapterId of this.fileCache.keys()) {
+      const entry = this.fileCache.get(chapterId);
+      if (entry && entry.filePath === filePath) {
+        this.fileCache.delete(chapterId);
+        return;
+      }
     }
   }
 

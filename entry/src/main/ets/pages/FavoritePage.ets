@@ -1,6 +1,12 @@
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
+import {
+  HdsNavigation,
+  HdsNavigationTitleMode,
+  ScrollEffectType,
+  hdsMaterial
+} from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
@@ -17,6 +23,7 @@ import { DownloadService } from '../service/DownloadService';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
+const MINI_TITLE_BAR_HEIGHT: number = 56;
 
 interface BookUpdateInfo {
   title: string;
@@ -760,26 +767,7 @@ export struct FavoritePage {
           ]
         })
 
-      // 内容层：标题固定在上方，Refresh 只负责标题下方的书籍区域
-      Column() {
-        Column() {
-          Row() {
-            Text('书架')
-              .fontSize(AppFont.TitleL)
-              .fontColor($r('sys.color.font_primary'))
-              .fontWeight(FontWeight.Bold)
-          }
-          .width('100%')
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({
-          left: AppSpace.Md,
-          right: AppSpace.Md,
-          top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
-          bottom: AppSpace.Sm
-        })
-
+      HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.refreshIndicator() }) {
           Grid(this.listScroller) {
             LazyForEach(this.bookDataSource, (book: Book) => {
@@ -803,7 +791,7 @@ export struct FavoritePage {
           .padding({
             left: AppSpace.Md,
             right: AppSpace.Md,
-            top: AppSpace.Sm,
+            top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
             bottom: WindowUtils.getFloatingTabBottomVp()
           })
           .scrollBar(BarState.Off)
@@ -818,6 +806,47 @@ export struct FavoritePage {
         .layoutWeight(1)
         .backgroundColor(Color.Transparent)
       }
+      .mode(NavigationMode.Stack)
+      .titleBar({
+        avoidLayoutSafeArea: true,
+        content: {
+          title: {
+            mainTitle: '书架'
+          }
+        },
+        style: {
+          scrollEffectOpts: {
+            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          },
+          originalStyle: {
+            backgroundStyle: {
+              backgroundColor: Color.Transparent
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary')
+              }
+            }
+          },
+          scrollEffectStyle: {
+            backgroundStyle: {
+              backgroundColor: Color.Transparent
+            },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary')
+              }
+            }
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
+        }
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(true)
+      .bindToScrollable([this.listScroller])
       .width('100%')
       .height('100%')
       .backgroundColor(Color.Transparent)
@@ -840,13 +869,16 @@ export struct FavoritePage {
   @Builder
   refreshIndicator() {
     Row() {
-      LoadingProgress()
-        .width(24)
-        .height(24)
-        .color(AppColor.Brand)
+      if (this.isRefreshing) {
+        LoadingProgress()
+          .width(24)
+          .height(24)
+          .color(AppColor.Brand)
+      }
     }
     .height(56)
     .justifyContent(FlexAlign.Center)
+    .translate({ y: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT })
   }
 
   @Builder

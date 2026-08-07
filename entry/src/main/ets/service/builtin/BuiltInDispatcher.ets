@@ -24,8 +24,9 @@ class SR implements SearchResult {
   lastChapter: string = '';
   sourceName: string;
   sourceUrl: string;
+  completed?: boolean;
 
-  constructor(name: string, author: string, coverUrl: string, bookUrl: string, intro: string, kind: string, sourceName: string, sourceUrl: string) {
+  constructor(name: string, author: string, coverUrl: string, bookUrl: string, intro: string, kind: string, sourceName: string, sourceUrl: string, completed?: boolean) {
     this.name = name;
     this.author = author;
     this.coverUrl = coverUrl;
@@ -34,6 +35,7 @@ class SR implements SearchResult {
     this.kind = kind;
     this.sourceName = sourceName;
     this.sourceUrl = sourceUrl;
+    this.completed = completed;
   }
 }
 
@@ -46,14 +48,16 @@ class BI implements BookInfo {
   wordCount: string = '';
   lastChapter: string = '';
   tocUrl: string;
+  completed?: boolean;
 
-  constructor(name: string, author: string, coverUrl: string, intro: string, kind: string, tocUrl: string) {
+  constructor(name: string, author: string, coverUrl: string, intro: string, kind: string, tocUrl: string, completed?: boolean) {
     this.name = name;
     this.author = author;
     this.coverUrl = coverUrl;
     this.intro = intro;
     this.kind = kind;
     this.tocUrl = tocUrl;
+    this.completed = completed;
   }
 }
 
@@ -93,7 +97,7 @@ function bookToSearchResult(book: BuiltInBook, source: IBuiltInSource, sourceUrl
   BuiltInSourceRegistry.cacheBookMeta(book);
   const displaySourceName = book.sourceName.trim() || source.name;
   return new SR(book.title, book.author, book.coverUrl, book.bookUrl, book.intro, book.status,
-    displaySourceName, sourceUrl);
+    displaySourceName, sourceUrl, book.completed);
 }
 
 export class BuiltInDispatcher {
@@ -123,7 +127,7 @@ export class BuiltInDispatcher {
       const cover = meta ? meta.coverUrl : '';
       const intro = detail.intro || (meta ? meta.intro : '');
       const kind = meta ? meta.status : '';
-      return new BI(name, author, cover, intro, kind, bookUrl);
+      return new BI(name, author, cover, intro, kind, bookUrl, meta ? meta.completed : undefined);
     } catch (e) {
       BuiltInSourceRegistry.evictBookMeta(bookUrl);
       const msg = e instanceof Error ? e.message : JSON.stringify(e);

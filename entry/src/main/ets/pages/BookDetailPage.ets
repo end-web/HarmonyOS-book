@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
-import { AppColor, AppRadius, AppSpace, AppFont, AppMotion } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
@@ -39,7 +39,7 @@ export struct BookDetailPage {
   @Local chapterQuery: string = '';
   @Local downloadTick: number = 0;
   @Local chapterDownloadTick: number = 0;
-/** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
+  /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
   @Local listOffsetFromCurrent: number = 0;
   private chapterListScroller: Scroller = new Scroller();
   /** @ReusableV2 章节列表：Repeat 入参。过滤后的展示数组；下载/播放状态变化时浅拷贝重建引用以触发重渲染。 */
@@ -178,6 +178,9 @@ AudioService.getInstance().prewarmBookSource(cached);
         if (bookInfo) {
           if (bookInfo.tocUrl) tocUrl = bookInfo.tocUrl;
           if (bookInfo.intro && !book.intro) book.intro = bookInfo.intro;
+          // 详情返回的分类/完结作为更权威来源补全（搜索快照可能因硬编码丢失）
+          if (bookInfo.kind && bookInfo.kind.trim().length > 0 && !book.category.trim()) book.category = bookInfo.kind;
+          if (bookInfo.completed !== undefined) book.completed = bookInfo.completed;
         }
         this.debugInfo += `\ntocUrl=${tocUrl}`;
 
@@ -227,7 +230,8 @@ AudioService.getInstance().prewarmBookSource(cached);
           variables: Object.keys(mergedVars).length > 0 ? mergedVars : book.variables,
           // 保留 skip:否则 upsertCachedBook(cloned) 会把缓存索引里的旧 skip 清掉
           skipIntro: book.skipIntro,
-          skipOutro: book.skipOutro
+          skipOutro: book.skipOutro,
+          completed: book.completed
         };
         this.book = cloned;
         this.refreshDisplayedChapters(cloned.chapters);
@@ -684,17 +688,31 @@ AudioService.getInstance().prewarmBookSource(cached);
   @Builder
   buildTopBar() {
     Row() {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(24).fontColor(['#FFFFFF'])
-        .onClick(() => this.navStack.pop())
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(24)
+          .fontColor(['#FFFFFF'])
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .systemMaterial(AppMaterial.FloatingControl)
+      .onClick(() => this.navStack.pop())
       Blank()
-      SymbolGlyph(this.isFavorite ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
-        .fontSize(22)
-        .fontColor([this.isFavorite ? '#FF6B8A' : '#FFFFFF'])
-        .onClick(() => this.toggleFavorite())
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph(this.isFavorite ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
+          .fontSize(22)
+          .fontColor([this.isFavorite ? '#FF6B8A' : '#FFFFFF'])
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .systemMaterial(AppMaterial.FloatingControl)
+      .onClick(() => this.toggleFavorite())
     }
     .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
+    .height(48)
+    .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
   }
 
   @Builder
@@ -774,25 +792,27 @@ AudioService.getInstance().prewarmBookSource(cached);
   @Builder
   buildStats() {
     Row() {
-      // 评分
+      // 分类
       Column({ space: 2 }) {
-        Text(this.book!.rating > 0 ? this.book!.rating.toFixed(1) + ' 分' : '--')
+        Text(this.book!.category.trim().length > 0 ? this.book!.category : '--')
           .fontSize(AppFont.Title)
           .fontColor('#FFFFFF')
           .fontWeight(FontWeight.Bold)
-        Text('评分')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text('分类')
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF99')
       }
       .layoutWeight(1)
 
-      // 播放量
+      // 状态
       Column({ space: 2 }) {
-        Text(this.book!.totalDuration > 0 ? this.formatPlayCount(this.book!.totalDuration) : '--')
+        Text(this.book!.completed === undefined ? '--' : (this.book!.completed ? '已完结' : '连载中'))
           .fontSize(AppFont.Title)
           .fontColor('#FFFFFF')
           .fontWeight(FontWeight.Bold)
-        Text('播放量')
+        Text('状态')
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF99')
       }

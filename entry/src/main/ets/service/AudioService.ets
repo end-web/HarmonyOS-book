@@ -37,6 +37,11 @@ export interface AudioPlayFailedPayload {
   message: string;
 }
 
+interface AudioResolveResult {
+  headers: Record<string, string>;
+  success: boolean;
+}
+
 /**
  * AVPlayer 单例封装
  * 内部按 AudioSource.type 分发：rawfile / url / file
@@ -864,30 +869,32 @@ export class AudioService {
         chapter.source?.value ?? '', false
       );
 
-      // 2) 解析音频 URL（首次解析未变化时自动重试一次）
+      // 2) 解析音频 URL（失败时自动重试一次）
       const maxAttempts: number = 2;
       let audioHeaders: Record<string, string> = {};
+      let resolveResult: AudioResolveResult = { headers: {}, success: false };
       let resolved: boolean = false;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        audioHeaders = await this.resolveAudioUrl(book, chapter);
+        resolveResult = await this.resolveAudioUrl(book, chapter);
         if (myGen !== this.playGen) {
           return;
         }
-        if (chapter.source.type !== 'url' || !chapter.originSourceValue
-          || chapter.source.value !== chapter.originSourceValue) {
+        if (resolveResult.success) {
+          audioHeaders = resolveResult.headers;
           resolved = true;
           break;
         }
         if (attempt < maxAttempts - 1) {
-          hilog.warn(DOMAIN, TAG, 'resolveAudioUrl source unchanged (attempt %d/%d), retrying',
+          hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed (attempt %d/%d), retrying after 800ms',
             attempt + 1, maxAttempts);
+          await new Promise<void>((res) => setTimeout(res, 800));
         }
       }
       if (!resolved) {
         hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed after %d attempts, aborting playback', maxAttempts);
         this.state.isLoading = false;
         this.state.isPlaying = false;
-        this.emitPlayFailed(book.id, chapter.id, '音频地址获取失败，请点击重试');
+        this.emitPlayFailed(book.id, chapter.id, '无法获取音频地址，请检查网络或稍后重试');
         return;
       }
 
@@ -900,7 +907,18 @@ export class AudioService {
         this.pendingSeek = seekMs;
         this.resumeTargetMs = seekMs;
       }
-      await this.applySource(p, chapter.source, audioHeaders);
+      const loaded = await this.applySource(p, chapter.source, audioHeaders);
+      if (!loaded) {
+        // 装载失败(缓存文件被系统清理/URL 失效等),立即清 loading 并提示,
+        // 避免 UI 一直转圈。下个 applySource 的调用会走 resolveAudioUrl 重新解析。
+        hilog.error(DOMAIN, TAG, 'applySource returned false, aborting playback');
+        if (myGen === this.playGen && this.state) {
+          this.state.isLoading = false;
+          this.state.isPlaying = false;
+          this.emitPlayFailed(book.id, chapter.id, '音频源不可用，请点击重试');
+        }
+        return;
+      }
       this.triggerPreload(book, chapter);
     } catch (err) {
       if (myGen === this.playGen && this.state) {
@@ -925,66 +943,93 @@ export class AudioService {
    * 重要：如果上一次播放后 source.value 已经是临时签名 URL（如 api.aikeu.com 带 sign），
    * 重启后这条 URL 已过期，必须用 originSourceValue 里保存的章节页 URL 重新解析。
    */
-  private async resolveAudioUrl(book: Book, chapter: Chapter): Promise<Record<string, string>> {
+  private isFileUsable(path: string): boolean {
+    try {
+      return fileIo.statSync(path).size > 0;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  private async resolveAudioUrl(book: Book, chapter: Chapter): Promise<AudioResolveResult> {
     const cache = ChapterCacheService.getInstance();
     if (chapter.source.type !== 'url') {
-      // 预加载曾把章节改成本地临时文件；关闭预加载后恢复章节页 URL，
-      // 避免旧缓存绕过本次接口请求。整本下载/本地导入不受影响。
+      if (chapter.source.type === 'rawfile') {
+        const r: AudioResolveResult = { headers: {}, success: true };
+        return r;
+      }
+      // file 类型:先验证文件真实存在。cacheDir 里的临时缓存可能被系统清理/LRU 淘汰,
+      // 持久化的旧 file 路径直接喂给 AVPlayer 会 open 失败且 UI 卡在 loading。
       const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
-      if (chapter.source.type === 'file' && !downloadedPath && !cache.isPreloadEnabled()
-        && chapter.originSourceValue) {
+      if (this.isFileUsable(chapter.source.value)
+        && (downloadedPath || cache.isPreloadEnabled())) {
+        const r: AudioResolveResult = { headers: {}, success: true };
+        return r;
+      }
+      // 文件已丢失(或关闭预加载):回退到章节页 URL 重新解析
+      if (chapter.originSourceValue) {
+        try { cache.clearChapter(chapter.id); } catch (_e) { /* ignore */ }
         chapter.source = { type: 'url', value: chapter.originSourceValue };
       } else {
-        return {};
+        hilog.error(DOMAIN, TAG, 'file source missing and no originSourceValue: %{public}s',
+          chapter.source.value);
+        const r: AudioResolveResult = { headers: {}, success: false };
+        return r;
       }
     }
-    if (!book.sourceUrl) return {};
-    // 第一次解析，把当前的 source.value 备份成 originSourceValue（永远是章节页 URL）
+    if (!book.sourceUrl) {
+      const r: AudioResolveResult = { headers: {}, success: false };
+      return r;
+    }
     if (!chapter.originSourceValue) {
       chapter.originSourceValue = chapter.source.value;
     }
-    // 1) 优先看长期下载文件，保证整本下载后离线播放稳定
     const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
-    if (downloadedPath) {
+    if (downloadedPath && this.isFileUsable(downloadedPath)) {
       chapter.source = { type: 'file', value: downloadedPath };
-      return {};
+      const r: AudioResolveResult = { headers: {}, success: true };
+      return r;
     }
     if (cache.isPreloadEnabled()) {
-      // 2) 再看临时本地音频文件缓存（预加载到沙箱），最快路径，离线也能播
       const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
-      if (filePath) {
+      if (filePath && this.isFileUsable(filePath)) {
         chapter.source = { type: 'file', value: filePath };
-        return {};
+        const r: AudioResolveResult = { headers: {}, success: true };
+        return r;
       }
-      // 3) URL 缓存命中
       const cachedUrl = cache.getAudioUrl(chapter.id);
       if (cachedUrl) {
         chapter.source = { type: 'url', value: cachedUrl };
         const cachedHeaders = cache.getAudioHeaders(chapter.id);
-        // 顺手把这个章节的文件也缓到本地
         cache.ensureFileCached(book, chapter, cachedUrl, cachedHeaders);
-        return cachedHeaders;
+        const r: AudioResolveResult = { headers: cachedHeaders, success: true };
+        return r;
       }
     }
-    // 4) 未启用预加载时也会从这里进入，每次切章重新调用书源解析接口。
     try {
       const sources = await SourceDataService.getSources();
       const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
-      if (!source) return {};
+      if (!source) {
+        const r: AudioResolveResult = { headers: {}, success: false };
+        return r;
+      }
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables);
       const audioUrl = requestInfo.url;
       if (audioUrl) {
         chapter.source = { type: 'url', value: audioUrl };
-        // 把当前章节也下到本地
         cache.ensureFileCached(book, chapter, audioUrl, requestInfo.headers);
+        const r: AudioResolveResult = { headers: requestInfo.headers, success: true };
+        return r;
       }
-      return requestInfo.headers;
+      const r: AudioResolveResult = { headers: {}, success: false };
+      return r;
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'resolveAudioUrl failed: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
-      throw new Error(e?.message || '音频地址获取失败');
+      const r: AudioResolveResult = { headers: {}, success: false };
+      return r;
     }
   }
 
@@ -1008,9 +1053,15 @@ export class AudioService {
     });
   }
 
+  /**
+   * 把 src 装载进 AVPlayer。成功返回 true；失败返回 false（不主动向外抛，
+   * 由调用方 decide 是否重试/报错）。特别是：
+   * - file 类型：缓存文件可能已被系统回收/过期删除，打开失败返回 false，
+   *   调用方可借此清掉失效缓存并回退用 URL 重新解析下载，而不是卡在 loading。
+   */
   private async applySource(p: media.AVPlayer, src: AudioSource,
-    headers: Record<string, string> = {}): Promise<void> {
-    if (!this.context) return;
+    headers: Record<string, string> = {}): Promise<boolean> {
+    if (!this.context) return false;
 
     this.closeCurrentFile();
 
@@ -1021,28 +1072,33 @@ export class AudioService {
       } else if (src.type === 'url') {
         if (!src.value || src.value.trim().length === 0) {
           hilog.error(DOMAIN, TAG, 'Empty URL provided');
-          return;
+          return false;
         }
         if (!src.value.startsWith('http://') && !src.value.startsWith('https://')) {
           hilog.error(DOMAIN, TAG, 'Invalid URL scheme: %{public}s', src.value.substring(0, 50));
-          return;
+          return false;
         }
         const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
         mediaSource.enableOfflineCache(true);
         await p.setMediaSource(mediaSource);
       } else if (src.type === 'file') {
-        // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）
+        // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）。
+        // 缓存文件可能已被系统回收/过期删除，打开失败返回 false，不抛异常。
         const f = await fileIo.open(src.value, fileIo.OpenMode.READ_ONLY);
         const stat = await fileIo.stat(f.fd);
         this.currentFile = f;
         p.fdSrc = { fd: f.fd, offset: 0, length: stat.size };
+      } else {
+        return false;
       }
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'applySource failed: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
       this.closeCurrentFile();
+      return false;
     }
+    return true;
   }
 
   private closeCurrentFile(): void {

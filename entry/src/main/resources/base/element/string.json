@@ -199,6 +199,46 @@
     {
       "name": "cloud_source_error_save",
       "value": "保存失败，请稍后重试"
+    },
+    {
+      "name": "guide_group_mini_player",
+      "value": "迷你播放栏"
+    },
+    {
+      "name": "guide_mini_cover_action",
+      "value": "播放时查看底部小圆封面"
+    },
+    {
+      "name": "guide_mini_cover_desc",
+      "value": "封面持续旋转；暂停后定格，继续播放时从当前角度续转"
+    },
+    {
+      "name": "guide_mini_expand_action",
+      "value": "点击折叠态小封面"
+    },
+    {
+      "name": "guide_mini_expand_desc",
+      "value": "展开迷你播放栏；展开后点击标题区域进入播放页"
+    },
+    {
+      "name": "guide_group_system_media",
+      "value": "系统播放卡片"
+    },
+    {
+      "name": "guide_system_media_open_action",
+      "value": "下拉控制中心或查看锁屏播放卡片"
+    },
+    {
+      "name": "guide_system_media_open_desc",
+      "value": "可控制上一集、下一集、收藏和倍速"
+    },
+    {
+      "name": "guide_system_speed_action",
+      "value": "点击最左侧倍速按钮"
+    },
+    {
+      "name": "guide_system_speed_desc",
+      "value": "选择播放倍速，结果会同步到 App 播放页；系统卡片不再显示循环模式"
     }
   ]
 }

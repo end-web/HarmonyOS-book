@@ -1,4 +1,200 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "permission": "allow"
+  "permission": "allow",
+
+  "provider": {
+    "iflytek": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "iFlytek Claude",
+      "options": {
+        "baseURL": "https://one.iflytek.com/api/llm/console/chat/v1",
+        "apiKey": "{env:IFLYTEK_API_KEY}"
+      },
+      "models": {
+        "claude-haiku-4-5": {
+          "name": "Claude Haiku 4.5",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-haiku-4-5-20251001": {
+          "name": "Claude Haiku 4.5 (AWS)",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-sonnet-4-5": {
+          "name": "Claude Sonnet 4.5",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-sonnet-4-6": {
+          "name": "Claude Sonnet 4.6",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-sonnet-4-6-thinking": {
+          "name": "Claude Sonnet 4.6 Thinking",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-sonnet-5": {
+          "name": "Claude Sonnet 5",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-opus-4-6": {
+          "name": "Claude Opus 4.6",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-opus-4-6-thinking": {
+          "name": "Claude Opus 4.6 Thinking",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-opus-4-7": {
+          "name": "Claude Opus 4.7",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-opus-4-7-thinking": {
+          "name": "Claude Opus 4.7 Thinking",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-opus-4-8": {
+          "name": "Claude Opus 4.8",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-opus-5": {
+          "name": "Claude Opus 5",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+        "claude-fable-5": {
+          "name": "Claude Fable 5",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
+      }
+    },
+    "opencode-zen": {
+      "api": "openai",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/v1",
+        "apiKey": "{env:OPENCODE_ZEN_API_KEY}"
+      },
+      "models": {
+        "deepseek-v4-flash-free": {
+          "name": "DeepSeek V4 Flash Free",
+          "tool_call": true,
+          "temperature": true,
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          }
+        }
+      }
+    },
+    "grok-api": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Grok API",
+      "options": {
+        "baseURL": "https://grok-api.cn.mt/v1",
+        "apiKey": "g2a_37a965e3e665_gNXjtDk7SgGG0-s8CfVIRomYcMqOd0HU"
+      },
+      "models": {
+        "grok-4.5": {
+          "name": "Grok 4.5",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-4.3": {
+          "name": "Grok 4.3",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-chat-fast": {
+          "name": "Grok Chat Fast",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-build-0.1": {
+          "name": "Grok Build 0.1",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-composer-2.5-fast": {
+          "name": "Grok Composer 2.5 Fast",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-4.20-0309-reasoning": {
+          "name": "Grok 4.20 (Reasoning)",
+          "reasoning": true,
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-4.20-0309-non-reasoning": {
+          "name": "Grok 4.20",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        },
+        "grok-4.20-multi-agent-0309": {
+          "name": "Grok 4.20 Multi-Agent",
+          "tool_call": true,
+          "temperature": true,
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"]
+          }
+        }
+      }
+    }
+  }
 }

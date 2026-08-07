@@ -1,6 +1,11 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics } from '@kit.ArkUI';
-import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
+import {
+  HdsNavigation,
+  HdsNavigationTitleMode,
+  ScrollEffectType,
+  hdsMaterial
+} from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
@@ -9,10 +14,12 @@ import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
+import { CoverImage } from '../components/CoverImage';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { BookIdentity } from '../utils/BookIdentity';
+import { CoverPrefetcher } from '../service/CoverPrefetcher';
 
 /** 首页分类入口项 */
 interface HomeCategory {
@@ -57,6 +64,11 @@ const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
 const CATEGORY_NAV_WIDTH: number = 76;
 const CATEGORY_NAV_ROW_HEIGHT: number = 48;
+const FEATURED_PAGE_SIZE: number = 3;
+const FEATURED_ROW_HEIGHT: number = 72;
+const FEATURED_COVER_SIZE: number = 60;
+const FEATURED_NEXT_PEEK: number = 32;
+const HOME_COVER_CARD_SIZE: number = 128;
 
 @ComponentV2
 struct CategoryLightNavItem {
@@ -117,7 +129,7 @@ struct HomeLoadingSkeleton {
     Column({ space: 6 }) {
       Row()
         .width('100%')
-        .aspectRatio(0.74)
+        .aspectRatio(1)
         .borderRadius(AppRadius.Sm)
         .backgroundColor(AppColor.Divider)
       Row()
@@ -133,6 +145,68 @@ struct HomeLoadingSkeleton {
     }
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  skeletonFeaturedRow(showDivider: boolean) {
+    Column() {
+      Row({ space: AppSpace.Sm }) {
+        Row()
+          .width(FEATURED_COVER_SIZE)
+          .height(FEATURED_COVER_SIZE)
+          .borderRadius(AppRadius.Sm)
+          .backgroundColor(AppColor.Divider)
+        Column({ space: AppSpace.Xs }) {
+          Row()
+            .width('72%')
+            .height(14)
+            .borderRadius(AppRadius.Xs)
+            .backgroundColor(AppColor.Divider)
+          Row()
+            .width('44%')
+            .height(10)
+            .borderRadius(AppRadius.Xs)
+            .backgroundColor(HomeTheme.ProgressTrack)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      .height(FEATURED_ROW_HEIGHT - 1)
+      .alignItems(VerticalAlign.Center)
+
+      if (showDivider) {
+        Divider()
+          .color(AppColor.Divider)
+          .margin({ left: FEATURED_COVER_SIZE + AppSpace.Sm })
+      }
+    }
+    .width('100%')
+    .height(FEATURED_ROW_HEIGHT)
+  }
+
+  @Builder
+  skeletonFeaturedSection() {
+    Column({ space: AppSpace.Sm }) {
+      Row() {
+        Row()
+          .width(104)
+          .height(18)
+          .borderRadius(AppRadius.Xs)
+          .backgroundColor(AppColor.Divider)
+        Blank()
+        Row()
+          .width(38)
+          .height(12)
+          .borderRadius(AppRadius.Xs)
+          .backgroundColor(HomeTheme.ProgressTrack)
+      }
+      .width('100%')
+      this.skeletonFeaturedRow(true)
+      this.skeletonFeaturedRow(true)
+      this.skeletonFeaturedRow(false)
+    }
+    .width('100%')
   }
 
   @Builder
@@ -170,8 +244,8 @@ struct HomeLoadingSkeleton {
 
   build() {
     Column() {
-      Column({ space: AppSpace.Lg }) {
-        this.skeletonSection()
+      Column({ space: AppSpace.Md }) {
+        this.skeletonFeaturedSection()
         this.skeletonSection()
       }
       .width('100%')
@@ -228,6 +302,7 @@ export struct HomePage {
 
   aboutToAppear(): void {
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
+    CoverPrefetcher.init();
     this.loadHomeBlocks();
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.contentScroller);
@@ -303,6 +378,7 @@ export struct HomePage {
             bookUrl: book.bookUrl,
             intro: book.intro,
             kind: book.status || '',
+            completed: book.completed,
             lastChapter: '',
             sourceName: plugin.name,
             sourceUrl: HUAN_SOURCE_URL
@@ -322,6 +398,14 @@ export struct HomePage {
       this.homeBlockDataSource.setBlocks(sections);
       this.loadingHome = false;
       hilog.info(DOMAIN, TAG, 'loadHomeBlocks: SUCCESS, sections=%{public}d, loadingHome=false', sections.length);
+      // 预下载首页所有网络封面：前 12 张高优，其余排队，失败会自动重试直到完成
+      const covers: string[] = [];
+      for (const s of sections) {
+        for (const b of s.books) {
+          if (b.coverUrl && b.coverUrl.startsWith('http')) covers.push(b.coverUrl);
+        }
+      }
+      CoverPrefetcher.prefetchMany(covers, 12);
 
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'loadHomeBlocks failed: %{public}s', String(e));
@@ -339,6 +423,13 @@ export struct HomePage {
     this.audioBooks = [];
     this.audioCount = 0;
     this.audioDataSource.clear();
+    this.resetSearchCollapse();
+  }
+
+  private scrollContentToTop(): void {
+    try {
+      this.contentScroller.scrollEdge(Edge.Top);
+    } catch (_e) { /* ignore */ }
   }
 
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
@@ -346,6 +437,8 @@ export struct HomePage {
     if (this.selectedCategoryIndex === index && !forceReload) return; // 重复点击不处理
 
     this.selectedCategoryIndex = index;
+    this.resetSearchCollapse();
+    this.scrollContentToTop();
 
     if (index === -1) {
       // 切回推荐
@@ -389,6 +482,7 @@ export struct HomePage {
             name: b.title, author: b.author, coverUrl: b.coverUrl,
             bookUrl: b.bookUrl, intro: b.intro, kind: b.status, lastChapter: '',
             sourceName: plugin.name, sourceUrl: HUAN_SOURCE_URL,
+            completed: b.completed,
           };
           books.push(this.homeBookFromResult(sr));
         }
@@ -407,6 +501,11 @@ export struct HomePage {
       this.categoryHasMore = nextUrl.length > 0;
       this.categoryLoading = false;
       hilog.info(DOMAIN, TAG, 'switchCategory: loaded %{public}d books for category %{public}d', books.length, index);
+      const covers: string[] = [];
+      for (const b of books) {
+        if (b.cover && b.cover.startsWith('http')) covers.push(b.cover);
+      }
+      CoverPrefetcher.prefetchMany(covers, 16);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'switchCategory failed: %{public}s', String(e));
       this.categoryLoading = false;
@@ -436,7 +535,7 @@ export struct HomePage {
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: 'audio',
+      category: r.kind || 'audio',
       contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,
@@ -447,6 +546,7 @@ export struct HomePage {
       bookUrl: r.bookUrl,
       sourceUrl: r.sourceUrl,
       variables: r.variables,
+      completed: r.completed,
     };
     SearchCache.put(book);
     return book;
@@ -462,6 +562,8 @@ export struct HomePage {
     const gen = this.searchGen;
     this.searching = true;
     this.hasSearched = true;
+    this.resetSearchCollapse();
+    this.scrollContentToTop();
     this.audioBooks = [];
     this.audioCount = 0;
     this.audioDataSource.clear();
@@ -498,6 +600,11 @@ export struct HomePage {
       this.audioBooks = this.audioBooks.concat(books);
       this.audioCount = this.audioBooks.length;
       this.audioDataSource.appendBooks(books);
+      const covers: string[] = [];
+      for (const b of books) {
+        if (b.cover && b.cover.startsWith('http')) covers.push(b.cover);
+      }
+      CoverPrefetcher.prefetchMany(covers, 12);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
         source.bookSourceName, String(e));
@@ -512,7 +619,7 @@ export struct HomePage {
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: 'audio',
+      category: r.kind || 'audio',
       contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,
@@ -523,26 +630,112 @@ export struct HomePage {
       bookUrl: r.bookUrl,
       sourceUrl: r.sourceUrl,
       variables: r.variables,
+      completed: r.completed,
     };
     SearchCache.put(book);
     return book;
   }
 
-  private currentSubHeaderHeight(): number {
-    return this.hasSearched ? HEADER_TOOLBAR_HEIGHT : CATEGORY_NAV_ROW_HEIGHT;
+  /** 首板块按每页三条分组，横向切换时保留稳定的书籍顺序。 */
+  private featuredPages(books: SearchResult[]): SearchResult[][] {
+    const pages: SearchResult[][] = [];
+    let page: SearchResult[] = [];
+    for (const book of books) {
+      page.push(book);
+      if (page.length === FEATURED_PAGE_SIZE) {
+        pages.push(page);
+        page = [];
+      }
+    }
+    if (page.length > 0) {
+      pages.push(page);
+    }
+    return pages;
   }
 
-  @Computed
-  get fixedHeaderHeight(): number {
-    return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + this.currentSubHeaderHeight();
+  private featuredPageKey(pageBooks: SearchResult[]): string {
+    if (pageBooks.length === 0) return 'featured-empty';
+    const firstBook = pageBooks[0];
+    return `${firstBook.sourceUrl}#${firstBook.bookUrl}`;
+  }
+
+  /** 吸顶次行高度：分类标签行或搜索结果工具条 */
+  private currentSubHeaderHeight(): number {
+    return this.hasSearched
+      ? HEADER_TOOLBAR_HEIGHT
+      : CATEGORY_NAV_ROW_HEIGHT;
   }
 
   /**
-   * 固定顶部区：页面底色保持透明，搜索框和分类标签使用鸿蒙 7 沉浸光感材质。
+   * 列表纵向偏移。搜索折叠由滚动驱动：collapse = clamp(y, 0, SEARCH_ROW)，
+   * 一次滑动即可收起/展开，不再二次消费手势。
+   */
+  @Local listScrollY: number = 0;
+
+  /** 搜索行已折叠像素(0=展开, SEARCH_FIELD_ROW_HEIGHT=完全收起) */
+  @Computed
+  get searchCollapsePx(): number {
+    if (this.listScrollY <= 0) {
+      return 0;
+    }
+    if (this.listScrollY >= SEARCH_FIELD_ROW_HEIGHT) {
+      return SEARCH_FIELD_ROW_HEIGHT;
+    }
+    return this.listScrollY;
+  }
+
+  /** 搜索行当前可视高度 */
+  @Computed
+  get searchRowHeight(): number {
+    return SEARCH_FIELD_ROW_HEIGHT - this.searchCollapsePx;
+  }
+
+  /**
+   * 列表顶部占位始终为完整顶栏高度（状态栏+搜索+吸顶次行）。
+   * 折叠只改浮层视觉，不改占位，避免高度跳动导致“拉两次”。
+   */
+  @Computed
+  get headerHeight(): number {
+    return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + this.currentSubHeaderHeight();
+  }
+
+  /** 搜索是否完全展开（在顶部），允许下拉刷新 */
+  @Computed
+  get isSearchFullyExpanded(): boolean {
+    return this.listScrollY <= 0.5;
+  }
+
+  /** 搜索折叠进度 0~1，用于透明度 */
+  @Computed
+  get searchCollapseProgress(): number {
+    return this.searchCollapsePx / SEARCH_FIELD_ROW_HEIGHT;
+  }
+
+  private syncListScrollY(): void {
+    try {
+      const y: number = this.contentScroller.currentOffset().yOffset;
+      this.listScrollY = y > 0 ? y : 0;
+    } catch (_e) {
+      this.listScrollY = 0;
+    }
+  }
+
+  private resetSearchCollapse(): void {
+    this.listScrollY = 0;
+  }
+
+  /**
+   * 方案2 浮层顶栏：HDS 渐变模糊 + 搜索折叠 + 分类吸顶。
    */
   @Builder
   fixedSearchBar() {
     Column() {
+      // 仅保留状态栏布局空间，模糊由 HdsNavigation 渐变材质统一绘制。
+      Column()
+        .width('100%')
+        .height(WindowUtils.getStatusBarHeightVp())
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+
       Column() {
         Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
           .searchButton('搜索', { fontColor: HomeTheme.Accent })
@@ -559,11 +752,14 @@ export struct HomePage {
           .height(SEARCH_FIELD_HEIGHT)
           .backgroundColor(Color.Transparent)
           .systemMaterial(AppMaterial.InteractiveClean)
-          .borderRadius(AppRadius.Lg)
+          .borderRadius(AppRadius.Pill)
           .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+          .opacity(1 - this.searchCollapseProgress)
       }
       .width('100%')
-      .height(SEARCH_FIELD_ROW_HEIGHT)
+      .height(this.searchRowHeight)
+      .clip(true)
+      .opacity(this.searchRowHeight > 0 ? 1 : 0)
 
       if (!this.hasSearched) {
         this.buildCategoryTags()
@@ -599,10 +795,7 @@ export struct HomePage {
       }
     }
     .width('100%')
-    .padding({ top: WindowUtils.getStatusBarHeightVp() })
-    // 悬浮无背景：只保留控件自身边界和文字状态,避免顶部与列表底色出现色差。
     .backgroundColor(Color.Transparent)
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
   }
 
   /** 隐藏 Refresh 默认指示器，避免它出现在固定顶栏后方。 */
@@ -634,8 +827,8 @@ export struct HomePage {
       HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.emptyRefreshIndicator() }) {
           List({ scroller: this.contentScroller }) {
-        // 第1项:固定搜索与分类栏的等高占位 —— 顶栏本身常驻不滚动(见 fixedSearchBar),
-        // 下拉时刷新圈从占位项底部露出，正好位于分类栏和内容列表之间。
+        // 第1项:完整顶栏等高占位(高度固定，折叠只改浮层)。
+        // 下拉时刷新圈从占位项底部露出，位于分类栏和内容列表之间。
         ListItem() {
           Column() {
             if (this.shouldShowPullRefreshIndicator()) {
@@ -643,7 +836,7 @@ export struct HomePage {
             }
           }
           .width('100%')
-          .height(this.fixedHeaderHeight)
+          .height(this.headerHeight)
           .justifyContent(FlexAlign.End)
         }
 
@@ -693,7 +886,7 @@ export struct HomePage {
                 ListItem() {
                   this.buildHomeBlock(block, idx)
                 }
-                .margin({ top: idx === 0 ? AppSpace.Md : 0, bottom: AppSpace.Lg })
+                .margin({ bottom: AppSpace.Sm })
               }, (block: HomeBlockSection, idx: number) => `${block.sourceUrl}#${block.title}#${idx}`)
             } else {
               ListItem() {
@@ -775,28 +968,52 @@ export struct HomePage {
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .cachedCount(5)
-      .clip(false)
-      .backgroundColor(Color.Transparent)
-        }
-        .onStateChange((state: RefreshStatus) => {
+    .clip(false)
+    .backgroundColor(Color.Transparent)
+    .onDidScroll(() => {
+      this.syncListScrollY();
+    })
+    }
+    .onStateChange((state: RefreshStatus) => {
           this.refreshStatus = state;
         })
         .onRefreshing(() => {
           this.handleHomeRefresh();
         })
         .refreshOffset(64)
-        .pullToRefresh(!this.hasSearched)
+        // 列表在顶部、搜索完全展开时才允许下拉刷新
+        .pullToRefresh(!this.hasSearched && this.isSearchFullyExpanded)
         .width('100%')
         .height('100%')
         .clip(false)
         .backgroundColor(Color.Transparent)
-      }
+    }
     .titleBar({
-      content: { title: { mainTitle: '' } }
+      avoidLayoutSafeArea: true,
+      content: { title: { mainTitle: '' } },
+      style: {
+        scrollEffectOpts: {
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: Color.Transparent
+          }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: {
+            backgroundColor: Color.Transparent
+          }
+        },
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        }
+      }
     })
-    .hideTitleBar(true) // 顶部改用固定毛玻璃搜索栏(fixedSearchBar)，HdsNavigation 标题栏不再使用
     .titleMode(HdsNavigationTitleMode.MINI)
     .hideBackButton(true)
+    .bindToScrollable([this.contentScroller])
     .backgroundColor(Color.Transparent)
 
       if (this.loadingHome && this.homeBlocks.length === 0) {
@@ -805,10 +1022,10 @@ export struct HomePage {
         }
         .width('100%')
         .height('100%')
-        .padding({ top: this.fixedHeaderHeight })
+        .padding({ top: this.headerHeight })
       }
 
-      // 顶部浮层保持固定，暂不启用滚动折叠和标签吸顶。
+      // 方案2：浮层顶栏，搜索折叠 + 分类吸顶
       this.fixedSearchBar()
     }
   }
@@ -849,7 +1066,7 @@ export struct HomePage {
 
   @Builder
   buildHomeBlock(block: HomeBlockSection, blockIdx: number) {
-    Column({ space: AppSpace.Sm }) {
+    Column({ space: AppSpace.Xs }) {
       // 板块标题行
       Row() {
         Text(block.title)
@@ -875,8 +1092,10 @@ export struct HomePage {
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
       .alignItems(VerticalAlign.Center)
 
-      // 板块内容
-      if (block.layout === 'grid') {
+      // 首板块采用每屏三条的横向轮播，形成参考图中的紧凑私享列表。
+      if (blockIdx === 0) {
+        this.buildFeaturedCarousel(block)
+      } else if (block.layout === 'grid') {
         // 大卡片 + 简介：竖向 List
         Column({ space: AppSpace.Sm }) {
           ForEach(block.books, (r: SearchResult) => {
@@ -905,11 +1124,97 @@ export struct HomePage {
   }
 
   @Builder
+  buildFeaturedCarousel(block: HomeBlockSection) {
+    Swiper() {
+      ForEach(this.featuredPages(block.books), (pageBooks: SearchResult[]) => {
+        Column() {
+          ForEach(pageBooks, (rowBook: SearchResult, rowIndex?: number) => {
+            this.buildFeaturedRow(rowBook, (rowIndex ?? 0) < pageBooks.length - 1)
+          }, (rowBook: SearchResult) => `${block.sourceUrl}#featured#${rowBook.bookUrl}`)
+        }
+        .width('100%')
+        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+      }, (pageBooks: SearchResult[]) => this.featuredPageKey(pageBooks))
+    }
+    .width('100%')
+    .height(FEATURED_ROW_HEIGHT * FEATURED_PAGE_SIZE)
+    .nextMargin(FEATURED_NEXT_PEEK, true)
+    .indicator(false)
+    .loop(false)
+    .effectMode(EdgeEffect.Spring)
+  }
+
+  @Builder
+  buildFeaturedRow(r: SearchResult, showDivider: boolean) {
+    Column() {
+      Row({ space: AppSpace.Sm }) {
+        if (r.coverUrl && r.coverUrl.startsWith('http')) {
+          CoverImage({
+            url: r.coverUrl,
+            imgWidth: FEATURED_COVER_SIZE,
+            imgHeight: FEATURED_COVER_SIZE,
+            useFixedHeight: true,
+            radius: AppRadius.Sm,
+            decodeW: 180,
+            decodeH: 180,
+            highPriority: true
+          })
+        } else {
+          Image($r('app.media.app_icon_legacy'))
+            .width(FEATURED_COVER_SIZE)
+            .height(FEATURED_COVER_SIZE)
+            .borderRadius(AppRadius.Sm)
+            .objectFit(ImageFit.Cover)
+        }
+
+        Column({ space: AppSpace.Xxs }) {
+          Text(r.name)
+            .fontSize(AppFont.BodyL)
+            .fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Medium)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+          Text(r.author || r.sourceName)
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        .justifyContent(FlexAlign.Center)
+
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(16)
+          .fontColor([$r('sys.color.font_tertiary')])
+      }
+      .width('100%')
+      .height(FEATURED_ROW_HEIGHT - 1)
+      .alignItems(VerticalAlign.Center)
+      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
+      .onClick(() => {
+        const book = this.homeBookFromResult(r);
+        this.onBookTap(book.id);
+      })
+
+      if (showDivider) {
+        Divider()
+          .color(AppColor.Divider)
+          .margin({ left: FEATURED_COVER_SIZE + AppSpace.Sm })
+      }
+    }
+    .width('100%')
+    .height(FEATURED_ROW_HEIGHT)
+  }
+
+  @Builder
   buildHomeCoverCard(r: SearchResult, indexHint: number) {
     Column({ space: 4 }) {
       BookCard({
         book: this.homeBookFromResult(r),
-        cardWidth: 100,
+        cardWidth: HOME_COVER_CARD_SIZE,
         indexHint: indexHint,
         onTap: () => {
           const book = this.homeBookFromResult(r);
@@ -917,26 +1222,30 @@ export struct HomePage {
         }
       })
     }
-    .width(100)
+    .width(HOME_COVER_CARD_SIZE)
   }
 
   @Builder
   buildHomeListItem(r: SearchResult) {
     Row({ space: AppSpace.Md }) {
       if (r.coverUrl && r.coverUrl.startsWith('http')) {
-        Image(r.coverUrl)
-          .width(72)
-          .height(100)
-          .borderRadius(AppRadius.Sm)
-          .objectFit(ImageFit.Cover)
-          .sourceSize({ width: 300, height: 400 })
+        CoverImage({
+          url: r.coverUrl,
+          imgWidth: 72,
+          imgHeight: 72,
+          useFixedHeight: true,
+          radius: AppRadius.Sm,
+          decodeW: 216,
+          decodeH: 216,
+          highPriority: true
+        })
       } else {
         Stack() {
           Column().width('100%').height('100%').backgroundColor($r('sys.color.brand'))
           Text(r.name ? r.name.substring(0, 1) : '?')
             .fontSize(24).fontColor($r('sys.color.font_on_primary')).fontWeight(FontWeight.Bold)
         }
-        .width(72).height(100).borderRadius(AppRadius.Sm).clip(true)
+        .width(72).height(72).borderRadius(AppRadius.Sm).clip(true)
       }
       Column({ space: 4 }) {
         Text(r.name)
@@ -1009,12 +1318,15 @@ export struct HomePage {
     Row({ space: AppSpace.Md }) {
       Stack({ alignContent: Alignment.BottomStart }) {
         if (book.cover && book.cover.startsWith('http')) {
-          Image(book.cover)
-            .width(100)
-            .aspectRatio(0.7)
-            .borderRadius(AppRadius.Md)
-            .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: 400 })
+          CoverImage({
+            url: book.cover,
+            imgWidth: 100,
+            aspectRatioValue: 1,
+            radius: AppRadius.Md,
+            decodeW: 300,
+            decodeH: 300,
+            highPriority: false
+          })
         } else {
           Stack() {
             Column()
@@ -1027,7 +1339,7 @@ export struct HomePage {
               .fontWeight(FontWeight.Bold)
           }
           .width(100)
-          .aspectRatio(0.7)
+          .aspectRatio(1)
           .borderRadius(AppRadius.Md)
           .clip(true)
         }

@@ -2,48 +2,87 @@ import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
 interface GuideItem {
-  action: string;
-  desc: string;
+  id: string;
+  action: ResourceStr;
+  desc: ResourceStr;
 }
 
 interface GuideGroup {
-  title: string;
+  id: string;
+  title: ResourceStr;
   items: GuideItem[];
 }
 
 /** 使用说明内容:每一条都对应代码里真实存在的交互 */
 const GUIDE_GROUPS: GuideGroup[] = [
   {
+    id: 'home',
     title: '首页',
     items: [
-      { action: '双击底部「首页」页签', desc: '快速回到首页顶部' },
+      { id: 'home-double-tap', action: '双击底部「首页」页签', desc: '快速回到首页顶部' },
     ]
   },
   {
+    id: 'common',
     title: '通用',
     items: [
-      { action: '双击「书架 / 记录 / 我的」页签', desc: '快速回到当前页顶部' },
+      { id: 'tab-double-tap', action: '双击「书架 / 记录 / 我的」页签', desc: '快速回到当前页顶部' },
     ]
   },
   {
+    id: 'favorite',
     title: '书架',
     items: [
-      { action: '下拉', desc: '从欢 FM 刷新在线书籍的最新数据' },
-      { action: '长按书籍并拖到底部删除区', desc: '移出书架(可选仅移除,或删除本地文件)' },
+      { id: 'favorite-refresh', action: '下拉', desc: '从欢 FM 刷新在线书籍的最新数据' },
+      { id: 'favorite-remove', action: '长按书籍并拖到底部删除区', desc: '移出书架(可选仅移除,或删除本地文件)' },
     ]
   },
   {
+    id: 'record',
     title: '记录',
     items: [
-      { action: '长按任一条记录', desc: '进入多选,批量删除收听记录' },
+      { id: 'record-select', action: '长按任一条记录', desc: '进入多选,批量删除收听记录' },
     ]
   },
   {
+    id: 'player',
     title: '播放页',
     items: [
-      { action: '长按「倍速」', desc: '恢复 1.0 倍速' },
-      { action: '长按「定时」', desc: '取消睡眠定时' },
-      { action: '长按「跳过」', desc: '清除片头 / 片尾跳过设置' },
+      { id: 'player-speed-reset', action: '长按「倍速」', desc: '恢复 1.0 倍速' },
+      { id: 'player-sleep-cancel', action: '长按「定时」', desc: '取消睡眠定时' },
+      { id: 'player-skip-clear', action: '长按「跳过」', desc: '清除片头 / 片尾跳过设置' },
+    ]
+  },
+  {
+    id: 'mini-player',
+    title: $r('app.string.guide_group_mini_player'),
+    items: [
+      {
+        id: 'mini-cover-rotation',
+        action: $r('app.string.guide_mini_cover_action'),
+        desc: $r('app.string.guide_mini_cover_desc')
+      },
+      {
+        id: 'mini-cover-expand',
+        action: $r('app.string.guide_mini_expand_action'),
+        desc: $r('app.string.guide_mini_expand_desc')
+      },
+    ]
+  },
+  {
+    id: 'system-media',
+    title: $r('app.string.guide_group_system_media'),
+    items: [
+      {
+        id: 'system-media-open',
+        action: $r('app.string.guide_system_media_open_action'),
+        desc: $r('app.string.guide_system_media_open_desc')
+      },
+      {
+        id: 'system-media-speed',
+        action: $r('app.string.guide_system_speed_action'),
+        desc: $r('app.string.guide_system_speed_desc')
+      },
     ]
   },
 ];
@@ -78,7 +117,7 @@ export struct GuidePage {
           if (idx < group.items.length - 1) {
             Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
           }
-        }, (item: GuideItem) => item.action)
+        }, (item: GuideItem) => item.id)
       }
       .backgroundColor($r('sys.color.comp_background_primary'))
       .borderRadius(AppRadius.Lg)
@@ -110,7 +149,7 @@ export struct GuidePage {
         Column({ space: AppSpace.Lg }) {
           ForEach(GUIDE_GROUPS, (group: GuideGroup) => {
             this.groupCard(group)
-          }, (group: GuideGroup) => group.title)
+          }, (group: GuideGroup) => group.id)
 
           Text('部分手势带轻震反馈,更多用法会持续补充')
             .fontSize(AppFont.Caption)
