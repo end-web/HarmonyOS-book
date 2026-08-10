@@ -6,7 +6,7 @@
 // 书源来源: 项目根目录的 *.txt(每个一个源) + 1780478078.json / book_sources_all.json(集合)
 // 示例:
 //   node run.mjs 猫眼 full 深空彼岸
-//   node run.mjs 福书 book https://www.fushucun.com/2021/75280.html
+//   node run.mjs 福书 book BOOK_URL
 //   node run.mjs ./我的源.json search 斗破苍穹
 import { Source } from './harness.mjs';
 import fs from 'node:fs';

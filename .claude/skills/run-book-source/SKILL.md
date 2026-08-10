@@ -39,7 +39,7 @@ npm --prefix .claude/skills/run-book-source install
 # 用法: node run.mjs <书源名/关键字|文件> <action> [arg]
 # action: search | detail <bookUrl> | toc <tocUrl> | content <chapterUrl> | full [关键词] | book <bookUrl>
 node .claude/skills/run-book-source/run.mjs 猫眼 full 深空彼岸
-node .claude/skills/run-book-source/run.mjs 福书 book https://www.fushucun.com/2021/75280.html
+node .claude/skills/run-book-source/run.mjs 福书 book BOOK_URL
 node .claude/skills/run-book-source/run.mjs ./我的源.json search 斗破苍穹
 ```
 
@@ -54,12 +54,12 @@ node .claude/skills/run-book-source/run.mjs ./我的源.json search 斗破苍穹
 
 ## 已验证（实站拿到正文）
 
-- ✅ **福书网[分页]** fushucun.com：GBK+POST 搜索 / XPath option 分页目录 / `@js`+正则+Jsoup 正文
+- ✅ **分页 HTML 源**：GBK+POST 搜索 / XPath option 分页目录 / `@js`+正则+Jsoup 正文
 - ✅ **猫眼看书(优++)**：加密 API（动态域名+JWT、`data:`hex、`md5(aesKey)`头、AES/CBC 解章节 path），目录 1455 章
-- ⛔ **笔趣📖** biqun.cc：纯 CSS，引擎支持，**站点 2026-06 宕机(522)** 暂无法实测
+- ⛔ **纯 CSS 源**：引擎支持，测试站点不可用时暂无法实测
 
 ## 注意事项
 
 - 需要网络连接访问书源网站
 - App 内对照：复杂 API 源（如猫眼）走 `service/builtin/` 原生源（如 `Maoyan.ets`）；HTML 规则源走 `service/rule/` 引擎
-- 旧版 `localhost:3737` JS 代理已不需要（`@js` 走 `run.mjs` 内的 vm + java 桥）
+- 旧版 JS 代理已不需要（`@js` 走 `run.mjs` 内的 vm + java 桥）
