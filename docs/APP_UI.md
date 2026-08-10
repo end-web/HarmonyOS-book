@@ -85,7 +85,7 @@
 | 页面 / 交互 | 主要代码 | 接口或服务 | 数据位置 |
 |---|---|---|---|
 | 首页推荐与分类 | `HomePage.ets`、`BlockMorePage.ets` | `BookSourceService`、`BuiltInDispatcher` | 内置源返回的板块与分类数据 |
-| 首页搜索 | `HomePage.ets` | 听友 FM 直连 + `GET /api/v1/audio-books/search` | 页面数据源与短期搜索缓存 |
+| 首页搜索 | `HomePage.ets` | 欢FM 直连 + `GET /api/v1/audio-books/search` | 页面数据源与短期搜索缓存 |
 | Tab 双击回顶 | `MainPage.ets` | 各页面注册的 `Scroller` | 仅运行时状态 |
 | 收听记录 | `ReadingStatsPage.ets` | `StatsService`、`PreferenceService`、`PlaybackStore` | 设备本地统计、历史和播放进度 |
 | 继续播放 | `ReadingStatsPage.ets`、`AudioService` | 按书籍来源解析章节与音频 | 本地进度 + 来源章节数据 |

@@ -47,12 +47,12 @@ Pages hold `@Local` state + Service singletons. No V1 viewmodel layer exists.
 
 ## Content Architecture (read this first)
 
-The App **no longer loads user Legado rule sources**. Online content comes only from registered built-in sources (`builtin://eprendre/<id>`):
+The App **no longer loads user Legado rule sources**. Online content comes only from registered built-in source IDs:
 
 | Source ID | Name | How it works |
 |---|---|---|
-| `tingyou_fm` | TingYou FM | App connects directly to `www.tingyou.fm` (encrypted protocol + CDN) |
-| `jianhu_server` | JianHu Cloud | HTTP to `ServerAudioConfig.apiBase` (default `https://121.196.223.85/api/v1`) |
+| `huan_fm` | 欢FM | App uses its built-in encrypted protocol to access the content service directly |
+| `jianhu_server` | JianHu Cloud | HTTP to `ServerAudioConfig.apiBase`, supplied by deployment or user settings |
 
 Search is multi-source parallel; results are deduplicated by `sourceUrl + bookUrl`. Cloud source only routes — search result `sourceName` reflects the actual upstream audio source, not "JianHu Cloud".
 
@@ -85,7 +85,7 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 
 - **`build-profile.json5` contains signing secrets** (key passwords, cert paths) — never commit changes to this file; signing is machine-specific and configured via DevEco Studio
 - `code-linter.json5` enforces crypto security rules (no unsafe AES/RSA/DSA/DH/3DES) on all `.ets` files
-- Cloud API base default is `https://121.196.223.85/api/v1` (`ServerAudioConfig`); user overrides via `PreferenceService`
+- Cloud API base is managed by `ServerAudioConfig` and may be supplied by deployment or `PreferenceService`; do not publish concrete service addresses in documentation
 - Server's Reader/Legado engine must stay internal to Docker; never expose `/reader3` to the public internet
 
 ## Reference Documents

@@ -1,4 +1,4 @@
-# ListenBook（简·欢 / 听友）
+# ListenBook（简·欢 / 欢FM）
 
 纯血鸿蒙听书 App。当前形态：**手机端 + 内置音频源**，不再支持用户导入 Legado 规则书源。
 
@@ -6,7 +6,7 @@
 
 | 内置源 ID | 显示名 | 接入方式 |
 |---|---|---|
-| `tingyou_fm` | 听友 FM | App 本地直连 `www.tingyou.fm`（加密协议 + CDN） |
+| `huan_fm` | 欢FM | App 通过内置加密协议直接接入内容服务 |
 | `jianhu_server` | 简·欢云源 | 调用自建 `server/` 聚合服务；阅读规则在服务端执行 |
 
 本地导入音频、章节下载离线与文件管理导出、桌面播放卡片、隐私同意与使用说明已落地。TV/Pad 暂不做。
@@ -77,7 +77,7 @@ entry/src/main/ets/
 │       ├── BuiltInDispatcher.ets
 │       ├── ServerAudioConfig.ets   # 云源 API Base 配置
 │       └── sources/
-│           ├── TingYouFM.ets       # 听友 FM
+│           ├── TingYouFM.ets       # 欢FM
 │           └── ServerAudioSource.ets  # 简·欢云源
 ├── model/                    # Book / BookSource / PlayerState
 ├── theme/                    # Theme 常量
@@ -93,10 +93,10 @@ entry/src/main/ets/
 
 ```
 App
-├── 听友 FM (builtin://eprendre/tingyou_fm)
+├── 欢FM（内置源 ID：huan_fm）
 │     └── 本地协议：CDN 静态 JSON + 加密 API + WebView 兜底取 token
-└── 简·欢云源 (builtin://eprendre/jianhu_server)
-      └── HTTP → ServerAudioConfig.apiBase（默认 https://121.196.223.85/api/v1）
+└── 简·欢云源（内置源 ID：jianhu_server）
+      └── HTTP → ServerAudioConfig.apiBase（由部署环境或 App 设置提供）
             ├── GET  /audio-books/search
             ├── GET  /audio-books/:id
             ├── GET  /audio-books/:id/chapters
@@ -104,14 +104,14 @@ App
                   └── server 内：Reader/Legado 引擎 + 网络目录同步（YCKCEO / AOAOSTAR / Yiove 等）
 ```
 
-- 搜索：**多源并行**（听友 + 云源），按 `sourceUrl + bookUrl` 去重，见 `SearchCache` / 首页搜索逻辑
+- 搜索：**多源并行**（欢FM + 云源），按 `sourceUrl + bookUrl` 去重，见 `SearchCache` / 首页搜索逻辑
 - 云源只做路由；搜索结果 `sourceName` 为实际上游音频源名，角标不强制写死「简·欢云源」
 - 云源 API 地址可在 **我的 → 云源服务地址** 配置，经 `ServerAudioConfig` 规范化并持久化
 - App **不接收、不执行** 阅读规则 JSON；规则只在 `server/` 运行
 
 ### 与「摸鱼听书」类 App 的区别
 
-摸鱼听书等第三方 APK 的后台（例如 `http://47.103.62.118/api/v1/`）是**闭源插件 + 账号体系**，接口形状与简·欢云源 **不兼容**，不能把对方 `plugin/list` 一类地址直接填进 `ServerAudioConfig`。  
+摸鱼听书等第三方 APK 的后台是**闭源插件 + 账号体系**，接口形状与简·欢云源 **不兼容**，不能把对方 `plugin/list` 一类地址直接填进 `ServerAudioConfig`。
 要对齐的是本仓库 `server/` 暴露的标准接口（见 `server/README.md`）。
 
 ## 核心服务
@@ -123,7 +123,7 @@ App
 | `BackgroundTaskService` | `audioPlayback` 长时任务 |
 | `BookSourceService` | 内置源门面（search/info/toc/audio/explore/home） |
 | `SourceDataService` | 仅返回已注册内置源列表（无用户规则源 CRUD） |
-| `BuiltInDispatcher` / `BuiltInSourceRegistry` | 按 `builtin://eprendre/<id>` 分发到具体源 |
+| `BuiltInDispatcher` / `BuiltInSourceRegistry` | 按内置源 ID 分发到具体实现 |
 | `ServerAudioConfig` | 云源 `apiBase` 读写、校验、health 探测 |
 | `DataService` | 收藏 / 历史 / 书架本地数据 |
 | `PlaybackStore` | 当前播放会话与进度 |
@@ -135,7 +135,7 @@ App
 | `StatsService` | 听书统计 |
 | `UpdateService` | 静默检查更新 |
 | `WidgetUpdater` | 桌面卡片刷新 |
-| `WebEngineGate` / `WebViewAudioExtractor` | 按需 Web 引擎（听友 token 等） |
+| `WebEngineGate` / `WebViewAudioExtractor` | 按需 Web 引擎（欢FM token 等） |
 
 ## 页面与导航
 
@@ -155,7 +155,7 @@ App
 详见 [`server/README.md`](server/README.md)。摘要：
 
 - 包名：`jianhu-source-service`（Node ≥ 22）
-- 公网示例：`https://121.196.223.85/api/v1/health`
+- 公网入口由实际部署环境配置，仓库说明不记录具体服务地址
 - 管理台：`/admin/`
 - 能力：音频书源导入与健康检测、网络目录每日同步、按需解析播放地址（不代理音频文件）
 - 部署：`server/deploy/compose.yml` + Caddy HTTPS
@@ -221,7 +221,7 @@ cd server && npm test && npm run build:all
 - [x] 四 Tab 双击回顶
 - [x] 记录页统计摘要、编辑/长按多选、批量删除和继续播放
 - [x] 播放器、详情、自定义转场
-- [x] 听友 FM 内置源（加密协议、预热、策略重试）
+- [x] 欢FM 内置源（加密协议、预热、策略重试）
 - [x] 简·欢云源 + 可配置 API 地址
 - [x] 服务端聚合、网络目录同步、运维后台、Docker 部署
 - [x] AudioService 焦点 / AVSession / 后台播放

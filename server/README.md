@@ -1,6 +1,6 @@
 # 简·欢音频源服务
 
-服务端集中运行阅读音频书源，将搜索、书籍、章节和播放地址清洗成简·欢 App 使用的稳定接口。听友 FM
+服务端集中运行阅读音频书源，将搜索、书籍、章节和播放地址清洗成简·欢 App 使用的稳定接口。欢FM
 仍由 App 本地直连，本服务只作为第二个并行来源。
 
 ## 组成
@@ -21,7 +21,7 @@
 
 ## 调用结构
 
-App 保留听友 FM 本地直连，同时注册 `jianhu_server` 云源。搜索时两路并发、独立失败并按
+App 保留欢FM 本地直连，同时注册 `jianhu_server` 云源。搜索时两路并发、独立失败并按
 `sourceUrl + bookUrl` 去重；详情、目录和播放解析仍按结果所属来源分发。
 云源仅负责路由，搜索结果的 `sourceName` 会返回实际命中的阅读音频源名称，App 封面角标不再统一显示
 “简·欢云源”。
@@ -64,10 +64,9 @@ node -e "const{randomBytes,scryptSync}=require('crypto');const p=process.argv[1]
 cd deploy
 docker compose -f compose.yml up -d --build
 docker compose -f compose.yml ps
-curl https://121.196.223.85/api/v1/health
 ```
 
-当前入口为 Let's Encrypt 短期 IP 证书，Caddy 会自动续期；绑定自有域名后可直接替换为域名证书。Reader
+公网入口和 HTTPS 证书由部署环境配置，Caddy 负责自动续期。Reader
 和 API 均只在 Docker 内网暴露，公网仅开放 80/443。不要把 Reader 原始 `/reader3` 接口映射到公网。
 
 ## App 接口

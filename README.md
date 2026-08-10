@@ -1,4 +1,4 @@
-# ListenBook（简·欢 / 听友）
+# ListenBook（简·欢 / 欢FM）
 
 ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App，而是由**用户前台、运维后台和云源服务**三部分组成。用户在鸿蒙 App 内搜索、收藏和播放内容；管理员通过 Web 后台维护云端音频来源；Node 服务负责聚合来源并向 App 提供稳定 API。
 
@@ -11,7 +11,7 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 三部分边界明确：
 
 - App 只注册内置来源，不加载或执行用户提供的 Legado 规则。
-- 听友 FM 由 App 直接访问；简·欢云源通过服务端聚合，两路搜索并行且互不影响。
+- 欢FM 由 App 直接接入；简·欢云源通过服务端聚合，两路搜索并行且互不影响。
 - 书架、播放记录、每本书进度和设置默认保存在设备本地，不上传到云源服务。
 - 云源服务只返回真实音频地址和必要请求头，不代理音频流，也不保存用户的收听记录。
 - 运维后台不是用户听书网页，它只管理服务端来源和运行状态。
@@ -22,15 +22,15 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 
 ### 用户前台
 
-- **双路在线内容**：听友 FM 本地协议 + 简·欢云源聚合 API。
+- **双路在线内容**：欢FM 内置协议 + 简·欢云源聚合 API。
 - **首页浏览体验**：HarmonyOS 7 沉浸材质搜索/分类控件、首次进入骨架屏、下拉刷新和每个推荐板块的“更多”入口。
-- **完整收听流程**：多源搜索、书籍详情、章节目录、播放地址解析与续播。
+- **完整收听流程**：多源搜索、书籍详情、章节目录、播放地址解析、跳过片头片尾与章节级续播。
 - **播放状态反馈**：底部迷你播放栏的小圆封面随播放旋转，暂停时定格并从当前角度续转。
 - **系统级播放**：AVPlayer、音频焦点、锁屏/控制中心上一集、下一集、倍速和收藏控制；系统卡片不显示循环模式，另支持后台长时任务和睡眠定时。
 - **本地内容与离线能力**：导入音频文件、按章下载、下载管理、本地播放，以及将已下载章节导出到系统文件管理。
-- **个人数据**：书架、收藏、收听记录、整本书进度统计和每本书独立播放进度。
+- **个人数据**：书架、收藏、收听记录、整本书进度统计，以及每本书、每章节独立播放进度。
 - **记录管理**：顶部编辑或长按进入多选，支持全选和批量删除，并保留单书继续播放入口。
-- **系统集成**：桌面播放卡片、首启隐私同意、使用说明和云源地址配置。
+- **系统集成**：桌面播放卡片、首启隐私同意、使用说明、内置书源列表和云源配置。
 
 ### 运维后台
 
@@ -62,8 +62,8 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 ## 架构一览
 
 ```
-┌──────────────────────────┐       直连       ┌──────────────────┐
-│ HarmonyOS 用户前台 entry/ │ ───────────────► │ tingyou.fm       │
+┌──────────────────────────┐     内置协议      ┌──────────────────┐
+│ HarmonyOS 用户前台 entry/ │ ───────────────► │ 欢FM 内容源       │
 │ 首页 / 书架 / 记录 / 我的  │                  └──────────────────┘
 └─────────────┬────────────┘
               │ HTTPS /api/v1
@@ -92,7 +92,7 @@ App **不执行** Legado 规则 JSON；规则只在服务端运行。
 
 | 页面或流程 | 调用层 | 接口 / 数据 |
 |---|---|---|
-| App 首页推荐、分类与搜索 | `HomePage`、`BookSourceService`、内置源分发器 | 听友 FM 首页区块与分类直连；搜索并行调用听友 FM 和 `GET /api/v1/audio-books/search` |
+| App 首页推荐、分类与搜索 | `HomePage`、`BookSourceService`、内置源分发器 | 欢FM 首页区块与分类直连；搜索并行调用欢FM 和 `GET /api/v1/audio-books/search` |
 | App 书籍详情与章节 | `ServerAudioSource`、`DataService` | `GET /api/v1/audio-books/:id`、`GET /api/v1/audio-books/:id/chapters`；本地 TOC sidecar 缓存 |
 | App 播放与下载 | `AudioService`、`DownloadService` | `POST /api/v1/audio-chapters/:id/resolve`；音频直连上游或写入设备沙箱 |
 | App 收听记录 | `ReadingStatsPage`、`StatsService`、`PreferenceService` | 本地统计、播放历史和每本书进度；编辑模式批量管理，不使用服务端用户表 |
@@ -109,7 +109,7 @@ ListenBook/
 ├── entry/src/main/ets/     # 鸿蒙业务代码
 │   ├── pages/              # 首页/书架/记录/我的 + 播放器/详情/下载…
 │   ├── service/            # 播放、下载、偏好、内置源
-│   │   └── builtin/        # TingYouFM / ServerAudioSource
+│   │   └── builtin/        # 欢FM / 简·欢云源实现
 │   ├── model/ components/ theme/ utils/ widget/
 ├── server/
 │   ├── src/                # Express API、Provider、SQLite、同步与健康检测
@@ -127,8 +127,8 @@ ListenBook/
 |---|---|
 | `AudioService` | AVPlayer 播放核心、音频焦点、后台任务、AVSession、在线媒体系统缓存、续播和进度落盘 |
 | `BookSourceService` | 内置来源统一门面和搜索、详情、目录、播放解析分发 |
-| `BuiltInSourceRegistry` | 注册 `tingyou_fm` / `jianhu_server` |
-| `ServerAudioConfig` | 云源 API Base（默认 `https://121.196.223.85/api/v1`） |
+| `BuiltInSourceRegistry` | 注册 `huan_fm` / `jianhu_server` |
+| `ServerAudioConfig` | 云源 API Base 的读取、校验和用户配置 |
 | `DownloadService` | 章节下载队列、后台传输、进度通知和离线文件管理 |
 | `DownloadExportService` | 调用系统文件选择器，将沙箱内已下载章节复制到用户选择的位置 |
 | `DataService` | 本地导入书、缓存书籍索引和按书拆分的章节目录 |
@@ -148,7 +148,7 @@ ListenBook/
 
 ## 云源 API（摘要）
 
-默认 Base：`https://121.196.223.85/api/v1`
+API Base 由部署环境或 App 设置提供，仓库说明不记录具体服务地址。
 
 - `GET /health`
 - `GET /audio-books/search?q=&page=`
