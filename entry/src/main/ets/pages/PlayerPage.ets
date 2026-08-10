@@ -1065,7 +1065,9 @@ export struct PlayerPage {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
-        SymbolGlyph(this.isFavorite ? $r('sys.symbol.archivebox_fill') : $r('sys.symbol.archivebox'))
+        SymbolGlyph(this.isFavorite
+          ? $r('sys.symbol.bookshelf_badge_checkmark_fill')
+          : $r('sys.symbol.bookshelf'))
           .fontSize(24)
           .fontColor([this.isFavorite ? AppColor.Brand : '#FFFFFF'])
           .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })

@@ -101,6 +101,7 @@ export struct FavoritePage {
   @Local resolvingTocId: string = '';
   @Local refreshProgress: string = '';
   @Local missingFavoriteCount: number = 0;
+  @Local viewMode: number = 0; // 0=网格，1=列表
   @Param visible: boolean = false;
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
@@ -116,6 +117,31 @@ export struct FavoritePage {
 
   private getChapterCount(book: Book): number {
     return book.chapters && book.chapters.length > 0 ? book.chapters.length : (book.chapterCount || 0);
+  }
+
+  /** 汇总每本书的最新集数：优先章节匹配，失败时使用独立进度中已落盘的章节序号。 */
+  private async buildChapterIndexMap(books: Book[], historyMap: Record<string, PlayHistoryItem>):
+    Promise<Record<string, number>> {
+    const idxMap: Record<string, number> = {};
+    for (const book of books) {
+      const chapterCount = this.getChapterCount(book);
+      if (chapterCount <= 0) continue;
+
+      const progress = await PreferenceService.getProgress(book.id);
+      const history = historyMap[book.id];
+      let idx = -1;
+      if (progress && book.chapters && book.chapters.length > 0) {
+        idx = DataService.resolveChapterIndex(book, progress.chapterId, progress.chapterTitle);
+      }
+      if (idx < 0 && progress && progress.chapterIndex >= 0 && progress.chapterIndex < chapterCount) {
+        idx = progress.chapterIndex;
+      }
+      if (idx < 0 && history && book.chapters && book.chapters.length > 0) {
+        idx = DataService.resolveChapterIndex(book, history.chapterId, history.chapterTitle);
+      }
+      if (idx >= 0 && idx < chapterCount) idxMap[book.id] = idx;
+    }
+    return idxMap;
   }
 
   private syncFavoriteBook(updatedBook: Book): void {
@@ -154,13 +180,7 @@ export struct FavoritePage {
         map[item.bookId] = item;
       }
     }
-    const idxMap: Record<string, number> = {};
-    for (const b of this.favoriteBooks) {
-      const h = map[b.id];
-      if (!h || !b.chapters || b.chapters.length === 0) continue;
-      const idx = DataService.resolveChapterIndex(b, h.chapterId, h.chapterTitle);
-      if (idx >= 0) idxMap[b.id] = idx;
-    }
+    const idxMap = await this.buildChapterIndexMap(this.favoriteBooks, map);
     this.historyMap = map;
     this.chapterIdxMap = idxMap;
   }
@@ -237,14 +257,8 @@ export struct FavoritePage {
       }
     }
 
-    // 预算每本书的 chapterId → chapterIndex,避免后续 build / click 反复 findIndex
-    const idxMap: Record<string, number> = {};
-    for (const b of books) {
-      const h = map[b.id];
-      if (!h || !b.chapters || b.chapters.length === 0) continue;
-      const idx = DataService.resolveChapterIndex(b, h.chapterId, h.chapterTitle);
-      if (idx >= 0) idxMap[b.id] = idx;
-    }
+    // 预算每本书的最新章节序号，避免 build / click 反复解析，也兼容章节 ID 已变化的旧进度。
+    const idxMap = await this.buildChapterIndexMap(books, map);
     this.favoriteBooks = books;
     this.bookDataSource.setBooks(books);
     this.historyMap = map;
@@ -489,46 +503,26 @@ export struct FavoritePage {
     } catch (_e) { /* ignore */ }
   }
 
-  /** 当前在读章节的短标签:优先"第N章/集/回",取不到用完整标题(由 Text 省略号兜底) */
-  private currentChapterLabel(book: Book, idx: number): string {
-    const ch = book.chapters && book.chapters[idx] ? book.chapters[idx] : undefined;
-    if (!ch || !ch.title) return '';
-    const m = ch.title.match(/^第\s*\d+\s*[章集回话]/);
-    return m ? m[0] : ch.title;
-  }
-
-  /** 从章节标题里提取"第N章/集/回/话"短标签;取不到返回空(交由调用方退化处理) */
-  private chapterLabelFromTitle(title: string): string {
-    if (!title) return '';
-    const m = title.match(/^第\s*\d+\s*[章集回话]/);
-    return m ? m[0] : '';
-  }
-
   private getProgressText(book: Book): string {
     if (this.isMissingCachedBook(book)) {
       return '缓存缺失 · 重新搜索后加入';
     }
     const unit = '集';
     const chapterCount = this.getChapterCount(book);
-    const h = this.historyMap[book.id];
-    if (h && chapterCount > 0) {
+    if (chapterCount > 0) {
       const idx = this.chapterIdxMap[book.id];
       if (idx !== undefined && idx >= 0) {
-        // 显示"当前节目标题 · 总数",与播放页内序号一致;不用 idx+1(列表位置),
-        // 因为含水章/公告章时列表位置≠作者章号(如列表第527位其实是"第512章"),会对不上
-        const label = this.currentChapterLabel(book, idx);
-        if (label) return `${label} · ${chapterCount}${unit}`;
-        return `${idx + 1}${unit}/${chapterCount}${unit}`;
+        return `${idx + 1}/${chapterCount} ${unit}`;
       }
-      // 章节尚未加载(壳书,章节在 sidecar 懒加载)→ 用历史里的章节标题提取章号,避免退化成"共N集"
-      const histLabel = h.chapterTitle ? this.chapterLabelFromTitle(h.chapterTitle) : '';
-      if (histLabel) return `${histLabel} · ${chapterCount}${unit}`;
-      return `共${chapterCount}${unit}`;
-    }
-    if (chapterCount > 0) {
       return `共${chapterCount}${unit}`;
     }
     return book.author || '';
+  }
+
+  private toggleViewMode(): void {
+    this.getUIContext().animateTo({ duration: 220, curve: Curve.FastOutSlowIn }, () => {
+      this.viewMode = this.viewMode === 0 ? 1 : 0;
+    });
   }
 
   private handleBookTap(book: Book): void {
@@ -769,33 +763,62 @@ export struct FavoritePage {
 
       HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.refreshIndicator() }) {
-          Grid(this.listScroller) {
-            LazyForEach(this.bookDataSource, (book: Book) => {
+          if (this.viewMode === 0) {
+            Grid(this.listScroller) {
+              LazyForEach(this.bookDataSource, (book: Book) => {
+                GridItem() {
+                  this.buildBookTile(book)
+                }
+                // key 带上"总章数 + 当前章索引":LazyForEach 对相同 key 的项会复用旧节点、
+                // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
+                // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
+              }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
               GridItem() {
-                this.buildBookTile(book)
+                this.buildAddTile()
               }
-              // key 带上"总章数 + 当前章索引":LazyForEach 对相同 key 的项会复用旧节点、
-              // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
-              // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
-            }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-            GridItem() {
-              this.buildAddTile()
             }
+            .columnsTemplate('1fr 1fr 1fr')
+            .columnsGap(AppSpace.Sm)
+            .rowsGap(AppSpace.Md)
+            .cachedCount(6)
+            .width('100%')
+            .height('100%')
+            .padding({
+              left: AppSpace.Md,
+              right: AppSpace.Md,
+              top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
+              bottom: WindowUtils.getFloatingTabBottomVp()
+            })
+            .scrollBar(BarState.Off)
+            .backgroundColor(Color.Transparent)
+          } else {
+            List({ scroller: this.listScroller }) {
+              LazyForEach(this.bookDataSource, (book: Book) => {
+                ListItem() {
+                  this.buildListItem(book)
+                }
+              }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
+              ListItem() {
+                this.buildAddListItem()
+              }
+            }
+            .cachedCount(6)
+            .width('100%')
+            .height('100%')
+            .padding({
+              left: AppSpace.Md,
+              right: AppSpace.Md,
+              top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
+              bottom: WindowUtils.getFloatingTabBottomVp()
+            })
+            .divider({
+              strokeWidth: 1,
+              color: $r('sys.color.comp_divider'),
+              startMargin: 88
+            })
+            .scrollBar(BarState.Off)
+            .backgroundColor(Color.Transparent)
           }
-          .columnsTemplate('1fr 1fr 1fr')
-          .columnsGap(AppSpace.Sm)
-          .rowsGap(AppSpace.Md)
-          .cachedCount(6)
-          .width('100%')
-          .height('100%')
-          .padding({
-            left: AppSpace.Md,
-            right: AppSpace.Md,
-            top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
-            bottom: WindowUtils.getFloatingTabBottomVp()
-          })
-          .scrollBar(BarState.Off)
-          .backgroundColor(Color.Transparent)
         }
         .onRefreshing(() => {
           this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
@@ -812,6 +835,17 @@ export struct FavoritePage {
         content: {
           title: {
             mainTitle: '书架'
+          },
+          menu: {
+            value: [{
+              content: {
+                icon: this.viewMode === 0
+                  ? $r('sys.symbol.list_bullet')
+                  : $r('sys.symbol.square_grid_2x2'),
+                label: this.viewMode === 0 ? '切换为列表' : '切换为网格',
+                action: () => this.toggleViewMode()
+              }
+            }]
           }
         },
         style: {
@@ -825,6 +859,9 @@ export struct FavoritePage {
             contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('sys.color.font_primary')
+              },
+              menuStyle: {
+                iconColor: $r('sys.color.icon_primary')
               }
             }
           },
@@ -835,6 +872,9 @@ export struct FavoritePage {
             contentStyle: {
               titleStyle: {
                 mainTitleColor: $r('sys.color.font_primary')
+              },
+              menuStyle: {
+                iconColor: $r('sys.color.icon_primary')
               }
             }
           },
@@ -1182,6 +1222,31 @@ export struct FavoritePage {
         .fontSize(AppFont.Caption)
         .width('100%')
     }
+    .onClick(() => this.onGotoStore())
+  }
+
+  @Builder
+  buildAddListItem() {
+    Row({ space: AppSpace.Md }) {
+      Column() {
+        SymbolGlyph($r('sys.symbol.plus_circle'))
+          .fontSize(26)
+          .fontColor([$r('sys.color.font_tertiary')])
+      }
+      .width(72)
+      .height(72)
+      .borderRadius(AppRadius.Sm)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+
+      Text('去书城寻好书')
+        .fontSize(AppFont.Body)
+        .fontColor($r('sys.color.font_secondary'))
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
+    .alignItems(VerticalAlign.Center)
     .onClick(() => this.onGotoStore())
   }
 }

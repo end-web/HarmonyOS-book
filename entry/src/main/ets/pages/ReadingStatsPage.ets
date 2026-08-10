@@ -606,8 +606,8 @@ export struct ReadingStatsPage {
         .width(8)
         .height(8)
         .borderRadius(4)
-        .backgroundColor('#BFA38D')
-        .margin({ right: 95, bottom: 88 })
+        .backgroundColor(AppColor.Brand)
+        .margin({ right: 87, bottom: 87 })
 
       Column()
         .width(48)
