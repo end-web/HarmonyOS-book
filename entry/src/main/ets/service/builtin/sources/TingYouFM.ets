@@ -38,6 +38,8 @@ const LATEST_RANK_PAGE_SIZE = 50;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 /** 章节播放标识：tingyou://play/<albumId>/<chapterIdx> */
 const PLAY_SCHEME = 'tingyou://play/';
+/** play_token 最小请求间隔：整本下载并发轰炸会触发站点风控，导致所有章节解析失败 */
+const PLAY_TOKEN_MIN_INTERVAL_MS = 800;
 
 function baseHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -84,6 +86,8 @@ class HuanFMClass implements IBuiltInSource {
   /** guest 会话 token（不含 "Bearer " 前缀） */
   private token: string = '';
   private tokenFlight: AsyncSingleFlight<string> = new AsyncSingleFlight<string>();
+  /** play_token 串行限速：上一次请求的完成时刻链（含最小间隔） */
+  private playTokenChain: Promise<void> = Promise.resolve();
 
   /* ─────────────── token 与 API 基础设施 ─────────────── */
 
@@ -268,8 +272,17 @@ class HuanFMClass implements IBuiltInSource {
     const chapterIdx = Number(rest.substring(slash + 1));
     if (!albumId || !chapterIdx) return chapterUrl;
     const bodyJson = `{"album_id":${albumId},"chapter_idx":${chapterIdx}}`;
-    const obj = await this.apiPost('play_token', bodyJson);
-    const url = obj ? obj.getString('play_url', '') : '';
+    // 串行 + 最小间隔：防止批量下载时并发轰炸 play_token 触发风控封禁
+    const run = this.playTokenChain.then(async (): Promise<string> => {
+      const obj = await this.apiPost('play_token', bodyJson);
+      return obj ? obj.getString('play_url', '') : '';
+    });
+    this.playTokenChain = run.then((): Promise<void> =>
+      new Promise<void>((resolve) => setTimeout(resolve, PLAY_TOKEN_MIN_INTERVAL_MS))
+    ).catch((): Promise<void> =>
+      new Promise<void>((resolve) => setTimeout(resolve, PLAY_TOKEN_MIN_INTERVAL_MS))
+    );
+    const url = await run;
     return url || chapterUrl;
   }
 

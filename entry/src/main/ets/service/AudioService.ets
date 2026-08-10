@@ -8,13 +8,14 @@ import { avSession } from '@kit.AVSessionKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { PlayerState, PlayMode } from '../model/PlayerState';
-import { PreferenceService, PlayProgress } from './PreferenceService';
+import { PreferenceService, PlayProgress, ChapterPlayProgress } from './PreferenceService';
 import { SourceDataService } from './SourceDataService';
 import { AudioRequestInfo, BookSourceService } from './BookSourceService';
 import { DataService } from './DataService';
 import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
 import { ChapterCacheService } from './ChapterCacheService';
+import { DownloadPolicy } from './DownloadPolicy';
 import { DownloadService } from './DownloadService';
 import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
@@ -22,6 +23,7 @@ import { StatsService } from './StatsService';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
 import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
+import { ChapterProgressPolicy } from './ChapterProgressPolicy';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
@@ -600,6 +602,13 @@ export class AudioService {
       bookUrl: book.bookUrl || ''
     };
     await PreferenceService.saveProgress(progress);
+    const chapterProgress = new ChapterPlayProgress();
+    chapterProgress.bookId = book.id;
+    chapterProgress.chapterId = chapterId;
+    chapterProgress.positionMs = progressMs;
+    chapterProgress.durationMs = durationMs;
+    chapterProgress.updatedAt = Date.now();
+    await PreferenceService.saveChapterProgress(chapterProgress);
     await DataService.upsertCachedBook(book);
     // PlaybackStore: 让其他页面拿到的是"现在响着的"那本书,
     // sourceUrl 走 chapter.source.value(已是解析后的真实 URL,作 same-source 判断)
@@ -682,6 +691,23 @@ export class AudioService {
       if (this.state) this.state.isLoading = false;
       throw err as Error;
     }
+  }
+
+  /** 手动选集时恢复该章节的独立进度；没有记录时按正常片头设置起播。 */
+  async playChapterFromSavedProgress(book: Book, chapter: Chapter): Promise<void> {
+    const saved = await PreferenceService.getChapterProgress(book.id, chapter.id);
+    if (!saved) {
+      await this.playChapter(book, chapter);
+      return;
+    }
+    const durationMs = saved.durationMs > 0 ? saved.durationMs : Math.max(0, chapter.duration * 1000);
+    const seekMs = ChapterProgressPolicy.resolveResumePosition(
+      saved.positionMs,
+      durationMs,
+      Math.max(0, book.skipIntro ?? 0) * 1000,
+      Math.max(0, book.skipOutro ?? 0) * 1000
+    );
+    await this.playChapterAndSeek(book, chapter, seekMs);
   }
 
   /** 同书+同章节复用:不 reset。视 player 状态决定 seek/play */
@@ -782,9 +808,11 @@ export class AudioService {
   private async flushBeforeSwitch(targetBook: Book, targetChapter: Chapter): Promise<void> {
     if (!this.state) return;
     const curBookId = this.state.currentBook?.id ?? '';
+    const curChapterId = this.state.currentChapter?.id ?? '';
     const bookChanged = curBookId !== targetBook.id;
-    if (curBookId && bookChanged) {
-      // 切书:先把当前书的进度落盘
+    const chapterChanged = bookChanged || curChapterId !== targetChapter.id;
+    if (curBookId && curChapterId && chapterChanged) {
+      // 切书或切集:先把当前章节的进度落盘
       try { await this.persistHistory(); } catch (_e) { /* ignore */ }
     }
     // 切书(含冷启动首播)时恢复该书上次的倍速;同书切章保持当前倍速不变。
@@ -1029,7 +1057,10 @@ export class AudioService {
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables);
       const audioUrl = requestInfo.url;
-      if (audioUrl) {
+      // 解析失败时书源层会原样回传章节页 URL（如 tingyou://play/...），
+      // 必须校验后才算成功，否则假地址会被装进 AVPlayer 并报“音频源不可用”，
+      // 还会跳过 doPlayChapter 的解析重试。
+      if (DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl)) {
         chapter.source = { type: 'url', value: audioUrl };
         cache.ensureFileCached(book, chapter, audioUrl, requestInfo.headers);
         const r: AudioResolveResult = { headers: requestInfo.headers, success: true };
@@ -1556,7 +1587,7 @@ export class AudioService {
     const chapters = this.state.currentBook.chapters;
     const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
     if (idx > 0) {
-      await this.playChapter(this.state.currentBook, chapters[idx - 1]);
+      await this.playChapterFromSavedProgress(this.state.currentBook, chapters[idx - 1]);
     }
   }
 

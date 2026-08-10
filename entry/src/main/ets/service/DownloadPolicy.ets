@@ -82,6 +82,24 @@ export class DownloadPolicy {
     return code === 13900002 ? 'missing' : 'stat_error';
   }
 
+  /**
+   * 判定书源解析结果是否是可用的音频地址。
+   * 解析失败时上游会原样回传章节页 URL（如 tingyou://play/...），
+   * 这类值不能当作解析成功，否则会被装进播放器/下载器产生误导性报错。
+   */
+  static isResolvedAudioUrl(pageUrl: string, audioUrl: string): boolean {
+    if (!audioUrl || !DownloadPolicy.isHttpUrl(audioUrl)) return false;
+    if (audioUrl !== pageUrl) return true;
+    return DownloadPolicy.looksLikeDirectAudioUrl(audioUrl);
+  }
+
+  static looksLikeDirectAudioUrl(url: string): boolean {
+    const lower = (url || '').toLowerCase();
+    return lower.indexOf('.mp3') >= 0 || lower.indexOf('.m4a') >= 0
+      || lower.indexOf('.aac') >= 0 || lower.indexOf('.flac') >= 0
+      || lower.indexOf('.wav') >= 0 || lower.indexOf('.ogg') >= 0;
+  }
+
   static isHls(url: string, contentType: string): boolean {
     const cleanUrl = url.toLowerCase().split('?')[0];
     const type = contentType.toLowerCase();

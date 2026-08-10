@@ -11,6 +11,8 @@ import { SearchCache } from '../utils/SearchCache';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
+import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
+import { IBuiltInSource } from '../service/builtin/IBuiltInSource';
 
 interface ThemeOption {
   mode: number;
@@ -75,6 +77,7 @@ export struct SettingsPage {
   @Local isClearingDownloads: boolean = false;
   @Local viewportWidth: number = 0;
   @Local viewportHeight: number = 0;
+  private readonly builtInSources: IBuiltInSource[] = BuiltInSourceRegistry.all();
   private viewportUpdateTimerId: number = -1;
 
   aboutToAppear(): void {
@@ -270,6 +273,7 @@ export struct SettingsPage {
           Column({ space: AdaptiveLayout.sectionSpacing(this.viewportWidth, this.viewportHeight) }) {
             this.buildAppearanceGroup()
             this.buildLaunchGroup()
+            this.buildBuiltInSourcesGroup()
             this.buildPlaybackGroup()
           }
           .width('100%')
@@ -317,7 +321,7 @@ export struct SettingsPage {
   }
 
   @Builder
-  buildGroupTitle(title: string) {
+  buildGroupTitle(title: ResourceStr) {
     Text(title)
       .fontSize(AppFont.Body)
       .fontColor($r('sys.color.font_tertiary'))
@@ -394,6 +398,74 @@ export struct SettingsPage {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  buildBuiltInSourcesGroup() {
+    Column() {
+      this.buildGroupTitle($r('app.string.settings_builtin_sources'))
+
+      Column() {
+        ForEach(this.builtInSources, (source: IBuiltInSource, index: number) => {
+          this.buildBuiltInSourceItem(source)
+          if (index < this.builtInSources.length - 1) {
+            Divider()
+              .strokeWidth(0.5)
+              .color($r('sys.color.comp_divider'))
+              .margin({ left: ROW_INDENT + 32 + AppSpace.Sm })
+          }
+        }, (source: IBuiltInSource) => source.id)
+      }
+      .width('100%')
+      .backgroundColor($r('sys.color.comp_background_primary'))
+      .borderRadius(AppRadius.Lg)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  buildBuiltInSourceItem(source: IBuiltInSource) {
+    Row({ space: AppSpace.Sm }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Text(source.name.substring(0, 1))
+          .fontSize(AppFont.Caption)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(AppColor.OnBrand)
+      }
+      .width(32)
+      .height(32)
+      .backgroundColor(AppColor.Brand)
+      .borderRadius(AppRadius.Md)
+
+      Column({ space: 2 }) {
+        Text(source.name)
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+        Text(source.url)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      Text(source.searchable
+        ? $r('app.string.settings_source_searchable')
+        : $r('app.string.settings_source_browse_only'))
+        .fontSize(AppFont.Caption)
+        .fontColor($r('sys.color.font_secondary'))
+    }
+    .width('100%')
+    .padding({
+      left: ROW_INDENT,
+      right: ROW_INDENT,
+      top: AppSpace.Sm,
+      bottom: AppSpace.Sm
+    })
+    .constraintSize({ minHeight: 64 })
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder

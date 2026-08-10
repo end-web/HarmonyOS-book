@@ -121,6 +121,18 @@
       "value": "删除下载"
     },
     {
+      "name": "settings_builtin_sources",
+      "value": "内置书源"
+    },
+    {
+      "name": "settings_source_searchable",
+      "value": "支持搜索"
+    },
+    {
+      "name": "settings_source_browse_only",
+      "value": "仅分类"
+    },
+    {
       "name": "download_delete_confirm",
       "value": "删除"
     },

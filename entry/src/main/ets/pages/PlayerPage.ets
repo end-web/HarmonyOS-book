@@ -492,11 +492,12 @@ export struct PlayerPage {
     return this.playerState.savedDurationMs;
   }
 
-  /** 加载中或尚未拿到真实时长时，进度始终从 0 开始，避免沿用上一章的末尾位置。 */
+  /** prepared 前继续显示已保存的进度，避免续播加载时滑块先归零再跳回。 */
   private progressValueMs(): number {
-    if (this.playerState.isLoading || this.playerState.durationMs <= 0) return 0;
+    const max = this.sliderMaxMs();
+    if (max <= 1) return 0;
     const value = this.seeking ? this.seekValueMs : this.playerState.progressMs;
-    return Math.max(0, Math.min(value, this.playerState.durationMs));
+    return Math.max(0, Math.min(value, max));
   }
 
   private async togglePlay(): Promise<void> {
@@ -509,7 +510,7 @@ export struct PlayerPage {
     if (idx > 0) {
       const ch = this.book.chapters[idx - 1];
       // AudioService 内部会查缓存/解析 URL，这里不用再做
-      await AudioService.getInstance().playChapter(this.book, ch);
+      await AudioService.getInstance().playChapterFromSavedProgress(this.book, ch);
     }
   }
 
@@ -640,7 +641,7 @@ export struct PlayerPage {
     // 立即关抽屉（不要等 await playChapter，否则 WebView 嗅探的几秒内 UI 卡在章节列表上）
     this.showChapterList = false;
     // AudioService 内部用 playGen 替换式取消旧任务，所以反复点章节不会叠加
-    AudioService.getInstance().playChapter(this.book, ch).catch((e: Error) => {
+    AudioService.getInstance().playChapterFromSavedProgress(this.book, ch).catch((e: Error) => {
       hilog.error(DOMAIN, TAG, 'selectChapter failed: %{public}s', e.message);
     });
   }
@@ -1148,6 +1149,7 @@ export struct PlayerPage {
           SymbolGlyph(this.playerState.isPlaying
             ? $r('sys.symbol.pause_round_triangle_fill') : $r('sys.symbol.play_round_triangle_fill'))
             .fontSize(this.isCompactPlayer() ? 56 : 64)
+            .fontWeight(this.playerState.isPlaying ? FontWeight.Medium : FontWeight.Normal)
             .fontColor(['#FFFFFF'])
             .symbolEffect(new BounceSymbolEffect())
         }

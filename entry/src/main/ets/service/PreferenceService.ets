@@ -29,6 +29,9 @@ const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 const KEY_WIDGET_FORM_IDS = 'widget_form_ids_v1';
 /** 每本书独立的最新播放进度,key = `${KEY_PROGRESS_PREFIX}${bookId}` */
 const KEY_PROGRESS_PREFIX = 'progress_v1_';
+/** 每本书的章节级播放进度,key = `${KEY_CHAPTER_PROGRESS_PREFIX}${bookId}` */
+const KEY_CHAPTER_PROGRESS_PREFIX = 'chapter_progress_v1_';
+const MAX_CHAPTER_PROGRESS_PER_BOOK = 200;
 /** 每本书独立的跳过头尾设置,key = `${KEY_SKIP_PREFIX}${bookId}`。
  *  独立小 KV,不再搭车缓存书索引——避免冷启动走 legacy/persistUnsafe 兜底分支时把 skip 丢掉。 */
 const KEY_SKIP_PREFIX = 'skip_v1_';
@@ -98,6 +101,15 @@ export interface PlayProgress {
   speed?: number;
   sourceUrl?: string;
   bookUrl?: string;
+}
+
+/** 单个章节的独立播放进度，用于手动切回章节时续播。 */
+export class ChapterPlayProgress {
+  bookId: string = '';
+  chapterId: string = '';
+  positionMs: number = 0;
+  durationMs: number = 0;
+  updatedAt: number = 0;
 }
 
 /** 卡片侧需要的最小快照,主进程写,FormExtensionAbility 读后渲染 */
@@ -359,8 +371,55 @@ export class PreferenceService {
   static async removeProgress(bookId: string): Promise<void> {
     if (!bookId) return;
     PreferenceService.progressMemo.delete(bookId);
+    PreferenceService.chapterProgressMemo.delete(bookId);
     const s = await PreferenceService.ensureStore();
     await s.delete(KEY_PROGRESS_PREFIX + bookId);
+    await s.delete(KEY_CHAPTER_PROGRESS_PREFIX + bookId);
+    await s.flush();
+  }
+
+  private static chapterProgressMemo: Map<string, ChapterPlayProgress[]> = new Map();
+
+  private static async loadChapterProgresses(bookId: string): Promise<ChapterPlayProgress[]> {
+    const memo = PreferenceService.chapterProgressMemo.get(bookId);
+    if (memo !== undefined) return memo;
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_CHAPTER_PROGRESS_PREFIX + bookId, '') as string;
+    if (!raw) {
+      const empty: ChapterPlayProgress[] = [];
+      PreferenceService.chapterProgressMemo.set(bookId, empty);
+      return empty;
+    }
+    try {
+      const items = JSON.parse(raw) as ChapterPlayProgress[];
+      PreferenceService.chapterProgressMemo.set(bookId, items);
+      return items;
+    } catch (_e) {
+      const empty: ChapterPlayProgress[] = [];
+      PreferenceService.chapterProgressMemo.set(bookId, empty);
+      return empty;
+    }
+  }
+
+  static async getChapterProgress(bookId: string, chapterId: string): Promise<ChapterPlayProgress | null> {
+    if (!bookId || !chapterId) return null;
+    const items = await PreferenceService.loadChapterProgresses(bookId);
+    for (const item of items) {
+      if (item.chapterId === chapterId) return item;
+    }
+    return null;
+  }
+
+  static async saveChapterProgress(progress: ChapterPlayProgress): Promise<void> {
+    if (!progress.bookId || !progress.chapterId) return;
+    const saved = await PreferenceService.loadChapterProgresses(progress.bookId);
+    const next = saved.filter((item: ChapterPlayProgress): boolean => item.chapterId !== progress.chapterId);
+    next.unshift(progress);
+    const limited = next.length > MAX_CHAPTER_PROGRESS_PER_BOOK
+      ? next.slice(0, MAX_CHAPTER_PROGRESS_PER_BOOK) : next;
+    PreferenceService.chapterProgressMemo.set(progress.bookId, limited);
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_CHAPTER_PROGRESS_PREFIX + progress.bookId, JSON.stringify(limited));
     await s.flush();
   }
 
@@ -534,12 +593,14 @@ export class PreferenceService {
     try {
       const all = await s.getAll() as Record<string, Object>;
       for (const key of Object.keys(all)) {
-        if (key.startsWith(KEY_PROGRESS_PREFIX) || key.startsWith(KEY_SKIP_PREFIX)) {
+        if (key.startsWith(KEY_PROGRESS_PREFIX) || key.startsWith(KEY_CHAPTER_PROGRESS_PREFIX)
+          || key.startsWith(KEY_SKIP_PREFIX)) {
           await s.delete(key);
         }
       }
     } catch (_e) { /* ignore */ }
     PreferenceService.progressMemo.clear();
+    PreferenceService.chapterProgressMemo.clear();
     PreferenceService.skipMemo.clear();
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
@@ -562,12 +623,13 @@ export class PreferenceService {
     try {
       const all = await s.getAll() as Record<string, Object>;
       for (const key of Object.keys(all)) {
-        if (key.startsWith(KEY_PROGRESS_PREFIX)) {
+        if (key.startsWith(KEY_PROGRESS_PREFIX) || key.startsWith(KEY_CHAPTER_PROGRESS_PREFIX)) {
           await s.delete(key);
         }
       }
     } catch (_e) { /* ignore */ }
     PreferenceService.progressMemo.clear();
+    PreferenceService.chapterProgressMemo.clear();
     // skipMemo 不清——跳过头尾设置是用户主动配置
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
@@ -726,12 +788,16 @@ export class PreferenceService {
       if (key.startsWith(KEY_PROGRESS_PREFIX)) {
         const bookId = key.substring(KEY_PROGRESS_PREFIX.length);
         if (!bookId.startsWith('import_')) await s.delete(key);
+      } else if (key.startsWith(KEY_CHAPTER_PROGRESS_PREFIX)) {
+        const bookId = key.substring(KEY_CHAPTER_PROGRESS_PREFIX.length);
+        if (!bookId.startsWith('import_')) await s.delete(key);
       } else if (key.startsWith(KEY_SKIP_PREFIX)) {
         const bookId = key.substring(KEY_SKIP_PREFIX.length);
         if (!bookId.startsWith('import_')) await s.delete(key);
       }
     }
     PreferenceService.progressMemo.clear();
+    PreferenceService.chapterProgressMemo.clear();
     PreferenceService.skipMemo.clear();
     for (const progress of snapshot.progresses) {
       if (!progress || !progress.bookId || progress.bookId.startsWith('import_')) continue;

@@ -5,6 +5,7 @@ import builtInAudioCapabilityTest from './BuiltInAudioCapability.test';
 import tingYouRequestPolicyTest from './TingYouRequestPolicy.test';
 import searchCacheTest from './SearchCache.test';
 import listeningHistoryPolicyTest from './ListeningHistoryPolicy.test';
+import chapterProgressPolicyTest from './ChapterProgressPolicy.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -14,4 +15,5 @@ export default function testsuite() {
   tingYouRequestPolicyTest();
   searchCacheTest();
   listeningHistoryPolicyTest();
+  chapterProgressPolicyTest();
 }

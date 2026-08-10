@@ -42,6 +42,21 @@ export default function downloadPolicyTest() {
       expect(DownloadPolicy.rebaseStoragePath('', cacheRoot, filesRoot)).assertEqual('');
     });
 
+    it('rejects unresolved page urls echoed back by the source', 0, () => {
+      expect(DownloadPolicy.isResolvedAudioUrl('tingyou://play/123/1', 'tingyou://play/123/1'))
+        .assertEqual(false);
+      expect(DownloadPolicy.isResolvedAudioUrl('jianhu://audio-chapter/9', 'jianhu://audio-chapter/9'))
+        .assertEqual(false);
+      expect(DownloadPolicy.isResolvedAudioUrl('tingyou://play/123/1', ''))
+        .assertEqual(false);
+      expect(DownloadPolicy.isResolvedAudioUrl('tingyou://play/123/1', 'https://cdn.test/a.m4a?sign=x'))
+        .assertEqual(true);
+      expect(DownloadPolicy.isResolvedAudioUrl('https://audio.test/page/1', 'https://audio.test/page/1'))
+        .assertEqual(false);
+      expect(DownloadPolicy.isResolvedAudioUrl('https://audio.test/track.mp3', 'https://audio.test/track.mp3'))
+        .assertEqual(true);
+    });
+
     it('rejects hls and non audio responses', 0, () => {
       expect(DownloadPolicy.isHls('https://audio.test/book.m3u8?token=1', '')).assertEqual(true);
       expect(DownloadPolicy.isHls('https://audio.test/play', 'application/vnd.apple.mpegurl')).assertEqual(true);

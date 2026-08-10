@@ -19,6 +19,8 @@ const DOMAIN = 0x0001;
 const TAG = 'DownloadService';
 const MAX_RESOLVE_CONCURRENT = 2;
 const MAX_FILE_CONCURRENT = 2;
+/** 同一本书连续解析失败达到阈值即自动暂停：多为书源风控/限流，继续硬打只会加重封禁 */
+const MAX_RESOLVE_FAILURE_STREAK = 8;
 
 export const EVT_DOWNLOAD_UPDATED = 'app.download.updated';
 
@@ -85,6 +87,7 @@ export class DownloadService {
   private durationHydrationRerunBooks: Set<string> = new Set();
   private notificationBookIds: Set<string> = new Set();
   private lastNotificationAt: number = 0;
+  private resolveFailureStreaks: Map<string, number> = new Map();
 
   static getInstance(): DownloadService {
     if (!DownloadService.instance) {
@@ -379,6 +382,7 @@ export class DownloadService {
     if (!book || !book.id || chapters.length === 0) return 0;
     this.deletedBooks.delete(book.id);
     this.pausedBooks.delete(book.id);
+    this.resolveFailureStreaks.delete(book.id);
     const candidates: DownloadQueueItem[] = [];
     const localKeys: Set<string> = new Set();
     for (const chapter of chapters) {
@@ -472,8 +476,10 @@ export class DownloadService {
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       if (!this.isValidAudioUrl(pageUrl, requestInfo.url)) {
         await this.markFailed(item, '音频地址解析失败');
+        await this.recordResolveFailure(item);
         return;
       }
+      this.resolveFailureStreaks.delete(item.book.id);
       await DownloadStore.upsertChapter(item.book, item.chapter, 'pending', requestInfo.url, '', 0, '',
         (): boolean => this.isItemCurrent(item));
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
@@ -484,7 +490,24 @@ export class DownloadService {
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       const e = err as Error;
       await this.markFailed(item, e?.message ?? JSON.stringify(err));
+      await this.recordResolveFailure(item);
     }
+  }
+
+  /**
+   * 记录同一本书的连续解析失败。达到阈值说明书源大概率已风控/限流，
+   * 自动暂停整本下载，保留 pending 章节供用户稍后手动恢复，避免上千章持续轰炸接口。
+   */
+  private async recordResolveFailure(item: DownloadQueueItem): Promise<void> {
+    if (!this.isItemCurrent(item)) return;
+    const bookId = item.book.id;
+    const streak = (this.resolveFailureStreaks.get(bookId) ?? 0) + 1;
+    this.resolveFailureStreaks.set(bookId, streak);
+    if (streak < MAX_RESOLVE_FAILURE_STREAK) return;
+    this.resolveFailureStreaks.delete(bookId);
+    hilog.warn(DOMAIN, TAG,
+      'auto-pause book %{public}s after %{public}d consecutive resolve failures', bookId, streak);
+    await this.pauseBook(bookId);
   }
 
   private async downloadFile(item: DownloadQueueItem): Promise<void> {
@@ -651,16 +674,7 @@ export class DownloadService {
   }
 
   private isValidAudioUrl(pageUrl: string, audioUrl: string): boolean {
-    if (!audioUrl || !audioUrl.startsWith('http')) return false;
-    if (audioUrl !== pageUrl) return true;
-    return this.looksLikeDirectAudioUrl(audioUrl);
-  }
-
-  private looksLikeDirectAudioUrl(url: string): boolean {
-    const lower = url.toLowerCase();
-    return lower.indexOf('.mp3') >= 0 || lower.indexOf('.m4a') >= 0
-      || lower.indexOf('.aac') >= 0 || lower.indexOf('.flac') >= 0
-      || lower.indexOf('.wav') >= 0 || lower.indexOf('.ogg') >= 0;
+    return DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl);
   }
 
   private async restoreInterruptedDownloads(): Promise<void> {
