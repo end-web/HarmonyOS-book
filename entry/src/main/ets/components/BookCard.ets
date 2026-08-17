@@ -39,6 +39,7 @@ export struct BookCard {
   }
 
   private sourceName(): string {
+    if (this.book.contentType === 'text') return '电子书 · ' + (this.book.narrator || 'kk笔趣阁');
     if (this.book.narrator) return this.book.narrator;
     if (this.book.tags && this.book.tags.length > 0) return this.book.tags[0];
     return '';

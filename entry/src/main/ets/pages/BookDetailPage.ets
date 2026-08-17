@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
@@ -20,17 +21,26 @@ import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { ChapterListItem, ChapterBadge, mapChapterBadge } from '../components/ChapterListItem';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
+import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
+import { KkBiqugeTextSource } from '../service/text/KkBiqugeTextSource';
+import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
+
+const DETAIL_LOG_DOMAIN: number = 0x0000;
+const DETAIL_LOG_TAG: string = 'BookDetailPage';
 
 @ComponentV2
 export struct BookDetailPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
   @Local book: Book | null = null;
+  @Local loadingDetail: boolean = true;
+  @Local loadFailed: boolean = false;
   @Local isFavorite: boolean = false;
   @Local loadingToc: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   @Local isStartingPlay: boolean = false;
   @Local lastHistory: PlayHistoryItem | null = null;
+  @Local textReadingProgress: TextReadingPosition | null = null;
   @Local activeTab: number = 1;
   @Local bgColor: string = '#3A3A3A';
   @Local bgColorDark: string = '#1A1A1A';
@@ -130,8 +140,33 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   private async loadBook(): Promise<void> {
+    this.loadingDetail = true;
+    this.loadFailed = false;
+    try {
+      await this.loadBookData();
+    } catch (e) {
+      this.loadFailed = true;
+      this.debugInfo = e instanceof Error ? e.message : String(e);
+      hilog.error(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
+        'detail load failed, id=%{public}s error=%{public}s', this.bookId, this.debugInfo);
+    } finally {
+      this.loadingDetail = false;
+    }
+  }
+
+  private async loadBookData(): Promise<void> {
     const b = await this.findBookById(this.bookId);
+    if (!b) {
+      this.loadFailed = true;
+      hilog.error(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
+        'book lookup missed, id=%{public}s cacheSize=%{public}d', this.bookId, SearchCache.size());
+      return;
+    }
     if (b) {
+      if (b.contentType === 'text') {
+        await this.loadTextBook(b);
+        return;
+      }
       // 独立 KV 为权威:贴回跳过头尾,详情页起播也带上正确 skip(否则会用无 skip 对象喂 AudioService)
       await PreferenceService.applySkipConfig(b);
       // 先快速渲染基础信息
@@ -157,6 +192,64 @@ AudioService.getInstance().prewarmBookSource(cached);
         this.scrollToCurrentChapter();
       }
     }
+  }
+
+  private async loadTextBook(book: Book): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      const sourceBook = book.chapters.length > 0 ? book : await KkBiqugeTextSource.loadBook(book);
+      const loaded = this.copyBookForRender(sourceBook);
+      this.book = loaded;
+      this.refreshDisplayedChapters(loaded.chapters);
+      SearchCache.put(loaded);
+      this.isFavorite = await PreferenceService.isFavorite(loaded.id);
+      if (this.isFavorite) await DataService.upsertCachedBook(loaded);
+      await this.loadTextReadingProgress(loaded.id);
+      this.scrollToCurrentChapter();
+      hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
+        'text detail ready, id=%{public}s chapters=%{public}d elapsedMs=%{public}d',
+        loaded.id, loaded.chapters.length, Date.now() - startedAt);
+    } catch (e) {
+      this.loadFailed = true;
+      this.debugInfo = e instanceof Error ? e.message : String(e);
+      hilog.error(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
+        'text detail failed, id=%{public}s elapsedMs=%{public}d error=%{public}s',
+        book.id, Date.now() - startedAt, this.debugInfo);
+    }
+  }
+
+  private copyBookForRender(book: Book): Book {
+    const value: Book = {
+      id: book.id,
+      contentType: book.contentType,
+      title: book.title,
+      author: book.author,
+      narrator: book.narrator,
+      cover: book.cover,
+      category: book.category,
+      intro: book.intro,
+      totalDuration: book.totalDuration,
+      chapterCount: book.chapterCount,
+      rating: book.rating,
+      tags: book.tags.slice(),
+      chapters: book.chapters.slice(),
+      bookUrl: book.bookUrl,
+      sourceUrl: book.sourceUrl,
+      variables: book.variables,
+      skipIntro: book.skipIntro,
+      skipOutro: book.skipOutro,
+      completed: book.completed
+    };
+    return value;
+  }
+
+  private retryLoadBook(): void {
+    this.loadBook();
+  }
+
+  private async loadTextReadingProgress(bookId: string): Promise<void> {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.textReadingProgress = await TextReadingProgressService.get(context, bookId);
   }
 
   /** 从 Preferences 加载本书的播放历史。 */
@@ -319,6 +412,11 @@ AudioService.getInstance().prewarmBookSource(cached);
    */
   private currentChapterIndex(): number {
     if (!this.book) return -1;
+    if (this.book.contentType === 'text') {
+      const position = this.textReadingProgress;
+      if (!position || this.book.chapters.length === 0) return -1;
+      return Math.max(0, Math.min(position.resourceIndex, this.book.chapters.length - 1));
+    }
     if (this.playerState.currentBook && this.playerState.currentChapter
         && this.playerState.currentBook.id === this.bookId) {
       return DataService.resolveChapterIndex(
@@ -573,7 +671,22 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   private openPrimaryAction(chapter?: Chapter): void {
+    if (this.book?.contentType === 'text') {
+      this.openTextReader(chapter);
+      return;
+    }
     this.startPlay(chapter);
+  }
+
+  private openTextReader(chapter?: Chapter): void {
+    if (!this.book) return;
+    let resourceIndex = -1;
+    if (chapter) {
+      resourceIndex = DataService.resolveChapterIndex(this.book, chapter.id, chapter.title);
+    }
+    const params = TextReaderRouteParams.of(this.book.id, resourceIndex);
+    SearchCache.put(this.book);
+    this.navStack.pushPathByName('reader', params);
   }
 
   private async startPlay(chapter?: Chapter): Promise<void> {
@@ -672,6 +785,12 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   private isPlayingChapter(ch: Chapter): boolean {
+    if (this.book?.contentType === 'text') {
+      const currentIndex = this.currentChapterIndex();
+      if (currentIndex < 0 || !this.book) return false;
+      const chapterIndex = DataService.resolveChapterIndex(this.book, ch.id, ch.title);
+      return chapterIndex === currentIndex;
+    }
     return this.isCurrentPlaybackChapter(ch);
   }
 
@@ -689,7 +808,38 @@ AudioService.getInstance().prewarmBookSource(cached);
 
   build() {
     Column() {
-      if (this.book) {
+      if (this.loadingDetail) {
+        Column({ space: AppSpace.Sm }) {
+          LoadingProgress()
+            .width(40)
+            .height(40)
+            .color(AppColor.Brand)
+          Text($r('app.string.book_detail_loading'))
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else if (this.loadFailed) {
+        Column({ space: AppSpace.Md }) {
+          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+            .fontSize(42)
+            .fontColor([AppColor.Brand])
+          Text($r('app.string.book_detail_load_failed'))
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+          Text($r('app.string.common_retry'))
+            .fontSize(AppFont.Body)
+            .fontColor(AppColor.Brand)
+            .height(44)
+            .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+            .onClick(() => this.retryLoadBook())
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else if (this.book) {
         Stack({ alignContent: Alignment.TopStart }) {
           // 沉浸式背景:封面主色→深色纵向渐变,与下方正文底色保持明确分界(用户定调:不做消散融合)
           Column()
@@ -873,11 +1023,12 @@ AudioService.getInstance().prewarmBookSource(cached);
 
       // 章节数
       Column({ space: 2 }) {
-        Text(this.book!.chapterCount > 0 ? this.book!.chapterCount.toString() + ' 集' : '--')
+        Text(this.book!.chapterCount > 0
+          ? this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? ' 章' : ' 集') : '--')
           .fontSize(AppFont.Title)
           .fontColor('#FFFFFF')
           .fontWeight(FontWeight.Bold)
-        Text('总集数')
+        Text(this.book!.contentType === 'text' ? '总章节' : '总集数')
           .fontSize(AppFont.Caption)
           .fontColor('#FFFFFF99')
       }
@@ -907,7 +1058,7 @@ AudioService.getInstance().prewarmBookSource(cached);
           : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
         .onClick(() => { this.activeTab = 0; })
 
-      Text('节目')
+      Text(this.book!.contentType === 'text' ? '目录' : '节目')
         .fontSize(AppFont.BodyL)
         .fontColor(this.activeTab === 1 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
         .fontWeight(this.activeTab === 1 ? FontWeight.Bold : FontWeight.Normal)
@@ -919,7 +1070,7 @@ AudioService.getInstance().prewarmBookSource(cached);
           : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
         .onClick(() => {
           this.activeTab = 1;
-          // 进「节目」tab 复位搜索,避免带着旧过滤态定位章节
+          // 进入目录 tab 复位搜索,避免带着旧过滤态定位章节
           if (this.chapterQuery.length > 0) {
             this.chapterQuery = '';
             this.applyChapterFilter();
@@ -934,13 +1085,20 @@ AudioService.getInstance().prewarmBookSource(cached);
 
   /** 获取历史章节标题，供 Builder 使用 */
   private historyChapterTitle(): string {
-    if (!this.lastHistory || !this.book) return '';
+    if (!this.book) return '';
+    if (this.book.contentType === 'text') {
+      return this.textReadingProgress?.chapterTitle ?? '';
+    }
+    if (!this.lastHistory) return '';
     const idx = DataService.resolveChapterIndex(this.book, this.lastHistory.chapterId, this.lastHistory.chapterTitle);
     return idx >= 0 ? this.book.chapters[idx].title : (this.lastHistory.chapterTitle ?? '');
   }
 
   /** 根据是否有历史记录返回按钮文案 */
   private resumeButtonText(): string {
+    if (this.book?.contentType === 'text') {
+      return this.textReadingProgress ? '继续阅读' : '开始阅读';
+    }
     if (!this.lastHistory || !this.book) {
       return '开始播放';
     }
@@ -969,9 +1127,10 @@ AudioService.getInstance().prewarmBookSource(cached);
             .width('100%')
         }
 
-        // 播放按钮
+        // 主操作按钮
         Row() {
-          SymbolGlyph($r('sys.symbol.play_fill'))
+          SymbolGlyph(this.book!.contentType === 'text'
+            ? $r('sys.symbol.bookshelf') : $r('sys.symbol.play_fill'))
             .fontSize(18).fontColor(['#FFFFFF'])
           Text(this.resumeButtonText())
             .fontSize(AppFont.BodyL)
@@ -987,7 +1146,9 @@ AudioService.getInstance().prewarmBookSource(cached);
         .margin({ top: AppSpace.Md })
         .onClick(() => this.openPrimaryAction())
 
-        this.buildDownloadPanel()
+        if (this.book!.contentType !== 'text') {
+          this.buildDownloadPanel()
+        }
       }
       .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Lg, bottom: AppSpace.Xl })
     }
@@ -1076,8 +1237,8 @@ AudioService.getInstance().prewarmBookSource(cached);
       // 章节头部
       Row() {
         Text(this.chapterQuery.trim().length > 0
-          ? `匹配 ${this.displayedChapters.length} 集`
-          : `共 ${this.book!.chapters.length} 集`)
+          ? `匹配 ${this.displayedChapters.length}${this.book!.contentType === 'text' ? ' 章' : ' 集'}`
+          : `共 ${this.book!.chapters.length}${this.book!.contentType === 'text' ? ' 章' : ' 集'}`)
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
         if (this.loadingToc) {
@@ -1090,9 +1251,9 @@ AudioService.getInstance().prewarmBookSource(cached);
       .width('100%')
       .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Sm })
 
-      // 有节目时显示目录搜索。
+      // 有章节时显示目录搜索。
       if (this.book!.chapters.length > 0) {
-        Search({ value: this.chapterQuery, placeholder: '搜索节目' })
+        Search({ value: this.chapterQuery, placeholder: this.book!.contentType === 'text' ? '搜索章节' : '搜索节目' })
           .height(38)
           .margin({ left: AppSpace.Lg, right: AppSpace.Lg, bottom: AppSpace.Sm })
           .backgroundColor($r('sys.color.comp_background_tertiary'))
@@ -1190,13 +1351,19 @@ AudioService.getInstance().prewarmBookSource(cached);
   buildChapterItem(ri: RepeatItem<Chapter>) {
     ChapterListItem({
       title: ri.item.title,
+      isTextBook: this.book?.contentType === 'text',
       isPlaying: this.isPlayingChapter(ri.item),
-      durationText: this.chapterDuration(ri.item) > 0 ? this.formatDuration(this.chapterDuration(ri.item)) : '',
-      bytesText: this.isChapterDownloaded(ri.item) && (this.chapterDownloadRecord(ri.item)?.bytes ?? 0) > 0
-        ? this.formatBytes(this.chapterDownloadRecord(ri.item)?.bytes ?? 0)
-        : '',
-      progressText: this.getPlayProgress(ri.item) > 0 ? `${this.getPlayProgress(ri.item)}%` : '',
-      badge: mapChapterBadge(this.isChapterDownloaded(ri.item), this.isChapterDownloading(ri.item), this.isChapterDownloadFailed(ri.item)),
+      durationText: this.book?.contentType === 'text' ? ''
+        : (this.chapterDuration(ri.item) > 0 ? this.formatDuration(this.chapterDuration(ri.item)) : ''),
+      bytesText: this.book?.contentType === 'text' ? ''
+        : (this.isChapterDownloaded(ri.item) && (this.chapterDownloadRecord(ri.item)?.bytes ?? 0) > 0
+          ? this.formatBytes(this.chapterDownloadRecord(ri.item)?.bytes ?? 0)
+          : ''),
+      progressText: this.book?.contentType === 'text' ? ''
+        : (this.getPlayProgress(ri.item) > 0 ? `${this.getPlayProgress(ri.item)}%` : ''),
+      badge: this.book?.contentType === 'text' ? ChapterBadge.None
+        : mapChapterBadge(this.isChapterDownloaded(ri.item), this.isChapterDownloading(ri.item),
+          this.isChapterDownloadFailed(ri.item)),
       onTap: () => this.openPrimaryAction(ri.item)
     })
   }

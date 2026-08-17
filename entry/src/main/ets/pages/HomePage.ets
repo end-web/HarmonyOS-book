@@ -20,6 +20,8 @@ import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
+import { KkBiqugeTextSource } from '../service/text/KkBiqugeTextSource';
+import { TextSourceError } from '../model/TextReading';
 
 /** 首页分类入口项 */
 interface HomeCategory {
@@ -269,11 +271,16 @@ struct HomeLoadingSkeleton {
 @ComponentV2
 export struct HomePage {
   @Local audioBooks: Book[] = [];
+  @Local textBooks: Book[] = [];
   @Local keyword: string = '';
   @Local searching: boolean = false;
   @Local hasSearched: boolean = false;
+  @Local searchTab: number = 0; // 0=全部, 1=有声书, 2=电子书
   @Local viewMode: number = 0; // 0=grid, 1=list (默认表格模式)
   @Local audioCount: number = 0;
+  @Local textCount: number = 0;
+  @Local textSourceNeedsVerification: boolean = false;
+  @Local textSourceError: string = '';
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local loadingHome: boolean = false;
   /** 当前选中的入口索引（-1=推荐，其他值对应 HOME_CATEGORIES）。 */
@@ -292,6 +299,7 @@ export struct HomePage {
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   /** 分类入口点击:跳到分类书单页(复用 blockMore 路由) */
   @Event onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) => void = () => {};
+  @Event onVerifyTextSource: () => void = () => {};
 
   private contentScroller: Scroller = new Scroller();
   private audioDataSource: BookDataSource = new BookDataSource();
@@ -422,7 +430,12 @@ export struct HomePage {
     this.searching = false;
     this.hasSearched = false;
     this.audioBooks = [];
+    this.textBooks = [];
     this.audioCount = 0;
+    this.textCount = 0;
+    this.textSourceNeedsVerification = false;
+    this.textSourceError = '';
+    this.searchTab = 0;
     this.audioDataSource.clear();
     this.resetSearchCollapse();
   }
@@ -566,7 +579,11 @@ export struct HomePage {
     this.resetSearchCollapse();
     this.scrollContentToTop();
     this.audioBooks = [];
+    this.textBooks = [];
     this.audioCount = 0;
+    this.textCount = 0;
+    this.textSourceNeedsVerification = false;
+    this.textSourceError = '';
     this.audioDataSource.clear();
     BookCard.resetAnimations();
     try {
@@ -577,7 +594,13 @@ export struct HomePage {
       for (const source of sources) {
         tasks.push(this.searchOneSource(source, keyword, gen, seen));
       }
+      tasks.push(this.searchTextSource(keyword, gen, seen));
       await Promise.all(tasks);
+      if (gen !== this.searchGen) return;
+      // 并发搜索结束后统一校准一次，避免单个源完成顺序影响标签计数。
+      this.audioCount = this.audioBooks.length;
+      this.textCount = this.textBooks.length;
+      this.refreshVisibleSearchBooks();
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'search failed: %{public}s', String(e));
     } finally {
@@ -600,7 +623,7 @@ export struct HomePage {
       if (books.length === 0) return;
       this.audioBooks = this.audioBooks.concat(books);
       this.audioCount = this.audioBooks.length;
-      this.audioDataSource.appendBooks(books);
+      this.refreshVisibleSearchBooks();
       const covers: string[] = [];
       for (const b of books) {
         if (b.cover && b.cover.startsWith('http')) covers.push(b.cover);
@@ -610,6 +633,58 @@ export struct HomePage {
       hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
         source.bookSourceName, String(e));
     }
+  }
+
+  private async searchTextSource(keyword: string, gen: number, seen: Set<string>): Promise<void> {
+    try {
+      const books = await KkBiqugeTextSource.search(keyword);
+      if (gen !== this.searchGen) return;
+      const unique: Book[] = [];
+      for (const book of books) {
+        const dedupeKey = `${book.sourceUrl}\u001f${book.bookUrl}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        SearchCache.put(book);
+        unique.push(book);
+      }
+      this.textBooks = unique;
+      this.textCount = unique.length;
+      this.refreshVisibleSearchBooks();
+      const covers: string[] = [];
+      for (const book of unique) {
+        if (book.cover && book.cover.startsWith('http')) covers.push(book.cover);
+      }
+      CoverPrefetcher.prefetchMany(covers, 12);
+    } catch (e) {
+      if (e instanceof TextSourceError) {
+        this.textSourceNeedsVerification = e.code === 'VERIFY_REQUIRED';
+        this.textSourceError = e.message;
+      }
+      hilog.warn(DOMAIN, TAG, 'text source search failed: %{public}s', String(e));
+    }
+  }
+
+  private refreshVisibleSearchBooks(): void {
+    const visible: Book[] = [];
+    if (this.searchTab === 0 || this.searchTab === 1) {
+      for (const book of this.audioBooks) visible.push(book);
+    }
+    if (this.searchTab === 0 || this.searchTab === 2) {
+      for (const book of this.textBooks) visible.push(book);
+    }
+    this.audioDataSource.setBooks(visible);
+  }
+
+  private openBook(book: Book): void {
+    // 搜索结果可能超过 SearchCache 的 LRU 容量，跳转前重新固定当前所选书籍。
+    SearchCache.put(book);
+    this.onBookTap(book.id);
+  }
+
+  private selectSearchTab(index: number): void {
+    if (index < 0 || index > 2 || this.searchTab === index) return;
+    this.searchTab = index;
+    this.refreshVisibleSearchBooks();
   }
 
   private searchResultToBook(r: SearchResult): Book {
@@ -766,9 +841,7 @@ export struct HomePage {
         this.buildCategoryTags()
       } else {
         Row() {
-          Text(`有声书 ${this.audioCount}`)
-            .fontSize(13)
-            .fontColor($r('sys.color.font_secondary'))
+          this.buildSearchTypeTabs()
           if (this.searching) {
             LoadingProgress()
               .width(18).height(18)
@@ -797,6 +870,36 @@ export struct HomePage {
     }
     .width('100%')
     .backgroundColor(Color.Transparent)
+  }
+
+  @Builder
+  buildSearchTypeTabs() {
+    Row({ space: AppSpace.Xxs }) {
+      this.buildSearchTypeTab('全部', 0)
+      this.buildSearchTypeTab('有声书', 1)
+      this.buildSearchTypeTab('电子书', 2)
+    }
+    .padding({ left: 4, right: 4, top: 3, bottom: 3 })
+    .borderRadius(AppRadius.Pill)
+    .systemMaterial(AppMaterial.InteractiveThin)
+  }
+
+  @Builder
+  buildSearchTypeTab(label: string, index: number) {
+    Row({ space: 4 }) {
+      Text(label)
+        .fontSize(12)
+        .fontColor(this.searchTab === index ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
+        .fontWeight(this.searchTab === index ? FontWeight.Medium : FontWeight.Regular)
+      Text((index === 0 ? this.audioCount + this.textCount :
+        (index === 1 ? this.audioCount : this.textCount)).toString())
+        .fontSize(11)
+        .fontColor(this.searchTab === index ? HomeTheme.Accent : $r('sys.color.font_tertiary'))
+    }
+    .padding({ left: 9, right: 9, top: 5, bottom: 5 })
+    .borderRadius(AppRadius.Pill)
+    .backgroundColor(this.searchTab === index ? HomeTheme.AccentSoft : Color.Transparent)
+    .onClick(() => this.selectSearchTab(index))
   }
 
   /** 隐藏 Refresh 默认指示器，避免它出现在固定顶栏后方。 */
@@ -842,11 +945,11 @@ export struct HomePage {
         }
 
         // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
-        if (this.hasSearched && this.audioCount === 0 && this.searching) {
+        if (this.hasSearched && this.audioDataSource.totalCount() === 0 && this.searching) {
           ListItem() {
             this.buildSearchingState()
           }
-        } else if (this.hasSearched && this.audioCount === 0 && !this.searching) {
+        } else if (this.hasSearched && this.audioDataSource.totalCount() === 0 && !this.searching) {
           ListItem() {
             this.buildNoResultState()
           }
@@ -856,7 +959,7 @@ export struct HomePage {
             // API 26:直接使用外层 List 的视口按需创建网格项。
             LazyVGridLayout() {
               LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
-                BookCard({ book: book, indexHint: idx, onTap: () => this.onBookTap(book.id) })
+                BookCard({ book: book, indexHint: idx, onTap: () => this.openBook(book) })
               }, (book: Book) => book.id)
             }
             .columnsTemplate('1fr 1fr 1fr')
@@ -945,7 +1048,7 @@ export struct HomePage {
                   BookCard({
                     book: book,
                     indexHint: idx,
-                    onTap: () => this.onBookTap(book.id)
+                    onTap: () => this.openBook(book)
                   })
                 }, (book: Book) => book.id)
               }
@@ -1035,7 +1138,7 @@ export struct HomePage {
   buildSearchingState() {
     Column() {
       LoadingProgress().width(40).height(40).color(AppColor.Brand)
-      Text(`正在搜索 ${HUAN_SOURCE_NAME}...`)
+      Text('正在搜索有声书和电子书...')
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Sm })
@@ -1051,7 +1154,7 @@ export struct HomePage {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
         .fontSize(48)
         .fontColor([$r('sys.color.font_tertiary')])
-      Text('未找到相关有声书')
+      Text('未找到相关内容')
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Md })
@@ -1059,6 +1162,26 @@ export struct HomePage {
         .fontSize(AppFont.Caption)
         .fontColor($r('sys.color.font_tertiary'))
         .margin({ top: AppSpace.Xs })
+      if (this.textSourceNeedsVerification) {
+        Row({ space: AppSpace.Xs }) {
+          Text('验证')
+            .fontSize(12)
+            .fontColor(HomeTheme.Accent)
+            .fontWeight(FontWeight.Medium)
+          Text('电子书源')
+            .fontSize(AppFont.Caption)
+            .fontColor(HomeTheme.Accent)
+        }
+        .margin({ top: AppSpace.Md })
+        .onClick(() => this.onVerifyTextSource())
+      } else if (this.textSourceError) {
+        Text(this.textSourceError)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(2)
+          .textAlign(TextAlign.Center)
+          .margin({ top: AppSpace.Md, left: AppSpace.Xl, right: AppSpace.Xl })
+      }
     }
     .width('100%')
     .height(300)
@@ -1198,7 +1321,7 @@ export struct HomePage {
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
       .onClick(() => {
         const book = this.homeBookFromResult(r);
-        this.onBookTap(book.id);
+        this.openBook(book);
       })
 
       if (showDivider) {
@@ -1220,7 +1343,7 @@ export struct HomePage {
         indexHint: indexHint,
         onTap: () => {
           const book = this.homeBookFromResult(r);
-          this.onBookTap(book.id);
+          this.openBook(book);
         }
       })
     }
@@ -1282,7 +1405,7 @@ export struct HomePage {
     .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
     .onClick(() => {
       const book = this.homeBookFromResult(r);
-      this.onBookTap(book.id);
+      this.openBook(book);
     })
   }
 
@@ -1386,7 +1509,7 @@ export struct HomePage {
     }
     .width('100%')
     .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
-    .onClick(() => this.onBookTap(book.id))
+    .onClick(() => this.openBook(book))
   }
 
 }

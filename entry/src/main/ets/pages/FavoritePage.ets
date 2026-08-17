@@ -7,7 +7,14 @@ import {
   ScrollEffectType,
   hdsMaterial
 } from '@kit.UIDesignKit';
-import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
+import {
+  AppColor,
+  AppRadius,
+  AppSpace,
+  AppFont,
+  AppMaterial,
+  HomeTheme
+} from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
@@ -21,9 +28,14 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 import { DownloadService } from '../service/DownloadService';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
+import { KK_BIQU_GE_SOURCE_URL } from '../service/text/KkBiqugeHtmlParser';
+import { TextReadingPosition } from '../model/TextReading';
+import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
+const SHELF_FILTER_TOP_OFFSET: number = MINI_TITLE_BAR_HEIGHT - 12;
+const SHELF_FILTER_ROW_HEIGHT: number = 48;
 
 interface BookUpdateInfo {
   title: string;
@@ -102,6 +114,8 @@ export struct FavoritePage {
   @Local refreshProgress: string = '';
   @Local missingFavoriteCount: number = 0;
   @Local viewMode: number = 0; // 0=网格，1=列表
+  @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
+  @Local textProgressMap: Record<string, TextReadingPosition> = {};
   @Param visible: boolean = false;
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
@@ -114,6 +128,16 @@ export struct FavoritePage {
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
   /** 加入/移出书架后重新拉书清单。 */
   private favoritesChangedHandler: () => void = () => { this.loadFavorites(); };
+
+  @Computed
+  get shelfAudioCount(): number {
+    return this.favoriteBooks.filter((book: Book): boolean => book.contentType !== 'text').length;
+  }
+
+  @Computed
+  get shelfTextCount(): number {
+    return this.favoriteBooks.filter((book: Book): boolean => book.contentType === 'text').length;
+  }
 
   private getChapterCount(book: Book): number {
     return book.chapters && book.chapters.length > 0 ? book.chapters.length : (book.chapterCount || 0);
@@ -147,7 +171,7 @@ export struct FavoritePage {
   private syncFavoriteBook(updatedBook: Book): void {
     const books = this.favoriteBooks.map((book: Book): Book => book.id === updatedBook.id ? updatedBook : book);
     this.favoriteBooks = books;
-    this.bookDataSource.setBooks(books);
+    this.bookDataSource.setBooks(this.filteredBooks(books));
   }
 
   aboutToAppear(): void {
@@ -259,8 +283,15 @@ export struct FavoritePage {
 
     // 预算每本书的最新章节序号，避免 build / click 反复解析，也兼容章节 ID 已变化的旧进度。
     const idxMap = await this.buildChapterIndexMap(books, map);
+    const textProgress: Record<string, TextReadingPosition> = {};
+    for (const book of books) {
+      if (book.contentType !== 'text' || !this.context) continue;
+      const position = await TextReadingProgressService.get(this.context, book.id);
+      if (position) textProgress[book.id] = position;
+    }
     this.favoriteBooks = books;
-    this.bookDataSource.setBooks(books);
+    this.textProgressMap = textProgress;
+    this.bookDataSource.setBooks(this.filteredBooks(books));
     this.historyMap = map;
     this.chapterIdxMap = idxMap;
     this.loading = false;
@@ -314,7 +345,8 @@ export struct FavoritePage {
 
   /** 仅展示本地音频和当前内置欢源，屏蔽升级前遗留的文本书与规则源缓存。 */
   private isSupportedBook(book: Book): boolean {
-    if (book.contentType === 'text' || book.category === 'text') return false;
+    if (book.contentType === 'text') return book.sourceUrl === KK_BIQU_GE_SOURCE_URL;
+    if (book.category === 'text') return false;
     if (!book.sourceUrl) return true;
     return BuiltInSourceRegistry.isBuiltIn(book.sourceUrl);
   }
@@ -369,7 +401,7 @@ export struct FavoritePage {
     // 筛选出在线书源的书(非本地导入)
     const onlineBooks = this.favoriteBooks.filter(b =>
       !this.isMissingCachedBook(b) && !this.isFavoriteAliasBook(b) &&
-        !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
+        !b.id.startsWith('import_') && b.contentType !== 'text' && b.bookUrl && b.sourceUrl);
     if (onlineBooks.length === 0) {
       try {
         const message = this.missingFavoriteCount > 0 ?
@@ -507,6 +539,14 @@ export struct FavoritePage {
     if (this.isMissingCachedBook(book)) {
       return '缓存缺失 · 重新搜索后加入';
     }
+    if (book.contentType === 'text') {
+      const position = this.textProgressMap[book.id];
+      const chapterCount = this.getChapterCount(book);
+      if (position && chapterCount > 0) {
+        return `${Math.min(position.resourceIndex + 1, chapterCount)}/${chapterCount} 章`;
+      }
+      return chapterCount > 0 ? `共${chapterCount}章` : '未开始阅读';
+    }
     const unit = '集';
     const chapterCount = this.getChapterCount(book);
     if (chapterCount > 0) {
@@ -525,6 +565,18 @@ export struct FavoritePage {
     });
   }
 
+  private filteredBooks(books: Book[]): Book[] {
+    if (this.shelfFilter === 1) return books.filter((book: Book): boolean => book.contentType !== 'text');
+    if (this.shelfFilter === 2) return books.filter((book: Book): boolean => book.contentType === 'text');
+    return books;
+  }
+
+  private selectShelfFilter(index: number): void {
+    if (index < 0 || index > 2 || this.shelfFilter === index) return;
+    this.shelfFilter = index;
+    this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
+  }
+
   private handleBookTap(book: Book): void {
     if (this.isMissingCachedBook(book)) {
       try {
@@ -534,6 +586,10 @@ export struct FavoritePage {
     }
     const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
+    if (book.contentType === 'text') {
+      this.navStack.pushPathByName('detail', book.id, onPop);
+      return;
+    }
     // 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state。
     if (PlaybackStore.getInstance().isCurrentBook(book.id)) {
       this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
@@ -786,7 +842,8 @@ export struct FavoritePage {
             .padding({
               left: AppSpace.Md,
               right: AppSpace.Md,
-              top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
+              top: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
+                SHELF_FILTER_ROW_HEIGHT,
               bottom: WindowUtils.getFloatingTabBottomVp()
             })
             .scrollBar(BarState.Off)
@@ -808,7 +865,8 @@ export struct FavoritePage {
             .padding({
               left: AppSpace.Md,
               right: AppSpace.Md,
-              top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
+              top: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
+                SHELF_FILTER_ROW_HEIGHT,
               bottom: WindowUtils.getFloatingTabBottomVp()
             })
             .divider({
@@ -891,6 +949,9 @@ export struct FavoritePage {
       .height('100%')
       .backgroundColor(Color.Transparent)
 
+      // 与首页分类标签保持一致，紧接在“书架”标题栏下方。
+      this.buildShelfFilter()
+
       // 拖动删除浮层（自己居中）
       Column() {
         this.buildTrashZone()
@@ -918,7 +979,46 @@ export struct FavoritePage {
     }
     .height(56)
     .justifyContent(FlexAlign.Center)
-    .translate({ y: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT })
+      .translate({
+        y: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET + SHELF_FILTER_ROW_HEIGHT
+      })
+  }
+
+  @Builder
+  buildShelfFilter() {
+    Row() {
+      Row({ space: AppSpace.Xxs }) {
+        this.buildShelfFilterSegment('全部', 0)
+        this.buildShelfFilterSegment('有声书', 1)
+        this.buildShelfFilterSegment('电子书', 2)
+      }
+      .padding({ left: 4, right: 4, top: 3, bottom: 3 })
+      .borderRadius(AppRadius.Pill)
+      .systemMaterial(AppMaterial.InteractiveThin)
+    }
+    .width('100%')
+    .height(SHELF_FILTER_ROW_HEIGHT)
+    .padding({ left: AppSpace.Md, right: AppSpace.Md })
+    .alignItems(VerticalAlign.Center)
+    .translate({ y: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET })
+  }
+
+  @Builder
+  buildShelfFilterSegment(label: string, index: number) {
+    Row({ space: 4 }) {
+      Text(label)
+        .fontSize(12)
+        .fontColor(this.shelfFilter === index ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
+        .fontWeight(this.shelfFilter === index ? FontWeight.Medium : FontWeight.Regular)
+      Text((index === 0 ? this.favoriteBooks.length :
+        (index === 1 ? this.shelfAudioCount : this.shelfTextCount)).toString())
+        .fontSize(11)
+        .fontColor(this.shelfFilter === index ? HomeTheme.Accent : $r('sys.color.font_tertiary'))
+    }
+    .padding({ left: 9, right: 9, top: 5, bottom: 5 })
+    .borderRadius(AppRadius.Pill)
+    .backgroundColor(this.shelfFilter === index ? HomeTheme.AccentSoft : Color.Transparent)
+    .onClick(() => this.selectShelfFilter(index))
   }
 
   @Builder
@@ -1026,7 +1126,7 @@ export struct FavoritePage {
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }
-        this.buildTypeBadge(false)
+        this.buildTypeBadge(false, book.contentType === 'text')
       }
       .width('100%')
       .borderRadius(AppRadius.Md)
@@ -1086,12 +1186,9 @@ export struct FavoritePage {
   }
 
   @Builder
-  buildTypeBadge(small: boolean) {
-    Row({ space: small ? 2 : 3 }) {
-      SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
-        .fontSize(small ? 10 : 12)
-        .fontColor([Color.White])
-      Text('有声书')
+  buildTypeBadge(small: boolean, isText: boolean) {
+    Row() {
+      Text(isText ? '电子书' : '有声书')
         .fontSize(small ? 9 : 10)
         .fontColor(Color.White)
         .fontWeight(FontWeight.Medium)
@@ -1102,7 +1199,7 @@ export struct FavoritePage {
       top: small ? 2 : 3,
       bottom: small ? 2 : 3
     })
-    .backgroundColor('#CCFF8800')
+    .backgroundColor(isText ? '#CC4E7FA8' : '#CCFF8800')
     .borderRadius(AppRadius.Sm)
     .margin({ top: small ? 5 : 6, left: small ? 5 : 6 })
   }
@@ -1145,7 +1242,7 @@ export struct FavoritePage {
           .borderRadius(AppRadius.Sm)
           .clip(true)
         }
-        this.buildTypeBadge(true)
+        this.buildTypeBadge(true, book.contentType === 'text')
       }
 
       Column({ space: 4 }) {

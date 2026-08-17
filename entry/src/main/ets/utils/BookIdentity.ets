@@ -1,5 +1,6 @@
 const HOME_AUDIO_PREFIX = 'home_audio_';
 const SEARCH_AUDIO_PREFIX = 'search_audio_';
+const SEARCH_TEXT_PREFIX = 'search_text_';
 
 export class BookIdentity {
   static onlineAudioBookId(sourceUrl: string, bookUrl: string): string {
@@ -9,6 +10,15 @@ export class BookIdentity {
       hash = (((hash << 5) + hash) + raw.charCodeAt(index)) | 0;
     }
     return `${SEARCH_AUDIO_PREFIX}${(hash >>> 0).toString(36)}`;
+  }
+
+  static onlineTextBookId(sourceUrl: string, bookUrl: string): string {
+    const raw = `${sourceUrl}::${bookUrl}`;
+    let hash: number = 5381;
+    for (let index = 0; index < raw.length; index++) {
+      hash = (((hash << 5) + hash) + raw.charCodeAt(index)) | 0;
+    }
+    return `${SEARCH_TEXT_PREFIX}${(hash >>> 0).toString(36)}`;
   }
 
   static isSameBook(leftId: string, leftSourceUrl: string, leftBookUrl: string,

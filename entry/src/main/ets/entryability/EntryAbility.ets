@@ -303,6 +303,14 @@ export default class EntryAbility extends UIAbility {
   }
 
   private consumeRouteWant(want: Want): void {
+    const action = want.action ?? '';
+    if (action === 'readerKitVerify') {
+      const route: WidgetRoute = { target: 'readerKitVerify', bookId: '', ts: Date.now() };
+      AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
+      emitter.emit(EVT_WIDGET_ROUTE, { data: { target: 'readerKitVerify', bookId: '', ts: route.ts } });
+      hilog.info(DOMAIN, TAG, 'consume route action: target=readerKitVerify');
+      return;
+    }
     const params = this.extractRouteParams(want);
     if (!params) return;
     const from = params['from'] as string | undefined;

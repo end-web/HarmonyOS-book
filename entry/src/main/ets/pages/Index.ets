@@ -10,6 +10,10 @@ import { ReadingStatsPage } from './ReadingStatsPage';
 import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
+import { ReaderPage } from './ReaderPage';
+import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
+import { TextSourceVerifyPage } from './TextSourceVerifyPage';
+import { TextReaderRouteParams } from '../model/TextReading';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
 import { HdsNavDestination, hdsMaterial } from '@kit.UIDesignKit';
@@ -100,6 +104,10 @@ struct Index {
       const cur = this.navStack.getAllPathName();
       if (cur && cur.length > 0 && cur[cur.length - 1] === 'downloads') return;
       this.navStack.pushPathByName('downloads', null, false);
+    } else if (target === 'readerKitVerify') {
+      const cur = this.navStack.getAllPathName();
+      if (cur && cur.length > 0 && cur[cur.length - 1] === 'readerKitVerify') return;
+      this.navStack.pushPathByName('readerKitVerify', null, false);
     }
     // target === 'home' 默认停在 Tab,不需要跳转
   }
@@ -221,6 +229,27 @@ struct Index {
         }
         return undefined;
       })
+    } else if (name === 'reader') {
+      NavDestination() {
+        ReaderPageWrapper({ navStack: this.navStack, param: param as Object })
+      }
+      .hideTitleBar(true)
+      .backgroundColor('#F5F2EA')
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'verifyTextSource') {
+      NavDestination() {
+        TextSourceVerifyPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'readerKitVerify') {
+      NavDestination() {
+        ReaderKitVerifyPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor('#F5F2EA')
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'settings') {
       NavDestination() {
         SettingsPage({ navStack: this.navStack })
@@ -356,6 +385,42 @@ struct BlockMorePageWrapper {
       sourceName: this.str('sourceName'),
       title: this.str('title'),
       moreUrl: this.str('moreUrl')
+    })
+  }
+}
+
+@ComponentV2
+struct ReaderPageWrapper {
+  @Param navStack: NavPathStack = new NavPathStack();
+  @Param param: Object = new TextReaderRouteParams();
+
+  private resolveBookId(): string {
+    if (this.param instanceof TextReaderRouteParams) return this.param.bookId;
+    const value = this.param as Record<string, Object>;
+    const bookId = value['bookId'];
+    return typeof bookId === 'string' ? bookId : '';
+  }
+
+  private resolveResourceIndex(): number {
+    if (this.param instanceof TextReaderRouteParams) return this.param.resourceIndex;
+    const value = this.param as Record<string, Object>;
+    const index = value['resourceIndex'];
+    return typeof index === 'number' ? index : -1;
+  }
+
+  private resolveDomPos(): string {
+    if (this.param instanceof TextReaderRouteParams) return this.param.domPos;
+    const value = this.param as Record<string, Object>;
+    const domPos = value['domPos'];
+    return typeof domPos === 'string' ? domPos : '';
+  }
+
+  build() {
+    ReaderPage({
+      navStack: this.navStack,
+      bookId: this.resolveBookId(),
+      targetResourceIndex: this.resolveResourceIndex(),
+      targetDomPos: this.resolveDomPos()
     })
   }
 }

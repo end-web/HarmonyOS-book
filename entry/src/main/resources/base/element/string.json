@@ -241,6 +241,158 @@
       "value": "保存失败，请稍后重试"
     },
     {
+      "name": "book_detail_loading",
+      "value": "正在加载书籍详情"
+    },
+    {
+      "name": "book_detail_load_failed",
+      "value": "书籍详情加载失败"
+    },
+    {
+      "name": "common_retry",
+      "value": "重试"
+    },
+    {
+      "name": "reader_title",
+      "value": "阅读"
+    },
+    {
+      "name": "reader_loading",
+      "value": "正在加载正文"
+    },
+    {
+      "name": "reader_catalog",
+      "value": "目录"
+    },
+    {
+      "name": "reader_chapters",
+      "value": "章节"
+    },
+    {
+      "name": "reader_settings",
+      "value": "设置"
+    },
+    {
+      "name": "reader_font_size",
+      "value": "字体大小"
+    },
+    {
+      "name": "reader_line_height",
+      "value": "行间距"
+    },
+    {
+      "name": "reader_line_height_compact",
+      "value": "紧凑"
+    },
+    {
+      "name": "reader_line_height_standard",
+      "value": "标准"
+    },
+    {
+      "name": "reader_line_height_loose",
+      "value": "宽松"
+    },
+    {
+      "name": "reader_text_align",
+      "value": "对齐方式"
+    },
+    {
+      "name": "reader_align_start",
+      "value": "左对齐"
+    },
+    {
+      "name": "reader_align_justify",
+      "value": "两端对齐"
+    },
+    {
+      "name": "reader_align_center",
+      "value": "居中"
+    },
+    {
+      "name": "reader_page_mode",
+      "value": "翻页方式"
+    },
+    {
+      "name": "reader_page_mode_none",
+      "value": "无动画"
+    },
+    {
+      "name": "reader_page_mode_slide",
+      "value": "平移"
+    },
+    {
+      "name": "reader_page_mode_cover",
+      "value": "覆盖"
+    },
+    {
+      "name": "reader_previous_chapter",
+      "value": "上一章"
+    },
+    {
+      "name": "reader_next_chapter",
+      "value": "下一章"
+    },
+    {
+      "name": "reader_previous_page",
+      "value": "上一页"
+    },
+    {
+      "name": "reader_next_page",
+      "value": "下一页"
+    },
+    {
+      "name": "reader_font_smaller",
+      "value": "缩小字号"
+    },
+    {
+      "name": "reader_font_larger",
+      "value": "放大字号"
+    },
+    {
+      "name": "reader_verify_source",
+      "value": "验证书源"
+    },
+    {
+      "name": "reader_kit_verify",
+      "value": "ReaderKit 验证"
+    },
+    {
+      "name": "reader_kit_verify_title",
+      "value": "ReaderKit 调用验证"
+    },
+    {
+      "name": "reader_kit_verify_running",
+      "value": "正在初始化 ReaderKit"
+    },
+    {
+      "name": "reader_kit_verify_waiting",
+      "value": "请在真机上查看当前签名是否通过调用方校验"
+    },
+    {
+      "name": "reader_kit_verify_success",
+      "value": "ReaderKit 初始化成功"
+    },
+    {
+      "name": "reader_kit_verify_failed",
+      "value": "ReaderKit 初始化失败"
+    },
+    {
+      "name": "reader_kit_verify_no_invalid_caller",
+      "value": "当前签名未触发 Invalid caller"
+    },
+    {
+      "name": "reader_kit_verify_invalid_caller",
+      "value": "当前签名触发 Invalid caller，请检查 Reader Kit 调用方配置"
+    },
+    {
+      "name": "reader_kit_verify_other_error",
+      "value": "ReaderKit 返回了其他错误，请结合错误码和设备日志排查"
+    },
+    {
+      "name": "reader_kit_verify_error_code",
+      "value": "错误码"
+    },
+    {
       "name": "guide_group_mini_player",
       "value": "迷你播放栏"
     },

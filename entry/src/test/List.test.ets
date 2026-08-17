@@ -6,6 +6,7 @@ import tingYouRequestPolicyTest from './TingYouRequestPolicy.test';
 import searchCacheTest from './SearchCache.test';
 import listeningHistoryPolicyTest from './ListeningHistoryPolicy.test';
 import chapterProgressPolicyTest from './ChapterProgressPolicy.test';
+import kkBiqugeHtmlParserTest from './KkBiqugeHtmlParser.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -16,4 +17,5 @@ export default function testsuite() {
   searchCacheTest();
   listeningHistoryPolicyTest();
   chapterProgressPolicyTest();
+  kkBiqugeHtmlParserTest();
 }

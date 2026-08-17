@@ -20,6 +20,7 @@ export enum ChapterBadge {
 @ReusableV2
 export struct ChapterListItem {
   @Param title: string = '';
+  @Param isTextBook: boolean = false;
   @Param isPlaying: boolean = false;
   /** 时长文案；为空则隐藏该行 */
   @Param durationText: string = '';
@@ -84,7 +85,7 @@ export struct ChapterListItem {
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
         }
-        if (this.isPlaying) {
+        if (this.isPlaying && !this.isTextBook) {
           SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
             .fontSize(18).fontColor(['#D4380D'])
         }
