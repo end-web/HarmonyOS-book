@@ -12,6 +12,9 @@ export class WindowUtils {
   private static density: number = 3.25;
   private static mainWindow: window.Window | null = null;
   private static safeAreaListeners: Array<(topVp: number, bottomVp: number) => void> = [];
+  private static layoutRefreshTimerId: number = -1;
+  private static settledRefreshTimerId: number = -1;
+  private static readonly FALLBACK_BOTTOM_SAFE_VP: number = 24;
   /** 当前生效的深浅色模式（由 EntryAbility 的 config / onConfigurationUpdate 同步） */
   private static colorMode: ConfigurationConstant.ColorMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   /** 最近一次页面请求的状态栏诉求：true=强制白字(深色背景页)，false=跟随系统 */
@@ -24,8 +27,10 @@ export class WindowUtils {
       try {
         previousWindow.off('avoidAreaChange', WindowUtils.handleAvoidAreaChange);
         previousWindow.off('windowSizeChange', WindowUtils.handleWindowSizeChange);
+        previousWindow.off('windowStatusDidChange', WindowUtils.handleWindowStatusDidChange);
       } catch (_e) { /* ignore */ }
     }
+    WindowUtils.cancelPendingRefreshes();
     WindowUtils.mainWindow = win;
     if (colorMode !== undefined) {
       WindowUtils.colorMode = colorMode;
@@ -35,10 +40,16 @@ export class WindowUtils {
       statusBarColor: '#00000000',
       navigationBarColor: '#00000000'
     });
+    try {
+      await win.setFloatNavigationAvoidAreaEnabled(true);
+    } catch (_e) {
+      // Keep the regular system/nav-indicator fallback on devices without float-navigation support.
+    }
     await WindowUtils.applySystemBarContent();
-    WindowUtils.syncAvoidArea(win);
     win.on('avoidAreaChange', WindowUtils.handleAvoidAreaChange);
     win.on('windowSizeChange', WindowUtils.handleWindowSizeChange);
+    win.on('windowStatusDidChange', WindowUtils.handleWindowStatusDidChange);
+    WindowUtils.refreshAvoidArea();
   }
 
   static addSafeAreaListener(listener: (topVp: number, bottomVp: number) => void): void {
@@ -55,7 +66,9 @@ export class WindowUtils {
 
   static refreshAvoidArea(): void {
     const currentWindow = WindowUtils.mainWindow;
-    if (currentWindow !== null) WindowUtils.syncAvoidArea(currentWindow);
+    if (currentWindow === null) return;
+    WindowUtils.syncAvoidArea(currentWindow);
+    WindowUtils.scheduleAvoidAreaRefresh();
   }
 
   /**
@@ -91,7 +104,8 @@ export class WindowUtils {
   }
 
   static getBottomSafeVp(): number {
-    return WindowUtils.bottomPx / WindowUtils.density;
+    const measuredVp = WindowUtils.bottomPx / WindowUtils.density;
+    return Math.max(measuredVp, WindowUtils.FALLBACK_BOTTOM_SAFE_VP);
   }
 
   // 与 MainPage 中常量保持一致
@@ -121,6 +135,35 @@ export class WindowUtils {
     WindowUtils.refreshAvoidArea();
   }
 
+  private static handleWindowStatusDidChange(_status: window.WindowStatusType): void {
+    WindowUtils.refreshAvoidArea();
+  }
+
+  private static cancelPendingRefreshes(): void {
+    if (WindowUtils.layoutRefreshTimerId !== -1) {
+      clearTimeout(WindowUtils.layoutRefreshTimerId);
+      WindowUtils.layoutRefreshTimerId = -1;
+    }
+    if (WindowUtils.settledRefreshTimerId !== -1) {
+      clearTimeout(WindowUtils.settledRefreshTimerId);
+      WindowUtils.settledRefreshTimerId = -1;
+    }
+  }
+
+  private static scheduleAvoidAreaRefresh(): void {
+    WindowUtils.cancelPendingRefreshes();
+    WindowUtils.layoutRefreshTimerId = setTimeout((): void => {
+      WindowUtils.layoutRefreshTimerId = -1;
+      const currentWindow = WindowUtils.mainWindow;
+      if (currentWindow !== null) WindowUtils.syncAvoidArea(currentWindow);
+    }, 32);
+    WindowUtils.settledRefreshTimerId = setTimeout((): void => {
+      WindowUtils.settledRefreshTimerId = -1;
+      const currentWindow = WindowUtils.mainWindow;
+      if (currentWindow !== null) WindowUtils.syncAvoidArea(currentWindow);
+    }, 240);
+  }
+
   private static notifySafeAreaChange(): void {
     const topVp = WindowUtils.getStatusBarHeightVp();
     const bottomVp = WindowUtils.getBottomSafeVp();
@@ -129,13 +172,49 @@ export class WindowUtils {
     });
   }
 
+  private static readAvoidArea(win: window.Window, type: window.AvoidAreaType): window.AvoidArea | null {
+    try {
+      return win.getWindowAvoidArea(type);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  private static updateDensity(win: window.Window): void {
+    try {
+      const densityInfo = win.getWindowDensityInfo();
+      const windowDensity = densityInfo.customDensity > 0 ? densityInfo.customDensity : densityInfo.systemDensity;
+      if (windowDensity > 0) {
+        WindowUtils.density = windowDensity;
+        return;
+      }
+    } catch (_e) { /* use display density */ }
+    const displayDensity = display.getDefaultDisplaySync().densityPixels;
+    if (displayDensity > 0) WindowUtils.density = displayDensity;
+  }
+
   private static syncAvoidArea(win: window.Window): void {
     try {
-      WindowUtils.density = display.getDefaultDisplaySync().densityPixels;
-      const topArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      const bottomArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-      WindowUtils.topPx = topArea.topRect.height;
-      WindowUtils.bottomPx = Math.max(topArea.bottomRect.height, bottomArea.bottomRect.height);
+      WindowUtils.updateDensity(win);
+      const systemArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_SYSTEM);
+      const navigationArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+      const floatNavigationArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_FLOAT_NAVIGATION);
+      let hasBottomArea: boolean = false;
+      let nextBottomPx: number = 0;
+      if (systemArea !== null) {
+        WindowUtils.topPx = systemArea.topRect.height;
+        nextBottomPx = Math.max(nextBottomPx, systemArea.bottomRect.height);
+        hasBottomArea = true;
+      }
+      if (navigationArea !== null) {
+        nextBottomPx = Math.max(nextBottomPx, navigationArea.bottomRect.height);
+        hasBottomArea = true;
+      }
+      if (floatNavigationArea !== null) {
+        nextBottomPx = Math.max(nextBottomPx, floatNavigationArea.bottomRect.height);
+        hasBottomArea = true;
+      }
+      if (hasBottomArea) WindowUtils.bottomPx = nextBottomPx;
       WindowUtils.notifySafeAreaChange();
     } catch (_e) {
       // keep previous cached values

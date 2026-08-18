@@ -7,6 +7,7 @@ import { AboutPage } from './AboutPage';
 import { GuidePage } from './GuidePage';
 import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
+import { UnfavoritedHistoryPage } from './UnfavoritedHistoryPage';
 import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
@@ -288,6 +289,13 @@ struct Index {
     } else if (name === 'stats') {
       NavDestination() {
         ReadingStatsPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'unfavoriteHistory') {
+      NavDestination() {
+        UnfavoritedHistoryPage({ navStack: this.navStack })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))

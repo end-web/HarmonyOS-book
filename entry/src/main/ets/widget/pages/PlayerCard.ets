@@ -5,20 +5,14 @@ let playerCardStorage = new LocalStorage();
 @Entry(playerCardStorage)
 @Component
 struct PlayerCard {
-  @LocalStorageProp('hasBook') hasBook: number = 0;
+  @LocalStorageProp('hasBook') hasBook: boolean = false;
   @LocalStorageProp('bookId') bookId: string = '';
   @LocalStorageProp('bookTitle') bookTitle: string = '没有正在播放';
   @LocalStorageProp('author') author: string = '';
   @LocalStorageProp('cover') cover: string = '';
   @LocalStorageProp('imgName') imgName: string = '';
   @LocalStorageProp('chapterTitle') chapterTitle: string = '';
-  @LocalStorageProp('isPlaying') isPlaying: number = 0;
-  @LocalStorageProp('bgColor') bgColor: string = '';
-  @LocalStorageProp('bgTopColor') bgTopColor: string = '';
-  @LocalStorageProp('bgBottomColor') bgBottomColor: string = '';
-  @LocalStorageProp('bgLeftColor') bgLeftColor: string = '';
-  @LocalStorageProp('bgRightColor') bgRightColor: string = '';
-  @LocalStorageProp('bgDarkColor') bgDarkColor: string = '';
+  @LocalStorageProp('isPlaying') isPlaying: boolean = false;
 
   private postCall(method: string): void {
     postCardAction(this, {
@@ -30,7 +24,7 @@ struct PlayerCard {
 
   /** 点击卡片信息区时打开当前书的播放页；无播放记录时回到应用主页。 */
   private openPlayer(): void {
-    const target: string = this.hasBook === 1 && this.bookId.length > 0 ? 'player' : 'home';
+    const target: string = this.hasBook && this.bookId.length > 0 ? 'player' : 'home';
     postCardAction(this, {
       action: 'router',
       abilityName: 'EntryAbility',
@@ -43,48 +37,35 @@ struct PlayerCard {
   }
 
   private hasCover(): boolean {
-    return this.imgName.length > 0;
-  }
-
-  private hasBgColor(): boolean {
-    return this.bgColor.length > 0 && this.bgDarkColor.length > 0;
-  }
-
-  private coverSrc(): string {
-    return 'memory://' + this.imgName;
+    // 优先使用 formImages 的 memory:// 资源；FormExtensionAbility 尚未完成
+    // 落盘时回退到快照中的 URL，避免封面因一次更新失败而变成空白。
+    return this.imgName.length > 0 || this.cover.length > 0;
   }
 
   build() {
     Stack() {
-      // 背景层：优先"深底 + 封面主色从顶部消散"(背景跟随主题色)；
-      // 取色未就绪时用糊化封面兜底；都没有则默认渐变
-      // 不加 borderRadius，由最外层 Stack 统一 clip，避免多层裁剪产生毛边
-      if (this.hasBgColor()) {
-        Column()
+      // 与播放页保持一致：当前封面铺满模糊，再叠加深色遮罩。
+      // URL 位于下层，memory:// 位于上层；FD 绑定失败时仍可回退网络封面。
+      if (this.hasCover()) {
+        Stack() {
+          if (this.cover.length > 0) {
+            Image(this.cover)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .sourceSize({ width: 120, height: 120 })
+          }
+          if (this.imgName.length > 0) {
+            Image('memory://' + this.imgName)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Cover)
+              .sourceSize({ width: 120, height: 120 })
+          }
+        }
           .width('100%')
           .height('100%')
-          .linearGradient({
-            angle: 180,
-            colors: [
-              [this.bgTopColor.length > 0 ? this.bgTopColor : this.bgColor, 0.0],
-              [this.bgColor, 0.45],
-              [this.bgDarkColor, 1.0]
-            ]
-          })
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#0D0D0D')
-          .opacity(0.35)
-      } else if (this.hasCover()) {
-        Image(this.coverSrc())
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Cover)
-          .syncLoad(true)
-          .sourceSize({ width: 96, height: 96 })
           .blur(40)
-          .scale({ x: 1.25, y: 1.25 })
         Column()
           .width('100%')
           .height('100%')
@@ -102,12 +83,23 @@ struct PlayerCard {
         Row() {
           Stack() {
             if (this.hasCover()) {
-              Image(this.coverSrc())
-                .width('100%')
-                .height('100%')
-                .borderRadius(12)
-                .objectFit(ImageFit.Cover)
-                .syncLoad(true)
+              if (this.cover.length > 0) {
+                Image(this.cover)
+                  .width('100%')
+                  .height('100%')
+                  .borderRadius(12)
+                  .objectFit(ImageFit.Cover)
+                  .syncLoad(true)
+                  .alt($r('app.media.app_icon_legacy'))
+              }
+              if (this.imgName.length > 0) {
+                Image('memory://' + this.imgName)
+                  .width('100%')
+                  .height('100%')
+                  .borderRadius(12)
+                  .objectFit(ImageFit.Cover)
+                  .syncLoad(true)
+              }
             } else {
               Column() {
                 Text('听')
@@ -176,7 +168,7 @@ struct PlayerCard {
         Row() {
           this.PlainBtn($r('sys.symbol.backward_end_fill'), 'prev')
           Stack() {
-            if (this.isPlaying === 1) {
+            if (this.isPlaying) {
               SymbolGlyph($r('sys.symbol.pause_fill'))
                 .fontSize(22)
                 .fontColor(['#FF1F1F1F'])
@@ -191,11 +183,11 @@ struct PlayerCard {
           .borderRadius(20)
           .backgroundColor(Color.White)
           .onClick(() => {
-            if (this.hasBook !== 1) {
+            if (!this.hasBook) {
               this.openPlayer();
               return;
             }
-            this.postCall(this.isPlaying === 1 ? 'pause' : 'play');
+            this.postCall(this.isPlaying ? 'pause' : 'play');
           })
           this.PlainBtn($r('sys.symbol.forward_end_fill'), 'next')
         }
@@ -223,7 +215,7 @@ struct PlayerCard {
     .width(36)
     .height(36)
     .onClick(() => {
-      if (this.hasBook !== 1) {
+      if (!this.hasBook) {
         this.openPlayer();
         return;
       }

@@ -16,7 +16,8 @@ import {
 } from '../service/StatsService';
 import {
   PlayHistoryItem,
-  PreferenceService
+  PreferenceService,
+  EVT_FAVORITES_CHANGED
 } from '../service/PreferenceService';
 import { Book } from '../model/Book';
 import { DataService } from '../service/DataService';
@@ -48,6 +49,8 @@ const MINI_TITLE_BAR_HEIGHT: number = 56;
 export struct ReadingStatsPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param inTab: boolean = false;
+  /** 记录 Tab 只展示收藏书籍；时钟入口打开未收藏历史模式。 */
+  @Param onlyUnfavorited: boolean = false;
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
 
   @Local streak: number = 0;
@@ -64,11 +67,15 @@ export struct ReadingStatsPage {
   private statsHandler = (_evt: emitter.EventData): void => {
     this.loadStats();
   };
+  private favoritesHandler = (_evt: emitter.EventData): void => {
+    this.loadStats();
+  };
 
   aboutToAppear(): void {
     this.onScrollerReady(this.scroller);
     this.loadStats();
     emitter.on(EVT_USAGE_STATS_UPDATED, this.statsHandler);
+    emitter.on(EVT_FAVORITES_CHANGED, this.favoritesHandler);
     setTimeout(() => { this.appeared = true; }, 24);
   }
 
@@ -78,6 +85,7 @@ export struct ReadingStatsPage {
     } catch (_e) {
       try { emitter.off(EVT_USAGE_STATS_UPDATED); } catch (_ignore) { /* ignore */ }
     }
+    try { emitter.off(EVT_FAVORITES_CHANGED, this.favoritesHandler); } catch (_e) { /* ignore */ }
   }
 
   private async loadStats(): Promise<void> {
@@ -92,9 +100,12 @@ export struct ReadingStatsPage {
       await PreferenceService.ensureReady(ctx);
       const bundle: StatsBundle = await StatsService.getStatsBundle(1);
       const history = await PreferenceService.getHistory();
+      const favoriteIds = new Set<string>(await PreferenceService.getFavorites());
+      const allRecords = await this.buildRecordViews(ctx, bundle.records, history);
       this.streak = bundle.streak;
       this.sourceRecords = bundle.records;
-      this.records = await this.buildRecordViews(ctx, bundle.records, history);
+      this.records = allRecords.filter((item: ListenRecordView): boolean =>
+        this.shouldShowRecord(item, favoriteIds));
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
       if (this.selectedIds.size === 0) this.selectMode = false;
@@ -108,6 +119,16 @@ export struct ReadingStatsPage {
         this.loadStats();
       }
     }
+  }
+
+  private shouldShowRecord(item: ListenRecordView, favoriteIds: Set<string>): boolean {
+    const isFavorite = favoriteIds.has(item.bookId) ||
+      item.aliasBookIds.some((aliasBookId: string): boolean => favoriteIds.has(aliasBookId));
+    return this.onlyUnfavorited ? !isFavorite : isFavorite;
+  }
+
+  private pageTitle(): string {
+    return this.onlyUnfavorited ? '未收藏历史' : '收听记录';
   }
 
   private async buildRecordViews(context: common.UIAbilityContext, stats: BookUsageStats[],
@@ -356,7 +377,9 @@ export struct ReadingStatsPage {
       HdsNavigation() {
         Scroll(this.scroller) {
           Column({ space: AppSpace.Md }) {
-            this.buildSummaryCard()
+            if (!this.onlyUnfavorited) {
+              this.buildSummaryCard()
+            }
             this.buildRecordList()
           }
           .width('100%')
@@ -379,7 +402,7 @@ export struct ReadingStatsPage {
         avoidLayoutSafeArea: true,
         content: {
           title: {
-            mainTitle: '收听记录'
+            mainTitle: this.pageTitle()
           },
           backIcon: {
             icon: $r('sys.symbol.chevron_left'),
@@ -389,8 +412,14 @@ export struct ReadingStatsPage {
             value: [{
               content: {
                 icon: $r('sys.symbol.clock'),
-                label: '收听记录',
-                action: () => {}
+                label: this.onlyUnfavorited ? '返回收藏历史' : '未收藏历史',
+                action: () => {
+                  if (this.onlyUnfavorited) {
+                    this.navStack.pop();
+                  } else {
+                    this.navStack.pushPathByName('unfavoriteHistory', null, false);
+                  }
+                }
               }
             }]
           }
@@ -697,7 +726,7 @@ export struct ReadingStatsPage {
   buildHistoryHeader() {
     Row() {
       Column({ space: 5 }) {
-        Text('收听历史')
+        Text(this.onlyUnfavorited ? '未收藏历史' : '收听历史')
           .fontSize(AppFont.Title)
           .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
@@ -937,11 +966,11 @@ export struct ReadingStatsPage {
       .height(52)
       .borderRadius(26)
       .backgroundColor(AppColor.BrandSoft)
-      Text('暂无收听记录')
+      Text(this.onlyUnfavorited ? '暂无未收藏历史' : '暂无收藏书籍的收听记录')
         .fontSize(AppFont.BodyL)
         .fontColor($r('sys.color.font_primary'))
         .fontWeight(FontWeight.Medium)
-      Text('开始播放后，这里会自动记录你的聆听进度。')
+      Text(this.onlyUnfavorited ? '未收藏的书籍会显示在这里。' : '收藏书籍后，这里会保留你的聆听进度。')
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
     }

@@ -2,7 +2,7 @@ import { formBindingData, FormExtensionAbility, formInfo } from '@kit.FormKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Want } from '@kit.AbilityKit';
 import { PreferenceService } from '../service/PreferenceService';
-import { WidgetUpdater, WIDGET_PLAYER } from '../service/WidgetUpdater';
+import { PlayerFormData, WidgetUpdater, WIDGET_PLAYER } from '../service/WidgetUpdater';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_PlayerForm';
@@ -21,24 +21,8 @@ export default class PlayerFormAbility extends FormExtensionAbility {
       hilog.error(DOMAIN, TAG, 'persistAndPushAsync failed: %{public}s',
         err?.message ?? JSON.stringify(err));
     });
-    // 初始空态字段必须与后续推送字段名/类型一致,避免 LocalStorageProp 类型不匹配
-    const empty: Record<string, Object> = {
-      'hasBook': 0,
-      'bookId': '',
-      'bookTitle': '没有正在播放的书',
-      'author': '',
-      'cover': '',
-      'imgName': '',
-      'chapterTitle': '点击挑一本',
-      'isPlaying': 0,
-      'bgColor': '',
-      'bgTopColor': '',
-      'bgBottomColor': '',
-      'bgLeftColor': '',
-      'bgRightColor': '',
-      'bgDarkColor': ''
-    };
-    return formBindingData.createFormBindingData(empty);
+    // 初始空态与后续推送共用同一显式类型，避免字段类型或 formImages 结构漂移。
+    return formBindingData.createFormBindingData(new PlayerFormData());
   }
 
   private async persistAndPushAsync(formId: string): Promise<void> {
@@ -49,13 +33,14 @@ export default class PlayerFormAbility extends FormExtensionAbility {
     await PreferenceService.init(this.context);
     WidgetUpdater.setContext(this.context);
     await PreferenceService.addWidgetFormId(WIDGET_PLAYER, formId);
+    hilog.info(DOMAIN, TAG, 'form registered on add id=%{public}s', formId);
     let snap = await PreferenceService.getWidgetPlayerSnapshot();
     if (!snap) {
       snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
     }
     if (!snap) return;
     try {
-      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, false);
+      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, true);
     } catch (err) {
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'first push failed: %{public}s', e?.message ?? JSON.stringify(err));
@@ -80,12 +65,16 @@ export default class PlayerFormAbility extends FormExtensionAbility {
       return PreferenceService.init(this.context);
     }).then(async () => {
       WidgetUpdater.setContext(this.context);
+      // 覆盖安装或旧版本升级时系统可能只触发 onUpdateForm，不再触发 onAddForm。
+      // 每次刷新都自愈登记 formId，确保主进程能立即主动推送播控和封面。
+      await PreferenceService.addWidgetFormId(WIDGET_PLAYER, formId);
+      hilog.info(DOMAIN, TAG, 'form registered on update id=%{public}s', formId);
       let snap = await PreferenceService.getWidgetPlayerSnapshot();
       if (!snap) {
         snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
       }
       if (!snap) return;
-      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, false);
+      await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, true);
     }).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'onUpdateForm failed: %{public}s',
         err?.message ?? JSON.stringify(err));

@@ -124,12 +124,6 @@ export interface WidgetPlayerSnapshot {
   durationMs: number;
   isPlaying: boolean;
   updatedAt: number;
-  bgColor?: string;
-  bgTopColor?: string;
-  bgBottomColor?: string;
-  bgLeftColor?: string;
-  bgRightColor?: string;
-  bgDarkColor?: string;
 }
 
 /** 卡片名 -> formId 列表 */

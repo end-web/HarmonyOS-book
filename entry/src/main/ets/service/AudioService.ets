@@ -22,7 +22,6 @@ import { PlaybackStore } from './PlaybackStore';
 import { StatsService } from './StatsService';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
-import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
 import { ChapterProgressPolicy } from './ChapterProgressPolicy';
 
 const DOMAIN = 0xFF00;
@@ -670,11 +669,6 @@ export class AudioService {
     }
     this.cancelExternalMediaWatch();
 
-    // 封面变化时预取融合色,让播放页入场时直接命中缓存
-    if (book.cover && (!this.state.currentBook || this.state.currentBook.cover !== book.cover)) {
-      this.preFetchCoverColor(book.cover);
-    }
-
     // ★ 同书+同章节短路:不 reset,直接 seek(0) + play,避免重新嗅探 URL
     if (this.canReuseSameChapter(book, chapter)) {
       await this.replaySameChapterFromStart();
@@ -746,58 +740,6 @@ export class AudioService {
     if (!p) return false;
     const s = p.state;
     return s === 'playing' || s === 'paused' || s === 'prepared' || s === 'completed';
-  }
-
-  /** 封面变化时预取融合色并缓存,让播放页入场时瞬时显示而非灰色过渡 */
-  private preFetchCoverColor(cover: string): void {
-    if (!this.context) return;
-    if (this.applyCachedCoverColor(cover)) return;
-    // 异步取色不阻塞播放,立即启动
-    (async () => {
-      let palette: CoverColorPalette | null = null;
-      try {
-        if (cover.startsWith('http')) {
-          palette = await ColorPickerUtils.pickPaletteFromUrl(cover);
-        } else if (cover.startsWith('/')) {
-          palette = await ColorPickerUtils.pickPaletteFromFile(cover);
-        } else {
-          palette = await ColorPickerUtils.pickPaletteFromRawfile(this.context!, cover);
-        }
-      } catch (e) {
-        // 取色失败不影响播放,静默
-      }
-      if (palette && this.state && this.state.currentBook && this.state.currentBook.cover === cover) {
-        this.applyCoverPalette(cover, palette);
-        try {
-          await WidgetUpdater.updatePlayerCard(this.state, true);
-        } catch (_e) { /* 取色后的卡片刷新失败不影响播放 */ }
-      }
-    })();
-  }
-
-  private applyCachedCoverColor(cover: string): boolean {
-    if (!cover || !this.state) return false;
-    const palette = ColorPickerUtils.getPaletteCached(cover);
-    if (palette) {
-      this.applyCoverPalette(cover, palette);
-      return true;
-    }
-    return false;
-  }
-
-  private applyCoverPalette(cover: string, palette: CoverColorPalette): void {
-    if (!this.state) return;
-    const theme = ColorPickerUtils.toAmbientTheme(palette);
-    this.state.accentColor = theme.center;
-    this.state.ambientCover = cover;
-    this.state.ambientMainColor = theme.main;
-    this.state.ambientTopColor = theme.top;
-    this.state.ambientBottomColor = theme.bottom;
-    this.state.ambientLeftColor = theme.left;
-    this.state.ambientRightColor = theme.right;
-    this.state.ambientCenterColor = theme.center;
-    this.state.ambientDarkColor = theme.dark;
-    this.state.hasAmbientColor = true;
   }
 
   /**
@@ -896,7 +838,6 @@ export class AudioService {
       this.state.progressMs = seekMs;
       this.state.durationMs = 0;
       this.state.isPlaying = false;
-      this.applyCachedCoverColor(book.cover);
       // 切章/切书一律翻 loading:即使 URL 已缓存(快路径),音频仍要缓冲/落盘,
       // 页面若无提示用户会以为卡死。真正出声(prepared→playing)后清掉,
       // 本地文件秒切时只是闪一下,不影响"瞬间切换"观感。

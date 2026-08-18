@@ -18,7 +18,6 @@ import { DownloadChapterRecord } from '../service/DownloadStore';
 import { DownloadPolicy } from '../service/DownloadPolicy';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
-import { ColorPickerUtils, CoverColorPalette } from '../utils/ColorPickerUtils';
 import { ChapterCacheService, EVT_CHAPTER_DURATION_UPDATED } from '../service/ChapterCacheService';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
@@ -119,13 +118,6 @@ export struct PlayerPage {
   @Local viewportHeight: number = 0;
 
   private context: common.UIAbilityContext | null = null;
-  private lastCoverKey: string = '';
-  /** 正在取色的封面 key,防止异步取色并发重复触发(取色成功才写 lastCoverKey,失败可重试) */
-  private pickingCover: string = '';
-  /** 封面已处理标记，用于返回导航时快速复用，避免重走取色/水合链路导致的卡顿
-   * 配合 lastCoverKey + AudioService 缓存，实现丝滑返回（尤其是折叠Tab展开/缩回场景）
-   */
-  private coverProcessed: boolean = false;
   private chapterListScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
@@ -173,7 +165,6 @@ export struct PlayerPage {
     this.isLeaving = false;
     this.entryFinished = false;
     this.highQualityCover = false;
-    this.coverProcessed = false;  // 重置返回导航时的处理标记
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     PlayerEntryDecider.setCancelPendingClear(() => this.cancelPendingClearTimers());
     PlayerEntryDecider.setMarkLeaving(() => { this.isLeaving = true; });
@@ -232,7 +223,6 @@ export struct PlayerPage {
     }
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
-    this.coverProcessed = false;  // 供下次进入时重置
   }
 
   private handleViewportSizeChange(newValue: SizeOptions): void {
@@ -357,8 +347,6 @@ export struct PlayerPage {
     AudioService.getInstance().prewarmBookSource(b);
     this.isFavorite = await PreferenceService.isFavorite(b.id);
     if (this.isLeaving) return;
-    this.extractCoverColor(b.cover);
-
     // 绑定全局状态/上下文
     AudioService.getInstance().bind(this.playerState, this.context!);
 
@@ -751,11 +739,6 @@ export struct PlayerPage {
     return this.playerState.playMode === PlayMode.Sequence ? '#FFFFFF' : '#FFD480';
   }
 
-  private hasCurrentAmbientColor(): boolean {
-    return this.book !== null && this.book.cover.length > 0 && this.playerState.hasAmbientColor
-      && this.playerState.ambientCover === this.book.cover;
-  }
-
   private openBookDetail(): void {
     const id = this.book?.id || this.bookId;
     if (!id) {
@@ -763,69 +746,6 @@ export struct PlayerPage {
       return;
     }
     this.navStack.pushPathByName('detail', id);
-  }
-
-  private applyCoverPalette(palette: CoverColorPalette, cover: string): void {
-    const theme = ColorPickerUtils.toAmbientTheme(palette);
-    // 颜色状态变化包进 animateTo:背景主色渐变随封面切换平滑过渡,而不是硬跳
-    this.getUIContext().animateTo({ duration: 500, curve: Curve.Linear }, () => {
-      this.playerState.accentColor = theme.center;
-      this.playerState.ambientCover = cover;
-      this.playerState.ambientMainColor = theme.main;
-      this.playerState.ambientTopColor = theme.top;
-      this.playerState.ambientBottomColor = theme.bottom;
-      this.playerState.ambientLeftColor = theme.left;
-      this.playerState.ambientRightColor = theme.right;
-      this.playerState.ambientCenterColor = theme.center;
-      this.playerState.ambientDarkColor = theme.dark;
-      this.playerState.hasAmbientColor = true;
-    });
-  }
-
-  private async extractCoverColor(cover: string): Promise<void> {
-    if (this.coverProcessed) return;
-
-    // 已成功取过色 / 正在取这张图 → 跳过
-    if (!cover || cover === this.lastCoverKey || cover === this.pickingCover) return;
-
-    // 缓存命中:立即同步设置融合色,不走 setTimeout
-    const cachedPalette = ColorPickerUtils.getPaletteCached(cover);
-    if (cachedPalette) {
-      this.applyCoverPalette(cachedPalette, cover);
-      this.lastCoverKey = cover;
-      this.coverProcessed = true;
-      return;
-    }
-
-    // 缓存未命中:异步取色
-    this.pickingCover = cover;
-    setTimeout(async () => {
-      let palette: CoverColorPalette | null = null;
-      try {
-        if (cover.startsWith('http')) {
-          palette = await ColorPickerUtils.pickPaletteFromUrl(cover);
-        } else if (cover.startsWith('/')) {
-          palette = await ColorPickerUtils.pickPaletteFromFile(cover);
-        } else {
-          palette = await ColorPickerUtils.pickPaletteFromRawfile(this.context!, cover);
-        }
-      } catch (e) {
-        console.error('[PlayerPage] extractCoverColor failed: ' + JSON.stringify(e));
-      }
-
-      // 取色失败:释放占位,允许后续重试(不写 lastCoverKey)
-      if (!palette) {
-        if (this.pickingCover === cover) this.pickingCover = '';
-        return;
-      }
-      // 取色期间封面已切换 → 丢弃旧结果
-      if (cover !== this.pickingCover) return;
-
-      this.applyCoverPalette(palette, cover);
-      this.lastCoverKey = cover;   // ★ 成功后才标记,失败可重试
-      this.coverProcessed = true;
-      this.pickingCover = '';
-    }, 100);
   }
 
   build() {

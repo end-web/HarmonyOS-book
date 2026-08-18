@@ -400,23 +400,30 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    this.loadMainWindow(windowStage);
+    this.loadMainWindow(windowStage).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'Main window load failed: %{public}s', JSON.stringify(err));
+    });
   }
 
   onWindowStageRestore(windowStage: window.WindowStage): void {
-    this.loadMainWindow(windowStage);
+    this.loadMainWindow(windowStage).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'Restored window load failed: %{public}s', JSON.stringify(err));
+    });
   }
 
-  private loadMainWindow(windowStage: window.WindowStage): void {
-    WindowUtils.setupImmersive(windowStage, this.context.config.colorMode).catch((err: Error) => {
+  private async loadMainWindow(windowStage: window.WindowStage): Promise<void> {
+    try {
+      await WindowUtils.setupImmersive(windowStage, this.context.config.colorMode);
+    } catch (err) {
       hilog.error(DOMAIN, TAG, 'Immersive setup failed: %{public}s', JSON.stringify(err));
-    });
+    }
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
       }
+      WindowUtils.refreshAvoidArea();
     });
   }
 
@@ -463,6 +470,7 @@ export default class EntryAbility extends UIAbility {
    * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
+    WindowUtils.refreshAvoidArea();
     try {
       // 等待 bootstrapAudioService 完成(带超时保护,避免初始化卡死时永久阻塞前台回调)
       // 超时设为 5 秒,与 onCreate 的总超时时间对齐,避免初始化刚好超时时这里也超时

@@ -46,6 +46,7 @@
         "continuable": true,
         "startWindowIcon": "$media:splash_text",
         "startWindowBackground": "$color:start_window_background",
+        "orientation": "auto_rotation",
         "exported": true,
         "backgroundModes": [
           "dataTransfer",

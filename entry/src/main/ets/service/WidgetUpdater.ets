@@ -7,7 +7,6 @@ import { common } from '@kit.AbilityKit';
 import { PreferenceService, WidgetPlayerSnapshot } from './PreferenceService';
 import { Book, Chapter } from '../model/Book';
 import { PlayerState } from '../model/PlayerState';
-import { ColorPickerUtils } from '../utils/ColorPickerUtils';
 import { StorageMigrationService } from './StorageMigrationService';
 
 const DOMAIN = 0xFF00;
@@ -25,6 +24,33 @@ interface BuildBindingResult {
 }
 
 /**
+ * 使用显式类承载卡片数据，确保 formImages 以 SDK 要求的
+ * Record<string, number> 形态进入 FormBindingData。
+ */
+export class PlayerFormData {
+  hasBook: boolean = false;
+  bookId: string = '';
+  bookTitle: string = '没有正在播放的书';
+  author: string = '';
+  cover: string = '';
+  imgName: string = '';
+  chapterTitle: string = '点击挑一本';
+  isPlaying: boolean = false;
+  formImages: Record<string, number> = {};
+
+  constructor(snap?: WidgetPlayerSnapshot) {
+    if (snap === undefined) return;
+    this.hasBook = snap.bookId.length > 0;
+    this.bookId = snap.bookId;
+    this.bookTitle = snap.bookTitle || '没有正在播放的书';
+    this.author = snap.author;
+    this.cover = snap.cover;
+    this.chapterTitle = snap.chapterTitle || '点击挑一本';
+    this.isPlaying = snap.isPlaying;
+  }
+}
+
+/**
  * 鸿蒙官方推荐的卡片图片传递方式：
  *   1) 网络图直接传 https URL（最稳，无需 FD）
  *   2) 本地图通过 formImages 传 FD，卡片侧用 memory://<key> 加载
@@ -38,10 +64,15 @@ interface BuildBindingResult {
 export class WidgetUpdater {
   /** 主进程的 Context,用于沙箱写入封面缓存 */
   private static appContext: common.Context | null = null;
+  /**
+   * 更新序号：播放状态回调可能并发触发，较早开始的异步下载/写图不能覆盖较新的快照。
+   * 只让最后一次更新进入持久化和推送阶段，避免卡片偶尔回跳到旧状态。
+   */
+  private static updateGeneration: number = 0;
   /** url -> 沙箱文件路径 */
   private static coverPathCache: Map<string, string> = new Map();
-  /** url -> 文件大小（字节），>MAX_IMG_BYTES 的不走 FD 通道 */
-  private static coverSizeCache: Map<string, number> = new Map();
+  /** 每张卡片最后一次成功推送的可见状态，新登记的 formId 不会被全局去重误伤。 */
+  private static pushedCardStateByForm: Map<string, WidgetPlayerSnapshot> = new Map();
   private static coverMigrationPromise: Promise<void> | null = null;
 
   static setContext(ctx: common.Context): void {
@@ -66,7 +97,6 @@ export class WidgetUpdater {
         if (stat.size > 0) return cached;
       } catch (_e) {}
       WidgetUpdater.coverPathCache.delete(url);
-      WidgetUpdater.coverSizeCache.delete(url);
     }
     if (!WidgetUpdater.appContext) return null;
     if (WidgetUpdater.coverMigrationPromise) await WidgetUpdater.coverMigrationPromise;
@@ -78,7 +108,6 @@ export class WidgetUpdater {
         const stat = await fileIo.stat(filePath);
         if (stat.size > 0) {
           WidgetUpdater.coverPathCache.set(url, filePath);
-          WidgetUpdater.coverSizeCache.set(url, stat.size);
           return filePath;
         }
       } catch (_e) { /* not exist, continue */ }
@@ -88,7 +117,6 @@ export class WidgetUpdater {
           const stat = await fileIo.stat(filePath);
           if (stat.size > 0) {
             WidgetUpdater.coverPathCache.set(url, filePath);
-            WidgetUpdater.coverSizeCache.set(url, stat.size);
             return filePath;
           }
         } catch (_e) {}
@@ -120,7 +148,7 @@ export class WidgetUpdater {
           await fileIo.write(f.fd, buf);
           await fileIo.close(f);
           WidgetUpdater.coverPathCache.set(url, filePath);
-          WidgetUpdater.coverSizeCache.set(url, buf.byteLength);
+          hilog.info(DOMAIN, TAG, 'cover cached bytes=%{public}d', buf.byteLength);
           return filePath;
         }
         hilog.warn(DOMAIN, TAG, 'download cover bad status %{public}d for %{public}s',
@@ -154,7 +182,7 @@ export class WidgetUpdater {
    */
   private static async buildPlayerBinding(snap: WidgetPlayerSnapshot, allowNetwork: boolean = true)
     : Promise<BuildBindingResult> {
-    const data: Record<string, Object> = WidgetUpdater.snapshotToFormData(snap);
+    const data = new PlayerFormData(snap);
     let imgFile: fileIo.File | null = null;
     let imgName = '';
     if (snap.cover && (snap.cover.startsWith('http') || snap.cover.startsWith('/') || snap.cover.startsWith('file://'))) {
@@ -170,10 +198,14 @@ export class WidgetUpdater {
         if (localPath) {
           imgFile = await fileIo.open(localPath, fileIo.OpenMode.READ_ONLY);
           imgName = `cover_${WidgetUpdater.hash(snap.bookId)}_${snap.updatedAt}`;
-          data['imgName'] = imgName;
-          const imgMap: Record<string, number> = {};
-          imgMap[imgName] = imgFile.fd;
-          data['formImages'] = imgMap;
+          data.imgName = imgName;
+          data.formImages[imgName] = imgFile.fd;
+          const stat = await fileIo.stat(localPath);
+          hilog.info(DOMAIN, TAG, 'cover binding ready key=%{public}s bytes=%{public}d fd=%{public}d',
+            imgName, stat.size, imgFile.fd);
+        } else if (snap.cover.length > 0) {
+          hilog.warn(DOMAIN, TAG, 'cover binding fallback to url, network=%{public}s',
+            allowNetwork ? 'true' : 'false');
         }
       } catch (err) {
         const e = err as Error;
@@ -189,40 +221,63 @@ export class WidgetUpdater {
     try { fileIo.closeSync(f); } catch (_e) { /* ignore */ }
   }
 
+  private static isLatest(generation: number): boolean {
+    return generation === WidgetUpdater.updateGeneration;
+  }
+
+  /** 重新打开 preferences，读取 FormExtensionAbility 刚写入的 formId。 */
+  private static async refreshPreferenceCache(): Promise<void> {
+    if (!WidgetUpdater.appContext) return;
+    try {
+      await PreferenceService.invalidateCache(WidgetUpdater.appContext);
+      await PreferenceService.init(WidgetUpdater.appContext);
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'refresh preferences failed: %{public}s',
+        e?.message ?? JSON.stringify(err));
+    }
+  }
+
+  /** 卡片当前不展示播放进度，比较可见字段即可，避免每个 tick 都重建图片绑定。 */
+  private static sameCardState(a: WidgetPlayerSnapshot, b: WidgetPlayerSnapshot): boolean {
+    return a.bookId === b.bookId
+      && a.bookTitle === b.bookTitle
+      && a.author === b.author
+      && a.cover === b.cover
+      && a.chapterId === b.chapterId
+      && a.chapterTitle === b.chapterTitle
+      && a.isPlaying === b.isPlaying;
+  }
+
   /** 把当前 PlayerState 写入快照,并广播给所有听书卡片 */
   static async updatePlayerCard(state: PlayerState | null, force: boolean = false): Promise<void> {
+    const generation = ++WidgetUpdater.updateGeneration;
     const snap = WidgetUpdater.buildSnapshot(state);
-    if (!force) {
-      const existing = await PreferenceService.getWidgetPlayerSnapshot();
-      if (existing && snap.bookId === existing.bookId
-        && snap.isPlaying === existing.isPlaying
-        && Math.abs(snap.updatedAt - existing.updatedAt) < 100) {
-        return;
-      }
+    const existing = await PreferenceService.getWidgetPlayerSnapshot();
+    if (force || !existing || !WidgetUpdater.sameCardState(snap, existing)) {
+      await PreferenceService.setWidgetPlayerSnapshot(snap);
     }
-    await WidgetUpdater.ensureBgColor(snap);
-    await PreferenceService.setWidgetPlayerSnapshot(snap);
-    // form-id 列表是 FormExtensionAbility 进程写的,主进程的 preferences 内存缓存
-    // 不会感知另一进程写入。不刷新 → 用户在 App 运行期间新加的卡片读不到 →
-    // updateForm 直推被跳过,只能等系统的定时 onUpdateForm,表现就是"状态更新很慢"。
-    // 同 FormExt 的做法,推送前抛掉本进程缓存重新打开,读到最新写入。
-    if (WidgetUpdater.appContext) {
-      try {
-        await PreferenceService.invalidateCache(WidgetUpdater.appContext);
-        await PreferenceService.init(WidgetUpdater.appContext);
-      } catch (err) {
-        const e = err as Error;
-        hilog.warn(DOMAIN, TAG, 'invalidate before push failed: %{public}s',
-          e?.message ?? JSON.stringify(err));
-      }
-    }
+    if (!WidgetUpdater.isLatest(generation)) return;
+    // form-id 列表由 FormExtensionAbility 进程写入，主进程必须刷新 preferences 缓存。
+    await WidgetUpdater.refreshPreferenceCache();
     const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
+    hilog.info(DOMAIN, TAG, 'update card generation=%{public}d forms=%{public}d playing=%{public}s',
+      generation, ids.length, snap.isPlaying ? 'true' : 'false');
     if (ids.length === 0) return;
+    if (!WidgetUpdater.isLatest(generation)) return;
+    const pendingIds: string[] = ids.filter((id: string) => {
+      const pushed = WidgetUpdater.pushedCardStateByForm.get(id);
+      return force || !pushed || !WidgetUpdater.sameCardState(snap, pushed);
+    });
+    if (pendingIds.length === 0) return;
     const built = await WidgetUpdater.buildPlayerBinding(snap);
     try {
-      for (const id of ids) {
+      for (const id of pendingIds) {
+        if (!WidgetUpdater.isLatest(generation)) break;
         try {
           await formProvider.updateForm(id, built.binding);
+          WidgetUpdater.pushedCardStateByForm.set(id, snap);
+          hilog.info(DOMAIN, TAG, 'update card success id=%{public}s', id);
         } catch (err) {
           const e = err as BusinessError;
           hilog.warn(DOMAIN, TAG, 'updatePlayerCard fail id=%{public}s code=%{public}d msg=%{public}s',
@@ -230,6 +285,7 @@ export class WidgetUpdater {
           // 16500001 invalid id / 16500100 not removed / 16501001 form not exist
           // 这三种都是死 ID，从持久化里清掉，下次重新添加卡片时由 onAddForm 重新登记
           if (e.code === 16500001 || e.code === 16500100 || e.code === 16501001) {
+            WidgetUpdater.pushedCardStateByForm.delete(id);
             await PreferenceService.removeWidgetFormId(WIDGET_PLAYER, id);
           }
         }
@@ -242,10 +298,11 @@ export class WidgetUpdater {
   /** 单卡片推送(onAddForm/onUpdateForm 用),内部走 fd 通道并自动关闭 fd */
   static async pushPlayerSnapshotToForm(formId: string, snap: WidgetPlayerSnapshot,
     allowNetwork: boolean = true): Promise<void> {
-    await WidgetUpdater.ensureBgColor(snap, allowNetwork);
     const built = await WidgetUpdater.buildPlayerBinding(snap, allowNetwork);
     try {
       await formProvider.updateForm(formId, built.binding);
+      WidgetUpdater.pushedCardStateByForm.set(formId, snap);
+      hilog.info(DOMAIN, TAG, 'single card push success id=%{public}s', formId);
     } finally {
       WidgetUpdater.closeFd(built.imgFile);
     }
@@ -289,7 +346,6 @@ export class WidgetUpdater {
   static async seedAndPersistFromLastPlayed(): Promise<WidgetPlayerSnapshot | null> {
     const snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
     if (snap) {
-      await WidgetUpdater.ensureBgColor(snap);
       await PreferenceService.setWidgetPlayerSnapshot(snap);
     }
     return snap;
@@ -297,20 +353,26 @@ export class WidgetUpdater {
 
   /** 把当前 preference 里的快照推送到所有听书卡片(seed 后调用) */
   static async pushSnapshotToCards(): Promise<void> {
+    const generation = WidgetUpdater.updateGeneration;
+    await WidgetUpdater.refreshPreferenceCache();
     const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
     if (ids.length === 0) return;
     const snap = await PreferenceService.getWidgetPlayerSnapshot();
     if (!snap) return;
+    if (!WidgetUpdater.isLatest(generation)) return;
     const built = await WidgetUpdater.buildPlayerBinding(snap);
     try {
       for (const id of ids) {
+        if (!WidgetUpdater.isLatest(generation)) break;
         try {
           await formProvider.updateForm(id, built.binding);
+          WidgetUpdater.pushedCardStateByForm.set(id, snap);
         } catch (err) {
           const e = err as BusinessError;
           hilog.warn(DOMAIN, TAG, 'pushSnapshotToCards fail id=%{public}s code=%{public}d',
             id, e.code);
           if (e.code === 16500001 || e.code === 16500100 || e.code === 16501001) {
+            WidgetUpdater.pushedCardStateByForm.delete(id);
             await PreferenceService.removeWidgetFormId(WIDGET_PLAYER, id);
           }
         }
@@ -331,6 +393,8 @@ export class WidgetUpdater {
     if (!WidgetUpdater.appContext) return;
 
     try {
+      const generation = ++WidgetUpdater.updateGeneration;
+      await WidgetUpdater.refreshPreferenceCache();
       const snap = await PreferenceService.getWidgetPlayerSnapshot();
       if (!snap || snap.bookId.length === 0 || snap.isPlaying === isPlaying) {
         return;
@@ -338,23 +402,32 @@ export class WidgetUpdater {
 
       snap.isPlaying = isPlaying;
       snap.updatedAt = Date.now();
+      if (!WidgetUpdater.isLatest(generation)) return;
       await PreferenceService.setWidgetPlayerSnapshot(snap);
 
+      await WidgetUpdater.refreshPreferenceCache();
       const ids = await PreferenceService.getWidgetFormIds(WIDGET_PLAYER);
       if (ids.length === 0) return;
 
-      const data: Record<string, Object> = WidgetUpdater.snapshotToFormData(snap);
-      const binding = formBindingData.createFormBindingData(data);
-
-      for (const id of ids) {
-        try {
-          await formProvider.updateForm(id, binding);
-        } catch (err) {
-          const e = err as BusinessError;
-          if (e.code === 16500001 || e.code === 16500100 || e.code === 16501001) {
-            await PreferenceService.removeWidgetFormId(WIDGET_PLAYER, id);
+      // 乐观更新也必须走完整绑定，否则会把已有 imgName/formImages 覆盖掉，
+      // 播放按钮点击后封面和背景就会短暂消失。
+      const built = await WidgetUpdater.buildPlayerBinding(snap);
+      try {
+        for (const id of ids) {
+          if (!WidgetUpdater.isLatest(generation)) break;
+          try {
+            await formProvider.updateForm(id, built.binding);
+            WidgetUpdater.pushedCardStateByForm.set(id, snap);
+          } catch (err) {
+            const e = err as BusinessError;
+            if (e.code === 16500001 || e.code === 16500100 || e.code === 16501001) {
+              WidgetUpdater.pushedCardStateByForm.delete(id);
+              await PreferenceService.removeWidgetFormId(WIDGET_PLAYER, id);
+            }
           }
         }
+      } finally {
+        WidgetUpdater.closeFd(built.imgFile);
       }
 
       setTimeout(() => {
@@ -369,32 +442,6 @@ export class WidgetUpdater {
   static buildSnapshot(state: PlayerState | null): WidgetPlayerSnapshot {
     const book: Book | null = state ? state.currentBook : null;
     const chapter: Chapter | null = state ? state.currentChapter : null;
-    let bgColor = '';
-    let bgTopColor = '';
-    let bgBottomColor = '';
-    let bgLeftColor = '';
-    let bgRightColor = '';
-    let bgDarkColor = '';
-    if (state && state.hasAmbientColor) {
-      bgColor = state.ambientCenterColor;
-      bgTopColor = state.ambientTopColor;
-      bgBottomColor = state.ambientBottomColor;
-      bgLeftColor = state.ambientLeftColor;
-      bgRightColor = state.ambientRightColor;
-      bgDarkColor = state.ambientDarkColor;
-    }
-    if (!bgColor && book && book.cover) {
-      const palette = ColorPickerUtils.getPaletteCached(book.cover);
-      if (palette) {
-        const theme = ColorPickerUtils.toAmbientTheme(palette);
-        bgColor = theme.center;
-        bgTopColor = theme.top;
-        bgBottomColor = theme.bottom;
-        bgLeftColor = theme.left;
-        bgRightColor = theme.right;
-        bgDarkColor = theme.dark;
-      }
-    }
     return {
       bookId: book ? book.id : '',
       bookTitle: book ? book.title : '',
@@ -405,64 +452,7 @@ export class WidgetUpdater {
       progressMs: state ? state.progressMs : 0,
       durationMs: state ? state.durationMs : 0,
       isPlaying: state ? state.isPlaying : false,
-      updatedAt: Date.now(),
-      bgColor: bgColor,
-      bgTopColor: bgTopColor,
-      bgBottomColor: bgBottomColor,
-      bgLeftColor: bgLeftColor,
-      bgRightColor: bgRightColor,
-      bgDarkColor: bgDarkColor,
-    };
-  }
-
-  /** 异步提取封面色并补充到快照中（缓存 miss 时主动提取） */
-  private static async ensureBgColor(snap: WidgetPlayerSnapshot, allowNetwork: boolean = true): Promise<void> {
-    if (snap.bgColor && snap.bgColor.length > 0
-      && snap.bgTopColor && snap.bgTopColor.length > 0
-      && snap.bgBottomColor && snap.bgBottomColor.length > 0
-      && snap.bgLeftColor && snap.bgLeftColor.length > 0
-      && snap.bgRightColor && snap.bgRightColor.length > 0
-      && snap.bgDarkColor && snap.bgDarkColor.length > 0) {
-      return;
-    }
-    if (!snap.cover) return;
-    if (!allowNetwork) return;
-    try {
-      let palette = ColorPickerUtils.getPaletteCached(snap.cover);
-      if (!palette) {
-        if (snap.cover.startsWith('http')) {
-          palette = await ColorPickerUtils.pickPaletteFromUrl(snap.cover);
-        } else if (snap.cover.startsWith('/')) {
-          palette = await ColorPickerUtils.pickPaletteFromFile(snap.cover);
-        }
-      }
-      if (palette) {
-        const theme = ColorPickerUtils.toAmbientTheme(palette);
-        snap.bgColor = theme.center;
-        snap.bgTopColor = theme.top;
-        snap.bgBottomColor = theme.bottom;
-        snap.bgLeftColor = theme.left;
-        snap.bgRightColor = theme.right;
-        snap.bgDarkColor = theme.dark;
-      }
-    } catch (_e) { /* ignore */ }
-  }
-
-  static snapshotToFormData(snap: WidgetPlayerSnapshot): Record<string, Object> {
-    return {
-      'hasBook': snap.bookId.length > 0 ? 1 : 0,
-      'bookId': snap.bookId,
-      'bookTitle': snap.bookTitle || '没有正在播放的书',
-      'author': snap.author,
-      'cover': snap.cover,
-      'chapterTitle': snap.chapterTitle || '点击挑一本',
-      'isPlaying': snap.isPlaying ? 1 : 0,
-      'bgColor': snap.bgColor || '',
-      'bgTopColor': snap.bgTopColor || '',
-      'bgBottomColor': snap.bgBottomColor || '',
-      'bgLeftColor': snap.bgLeftColor || '',
-      'bgRightColor': snap.bgRightColor || '',
-      'bgDarkColor': snap.bgDarkColor || '',
+      updatedAt: Date.now()
     };
   }
 }

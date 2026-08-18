@@ -1116,6 +1116,9 @@ export struct HomePage {
       }
     })
     .titleMode(HdsNavigationTitleMode.MINI)
+    // 横屏时 HdsNavigation 默认会自动切换 Split，把首页内容压缩到左栏。
+    // 首页没有独立的导航栏，始终使用全宽 Stack 模式。
+    .mode(NavigationMode.Stack)
     .hideBackButton(true)
     .bindToScrollable([this.contentScroller])
     .backgroundColor(Color.Transparent)

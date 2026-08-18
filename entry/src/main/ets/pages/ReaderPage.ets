@@ -56,6 +56,7 @@ export struct ReaderPage {
   private readerSetting: readerCore.ReaderSetting | null = null;
   private readerKitDomPos: string = '';
   private readerKitPageOffset: number = 0;
+  private readerSettingsRefreshTimerId: number = -1;
   private safeAreaChangeHandler: (topVp: number, bottomVp: number) => void =
     (topVp: number, bottomVp: number): void => {
       const changed = Math.abs(this.topSafeVp - topVp) >= 0.1 ||
@@ -63,7 +64,7 @@ export struct ReaderPage {
       if (!changed) return;
       this.topSafeVp = topVp;
       this.bottomSafeVp = bottomVp;
-      this.applyReadingSettings();
+      this.scheduleReaderSettingsRefresh();
     };
 
   aboutToAppear(): void {
@@ -77,10 +78,33 @@ export struct ReaderPage {
 
   aboutToDisappear(): void {
     this.leaving = true;
+    this.cancelReaderSettingsRefresh();
     this.saveProgress();
     this.saveReadingSettings();
     WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     WindowUtils.setStatusBarLight(false);
+  }
+
+  private cancelReaderSettingsRefresh(): void {
+    if (this.readerSettingsRefreshTimerId !== -1) {
+      clearTimeout(this.readerSettingsRefreshTimerId);
+      this.readerSettingsRefreshTimerId = -1;
+    }
+  }
+
+  /** 合并旋转/窗口缩放期间的多次尺寸回调，避免 ReaderKit 重复分页。 */
+  private scheduleReaderSettingsRefresh(): void {
+    this.cancelReaderSettingsRefresh();
+    this.readerSettingsRefreshTimerId = setTimeout((): void => {
+      this.readerSettingsRefreshTimerId = -1;
+      if (this.leaving) return;
+      this.applyReadingSettings();
+    }, 120);
+  }
+
+  private handleViewportSizeChange(_oldValue: SizeOptions, newValue: SizeOptions): void {
+    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number') return;
+    this.scheduleReaderSettingsRefresh();
   }
 
   private async initializeReader(): Promise<void> {
@@ -524,6 +548,9 @@ export struct ReaderPage {
     .height('100%')
     .backgroundColor(READER_BACKGROUND)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onSizeChange((oldValue: SizeOptions, newValue: SizeOptions): void => {
+      this.handleViewportSizeChange(oldValue, newValue);
+    })
   }
 
   @Builder

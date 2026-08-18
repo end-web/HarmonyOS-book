@@ -32,16 +32,6 @@ export class PlayerState {
    */
   @Trace savedDurationMs: number = 0;
   @Trace speed: number = 1.0;
-  @Trace accentColor: string = '#2A7C8C';
-  @Trace ambientCover: string = '';
-  @Trace ambientMainColor: string = '#2A7C8C';
-  @Trace ambientTopColor: string = '#324B5F';
-  @Trace ambientBottomColor: string = '#17191D';
-  @Trace ambientLeftColor: string = '#2B5960';
-  @Trace ambientRightColor: string = '#5F4330';
-  @Trace ambientCenterColor: string = '#2A7C8C';
-  @Trace ambientDarkColor: string = '#111315';
-  @Trace hasAmbientColor: boolean = false;
   @Trace sleepMinutes: number = 0;
   @Trace sleepRemainingMs: number = 0;
   @Trace playMode: PlayMode = PlayMode.Sequence;
@@ -54,15 +44,6 @@ export class PlayerState {
     this.progressMs = 0;
     this.durationMs = 0;
     this.savedDurationMs = 0;
-    this.ambientCover = '';
-    this.ambientMainColor = '#2A7C8C';
-    this.ambientTopColor = '#324B5F';
-    this.ambientBottomColor = '#17191D';
-    this.ambientLeftColor = '#2B5960';
-    this.ambientRightColor = '#5F4330';
-    this.ambientCenterColor = '#2A7C8C';
-    this.ambientDarkColor = '#111315';
-    this.hasAmbientColor = false;
   }
 }
 
