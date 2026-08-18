@@ -28,6 +28,8 @@ export struct ChapterListItem {
   @Param bytesText: string = '';
   /** 已播进度百分比文案；为空则隐藏 */
   @Param progressText: string = '';
+  /** 与详情页/播放器正文对齐的水平内边距。 */
+  @Param horizontalInset: number = AppSpace.Lg;
   @Param badge: ChapterBadge = ChapterBadge.None;
   @Event onTap: () => void = () => {};
 
@@ -36,7 +38,7 @@ export struct ChapterListItem {
       Column({ space: 2 }) {
         Text(this.title)
           .fontSize(AppFont.BodyL)
-          .fontColor(this.isPlaying ? '#D4380D' : $r('sys.color.font_primary'))
+          .fontColor(this.isPlaying ? AppColor.BrandDark : $r('sys.color.font_primary'))
           .fontWeight(this.isPlaying ? FontWeight.Medium : FontWeight.Normal)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -55,7 +57,7 @@ export struct ChapterListItem {
           if (this.progressText.length > 0) {
             Text(`已播 ${this.progressText}`)
               .fontSize(AppFont.Caption)
-              .fontColor('#D4380D')
+              .fontColor(AppColor.BrandDark)
           }
         }
       }
@@ -73,8 +75,8 @@ export struct ChapterListItem {
         } else if (this.badge === ChapterBadge.Downloading) {
           Text($r('app.string.chapter_downloading'))
             .fontSize(AppFont.Caption)
-            .fontColor(AppColor.Brand)
-            .backgroundColor('#140A84FF')
+            .fontColor(AppColor.BrandDark)
+            .backgroundColor(AppColor.BrandSoft)
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
         } else if (this.badge === ChapterBadge.Failed) {
@@ -87,12 +89,12 @@ export struct ChapterListItem {
         }
         if (this.isPlaying && !this.isTextBook) {
           SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
-            .fontSize(18).fontColor(['#D4380D'])
+            .fontSize(18).fontColor([AppColor.BrandDark])
         }
       }
     }
     .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: 14, bottom: 14 })
+    .padding({ left: this.horizontalInset, right: this.horizontalInset, top: 14, bottom: 14 })
     .onClick(() => this.onTap())
   }
 }

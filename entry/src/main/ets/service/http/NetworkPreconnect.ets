@@ -7,13 +7,12 @@
  * 预建链只在"启动时可预测固定域名"时有意义；动态生成/依赖用户输入的 URL 无法命中。
  * 本应用的高频源域名分两类：
  *  - 固定域名（欢FM 站点 + 静态 CDN 三镜像）：onCreate 立即预建，不依赖配置。
- *  - 云源主机（默认 121.196.223.85 或用户自定义）：地址存 Preferences，需等
- *    PreferenceService 就绪后用真实值预建，避免用默认值导致自定义云源预建失效。
+ *  - 用户配置的云源主机：地址存 Preferences，需等 PreferenceService 就绪后预建；
+ *    未配置时不发起云源连接。
  *
  * 复用前提由 HttpClient.preconnect 保证：与 request() 共用同一 sharedSession。
  */
 import { HttpClient } from './HttpClient';
-import { DEFAULT_SERVER_AUDIO_API_BASE } from '../builtin/ServerAudioConfig';
 
 const HUAN_FM_SITE = 'https://www.tingyou.fm';
 const HUAN_CDN_BASES: string[] = [
@@ -50,9 +49,8 @@ export class NetworkPreconnect {
    * 若与已建链主机相同则跳过（也避免与 prewarmCustomHost 重复建链）。
    */
   static prewarmCloud(cloudApiBase?: string): void {
-    const base = cloudApiBase && cloudApiBase.length > 0
-      ? cloudApiBase : DEFAULT_SERVER_AUDIO_API_BASE;
-    const origin = NetworkPreconnect.originOf(base);
+    if (!cloudApiBase || cloudApiBase.length === 0) return;
+    const origin = NetworkPreconnect.originOf(cloudApiBase);
     if (origin.length === 0) return;
     if (NetworkPreconnect.cloudWarmedOrigin === origin) return;
     NetworkPreconnect.cloudWarmedOrigin = origin;

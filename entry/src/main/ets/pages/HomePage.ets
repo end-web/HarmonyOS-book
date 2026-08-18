@@ -9,9 +9,7 @@ import {
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
-import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
-import { BookSourceService } from '../service/BookSourceService';
-import { SourceDataService } from '../service/SourceDataService';
+import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
@@ -20,8 +18,6 @@ import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
-import { KkBiqugeTextSource } from '../service/text/KkBiqugeTextSource';
-import { TextSourceError } from '../model/TextReading';
 
 /** 首页分类入口项 */
 interface HomeCategory {
@@ -60,7 +56,6 @@ const HUAN_SOURCE_NAME = '欢FM';
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
 
-const HEADER_TOOLBAR_HEIGHT: number = 40;
 const SEARCH_FIELD_HEIGHT: number = 40;
 const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
@@ -270,17 +265,6 @@ struct HomeLoadingSkeleton {
 
 @ComponentV2
 export struct HomePage {
-  @Local audioBooks: Book[] = [];
-  @Local textBooks: Book[] = [];
-  @Local keyword: string = '';
-  @Local searching: boolean = false;
-  @Local hasSearched: boolean = false;
-  @Local searchTab: number = 0; // 0=全部, 1=有声书, 2=电子书
-  @Local viewMode: number = 0; // 0=grid, 1=list (默认表格模式)
-  @Local audioCount: number = 0;
-  @Local textCount: number = 0;
-  @Local textSourceNeedsVerification: boolean = false;
-  @Local textSourceError: string = '';
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local loadingHome: boolean = false;
   /** 当前选中的入口索引（-1=推荐，其他值对应 HOME_CATEGORIES）。 */
@@ -297,15 +281,13 @@ export struct HomePage {
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
+  @Event onSearchTap: () => void = () => {};
   /** 分类入口点击:跳到分类书单页(复用 blockMore 路由) */
   @Event onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) => void = () => {};
-  @Event onVerifyTextSource: () => void = () => {};
 
   private contentScroller: Scroller = new Scroller();
-  private audioDataSource: BookDataSource = new BookDataSource();
   private categoryDS: BookDataSource = new BookDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
-  private searchGen: number = 0;
   private homeGen: number = 0;
   private refreshInFlight: boolean = false;
 
@@ -319,7 +301,6 @@ export struct HomePage {
 
   /** 刷新推荐板块或当前分类，保留旧内容直到新数据返回。 */
   private async refreshHomeData(): Promise<void> {
-    if (this.hasSearched) return; // 搜索结果态不刷新
     if (this.selectedCategoryIndex === -1) {
       await this.loadHomeBlocks(true);
     } else {
@@ -329,11 +310,6 @@ export struct HomePage {
 
   private async handleHomeRefresh(): Promise<void> {
     if (this.refreshInFlight) return;
-    if (this.hasSearched) {
-      this.isRefreshing = false;
-      this.refreshStatus = RefreshStatus.Inactive;
-      return;
-    }
     this.refreshInFlight = true;
     this.isRefreshing = true;
     try {
@@ -423,21 +399,6 @@ export struct HomePage {
         this.loadingHome = false;
       }
     }
-  }
-
-  private clearSearch(): void {
-    this.searchGen++;
-    this.searching = false;
-    this.hasSearched = false;
-    this.audioBooks = [];
-    this.textBooks = [];
-    this.audioCount = 0;
-    this.textCount = 0;
-    this.textSourceNeedsVerification = false;
-    this.textSourceError = '';
-    this.searchTab = 0;
-    this.audioDataSource.clear();
-    this.resetSearchCollapse();
   }
 
   private scrollContentToTop(): void {
@@ -566,150 +527,9 @@ export struct HomePage {
     return book;
   }
 
-  private async doSearch(): Promise<void> {
-    const keyword = this.keyword.trim();
-    if (!keyword) {
-      this.clearSearch();
-      return;
-    }
-    this.searchGen++;
-    const gen = this.searchGen;
-    this.searching = true;
-    this.hasSearched = true;
-    this.resetSearchCollapse();
-    this.scrollContentToTop();
-    this.audioBooks = [];
-    this.textBooks = [];
-    this.audioCount = 0;
-    this.textCount = 0;
-    this.textSourceNeedsVerification = false;
-    this.textSourceError = '';
-    this.audioDataSource.clear();
-    BookCard.resetAnimations();
-    try {
-      const sources = await SourceDataService.getEnabledSources();
-      if (gen !== this.searchGen) return;
-      const seen = new Set<string>();
-      const tasks: Promise<void>[] = [];
-      for (const source of sources) {
-        tasks.push(this.searchOneSource(source, keyword, gen, seen));
-      }
-      tasks.push(this.searchTextSource(keyword, gen, seen));
-      await Promise.all(tasks);
-      if (gen !== this.searchGen) return;
-      // 并发搜索结束后统一校准一次，避免单个源完成顺序影响标签计数。
-      this.audioCount = this.audioBooks.length;
-      this.textCount = this.textBooks.length;
-      this.refreshVisibleSearchBooks();
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'search failed: %{public}s', String(e));
-    } finally {
-      if (gen === this.searchGen) this.searching = false;
-    }
-  }
-
-  private async searchOneSource(source: BookSource, keyword: string, gen: number,
-    seen: Set<string>): Promise<void> {
-    try {
-      const results = await BookSourceService.searchBooks(source, keyword);
-      if (gen !== this.searchGen) return;
-      const books: Book[] = [];
-      for (const item of results) {
-        const dedupeKey = `${item.sourceUrl}\u001f${item.bookUrl}`;
-        if (seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
-        books.push(this.searchResultToBook(item));
-      }
-      if (books.length === 0) return;
-      this.audioBooks = this.audioBooks.concat(books);
-      this.audioCount = this.audioBooks.length;
-      this.refreshVisibleSearchBooks();
-      const covers: string[] = [];
-      for (const b of books) {
-        if (b.cover && b.cover.startsWith('http')) covers.push(b.cover);
-      }
-      CoverPrefetcher.prefetchMany(covers, 12);
-    } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
-        source.bookSourceName, String(e));
-    }
-  }
-
-  private async searchTextSource(keyword: string, gen: number, seen: Set<string>): Promise<void> {
-    try {
-      const books = await KkBiqugeTextSource.search(keyword);
-      if (gen !== this.searchGen) return;
-      const unique: Book[] = [];
-      for (const book of books) {
-        const dedupeKey = `${book.sourceUrl}\u001f${book.bookUrl}`;
-        if (seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
-        SearchCache.put(book);
-        unique.push(book);
-      }
-      this.textBooks = unique;
-      this.textCount = unique.length;
-      this.refreshVisibleSearchBooks();
-      const covers: string[] = [];
-      for (const book of unique) {
-        if (book.cover && book.cover.startsWith('http')) covers.push(book.cover);
-      }
-      CoverPrefetcher.prefetchMany(covers, 12);
-    } catch (e) {
-      if (e instanceof TextSourceError) {
-        this.textSourceNeedsVerification = e.code === 'VERIFY_REQUIRED';
-        this.textSourceError = e.message;
-      }
-      hilog.warn(DOMAIN, TAG, 'text source search failed: %{public}s', String(e));
-    }
-  }
-
-  private refreshVisibleSearchBooks(): void {
-    const visible: Book[] = [];
-    if (this.searchTab === 0 || this.searchTab === 1) {
-      for (const book of this.audioBooks) visible.push(book);
-    }
-    if (this.searchTab === 0 || this.searchTab === 2) {
-      for (const book of this.textBooks) visible.push(book);
-    }
-    this.audioDataSource.setBooks(visible);
-  }
-
   private openBook(book: Book): void {
-    // 搜索结果可能超过 SearchCache 的 LRU 容量，跳转前重新固定当前所选书籍。
     SearchCache.put(book);
     this.onBookTap(book.id);
-  }
-
-  private selectSearchTab(index: number): void {
-    if (index < 0 || index > 2 || this.searchTab === index) return;
-    this.searchTab = index;
-    this.refreshVisibleSearchBooks();
-  }
-
-  private searchResultToBook(r: SearchResult): Book {
-    const emptyChapters: Chapter[] = [];
-    const book: Book = {
-      id: BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
-      title: r.name,
-      author: r.author || '未知',
-      narrator: r.sourceName,
-      cover: r.coverUrl || '',
-      category: r.kind || 'audio',
-      contentType: 'audio',
-      intro: r.intro || '',
-      totalDuration: 0,
-      chapterCount: 0,
-      rating: 0,
-      tags: [r.sourceName],
-      chapters: emptyChapters,
-      bookUrl: r.bookUrl,
-      sourceUrl: r.sourceUrl,
-      variables: r.variables,
-      completed: r.completed,
-    };
-    SearchCache.put(book);
-    return book;
   }
 
   /** 首板块按每页三条分组，横向切换时保留稳定的书籍顺序。 */
@@ -733,13 +553,6 @@ export struct HomePage {
     if (pageBooks.length === 0) return 'featured-empty';
     const firstBook = pageBooks[0];
     return `${firstBook.sourceUrl}#${firstBook.bookUrl}`;
-  }
-
-  /** 吸顶次行高度：分类标签行或搜索结果工具条 */
-  private currentSubHeaderHeight(): number {
-    return this.hasSearched
-      ? HEADER_TOOLBAR_HEIGHT
-      : CATEGORY_NAV_ROW_HEIGHT;
   }
 
   /**
@@ -772,7 +585,7 @@ export struct HomePage {
    */
   @Computed
   get headerHeight(): number {
-    return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + this.currentSubHeaderHeight();
+    return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + CATEGORY_NAV_ROW_HEIGHT;
   }
 
   /** 搜索是否完全展开（在顶部），允许下拉刷新 */
@@ -813,93 +626,37 @@ export struct HomePage {
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
       Column() {
-        Search({ value: this.keyword!!, placeholder: '搜索书籍、作者...' })
-          .searchButton('搜索', { fontColor: HomeTheme.Accent })
-          .placeholderColor($r('sys.color.font_tertiary'))
-          .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
-          .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
-          .onSubmit(() => this.doSearch())
-          .onChange((value: string) => {
-            this.keyword = value;
-            if (value.length === 0 && this.hasSearched) {
-              this.clearSearch();
-            }
-          })
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.magnifyingglass'))
+            .fontSize(17)
+            .fontColor([$r('sys.color.icon_secondary')])
+          Text($r('app.string.search_placeholder'))
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_tertiary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Blank()
+        }
+          .width('100%')
           .height(SEARCH_FIELD_HEIGHT)
+          .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
           .backgroundColor(Color.Transparent)
           .systemMaterial(AppMaterial.InteractiveClean)
           .borderRadius(AppRadius.Pill)
           .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
           .opacity(1 - this.searchCollapseProgress)
+          .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
+          .onClick(() => this.onSearchTap())
       }
       .width('100%')
       .height(this.searchRowHeight)
       .clip(true)
       .opacity(this.searchRowHeight > 0 ? 1 : 0)
 
-      if (!this.hasSearched) {
-        this.buildCategoryTags()
-      } else {
-        Row() {
-          this.buildSearchTypeTabs()
-          if (this.searching) {
-            LoadingProgress()
-              .width(18).height(18)
-              .color(AppColor.Brand)
-              .margin({ left: AppSpace.Xs })
-          }
-          Blank()
-          SymbolGlyph(this.viewMode === 0
-            ? $r('sys.symbol.list_bullet')
-            : $r('sys.symbol.square_grid_2x2'))
-            .fontSize(18)
-            .fontColor([$r('sys.color.font_primary')])
-            .padding(8)
-            .borderRadius(18)
-            .backgroundColor(Color.Transparent)
-            .onClick(() => {
-              this.getUIContext()?.animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard },
-                () => { this.viewMode = this.viewMode === 0 ? 1 : 0; });
-            })
-        }
-        .width('100%')
-        .height(HEADER_TOOLBAR_HEIGHT)
-        .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Xs })
-        .alignItems(VerticalAlign.Center)
-      }
+      this.buildCategoryTags()
     }
     .width('100%')
     .backgroundColor(Color.Transparent)
-  }
-
-  @Builder
-  buildSearchTypeTabs() {
-    Row({ space: AppSpace.Xxs }) {
-      this.buildSearchTypeTab('全部', 0)
-      this.buildSearchTypeTab('有声书', 1)
-      this.buildSearchTypeTab('电子书', 2)
-    }
-    .padding({ left: 4, right: 4, top: 3, bottom: 3 })
-    .borderRadius(AppRadius.Pill)
-    .systemMaterial(AppMaterial.InteractiveThin)
-  }
-
-  @Builder
-  buildSearchTypeTab(label: string, index: number) {
-    Row({ space: 4 }) {
-      Text(label)
-        .fontSize(12)
-        .fontColor(this.searchTab === index ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
-        .fontWeight(this.searchTab === index ? FontWeight.Medium : FontWeight.Regular)
-      Text((index === 0 ? this.audioCount + this.textCount :
-        (index === 1 ? this.audioCount : this.textCount)).toString())
-        .fontSize(11)
-        .fontColor(this.searchTab === index ? HomeTheme.Accent : $r('sys.color.font_tertiary'))
-    }
-    .padding({ left: 9, right: 9, top: 5, bottom: 5 })
-    .borderRadius(AppRadius.Pill)
-    .backgroundColor(this.searchTab === index ? HomeTheme.AccentSoft : Color.Transparent)
-    .onClick(() => this.selectSearchTab(index))
   }
 
   /** 隐藏 Refresh 默认指示器，避免它出现在固定顶栏后方。 */
@@ -944,121 +701,82 @@ export struct HomePage {
           .justifyContent(FlexAlign.End)
         }
 
-        // 第2~N项：内容主体（推荐板块 / 搜索结果 / 空态）
-        if (this.hasSearched && this.audioDataSource.totalCount() === 0 && this.searching) {
-          ListItem() {
-            this.buildSearchingState()
-          }
-        } else if (this.hasSearched && this.audioDataSource.totalCount() === 0 && !this.searching) {
-          ListItem() {
-            this.buildNoResultState()
-          }
-        } else if (this.hasSearched) {
-          // 搜索结果：直接渲染为 ListItem
-          if (this.viewMode === 0) {
-            // API 26:直接使用外层 List 的视口按需创建网格项。
-            LazyVGridLayout() {
-              LazyForEach(this.audioDataSource, (book: Book, idx: number) => {
-                BookCard({ book: book, indexHint: idx, onTap: () => this.openBook(book) })
-              }, (book: Book) => book.id)
+        // 第2~N项：推荐板块或分类书单。
+        if (this.selectedCategoryIndex === -1) {
+          if (this.loadingHome && this.homeBlocks.length === 0) {
+            ListItem() {
+              Column().width('100%').height(300)
             }
-            .columnsTemplate('1fr 1fr 1fr')
-            .columnsGap(LengthMetrics.vp(AppSpace.Sm))
-            .rowsGap(LengthMetrics.vp(AppSpace.Md))
-            .width('100%')
-            .padding({ left: AppSpace.Md, right: AppSpace.Md })
-          } else {
-            // List 模式：每本书一个 ListItem
-            LazyForEach(this.audioDataSource, (book: Book) => {
+          } else if (this.homeBlocks.length > 0) {
+            LazyForEach(this.homeBlockDataSource, (block: HomeBlockSection, idx: number) => {
               ListItem() {
-                this.buildListItem(book)
+                this.buildHomeBlock(block, idx)
               }
-              .padding({ left: AppSpace.Md, right: AppSpace.Md })
+              .margin({ bottom: AppSpace.Sm })
+            }, (block: HomeBlockSection, idx: number) => `${block.sourceUrl}#${block.title}#${idx}`)
+          } else {
+            ListItem() {
+              Column() {
+                SymbolGlyph($r('sys.symbol.magnifyingglass'))
+                  .fontSize(48)
+                  .fontColor([$r('sys.color.font_tertiary')])
+                Text('搜索你想听的书')
+                  .fontSize(AppFont.Body)
+                  .fontColor($r('sys.color.font_tertiary'))
+                  .margin({ top: AppSpace.Md })
+                Text(HUAN_SOURCE_NAME)
+                  .fontSize(AppFont.Caption)
+                  .fontColor($r('sys.color.font_tertiary'))
+                  .margin({ top: AppSpace.Xs })
+              }
+              .width('100%')
+              .height(300)
+              .justifyContent(FlexAlign.Center)
+            }
+          }
+        } else if (this.categoryLoading && this.categoryBooks.length === 0) {
+          ListItem() {
+            Column() {
+              LoadingProgress().width(40).height(40).color(AppColor.Brand)
+              Text('加载中...')
+                .fontSize(AppFont.Body)
+                .fontColor($r('sys.color.font_tertiary'))
+                .margin({ top: AppSpace.Sm })
+            }
+            .width('100%')
+            .height(300)
+            .justifyContent(FlexAlign.Center)
+          }
+        } else if (this.categoryError && this.categoryBooks.length === 0) {
+          ListItem() {
+            Column() {
+              SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                .fontSize(48)
+                .fontColor([$r('sys.color.font_tertiary')])
+              Text(this.categoryError)
+                .fontSize(AppFont.Body)
+                .fontColor($r('sys.color.font_tertiary'))
+                .margin({ top: AppSpace.Md })
+            }
+            .width('100%')
+            .height(300)
+            .justifyContent(FlexAlign.Center)
+          }
+        } else if (this.categoryBooks.length > 0) {
+          LazyVGridLayout() {
+            LazyForEach(this.categoryDS, (book: Book, idx: number) => {
+              BookCard({
+                book: book,
+                indexHint: idx,
+                onTap: () => this.openBook(book)
+              })
             }, (book: Book) => book.id)
           }
-        } else {
-          // 未搜索状态:根据 selectedCategoryIndex 显示推荐或分类书单
-          if (this.selectedCategoryIndex === -1) {
-            // 推荐板块或空态
-            if (this.loadingHome && this.homeBlocks.length === 0) {
-              ListItem() {
-                Column().width('100%').height(300)
-              }
-            } else if (this.homeBlocks.length > 0) {
-              // 推荐板块：每个板块一个 ListItem
-              LazyForEach(this.homeBlockDataSource, (block: HomeBlockSection, idx: number) => {
-                ListItem() {
-                  this.buildHomeBlock(block, idx)
-                }
-                .margin({ bottom: AppSpace.Sm })
-              }, (block: HomeBlockSection, idx: number) => `${block.sourceUrl}#${block.title}#${idx}`)
-            } else {
-              ListItem() {
-                Column() {
-                  SymbolGlyph($r('sys.symbol.magnifyingglass'))
-                    .fontSize(48)
-                    .fontColor([$r('sys.color.font_tertiary')])
-                  Text('搜索你想听的书')
-                    .fontSize(AppFont.Body)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .margin({ top: AppSpace.Md })
-                  Text(HUAN_SOURCE_NAME)
-                    .fontSize(AppFont.Caption)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .margin({ top: AppSpace.Xs })
-                }
-                .width('100%')
-                .height(300)
-                .justifyContent(FlexAlign.Center)
-              }
-            }
-          } else {
-            // 分类书单
-            if (this.categoryLoading && this.categoryBooks.length === 0) {
-              ListItem() {
-                Column() {
-                  LoadingProgress().width(40).height(40).color(AppColor.Brand)
-                  Text('加载中...')
-                    .fontSize(AppFont.Body)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .margin({ top: AppSpace.Sm })
-                }
-                .width('100%')
-                .height(300)
-                .justifyContent(FlexAlign.Center)
-              }
-            } else if (this.categoryError && this.categoryBooks.length === 0) {
-              ListItem() {
-                Column() {
-                  SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-                    .fontSize(48)
-                    .fontColor([$r('sys.color.font_tertiary')])
-                  Text(this.categoryError)
-                    .fontSize(AppFont.Body)
-                    .fontColor($r('sys.color.font_tertiary'))
-                    .margin({ top: AppSpace.Md })
-                }
-                .width('100%')
-                .height(300)
-                .justifyContent(FlexAlign.Center)
-              }
-            } else if (this.categoryBooks.length > 0) {
-              LazyVGridLayout() {
-                LazyForEach(this.categoryDS, (book: Book, idx: number) => {
-                  BookCard({
-                    book: book,
-                    indexHint: idx,
-                    onTap: () => this.openBook(book)
-                  })
-                }, (book: Book) => book.id)
-              }
-              .columnsTemplate('1fr 1fr 1fr')
-              .columnsGap(LengthMetrics.vp(AppSpace.Sm))
-              .rowsGap(LengthMetrics.vp(AppSpace.Md))
-              .width('100%')
-              .padding({ left: AppSpace.Md, right: AppSpace.Md })
-            }
-          }
+          .columnsTemplate('1fr 1fr 1fr')
+          .columnsGap(LengthMetrics.vp(AppSpace.Sm))
+          .rowsGap(LengthMetrics.vp(AppSpace.Md))
+          .width('100%')
+          .padding({ left: AppSpace.Md, right: AppSpace.Md })
         }
 
         // 底部留白避开浮动 Tab + MiniPlayer
@@ -1085,8 +803,8 @@ export struct HomePage {
           this.handleHomeRefresh();
         })
         .refreshOffset(64)
-        // 列表在顶部、搜索完全展开时才允许下拉刷新
-        .pullToRefresh(!this.hasSearched && this.isSearchFullyExpanded)
+        // 列表在顶部、搜索入口完全展开时才允许下拉刷新
+        .pullToRefresh(this.isSearchFullyExpanded)
         .width('100%')
         .height('100%')
         .clip(false)
@@ -1135,60 +853,6 @@ export struct HomePage {
       // 方案2：浮层顶栏，搜索折叠 + 分类吸顶
       this.fixedSearchBar()
     }
-  }
-
-  @Builder
-  buildSearchingState() {
-    Column() {
-      LoadingProgress().width(40).height(40).color(AppColor.Brand)
-      Text('正在搜索有声书和电子书...')
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_tertiary'))
-        .margin({ top: AppSpace.Sm })
-    }
-    .width('100%')
-    .height(300)
-    .justifyContent(FlexAlign.Center)
-  }
-
-  @Builder
-  buildNoResultState() {
-    Column() {
-      SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-        .fontSize(48)
-        .fontColor([$r('sys.color.font_tertiary')])
-      Text('未找到相关内容')
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_tertiary'))
-        .margin({ top: AppSpace.Md })
-      Text('试试其他关键词')
-        .fontSize(AppFont.Caption)
-        .fontColor($r('sys.color.font_tertiary'))
-        .margin({ top: AppSpace.Xs })
-      if (this.textSourceNeedsVerification) {
-        Row({ space: AppSpace.Xs }) {
-          Text('验证')
-            .fontSize(12)
-            .fontColor(HomeTheme.Accent)
-            .fontWeight(FontWeight.Medium)
-          Text('电子书源')
-            .fontSize(AppFont.Caption)
-            .fontColor(HomeTheme.Accent)
-        }
-        .margin({ top: AppSpace.Md })
-        .onClick(() => this.onVerifyTextSource())
-      } else if (this.textSourceError) {
-        Text(this.textSourceError)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .maxLines(2)
-          .textAlign(TextAlign.Center)
-          .margin({ top: AppSpace.Md, left: AppSpace.Xl, right: AppSpace.Xl })
-      }
-    }
-    .width('100%')
-    .height(300)
-    .justifyContent(FlexAlign.Center)
   }
 
   @Builder
@@ -1439,80 +1103,6 @@ export struct HomePage {
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
-  }
-
-  @Builder
-  buildListItem(book: Book) {
-    Row({ space: AppSpace.Md }) {
-      Stack({ alignContent: Alignment.BottomStart }) {
-        if (book.cover && book.cover.startsWith('http')) {
-          CoverImage({
-            url: book.cover,
-            imgWidth: 100,
-            aspectRatioValue: 1,
-            radius: AppRadius.Md,
-            decodeW: 300,
-            decodeH: 300,
-            highPriority: false
-          })
-        } else {
-          Stack() {
-            Column()
-              .width('100%')
-              .height('100%')
-              .backgroundColor($r('sys.color.brand'))
-            Text(book.title ? book.title.substring(0, 1) : '?')
-              .fontSize(32)
-              .fontColor(Color.White)
-              .fontWeight(FontWeight.Bold)
-          }
-          .width(100)
-          .aspectRatio(1)
-          .borderRadius(AppRadius.Md)
-          .clip(true)
-        }
-        if (book.narrator) {
-          Text(book.narrator)
-            .fontSize(10)
-            .fontColor(Color.White)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .backgroundColor($r('sys.color.ohos_id_color_mask_thin'))
-            .borderRadius({ topRight: AppRadius.Sm, bottomLeft: AppRadius.Md })
-        }
-      }
-
-      Column({ space: 4 }) {
-        Text(book.title)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Medium)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Text(book.author)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        if (book.intro) {
-          Text(book.intro)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.Center)
-    }
-    .width('100%')
-    .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
-    .onClick(() => this.openBook(book))
   }
 
 }

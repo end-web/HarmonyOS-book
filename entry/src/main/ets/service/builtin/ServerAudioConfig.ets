@@ -2,8 +2,6 @@ import { PreferenceService } from '../PreferenceService';
 import { HttpClient } from '../http/HttpClient';
 import { JsonObj } from './JsonValue';
 
-export const DEFAULT_SERVER_AUDIO_API_BASE = 'https://121.196.223.85/api/v1';
-
 export enum ServerAudioConfigErrorCode {
   EMPTY = 'SERVER_AUDIO_API_EMPTY',
   INVALID_SCHEME = 'SERVER_AUDIO_API_INVALID_SCHEME',
@@ -18,22 +16,22 @@ export class ServerAudioConfig {
   private static cachedApiBase: string | null = null;
 
   static peekApiBase(): string {
-    return ServerAudioConfig.cachedApiBase ?? DEFAULT_SERVER_AUDIO_API_BASE;
+    return ServerAudioConfig.cachedApiBase ?? '';
   }
 
   static async getApiBase(): Promise<string> {
-    if (ServerAudioConfig.cachedApiBase) {
+    if (ServerAudioConfig.cachedApiBase !== null) {
       return ServerAudioConfig.cachedApiBase;
     }
     try {
       const stored = await PreferenceService.getServerAudioApiBase();
       ServerAudioConfig.cachedApiBase = stored
         ? ServerAudioConfig.normalizeApiBase(stored)
-        : DEFAULT_SERVER_AUDIO_API_BASE;
+        : '';
     } catch (_e) {
-      ServerAudioConfig.cachedApiBase = DEFAULT_SERVER_AUDIO_API_BASE;
+      ServerAudioConfig.cachedApiBase = '';
     }
-    return ServerAudioConfig.cachedApiBase;
+    return ServerAudioConfig.cachedApiBase ?? '';
   }
 
   static async saveApiBase(value: string): Promise<string> {
@@ -45,8 +43,8 @@ export class ServerAudioConfig {
 
   static async resetApiBase(): Promise<string> {
     await PreferenceService.clearServerAudioApiBase();
-    ServerAudioConfig.cachedApiBase = DEFAULT_SERVER_AUDIO_API_BASE;
-    return DEFAULT_SERVER_AUDIO_API_BASE;
+    ServerAudioConfig.cachedApiBase = '';
+    return '';
   }
 
   static normalizeApiBase(value: string): string {

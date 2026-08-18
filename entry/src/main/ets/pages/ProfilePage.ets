@@ -8,7 +8,6 @@ import {
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import {
-  DEFAULT_SERVER_AUDIO_API_BASE,
   ServerAudioConfig,
   ServerAudioConfigErrorCode
 } from '../service/builtin/ServerAudioConfig';
@@ -45,8 +44,8 @@ export struct ProfilePage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   @Local auth: AuthService = AuthService.instance;
-  @Local serverApiBase: string = DEFAULT_SERVER_AUDIO_API_BASE;
-  @Local serverApiDraft: string = DEFAULT_SERVER_AUDIO_API_BASE;
+  @Local serverApiBase: string = '';
+  @Local serverApiDraft: string = '';
   @Local isServerConfigVisible: boolean = false;
   @Local isServerChecking: boolean = false;
   @Local isServerSaving: boolean = false;
@@ -73,8 +72,11 @@ export struct ProfilePage {
     this.isServerConfigVisible = true;
   }
 
-  private serverApiDisplay(): string {
-    return this.serverApiBase.replace(/^https?:\/\//, '');
+  private serverApiDisplay(): ResourceStr {
+    if (!this.serverApiBase) return $r('app.string.cloud_source_not_configured');
+    if (this.serverApiBase.startsWith('https://')) return this.serverApiBase.substring(8);
+    if (this.serverApiBase.startsWith('http://')) return this.serverApiBase.substring(7);
+    return this.serverApiBase;
   }
 
   private async testServerApi(): Promise<void> {
@@ -92,12 +94,6 @@ export struct ProfilePage {
     } finally {
       this.isServerChecking = false;
     }
-  }
-
-  private restoreDefaultServerApi(): void {
-    if (this.isServerChecking || this.isServerSaving) return;
-    this.serverApiDraft = DEFAULT_SERVER_AUDIO_API_BASE;
-    this.serverCheckState = 5;
   }
 
   private async saveServerApi(): Promise<void> {
@@ -500,22 +496,6 @@ export struct ProfilePage {
         .enabled(!this.isServerChecking && !this.isServerSaving)
         .onClick(() => this.testServerApi())
 
-        Button() {
-          Row({ space: AppSpace.Xs }) {
-            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-              .fontSize(17)
-              .fontColor([$r('sys.color.font_secondary')])
-            Text($r('app.string.cloud_source_restore_default'))
-              .fontSize(AppFont.Body)
-              .fontColor($r('sys.color.font_primary'))
-          }
-        }
-        .layoutWeight(1)
-        .height(44)
-        .backgroundColor($r('sys.color.comp_background_primary'))
-        .borderRadius(AppRadius.Md)
-        .enabled(!this.isServerChecking && !this.isServerSaving)
-        .onClick(() => this.restoreDefaultServerApi())
       }
       .width('100%')
 
@@ -580,13 +560,6 @@ export struct ProfilePage {
         Text($r('app.string.cloud_source_check_degraded'))
           .fontSize(AppFont.Caption)
           .fontColor('#C77700')
-      } else if (this.serverCheckState === 5) {
-        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-          .fontSize(17)
-          .fontColor([$r('sys.color.font_secondary')])
-        Text($r('app.string.cloud_source_restored_hint'))
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
       } else {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(17)

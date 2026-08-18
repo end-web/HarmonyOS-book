@@ -44,6 +44,9 @@ export struct BookDetailPage {
   @Local activeTab: number = 1;
   @Local bgColor: string = '#3A3A3A';
   @Local bgColorDark: string = '#1A1A1A';
+  @Local heroTextColor: string = '#FFFFFF';
+  @Local heroTextSecondaryColor: string = '#FFFFFFCC';
+  @Local heroTagBackground: string = '#33FFFFFF';
   @Local hasThemeColor: boolean = false;
   @Local debugInfo: string = '';
   /** 节目搜索关键词。 */
@@ -267,11 +270,22 @@ AudioService.getInstance().prewarmBookSource(cached);
   private applyCoverColor(rgb: RgbColor): void {
     // 压亮度:白色系封面的主色直接铺背景会让白字不可读
     const safe = ColorPickerUtils.normalizeAmbient(rgb);
-    const dark = ColorPickerUtils.darken(safe, 0.3);
+    const ambientLuminance = safe.r * 0.299 + safe.g * 0.587 + safe.b * 0.114;
+    const lightAmbient = ambientLuminance >= 156;
+    const neutralLight: RgbColor = { r: 255, g: 255, b: 255 };
+    // 浅色封面不再强行压成深色,让过渡保持同一亮度方向,文字则自动反色。
+    const bottomColor = lightAmbient
+      ? ColorPickerUtils.blend(safe, neutralLight, 0.16)
+      : ColorPickerUtils.darken(safe, 0.3);
+    const foreground = lightAmbient ? '#202124' : '#FFFFFF';
     // 颜色变化包进 animateTo:背景主色随封面就绪/切换平滑过渡,而不是硬跳
     this.getUIContext().animateTo({ duration: 500, curve: Curve.Linear }, () => {
       this.bgColor = ColorPickerUtils.toHex(safe);
-      this.bgColorDark = ColorPickerUtils.toHex(dark);
+      this.bgColorDark = ColorPickerUtils.toHex(bottomColor);
+      this.heroTextColor = foreground;
+      this.heroTextSecondaryColor = ColorPickerUtils.withAlpha(foreground, 'CC');
+      this.heroTagBackground = lightAmbient ? '#1F000000' : '#33FFFFFF';
+      WindowUtils.setStatusBarLight(!lightAmbient);
       this.hasThemeColor = true;
     });
   }
@@ -841,14 +855,10 @@ AudioService.getInstance().prewarmBookSource(cached);
         .justifyContent(FlexAlign.Center)
       } else if (this.book) {
         Stack({ alignContent: Alignment.TopStart }) {
-          // 沉浸式背景:封面主色→深色纵向渐变,与下方正文底色保持明确分界(用户定调:不做消散融合)
+          // 只保留顶部占位高度,背景由页面根容器统一绘制,避免中段出现第二层色带
           Column()
             .width('100%')
             .height(this.detailHeroHeight())
-            .linearGradient({
-              angle: 180,
-              colors: [[this.bgColor, 0.0], [this.bgColorDark, 1.0]]
-            })
 
           Column() {
             this.buildTopBar()
@@ -877,7 +887,15 @@ AudioService.getInstance().prewarmBookSource(cached);
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('sys.color.background_primary'))
+    .linearGradient({
+      angle: 180,
+      colors: [
+        [this.bgColor, 0.0],
+        [this.bgColorDark, 0.24],
+        [$r('sys.color.background_primary'), 0.52],
+        [$r('sys.color.background_primary'), 1.0]
+      ]
+    })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
       this.handleViewportSizeChange(newValue);
@@ -890,7 +908,7 @@ AudioService.getInstance().prewarmBookSource(cached);
       Stack({ alignContent: Alignment.Center }) {
         SymbolGlyph($r('sys.symbol.chevron_left'))
           .fontSize(24)
-          .fontColor(['#FFFFFF'])
+          .fontColor([this.heroTextColor])
       }
       .width(40)
       .height(40)
@@ -901,7 +919,7 @@ AudioService.getInstance().prewarmBookSource(cached);
       Stack({ alignContent: Alignment.Center }) {
         SymbolGlyph(this.isFavorite ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
           .fontSize(22)
-          .fontColor([this.isFavorite ? '#FF6B8A' : '#FFFFFF'])
+          .fontColor([this.isFavorite ? '#FF6B8A' : this.heroTextColor])
       }
       .width(40)
       .height(40)
@@ -958,14 +976,14 @@ AudioService.getInstance().prewarmBookSource(cached);
       Column({ space: AppSpace.Xs }) {
         Text(this.book!.title)
           .fontSize(AppFont.TitleL)
-          .fontColor('#FFFFFF')
+          .fontColor(this.heroTextColor)
           .fontWeight(FontWeight.Bold)
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         if (this.book!.author) {
           Text(this.book!.author)
             .fontSize(AppFont.Body)
-            .fontColor('#FFFFFFCC')
+            .fontColor(this.heroTextSecondaryColor)
             .maxLines(1)
         }
         if (this.book!.tags && this.book!.tags.length > 0) {
@@ -973,8 +991,8 @@ AudioService.getInstance().prewarmBookSource(cached);
             ForEach(this.book!.tags.slice(0, 2), (tag: string) => {
               Text(tag)
                 .fontSize(AppFont.Caption)
-                .fontColor('#FFFFFF')
-                .backgroundColor('#33FFFFFF')
+                .fontColor(this.heroTextColor)
+                .backgroundColor(this.heroTagBackground)
                 .borderRadius(AppRadius.Xs)
                 .padding({ left: 6, right: 6, top: 2, bottom: 2 })
             }, (tag: string) => tag)
@@ -999,13 +1017,13 @@ AudioService.getInstance().prewarmBookSource(cached);
       Column({ space: 2 }) {
         Text(this.book!.category.trim().length > 0 ? this.book!.category : '--')
           .fontSize(AppFont.Title)
-          .fontColor('#FFFFFF')
+          .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text('分类')
           .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF99')
+          .fontColor($r('sys.color.font_secondary'))
       }
       .layoutWeight(1)
 
@@ -1013,11 +1031,11 @@ AudioService.getInstance().prewarmBookSource(cached);
       Column({ space: 2 }) {
         Text(this.book!.completed === undefined ? '--' : (this.book!.completed ? '已完结' : '连载中'))
           .fontSize(AppFont.Title)
-          .fontColor('#FFFFFF')
+          .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
         Text('状态')
           .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF99')
+          .fontColor($r('sys.color.font_secondary'))
       }
       .layoutWeight(1)
 
@@ -1026,11 +1044,11 @@ AudioService.getInstance().prewarmBookSource(cached);
         Text(this.book!.chapterCount > 0
           ? this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? ' 章' : ' 集') : '--')
           .fontSize(AppFont.Title)
-          .fontColor('#FFFFFF')
+          .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
         Text(this.book!.contentType === 'text' ? '总章节' : '总集数')
           .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF99')
+          .fontColor($r('sys.color.font_secondary'))
       }
       .layoutWeight(1)
     }
@@ -1046,28 +1064,40 @@ AudioService.getInstance().prewarmBookSource(cached);
   @Builder
   buildTabBar() {
     Row() {
-      Text('详情')
-        .fontSize(AppFont.BodyL)
-        .fontColor(this.activeTab === 0 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
-        .fontWeight(this.activeTab === 0 ? FontWeight.Bold : FontWeight.Normal)
+      Column({ space: AppSpace.Xs }) {
+        Text('详情')
+          .fontSize(AppFont.BodyL)
+          .fontColor(this.activeTab === 0 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
+          .fontWeight(this.activeTab === 0 ? FontWeight.Bold : FontWeight.Normal)
+        Blank()
+          .width(16)
+          .height(3)
+          .borderRadius(2)
+          .backgroundColor(AppColor.Brand)
+          .opacity(this.activeTab === 0 ? 1 : 0)
+      }
         .layoutWeight(1)
-        .textAlign(TextAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .justifyContent(FlexAlign.Center)
         .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
-        .border(this.activeTab === 0
-          ? { width: { bottom: 2 }, color: { bottom: AppColor.Brand } }
-          : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
         .onClick(() => { this.activeTab = 0; })
 
-      Text(this.book!.contentType === 'text' ? '目录' : '节目')
-        .fontSize(AppFont.BodyL)
-        .fontColor(this.activeTab === 1 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
-        .fontWeight(this.activeTab === 1 ? FontWeight.Bold : FontWeight.Normal)
+      Column({ space: AppSpace.Xs }) {
+        Text(this.book!.contentType === 'text' ? '目录' : '节目')
+          .fontSize(AppFont.BodyL)
+          .fontColor(this.activeTab === 1 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
+          .fontWeight(this.activeTab === 1 ? FontWeight.Bold : FontWeight.Normal)
+        Blank()
+          .width(16)
+          .height(3)
+          .borderRadius(2)
+          .backgroundColor(AppColor.Brand)
+          .opacity(this.activeTab === 1 ? 1 : 0)
+      }
         .layoutWeight(1)
-        .textAlign(TextAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .justifyContent(FlexAlign.Center)
         .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
-        .border(this.activeTab === 1
-          ? { width: { bottom: 2 }, color: { bottom: AppColor.Brand } }
-          : { width: { bottom: 2 }, color: { bottom: Color.Transparent } })
         .onClick(() => {
           this.activeTab = 1;
           // 进入目录 tab 复位搜索,避免带着旧过滤态定位章节
@@ -1079,8 +1109,6 @@ AudioService.getInstance().prewarmBookSource(cached);
         })
     }
     .width('100%')
-    .border({ width: { bottom: 0.5 }, color: { bottom: AppColor.Divider } })
-    .backgroundColor($r('sys.color.background_primary'))
   }
 
   /** 获取历史章节标题，供 Builder 使用 */
@@ -1150,7 +1178,12 @@ AudioService.getInstance().prewarmBookSource(cached);
           this.buildDownloadPanel()
         }
       }
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Lg, bottom: AppSpace.Xl })
+      .padding({
+        left: this.horizontalPadding(),
+        right: this.horizontalPadding(),
+        top: AppSpace.Lg,
+        bottom: AppSpace.Xl
+      })
     }
     .layoutWeight(1)
     .scrollBar(BarState.Off)
@@ -1227,7 +1260,7 @@ AudioService.getInstance().prewarmBookSource(cached);
     .height(36)
     .justifyContent(FlexAlign.Center)
     .borderRadius(AppRadius.Lg)
-    .backgroundColor(danger ? '#14D03050' : $r('sys.color.comp_background_tertiary'))
+    .backgroundColor(danger ? '#14D03050' : AppColor.BrandSoft)
     .onClick(() => onAction())
   }
 
@@ -1249,13 +1282,18 @@ AudioService.getInstance().prewarmBookSource(cached);
           .fontSize(18).fontColor([$r('sys.color.font_tertiary')])
       }
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Sm })
+      .padding({
+        left: this.horizontalPadding(),
+        right: this.horizontalPadding(),
+        top: AppSpace.Md,
+        bottom: AppSpace.Sm
+      })
 
       // 有章节时显示目录搜索。
       if (this.book!.chapters.length > 0) {
         Search({ value: this.chapterQuery, placeholder: this.book!.contentType === 'text' ? '搜索章节' : '搜索节目' })
           .height(38)
-          .margin({ left: AppSpace.Lg, right: AppSpace.Lg, bottom: AppSpace.Sm })
+          .margin({ left: this.horizontalPadding(), right: this.horizontalPadding(), bottom: AppSpace.Sm })
           .backgroundColor($r('sys.color.comp_background_tertiary'))
           .borderRadius(AppRadius.Lg)
           .onChange((v: string) => {
@@ -1308,7 +1346,12 @@ AudioService.getInstance().prewarmBookSource(cached);
           .cachedCount(5)
           .scrollBar(BarState.Auto)
           .edgeEffect(EdgeEffect.Spring)
-          .divider({ strokeWidth: 0.5, color: AppColor.Divider, startMargin: AppSpace.Lg, endMargin: AppSpace.Lg })
+          .divider({
+            strokeWidth: 0.5,
+            color: AppColor.Divider,
+            startMargin: this.horizontalPadding(),
+            endMargin: this.horizontalPadding()
+          })
           .onScrollIndex((firstIndex: number, lastIndex: number) => {
             // 用首尾可见 index 与当前章节 index 计算偏离
             // 行高约 64vp(BodyL+Caption+上下 14 padding),用 (center - idx) * 64 估算
@@ -1361,6 +1404,7 @@ AudioService.getInstance().prewarmBookSource(cached);
           : ''),
       progressText: this.book?.contentType === 'text' ? ''
         : (this.getPlayProgress(ri.item) > 0 ? `${this.getPlayProgress(ri.item)}%` : ''),
+      horizontalInset: this.horizontalPadding(),
       badge: this.book?.contentType === 'text' ? ChapterBadge.None
         : mapChapterBadge(this.isChapterDownloaded(ri.item), this.isChapterDownloading(ri.item),
           this.isChapterDownloadFailed(ri.item)),

@@ -286,7 +286,7 @@ export struct MainPage {
         TabContent() {
           HomePage({
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
-            onVerifyTextSource: () => this.navStack.pushPathByName('verifyTextSource', null),
+            onSearchTap: () => this.navStack.pushPathByName('search', null),
             onBlockMore: (block: HomeBlockSection) => this.openBlockMore(block),
             onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) =>
               this.openCategory(sourceUrl, sourceName, title, url),

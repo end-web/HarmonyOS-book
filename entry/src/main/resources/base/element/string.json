@@ -101,6 +101,82 @@
       "value": "取消"
     },
     {
+      "name": "search_page_title",
+      "value": "搜索"
+    },
+    {
+      "name": "search_placeholder",
+      "value": "搜索书籍、作者"
+    },
+    {
+      "name": "search_action",
+      "value": "搜索"
+    },
+    {
+      "name": "search_recommendations",
+      "value": "搜索推荐"
+    },
+    {
+      "name": "search_recommend_mystery",
+      "value": "悬疑推理"
+    },
+    {
+      "name": "search_recommend_classics",
+      "value": "经典名著"
+    },
+    {
+      "name": "search_recommend_history",
+      "value": "历史故事"
+    },
+    {
+      "name": "search_recommend_city",
+      "value": "都市生活"
+    },
+    {
+      "name": "search_recommend_fantasy",
+      "value": "玄幻修仙"
+    },
+    {
+      "name": "search_recommend_comedy",
+      "value": "相声评书"
+    },
+    {
+      "name": "search_recommend_children",
+      "value": "儿童故事"
+    },
+    {
+      "name": "search_recommend_biography",
+      "value": "人物传记"
+    },
+    {
+      "name": "search_type_all",
+      "value": "全部"
+    },
+    {
+      "name": "search_type_audio",
+      "value": "有声书"
+    },
+    {
+      "name": "search_type_text",
+      "value": "电子书"
+    },
+    {
+      "name": "search_loading",
+      "value": "正在搜索有声书和电子书"
+    },
+    {
+      "name": "search_no_result",
+      "value": "未找到相关内容"
+    },
+    {
+      "name": "search_try_another",
+      "value": "试试其他关键词"
+    },
+    {
+      "name": "search_verify_text_source",
+      "value": "验证电子书源"
+    },
+    {
       "name": "settings_audio_storage_cleanup",
       "value": "清理音频存储"
     },
@@ -119,18 +195,6 @@
     {
       "name": "settings_clear_downloads",
       "value": "删除下载"
-    },
-    {
-      "name": "settings_builtin_sources",
-      "value": "内置书源"
-    },
-    {
-      "name": "settings_source_searchable",
-      "value": "支持搜索"
-    },
-    {
-      "name": "settings_source_browse_only",
-      "value": "仅分类"
     },
     {
       "name": "download_delete_confirm",
@@ -165,6 +229,10 @@
       "value": "服务器音频接口"
     },
     {
+      "name": "cloud_source_not_configured",
+      "value": "未配置"
+    },
+    {
       "name": "cloud_source_sheet_title",
       "value": "云源服务地址"
     },
@@ -178,7 +246,7 @@
     },
     {
       "name": "cloud_source_api_placeholder",
-      "value": "例如 121.196.223.85"
+      "value": "请输入服务器地址"
     },
     {
       "name": "cloud_source_api_hint",
@@ -203,14 +271,6 @@
     {
       "name": "cloud_source_check_failed",
       "value": "连接失败，请检查地址或服务器状态"
-    },
-    {
-      "name": "cloud_source_restore_default",
-      "value": "恢复默认"
-    },
-    {
-      "name": "cloud_source_restored_hint",
-      "value": "已填入默认地址，保存后生效"
     },
     {
       "name": "cloud_source_save",

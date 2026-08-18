@@ -106,7 +106,7 @@ App
 
 - 搜索：**多源并行**（欢FM + 云源），按 `sourceUrl + bookUrl` 去重，见 `SearchCache` / 首页搜索逻辑
 - 云源只做路由；搜索结果 `sourceName` 为实际上游音频源名，角标不强制写死「简·欢云源」
-- 云源 API 地址可在 **我的 → 云源服务地址** 配置，经 `ServerAudioConfig` 规范化并持久化
+- 云源 API 地址可在 **我的 → 云源服务地址** 配置，经 `ServerAudioConfig` 规范化并持久化；App 不提供默认地址，未配置时不启用云源请求
 - App **不接收、不执行** 阅读规则 JSON；规则只在 `server/` 运行
 
 ### 与「摸鱼听书」类 App 的区别

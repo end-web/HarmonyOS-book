@@ -14,6 +14,7 @@ import { DownloadManagerPage } from './DownloadManagerPage';
 import { ReaderPage } from './ReaderPage';
 import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
 import { TextSourceVerifyPage } from './TextSourceVerifyPage';
+import { SearchPage } from './SearchPage';
 import { TextReaderRouteParams } from '../model/TextReading';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
@@ -236,6 +237,13 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor('#F5F2EA')
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'search') {
+      NavDestination() {
+        SearchPage({ navStack: this.navStack })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'verifyTextSource') {
       NavDestination() {

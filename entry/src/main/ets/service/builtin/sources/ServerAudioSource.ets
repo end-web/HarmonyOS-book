@@ -11,7 +11,7 @@ import {
 } from '../IBuiltInSource';
 import { JsonArr, JsonObj } from '../JsonValue';
 import { HttpClient } from '../../http/HttpClient';
-import { ServerAudioConfig } from '../ServerAudioConfig';
+import { ServerAudioConfig, ServerAudioConfigErrorCode } from '../ServerAudioConfig';
 
 const DOMAIN = 0x0000;
 const TAG = 'ServerAudioSource';
@@ -31,13 +31,16 @@ class ServerAudioSourceClass implements IBuiltInSource {
     return ServerAudioConfig.peekApiBase();
   }
   readonly desc: string = '服务端聚合音频源；来源可在简·欢源控制台集中维护';
-  readonly searchable: boolean = true;
+  get searchable(): boolean {
+    return ServerAudioConfig.peekApiBase().length > 0;
+  }
   readonly audioResolveTimeoutMs: number = 40000;
 
   private audioHeadersByUrl: Map<string, Record<string, string>> = new Map();
 
   private async request(path: string, method: string = 'GET'): Promise<JsonObj> {
     const apiBase = await ServerAudioConfig.getApiBase();
+    if (!apiBase) throw new Error(ServerAudioConfigErrorCode.EMPTY);
     const response = await HttpClient.request(apiBase + path, {
       method,
       headers: apiHeaders(),
