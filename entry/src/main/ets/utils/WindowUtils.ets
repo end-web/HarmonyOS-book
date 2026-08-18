@@ -11,6 +11,7 @@ export class WindowUtils {
   private static bottomPx: number = 0;
   private static density: number = 3.25;
   private static mainWindow: window.Window | null = null;
+  private static safeAreaListeners: Array<(topVp: number, bottomVp: number) => void> = [];
   /** 当前生效的深浅色模式（由 EntryAbility 的 config / onConfigurationUpdate 同步） */
   private static colorMode: ConfigurationConstant.ColorMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   /** 最近一次页面请求的状态栏诉求：true=强制白字(深色背景页)，false=跟随系统 */
@@ -18,6 +19,13 @@ export class WindowUtils {
 
   static async setupImmersive(stage: window.WindowStage, colorMode?: ConfigurationConstant.ColorMode): Promise<void> {
     const win = await stage.getMainWindow();
+    const previousWindow = WindowUtils.mainWindow;
+    if (previousWindow !== null) {
+      try {
+        previousWindow.off('avoidAreaChange', WindowUtils.handleAvoidAreaChange);
+        previousWindow.off('windowSizeChange', WindowUtils.handleWindowSizeChange);
+      } catch (_e) { /* ignore */ }
+    }
     WindowUtils.mainWindow = win;
     if (colorMode !== undefined) {
       WindowUtils.colorMode = colorMode;
@@ -29,16 +37,25 @@ export class WindowUtils {
     });
     await WindowUtils.applySystemBarContent();
     WindowUtils.syncAvoidArea(win);
-    win.on('avoidAreaChange', (data: window.AvoidAreaOptions) => {
-      try {
-        if (!data || !data.area) return;
-        if (data.type === window.AvoidAreaType.TYPE_SYSTEM) {
-          WindowUtils.topPx = data.area.topRect.height;
-        } else if (data.type === window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR) {
-          WindowUtils.bottomPx = data.area.bottomRect.height;
-        }
-      } catch (_e) { /* ignore */ }
-    });
+    win.on('avoidAreaChange', WindowUtils.handleAvoidAreaChange);
+    win.on('windowSizeChange', WindowUtils.handleWindowSizeChange);
+  }
+
+  static addSafeAreaListener(listener: (topVp: number, bottomVp: number) => void): void {
+    if (WindowUtils.safeAreaListeners.indexOf(listener) < 0) {
+      WindowUtils.safeAreaListeners.push(listener);
+    }
+    listener(WindowUtils.getStatusBarHeightVp(), WindowUtils.getBottomSafeVp());
+  }
+
+  static removeSafeAreaListener(listener: (topVp: number, bottomVp: number) => void): void {
+    const index = WindowUtils.safeAreaListeners.indexOf(listener);
+    if (index >= 0) WindowUtils.safeAreaListeners.splice(index, 1);
+  }
+
+  static refreshAvoidArea(): void {
+    const currentWindow = WindowUtils.mainWindow;
+    if (currentWindow !== null) WindowUtils.syncAvoidArea(currentWindow);
   }
 
   /**
@@ -88,11 +105,28 @@ export class WindowUtils {
    * 说明: FloatingTabBar 内部用 padding-bottom = bottomSafe 把自身抬到导航条之上,
    *       所以业务页留出的高度也要包含 bottomSafe,否则最后一行会被手势条遮住一截。
    */
-  static getFloatingTabBottomVp(): number {
-    return WindowUtils.getBottomSafeVp() +
+  static getFloatingTabBottomVp(bottomSafeVp?: number): number {
+    const safeBottom = bottomSafeVp !== undefined ? bottomSafeVp : WindowUtils.getBottomSafeVp();
+    return safeBottom +
            WindowUtils.FLOATING_BOTTOM +
            WindowUtils.FLOATING_TAB_HEIGHT +
            WindowUtils.FLOATING_GAP;
+  }
+
+  private static handleAvoidAreaChange(_data: window.AvoidAreaOptions): void {
+    WindowUtils.refreshAvoidArea();
+  }
+
+  private static handleWindowSizeChange(_size: window.Size): void {
+    WindowUtils.refreshAvoidArea();
+  }
+
+  private static notifySafeAreaChange(): void {
+    const topVp = WindowUtils.getStatusBarHeightVp();
+    const bottomVp = WindowUtils.getBottomSafeVp();
+    WindowUtils.safeAreaListeners.forEach((listener: (topVp: number, bottomVp: number) => void): void => {
+      listener(topVp, bottomVp);
+    });
   }
 
   private static syncAvoidArea(win: window.Window): void {
@@ -101,7 +135,8 @@ export class WindowUtils {
       const topArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
       const bottomArea = win.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
       WindowUtils.topPx = topArea.topRect.height;
-      WindowUtils.bottomPx = bottomArea.bottomRect.height;
+      WindowUtils.bottomPx = Math.max(topArea.bottomRect.height, bottomArea.bottomRect.height);
+      WindowUtils.notifySafeAreaChange();
     } catch (_e) {
       // keep previous cached values
     }

@@ -102,5 +102,5 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `fix(player):`, `feat(server):` …); Chinese or English summaries OK
 - **Naming**: `XxxPage`, `XxxService`, `XxxComponent` (PascalCase + suffix); camelCase for fields/methods
-- **SDK**: HarmonyOS 7 / API 26; `targetSdkVersion = compatibleSdkVersion = 26.0.0`; `bundleName: com.ylwang.listenbook.tingyou`
+- **SDK**: HarmonyOS 7 / API 26; `targetSdkVersion = compatibleSdkVersion = 26.0.0`; `bundleName: com.huan.listenbook`
 - **Device types**: phone only (`deviceTypes: ["phone"]`)

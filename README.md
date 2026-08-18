@@ -54,7 +54,7 @@ ListenBook 是一套面向 HarmonyOS Next 的听书系统，不只是一个 App�
 |---|---|
 | App | HarmonyOS Next Stage、ArkTS、ArkUI V2 |
 | SDK | HarmonyOS 7 / API 26，`targetSdkVersion = compatibleSdkVersion = 26.0.0` |
-| bundleName | `com.ylwang.listenbook.tingyou` |
+| bundleName | `com.huan.listenbook` |
 | 运维后台 | Vue 3、TypeScript、Vite、Pinia、Vue Router |
 | 云源服务 | Node.js 22+、Express 5、TypeScript、SQLite |
 | 部署 | Docker Compose、Caddy、Reader 内网容器 |

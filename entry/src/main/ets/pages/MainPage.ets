@@ -39,6 +39,7 @@ export interface NavigateToBookPayload {
 }
 
 const FLOATING_BOTTOM: number = 4;
+const FLOATING_MIN_SAFE_BOTTOM: number = 8;
 const TAB_RESTORE_WIDTH_GROWTH: number = 48;
 const TAB_RESTORE_HEIGHT_GROWTH: number = 80;
 
@@ -51,6 +52,7 @@ export struct MainPage {
   @Local miniBarCollapsed: boolean = false;
   @Local viewportWidth: number = 0;
   @Local viewportHeight: number = 0;
+  @Local bottomSafeVp: number = WindowUtils.getBottomSafeVp();
 
   /** 隐藏 Web 宿主的按需挂载门控:引擎首次被调用时置位,据此条件渲染对应 Host */
   private gate: WebEngineGate = WebEngineGate.instance;
@@ -66,12 +68,19 @@ export struct MainPage {
   private restoreTabBarOnWindowGrow: boolean = false;
   private tabCollapseViewportWidth: number = 0;
   private tabCollapseViewportHeight: number = 0;
+  private safeAreaChangeHandler: (topVp: number, bottomVp: number) => void =
+    (_topVp: number, bottomVp: number): void => {
+      if (Math.abs(this.bottomSafeVp - bottomVp) < 0.1) return;
+      this.bottomSafeVp = bottomVp;
+    };
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     AudioService.getInstance().bind(this.playerState, this.context);
     this.restoreLastPlayed();
     WindowUtils.setStatusBarLight(false);
+    WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
+    WindowUtils.refreshAvoidArea();
     this.restoreDefaultTab();
     emitter.on(EVT_SWITCH_TAB, this.switchTabHandler);
     emitter.on(EVT_NAVIGATE_TO_BOOK, this.navigateBookHandler);
@@ -83,6 +92,7 @@ export struct MainPage {
 
   aboutToDisappear(): void {
     this.cancelLayoutTimers();
+    WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     emitter.off(EVT_SWITCH_TAB, this.switchTabHandler);
     emitter.off(EVT_NAVIGATE_TO_BOOK, this.navigateBookHandler);
   }
@@ -107,6 +117,7 @@ export struct MainPage {
       this.viewportUpdateTimerId = -1;
       this.viewportWidth = width;
       this.viewportHeight = height;
+      WindowUtils.refreshAvoidArea();
       if (shouldRestoreTabBar) this.restoreExpandedTabBars();
     }, 0);
   }
@@ -316,7 +327,7 @@ export struct MainPage {
       .barPosition(BarPosition.End)
       .vertical(false)
       .barFloatingStyle({
-        barBottomMargin: WindowUtils.getBottomSafeVp() + FLOATING_BOTTOM,
+        barBottomMargin: Math.max(this.bottomSafeVp, FLOATING_MIN_SAFE_BOTTOM) + FLOATING_BOTTOM,
         gradientMask: { maskColor: '#66F1F3F5', maskHeight: 92 },
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.ADAPTIVE,

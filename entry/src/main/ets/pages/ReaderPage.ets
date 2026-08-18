@@ -25,6 +25,7 @@ const READER_SECONDARY_COLOR: string = '#6F675E';
 const READER_DIVIDER_COLOR: string = '#1A6F675E';
 const READER_CURRENT_CHAPTER_BACKGROUND: string = '#14FFC15C';
 const READER_FLOATING_BOTTOM: number = 4;
+const READER_MIN_SAFE_BOTTOM: number = 8;
 
 @ComponentV2
 export struct ReaderPage {
@@ -43,6 +44,8 @@ export struct ReaderPage {
   @Local jumpingResourceIndex: number = -1;
   @Local currentTabIndex: number = 0;
   @Local readerBarVisible: boolean = true;
+  @Local topSafeVp: number = WindowUtils.getStatusBarHeightVp();
+  @Local bottomSafeVp: number = WindowUtils.getBottomSafeVp();
   private currentPosition: TextReadingPosition | null = null;
   private context: common.UIAbilityContext | null = null;
   private leaving: boolean = false;
@@ -53,11 +56,22 @@ export struct ReaderPage {
   private readerSetting: readerCore.ReaderSetting | null = null;
   private readerKitDomPos: string = '';
   private readerKitPageOffset: number = 0;
+  private safeAreaChangeHandler: (topVp: number, bottomVp: number) => void =
+    (topVp: number, bottomVp: number): void => {
+      const changed = Math.abs(this.topSafeVp - topVp) >= 0.1 ||
+        Math.abs(this.bottomSafeVp - bottomVp) >= 0.1;
+      if (!changed) return;
+      this.topSafeVp = topVp;
+      this.bottomSafeVp = bottomVp;
+      this.applyReadingSettings();
+    };
 
   aboutToAppear(): void {
     this.leaving = false;
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     WindowUtils.setStatusBarLight(false);
+    WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
+    WindowUtils.refreshAvoidArea();
     this.initializeReader();
   }
 
@@ -65,6 +79,7 @@ export struct ReaderPage {
     this.leaving = true;
     this.saveProgress();
     this.saveReadingSettings();
+    WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     WindowUtils.setStatusBarLight(false);
   }
 
@@ -234,7 +249,7 @@ export struct ReaderPage {
     const currentDisplay = display.getDefaultDisplaySync();
     const scaledDensity = currentDisplay.scaledDensity > 0 ? currentDisplay.scaledDensity : 1;
     const density = currentDisplay.densityPixels > 0 ? currentDisplay.densityPixels : 1;
-    const verticalSafePx = (WindowUtils.getStatusBarHeightVp() + WindowUtils.getBottomSafeVp()) * density;
+    const verticalSafePx = (this.topSafeVp + this.bottomSafeVp) * density;
     const pageConfig: readerCore.ReaderSetting = {
       fontName: '系统字体',
       fontSize: TextReadingSettings.normalizeFontSize(this.fontSize),
@@ -463,8 +478,8 @@ export struct ReaderPage {
               .width('100%')
               .height('100%')
               .padding({
-                top: WindowUtils.getStatusBarHeightVp(),
-                bottom: WindowUtils.getBottomSafeVp()
+                top: this.topSafeVp,
+                bottom: this.bottomSafeVp
               })
           }
           .tabBar(this.buildTabBar($r('sys.symbol.bookshelf'), $r('app.string.reader_title')))
@@ -485,7 +500,7 @@ export struct ReaderPage {
         .barPosition(BarPosition.End)
         .vertical(false)
         .barFloatingStyle({
-          barBottomMargin: WindowUtils.getBottomSafeVp() + READER_FLOATING_BOTTOM,
+          barBottomMargin: Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + READER_FLOATING_BOTTOM,
           gradientMask: { maskColor: '#66F5F2EA', maskHeight: 92 },
           systemMaterialEffect: {
             materialType: hdsMaterial.MaterialType.ADAPTIVE,
@@ -542,7 +557,7 @@ export struct ReaderPage {
       .padding({
         left: AppSpace.Lg,
         right: AppSpace.Lg,
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
+        top: this.topSafeVp + AppSpace.Md,
         bottom: AppSpace.Md
       })
 
@@ -595,7 +610,7 @@ export struct ReaderPage {
     }
     .width('100%')
     .height('100%')
-    .padding({ bottom: WindowUtils.getFloatingTabBottomVp() })
+    .padding({ bottom: WindowUtils.getFloatingTabBottomVp(this.bottomSafeVp) })
     .backgroundColor(READER_BACKGROUND)
   }
 
@@ -706,8 +721,8 @@ export struct ReaderPage {
       .padding({
         left: AppSpace.Lg,
         right: AppSpace.Lg,
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Md,
-        bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg
+        top: this.topSafeVp + AppSpace.Md,
+        bottom: WindowUtils.getFloatingTabBottomVp(this.bottomSafeVp) + AppSpace.Lg
       })
     }
     .width('100%')

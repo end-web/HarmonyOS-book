@@ -17,7 +17,7 @@
 - 当前本机 SDK 为 `HarmonyOS 26.0.0.32 Beta2`；代码只使用该 SDK 已声明并通过构建的 API 26 能力
 - 单 module：`entry/`（type=entry，deviceTypes=phone）
 - ArkUI 使用 **V2 装饰器**（`@ComponentV2` / `@Local` / `@Param` / `@Event` / `@ObservedV2` / `@Trace`）
-- `bundleName`: `com.ylwang.listenbook.tingyou`
+- `bundleName`: `com.huan.listenbook`
 - 版本示例：`versionName 0.1.1` / `versionCode 1000001`（以 `AppScope/app.json5` 为准）
 - 后台模式：`audioPlayback` + `dataTransfer` + `KEEP_BACKGROUND_RUNNING`
 - 网络：`INTERNET`；体感：`VIBRATE`
