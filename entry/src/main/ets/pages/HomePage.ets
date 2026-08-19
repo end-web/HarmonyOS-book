@@ -510,7 +510,7 @@ export struct HomePage {
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: r.kind || 'audio',
+      category: r.kind || '有声书',
       contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,
@@ -643,13 +643,14 @@ export struct HomePage {
           .backgroundColor(Color.Transparent)
           .systemMaterial(AppMaterial.InteractiveClean)
           .borderRadius(AppRadius.Pill)
-          .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+          .margin({ top: AppSpace.Xs, bottom: AppSpace.Xs })
           .opacity(1 - this.searchCollapseProgress)
           .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
           .onClick(() => this.onSearchTap())
       }
       .width('100%')
       .height(this.searchRowHeight)
+      .padding({ left: AppSpace.Md, right: AppSpace.Md })
       .clip(true)
       .opacity(this.searchRowHeight > 0 ? 1 : 0)
 

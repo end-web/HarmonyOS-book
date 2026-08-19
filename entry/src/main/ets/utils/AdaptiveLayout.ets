@@ -34,7 +34,7 @@ export class AdaptiveLayout {
   }
 
   static detailHeroHeight(width: number, height: number): number {
-    return AdaptiveLayout.isCompact(width, height) ? 284 : 320;
+    return AdaptiveLayout.isCompact(width, height) ? 216 : 230;
   }
 
   static detailCoverWidth(width: number, height: number): number {

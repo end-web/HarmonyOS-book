@@ -306,7 +306,7 @@ export struct FavoritePage {
       author: '收藏记录仍在',
       narrator: '',
       cover: '',
-      category: 'audio',
+      category: '有声书',
       intro: '',
       totalDuration: 0,
       chapterCount: 0,

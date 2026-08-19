@@ -114,7 +114,7 @@ export struct BlockMorePage {
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-category: r.kind || 'audio',
+category: r.kind || '有声书',
       contentType: 'audio',
       intro: r.intro || '',
       totalDuration: 0,

@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, curves } from '@kit.ArkUI';
+import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
@@ -1298,7 +1298,10 @@ export struct PlayerPage {
     }
     .width('100%')
     .layoutWeight(1)
-    .scrollBar(BarState.Auto)
+    .scrollBar(BarState.On)
+    .scrollBarWidth(8)
+    .scrollBarMargin({ start: LengthMetrics.vp(8), end: LengthMetrics.vp(56) })
+    .enableScrollInteraction(true)
     .cachedCount(5)
     .onScrollIndex((firstIndex: number, lastIndex: number) => {
       // 用首尾可见 index 与当前章节 index 计算偏离

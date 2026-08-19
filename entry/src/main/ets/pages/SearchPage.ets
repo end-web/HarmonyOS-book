@@ -1,5 +1,10 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType, hdsMaterial } from '@kit.UIDesignKit';
+import {
+  HdsNavigation,
+  HdsNavigationTitleMode,
+  ScrollEffectType,
+  hdsMaterial
+} from '@kit.UIDesignKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, SearchResult } from '../model/BookSource';
@@ -19,6 +24,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
 const SEARCH_HEADER_HEIGHT: number = 56;
+const RESULT_TOOLBAR_HEIGHT: number = 48;
 
 class SearchRecommendation {
   readonly label: Resource;
@@ -109,6 +115,11 @@ export struct SearchPage {
     this.textSourceNeedsVerification = false;
     this.textSourceError = '';
     this.resultDataSource.clear();
+    try {
+      this.resultScroller.scrollEdge(Edge.Top);
+    } catch (_e) {
+      // 数据源切换期间滚动容器可能尚未完成布局。
+    }
     BookCard.resetAnimations();
     try {
       const sources = await SourceDataService.getEnabledSources();
@@ -212,7 +223,7 @@ export struct SearchPage {
       author: result.author || '未知',
       narrator: result.sourceName,
       cover: result.coverUrl || '',
-      category: result.kind || 'audio',
+      category: result.kind || '有声书',
       contentType: 'audio',
       intro: result.intro || '',
       totalDuration: 0,
@@ -286,6 +297,8 @@ export struct SearchPage {
     .width('100%')
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
+    .align(Alignment.Top)
+    .padding({ top: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT })
   }
 
   @Builder
@@ -328,22 +341,23 @@ export struct SearchPage {
 
       Blank()
 
-      Row() {
+      Stack({ alignContent: Alignment.Center }) {
         SymbolGlyph(this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
           .fontSize(18)
           .fontColor([$r('sys.color.font_primary')])
-          .width(22)
-          .height(22)
       }
         .width(40)
         .height(40)
         .borderRadius(AppRadius.Pill)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
         .systemMaterial(AppMaterial.InteractiveThin)
         .onClick(() => {
           this.getUIContext().animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard }, () => {
             this.viewMode = this.viewMode === 0 ? 1 : 0;
+            try {
+              this.resultScroller.scrollEdge(Edge.Top);
+            } catch (_e) {
+              // 切换布局的同一帧可能暂时没有可滚动节点。
+            }
           });
         })
     }
@@ -430,7 +444,7 @@ export struct SearchPage {
     .padding({
       left: AppSpace.Md,
       right: AppSpace.Md,
-      top: AppSpace.Sm,
+      top: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT + RESULT_TOOLBAR_HEIGHT + AppSpace.Sm,
       bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg
     })
   }
@@ -504,6 +518,13 @@ export struct SearchPage {
   @Builder
   buildListResults() {
     List({ scroller: this.resultScroller, space: AppSpace.Xs }) {
+      // 与首页列表一致：顶部避让区作为可滚动首项，滚动后结果可自然进入浮层下方。
+      ListItem() {
+        Column()
+          .width('100%')
+          .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+            RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)
+      }
       LazyForEach(this.resultDataSource, (book: Book) => {
         ListItem() {
           this.buildListItem(book)
@@ -512,13 +533,14 @@ export struct SearchPage {
     }
     .layoutWeight(1)
     .width('100%')
+    .height('100%')
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .cachedCount(6)
+    .clip(false)
     .padding({
       left: AppSpace.Md,
-      right: AppSpace.Md,
-      bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg
+      right: AppSpace.Md
     })
   }
 
@@ -531,18 +553,14 @@ export struct SearchPage {
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
       Row({ space: AppSpace.Xs }) {
-        Row() {
+        Stack({ alignContent: Alignment.Center }) {
           SymbolGlyph($r('sys.symbol.chevron_left'))
             .fontSize(22)
             .fontColor([$r('sys.color.icon_primary')])
-            .width(22)
-            .height(22)
         }
           .width(40)
           .height(40)
           .borderRadius(AppRadius.Pill)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(VerticalAlign.Center)
           .systemMaterial(AppMaterial.InteractiveThin)
           .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
           .onClick(() => this.navStack.pop())
@@ -557,6 +575,16 @@ export struct SearchPage {
           .backgroundColor(Color.Transparent)
           .systemMaterial(AppMaterial.InteractiveClean)
           .borderRadius(AppRadius.Pill)
+          .id('search-page-input')
+          .focusable(true)
+          .defaultFocus(true)
+          .onAppear(() => {
+            try {
+              this.getUIContext().getFocusController().requestFocus('search-page-input');
+            } catch (_e) {
+              // 页面转场尚未完成时请求可能失败，defaultFocus 会在下一帧兜底。
+            }
+          })
           .onSubmit(() => this.doSearch())
           .onChange((value: string) => {
             this.keyword = value;
@@ -567,9 +595,13 @@ export struct SearchPage {
       .height(SEARCH_HEADER_HEIGHT)
       .padding({ left: AppSpace.Xs, right: AppSpace.Md })
       .alignItems(VerticalAlign.Center)
+      if (this.hasSearched) {
+        this.buildResultToolbar()
+      }
     }
     .width('100%')
-    .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT)
+    .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+      (this.hasSearched ? RESULT_TOOLBAR_HEIGHT : 0))
     .backgroundColor(Color.Transparent)
   }
 
@@ -583,25 +615,24 @@ export struct SearchPage {
 
       HdsNavigation() {
         Column() {
-        if (!this.hasSearched) {
-          this.buildRecommendations()
-        } else if (this.resultDataSource.totalCount() === 0 && this.searching) {
-          this.buildLoadingState()
-        } else if (this.resultDataSource.totalCount() === 0) {
-          this.buildEmptyState()
-        } else {
-          this.buildResultToolbar()
-          if (this.viewMode === 0) {
-            this.buildGridResults()
+          if (!this.hasSearched) {
+            this.buildRecommendations()
+          } else if (this.resultDataSource.totalCount() === 0 && this.searching) {
+            this.buildLoadingState()
+          } else if (this.resultDataSource.totalCount() === 0) {
+            this.buildEmptyState()
           } else {
-            this.buildListResults()
+            if (this.viewMode === 0) {
+              this.buildGridResults()
+            } else {
+              this.buildListResults()
+            }
           }
-        }
         }
         .width('100%')
         .height('100%')
-        .padding({ top: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT })
-        .backgroundColor(HomeTheme.BgNeutral)
+        .clip(false)
+        .backgroundColor(Color.Transparent)
       }
       .mode(NavigationMode.Stack)
       .titleBar({
@@ -645,6 +676,7 @@ export struct SearchPage {
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
       .width('100%')
       .height('100%')
+      .clip(false)
       .backgroundColor(Color.Transparent)
 
       this.buildSearchHeader()

@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, curves } from '@kit.ArkUI';
+import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial } from '../theme/Theme';
@@ -41,7 +41,7 @@ export struct BookDetailPage {
   @Local isStartingPlay: boolean = false;
   @Local lastHistory: PlayHistoryItem | null = null;
   @Local textReadingProgress: TextReadingPosition | null = null;
-  @Local activeTab: number = 1;
+  @Local introExpanded: boolean = false;
   @Local bgColor: string = '#3A3A3A';
   @Local bgColorDark: string = '#1A1A1A';
   @Local heroTextColor: string = '#FFFFFF';
@@ -140,6 +140,23 @@ AudioService.getInstance().prewarmBookSource(cached);
 
   private detailCoverHeight(): number {
     return AdaptiveLayout.detailCoverHeight(this.viewportWidth, this.viewportHeight);
+  }
+
+  /** 将历史缓存或源端的内部类型值转换为详情页可见文案。 */
+  private displayCategory(): string {
+    if (!this.book) return '有声书';
+    const category = this.book.category.trim();
+    const normalized = category.toLowerCase();
+    if (normalized.length === 0 || normalized === 'audio') {
+      return this.book.contentType === 'text' ? '电子书' : '有声书';
+    }
+    if (normalized === 'text') return '电子书';
+    return category;
+  }
+
+  /** 状态缺失时按默认完结处理，只有明确的 false 才是连载中。 */
+  private displayStatus(): string {
+    return this.book?.completed === false ? '连载中' : '已完结';
   }
 
   private async loadBook(): Promise<void> {
@@ -274,9 +291,11 @@ AudioService.getInstance().prewarmBookSource(cached);
     const lightAmbient = ambientLuminance >= 156;
     const neutralLight: RgbColor = { r: 255, g: 255, b: 255 };
     // 浅色封面不再强行压成深色,让过渡保持同一亮度方向,文字则自动反色。
+    // 封面色只负责 Hero 的氛围，不让上下端点形成过重的色带。
+    // 浅色封面向白色多混一点，深色封面少压暗一点，正文过渡会更柔和。
     const bottomColor = lightAmbient
-      ? ColorPickerUtils.blend(safe, neutralLight, 0.16)
-      : ColorPickerUtils.darken(safe, 0.3);
+      ? ColorPickerUtils.blend(safe, neutralLight, 0.28)
+      : ColorPickerUtils.darken(safe, 0.18);
     const foreground = lightAmbient ? '#202124' : '#FFFFFF';
     // 颜色变化包进 animateTo:背景主色随封面就绪/切换平滑过渡,而不是硬跳
     this.getUIContext().animateTo({ duration: 500, curve: Curve.Linear }, () => {
@@ -863,22 +882,17 @@ AudioService.getInstance().prewarmBookSource(cached);
           Column() {
             this.buildTopBar()
             this.buildHeader()
-            this.buildStats()
           }
           .width('100%')
           .padding({ top: WindowUtils.getStatusBarHeightVp() })
         }
         .width('100%')
 
-        // Tab 区域
-        this.buildTabBar()
+        // 简介区
+        this.buildIntroSection()
 
-        // 内容区
-        if (this.activeTab === 0) {
-          this.buildIntroContent()
-        } else {
-          this.buildChapterContent()
-        }
+        // 章节区
+        this.buildChapterContent()
       } else {
         Column() {
           LoadingProgress().width(40).height(40).color(AppColor.Brand)
@@ -891,8 +905,8 @@ AudioService.getInstance().prewarmBookSource(cached);
       angle: 180,
       colors: [
         [this.bgColor, 0.0],
-        [this.bgColorDark, 0.24],
-        [$r('sys.color.background_primary'), 0.52],
+        [this.bgColorDark, 0.16],
+        [$r('sys.color.background_primary'), 0.38],
         [$r('sys.color.background_primary'), 1.0]
       ]
     })
@@ -986,16 +1000,26 @@ AudioService.getInstance().prewarmBookSource(cached);
             .fontColor(this.heroTextSecondaryColor)
             .maxLines(1)
         }
-        if (this.book!.tags && this.book!.tags.length > 0) {
-          Row({ space: AppSpace.Xs }) {
-            ForEach(this.book!.tags.slice(0, 2), (tag: string) => {
-              Text(tag)
-                .fontSize(AppFont.Caption)
-                .fontColor(this.heroTextColor)
-                .backgroundColor(this.heroTagBackground)
-                .borderRadius(AppRadius.Xs)
-                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            }, (tag: string) => tag)
+        Row({ space: 8 }) {
+          Text(this.displayCategory())
+            .fontSize(AppFont.Caption)
+            .fontColor(this.heroTextColor)
+            .backgroundColor(this.heroTagBackground)
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+          Text(this.displayStatus())
+            .fontSize(AppFont.Caption)
+            .fontColor(this.heroTextColor)
+            .backgroundColor(this.heroTagBackground)
+            .borderRadius(AppRadius.Xs)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+          if (this.book!.chapterCount > 0) {
+            Text(this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? '章' : '集'))
+              .fontSize(AppFont.Caption)
+              .fontColor(this.heroTextColor)
+              .backgroundColor(this.heroTagBackground)
+              .borderRadius(AppRadius.Xs)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
           }
         }
       }
@@ -1006,109 +1030,8 @@ AudioService.getInstance().prewarmBookSource(cached);
     .padding({
       left: this.horizontalPadding(),
       right: this.horizontalPadding(),
-      top: this.isCompactLayout() ? AppSpace.Xs : AppSpace.Md
+      top: this.isCompactLayout() ? 0 : AppSpace.Xs
     })
-  }
-
-  @Builder
-  buildStats() {
-    Row() {
-      // 分类
-      Column({ space: 2 }) {
-        Text(this.book!.category.trim().length > 0 ? this.book!.category : '--')
-          .fontSize(AppFont.Title)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text('分类')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      .layoutWeight(1)
-
-      // 状态
-      Column({ space: 2 }) {
-        Text(this.book!.completed === undefined ? '--' : (this.book!.completed ? '已完结' : '连载中'))
-          .fontSize(AppFont.Title)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
-        Text('状态')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      .layoutWeight(1)
-
-      // 章节数
-      Column({ space: 2 }) {
-        Text(this.book!.chapterCount > 0
-          ? this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? ' 章' : ' 集') : '--')
-          .fontSize(AppFont.Title)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
-        Text(this.book!.contentType === 'text' ? '总章节' : '总集数')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      .layoutWeight(1)
-    }
-    .width('100%')
-    .padding({
-      left: this.isCompactLayout() ? AppSpace.Lg : AppSpace.Xl,
-      right: this.isCompactLayout() ? AppSpace.Lg : AppSpace.Xl,
-      top: this.isCompactLayout() ? AppSpace.Sm : AppSpace.Lg,
-      bottom: this.isCompactLayout() ? AppSpace.Sm : AppSpace.Lg
-    })
-  }
-
-  @Builder
-  buildTabBar() {
-    Row() {
-      Column({ space: AppSpace.Xs }) {
-        Text('详情')
-          .fontSize(AppFont.BodyL)
-          .fontColor(this.activeTab === 0 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
-          .fontWeight(this.activeTab === 0 ? FontWeight.Bold : FontWeight.Normal)
-        Blank()
-          .width(16)
-          .height(3)
-          .borderRadius(2)
-          .backgroundColor(AppColor.Brand)
-          .opacity(this.activeTab === 0 ? 1 : 0)
-      }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Center)
-        .justifyContent(FlexAlign.Center)
-        .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
-        .onClick(() => { this.activeTab = 0; })
-
-      Column({ space: AppSpace.Xs }) {
-        Text(this.book!.contentType === 'text' ? '目录' : '节目')
-          .fontSize(AppFont.BodyL)
-          .fontColor(this.activeTab === 1 ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary'))
-          .fontWeight(this.activeTab === 1 ? FontWeight.Bold : FontWeight.Normal)
-        Blank()
-          .width(16)
-          .height(3)
-          .borderRadius(2)
-          .backgroundColor(AppColor.Brand)
-          .opacity(this.activeTab === 1 ? 1 : 0)
-      }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Center)
-        .justifyContent(FlexAlign.Center)
-        .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
-        .onClick(() => {
-          this.activeTab = 1;
-          // 进入目录 tab 复位搜索,避免带着旧过滤态定位章节
-          if (this.chapterQuery.length > 0) {
-            this.chapterQuery = '';
-            this.applyChapterFilter();
-          }
-          this.scrollToCurrentChapter();
-        })
-    }
-    .width('100%')
   }
 
   /** 获取历史章节标题，供 Builder 使用 */
@@ -1139,55 +1062,47 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   @Builder
-  buildIntroContent() {
-    Scroll() {
-      Column({ space: AppSpace.Md }) {
-        if (this.book!.intro) {
-          Text(this.book!.intro)
-            .fontSize(AppFont.Body)
-            .fontColor($r('sys.color.font_secondary'))
-            .lineHeight(24)
-            .width('100%')
-        } else {
-          Text('暂无简介')
-            .fontSize(AppFont.Body)
-            .fontColor($r('sys.color.font_tertiary'))
-            .width('100%')
+  buildIntroSection() {
+    Column({ space: AppSpace.Xs }) {
+      if (this.book!.intro) {
+        Text(this.book!.intro)
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_secondary'))
+          .lineHeight(22)
+          .textIndent(AppFont.Body * 2)
+          .maxLines(this.introExpanded ? 100 : 3)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .onClick(() => {
+            if (this.introExpanded) { this.introExpanded = false; }
+            else if (this.book!.intro.length > 60) { this.introExpanded = true; }
+          })
+        if (!this.introExpanded && this.book!.intro.length > 60) {
+          Text('查看更多')
+            .fontSize(AppFont.Caption)
+            .fontColor(AppColor.Brand)
+            .onClick(() => { this.introExpanded = true; })
         }
-
-        // 主操作按钮
-        Row() {
-          SymbolGlyph(this.book!.contentType === 'text'
-            ? $r('sys.symbol.bookshelf') : $r('sys.symbol.play_fill'))
-            .fontSize(18).fontColor(['#FFFFFF'])
-          Text(this.resumeButtonText())
-            .fontSize(AppFont.BodyL)
-            .fontColor('#FFFFFF')
-            .fontWeight(FontWeight.Medium)
-            .margin({ left: AppSpace.Xs })
+        if (this.introExpanded) {
+          Text('收起')
+            .fontSize(AppFont.Caption)
+            .fontColor(AppColor.Brand)
+            .onClick(() => { this.introExpanded = false; })
         }
-        .width('100%')
-        .height(48)
-        .justifyContent(FlexAlign.Center)
-        .borderRadius(24)
-        .backgroundColor(AppColor.Brand)
-        .margin({ top: AppSpace.Md })
-        .onClick(() => this.openPrimaryAction())
-
-        if (this.book!.contentType !== 'text') {
-          this.buildDownloadPanel()
-        }
+      } else {
+        Text('暂无简介')
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_tertiary'))
+          .width('100%')
       }
-      .padding({
-        left: this.horizontalPadding(),
-        right: this.horizontalPadding(),
-        top: AppSpace.Lg,
-        bottom: AppSpace.Xl
-      })
     }
-    .layoutWeight(1)
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .width('100%')
+    .padding({
+      left: this.horizontalPadding(),
+      right: this.horizontalPadding(),
+      top: AppSpace.Xs,
+      bottom: 0
+    })
   }
 
   @Builder
@@ -1334,7 +1249,6 @@ AudioService.getInstance().prewarmBookSource(cached);
             Repeat<Chapter>(this.displayedChapters)
               .each((ri: RepeatItem<Chapter>) => {
                 ListItem() {
-                  // Repeat 与 @Builder 混用必须整体传 RepeatItem，只传 .item 会导致节点复用时渲染乱序
                   this.buildChapterItem(ri)
                 }
               })
@@ -1344,7 +1258,10 @@ AudioService.getInstance().prewarmBookSource(cached);
           .width('100%')
           .height('100%')
           .cachedCount(5)
-          .scrollBar(BarState.Auto)
+          .scrollBar(BarState.On)
+          .scrollBarWidth(8)
+          .scrollBarMargin({ start: LengthMetrics.vp(8), end: LengthMetrics.vp(56) })
+          .enableScrollInteraction(true)
           .edgeEffect(EdgeEffect.Spring)
           .divider({
             strokeWidth: 0.5,
@@ -1473,7 +1390,6 @@ AudioService.getInstance().prewarmBookSource(cached);
       SymbolGlyph($r('sys.symbol.list_bullet'))
         .fontSize(22).fontColor([$r('sys.color.font_secondary')])
         .onClick(() => {
-          this.activeTab = 1;
           this.scrollToCurrentChapter();
         })
     }
