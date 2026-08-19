@@ -4,6 +4,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { http } from '@kit.NetworkKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { image } from '@kit.ImageKit';
 import { PreferenceService, WidgetPlayerSnapshot } from './PreferenceService';
 import { Book, Chapter } from '../model/Book';
 import { PlayerState } from '../model/PlayerState';
@@ -17,16 +18,17 @@ export const WIDGET_PLAYER = 'PlayerCard';
 
 /** 单张图片大小上限：鸿蒙卡片 formImages 通道单图限制 ~2MB（再大会被框架拒绝） */
 const MAX_IMG_BYTES = 1.5 * 1024 * 1024;
+/** 卡片只展示 2x2 封面，预先缩图可避免原图解码后占用过大的共享内存。 */
+const WIDGET_COVER_SIZE = 384;
+const WIDGET_COVER_QUALITY = 88;
+const WIDGET_COVER_CACHE_VERSION = 'v2';
 
 interface BuildBindingResult {
   binding: formBindingData.FormBindingData;
   imgFile: fileIo.File | null;
 }
 
-/**
- * 使用显式类承载卡片数据，确保 formImages 以 SDK 要求的
- * Record<string, number> 形态进入 FormBindingData。
- */
+/** 初次添加卡片时使用的空态数据；带封面的更新由 buildPlayerBinding 构造。 */
 export class PlayerFormData {
   hasBook: boolean = false;
   bookId: string = '';
@@ -102,7 +104,7 @@ export class WidgetUpdater {
     if (WidgetUpdater.coverMigrationPromise) await WidgetUpdater.coverMigrationPromise;
     try {
       const cacheDir = WidgetUpdater.appContext.cacheDir;
-      const fileName = `widget_cover_${WidgetUpdater.hash(url)}.img`;
+      const fileName = `widget_cover_${WidgetUpdater.hash(url)}_${WIDGET_COVER_CACHE_VERSION}.jpg`;
       const filePath = `${cacheDir}/${fileName}`;
       try {
         const stat = await fileIo.stat(filePath);
@@ -139,16 +141,18 @@ export class WidgetUpdater {
         });
         if (resp.responseCode === 200 && resp.result) {
           const buf = resp.result as ArrayBuffer;
-          if (buf.byteLength > MAX_IMG_BYTES) {
+          const widgetCover = await WidgetUpdater.createWidgetCover(buf);
+          if (widgetCover.byteLength > MAX_IMG_BYTES) {
             hilog.warn(DOMAIN, TAG, 'cover too big (%{public}d bytes), drop FD path: %{public}s',
-              buf.byteLength, url);
+              widgetCover.byteLength, url);
             return null;
           }
           const f = await fileIo.open(filePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-          await fileIo.write(f.fd, buf);
+          await fileIo.write(f.fd, widgetCover);
           await fileIo.close(f);
           WidgetUpdater.coverPathCache.set(url, filePath);
-          hilog.info(DOMAIN, TAG, 'cover cached bytes=%{public}d', buf.byteLength);
+          hilog.info(DOMAIN, TAG, 'widget cover cached source=%{public}d bytes output=%{public}d bytes',
+            buf.byteLength, widgetCover.byteLength);
           return filePath;
         }
         hilog.warn(DOMAIN, TAG, 'download cover bad status %{public}d for %{public}s',
@@ -162,6 +166,41 @@ export class WidgetUpdater {
         e?.message ?? JSON.stringify(err));
     }
     return null;
+  }
+
+  /** 把大尺寸原图转成卡片专用 JPEG，控制解码内存和跨进程传输体积。 */
+  private static async createWidgetCover(buf: ArrayBuffer): Promise<ArrayBuffer> {
+    let source: image.ImageSource | null = null;
+    let pixelMap: image.PixelMap | null = null;
+    let packer: image.ImagePacker | null = null;
+    try {
+      source = image.createImageSource(buf);
+      const decodingOptions: image.DecodingOptions = {
+        desiredSize: { width: WIDGET_COVER_SIZE, height: WIDGET_COVER_SIZE }
+      };
+      pixelMap = await source.createPixelMap(decodingOptions);
+      packer = image.createImagePacker();
+      const packingOptions: image.PackingOption = {
+        format: 'image/jpeg',
+        quality: WIDGET_COVER_QUALITY
+      };
+      return await packer.packToData(pixelMap, packingOptions);
+    } catch (err) {
+      const e = err as Error;
+      hilog.warn(DOMAIN, TAG, 'resize widget cover failed, use original: %{public}s',
+        e?.message ?? JSON.stringify(err));
+      return buf;
+    } finally {
+      if (packer) {
+        try { await packer.release(); } catch (_e) {}
+      }
+      if (pixelMap) {
+        try { pixelMap.release(); } catch (_e) {}
+      }
+      if (source) {
+        try { source.release(); } catch (_e) {}
+      }
+    }
   }
 
   private static hash(s: string): string {
@@ -182,7 +221,16 @@ export class WidgetUpdater {
    */
   private static async buildPlayerBinding(snap: WidgetPlayerSnapshot, allowNetwork: boolean = true)
     : Promise<BuildBindingResult> {
-    const data = new PlayerFormData(snap);
+    const data: Record<string, Object> = {
+      'hasBook': snap.bookId.length > 0,
+      'bookId': snap.bookId,
+      'bookTitle': snap.bookTitle || '没有正在播放的书',
+      'author': snap.author,
+      'cover': snap.cover,
+      'imgName': '',
+      'chapterTitle': snap.chapterTitle || '点击挑一本',
+      'isPlaying': snap.isPlaying
+    };
     let imgFile: fileIo.File | null = null;
     let imgName = '';
     if (snap.cover && (snap.cover.startsWith('http') || snap.cover.startsWith('/') || snap.cover.startsWith('file://'))) {
@@ -198,8 +246,10 @@ export class WidgetUpdater {
         if (localPath) {
           imgFile = await fileIo.open(localPath, fileIo.OpenMode.READ_ONLY);
           imgName = `cover_${WidgetUpdater.hash(snap.bookId)}_${snap.updatedAt}`;
-          data.imgName = imgName;
-          data.formImages[imgName] = imgFile.fd;
+          data['imgName'] = imgName;
+          const formImages: Record<string, number> = {};
+          formImages[imgName] = imgFile.fd;
+          data['formImages'] = formImages;
           const stat = await fileIo.stat(localPath);
           hilog.info(DOMAIN, TAG, 'cover binding ready key=%{public}s bytes=%{public}d fd=%{public}d',
             imgName, stat.size, imgFile.fd);

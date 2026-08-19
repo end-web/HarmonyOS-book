@@ -37,35 +37,29 @@ struct PlayerCard {
   }
 
   private hasCover(): boolean {
-    // 优先使用 formImages 的 memory:// 资源；FormExtensionAbility 尚未完成
-    // 落盘时回退到快照中的 URL，避免封面因一次更新失败而变成空白。
     return this.imgName.length > 0 || this.cover.length > 0;
   }
 
   build() {
     Stack() {
       // 与播放页保持一致：当前封面铺满模糊，再叠加深色遮罩。
-      // URL 位于下层，memory:// 位于上层；FD 绑定失败时仍可回退网络封面。
+      // formImages 存在时只创建 memory 图片，避免网络图加载失败后的占位层干扰封面。
       if (this.hasCover()) {
-        Stack() {
-          if (this.cover.length > 0) {
-            Image(this.cover)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-              .sourceSize({ width: 120, height: 120 })
-          }
-          if (this.imgName.length > 0) {
-            Image('memory://' + this.imgName)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Cover)
-              .sourceSize({ width: 120, height: 120 })
-          }
+        if (this.imgName.length > 0) {
+          Image('memory://' + this.imgName)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 120, height: 120 })
+            .blur(40)
+        } else {
+          Image(this.cover)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Cover)
+            .sourceSize({ width: 120, height: 120 })
+            .blur(40)
         }
-          .width('100%')
-          .height('100%')
-          .blur(40)
         Column()
           .width('100%')
           .height('100%')
@@ -83,15 +77,6 @@ struct PlayerCard {
         Row() {
           Stack() {
             if (this.hasCover()) {
-              if (this.cover.length > 0) {
-                Image(this.cover)
-                  .width('100%')
-                  .height('100%')
-                  .borderRadius(12)
-                  .objectFit(ImageFit.Cover)
-                  .syncLoad(true)
-                  .alt($r('app.media.app_icon_legacy'))
-              }
               if (this.imgName.length > 0) {
                 Image('memory://' + this.imgName)
                   .width('100%')
@@ -99,6 +84,14 @@ struct PlayerCard {
                   .borderRadius(12)
                   .objectFit(ImageFit.Cover)
                   .syncLoad(true)
+              } else {
+                Image(this.cover)
+                  .width('100%')
+                  .height('100%')
+                  .borderRadius(12)
+                  .objectFit(ImageFit.Cover)
+                  .syncLoad(true)
+                  .alt($r('app.media.app_icon_legacy'))
               }
             } else {
               Column() {
