@@ -975,7 +975,7 @@ export struct PlayerPage {
             .fontSize(AppFont.TitleL)
             .fontColor('#FFFFFF')
             .fontWeight(FontWeight.Bold)
-            .maxLines(1)
+            .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(this.book!.author)
             .fontSize(AppFont.Body)
