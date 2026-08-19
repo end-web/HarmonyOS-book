@@ -18,7 +18,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
-const MINI_TITLE_BAR_HEIGHT: number = 56;
+const SEARCH_HEADER_HEIGHT: number = 56;
 
 class SearchRecommendation {
   readonly label: Resource;
@@ -328,12 +328,18 @@ export struct SearchPage {
 
       Blank()
 
-      SymbolGlyph(this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
-        .fontSize(18)
-        .fontColor([$r('sys.color.font_primary')])
-        .width(36)
-        .height(36)
+      Row() {
+        SymbolGlyph(this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
+          .fontSize(18)
+          .fontColor([$r('sys.color.font_primary')])
+          .width(22)
+          .height(22)
+      }
+        .width(40)
+        .height(40)
         .borderRadius(AppRadius.Pill)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
         .systemMaterial(AppMaterial.InteractiveThin)
         .onClick(() => {
           this.getUIContext().animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard }, () => {
@@ -425,7 +431,7 @@ export struct SearchPage {
       left: AppSpace.Md,
       right: AppSpace.Md,
       top: AppSpace.Sm,
-      bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg
+      bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg
     })
   }
 
@@ -512,29 +518,71 @@ export struct SearchPage {
     .padding({
       left: AppSpace.Md,
       right: AppSpace.Md,
-      bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg
+      bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg
     })
   }
 
-  build() {
-    HdsNavigation() {
-      Column() {
+  @Builder
+  buildSearchHeader() {
+    Column() {
+      Column()
+        .width('100%')
+        .height(WindowUtils.getStatusBarHeightVp())
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+
+      Row({ space: AppSpace.Xs }) {
+        Row() {
+          SymbolGlyph($r('sys.symbol.chevron_left'))
+            .fontSize(22)
+            .fontColor([$r('sys.color.icon_primary')])
+            .width(22)
+            .height(22)
+        }
+          .width(40)
+          .height(40)
+          .borderRadius(AppRadius.Pill)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+          .systemMaterial(AppMaterial.InteractiveThin)
+          .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
+          .onClick(() => this.navStack.pop())
+
         Search({ value: this.keyword, placeholder: $r('app.string.search_placeholder') })
           .searchButton($r('app.string.search_action'), { fontColor: HomeTheme.Accent })
           .placeholderColor($r('sys.color.font_tertiary'))
           .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
           .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
+          .layoutWeight(1)
           .height(42)
           .backgroundColor(Color.Transparent)
           .systemMaterial(AppMaterial.InteractiveClean)
           .borderRadius(AppRadius.Pill)
-          .margin({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
           .onSubmit(() => this.doSearch())
           .onChange((value: string) => {
             this.keyword = value;
             if (value.length === 0 && this.hasSearched) this.clearSearch();
           })
+      }
+      .width('100%')
+      .height(SEARCH_HEADER_HEIGHT)
+      .padding({ left: AppSpace.Xs, right: AppSpace.Md })
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT)
+    .backgroundColor(Color.Transparent)
+  }
 
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(HomeTheme.BgNeutral)
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+      HdsNavigation() {
+        Column() {
         if (!this.hasSearched) {
           this.buildRecommendations()
         } else if (this.resultDataSource.totalCount() === 0 && this.searching) {
@@ -549,58 +597,60 @@ export struct SearchPage {
             this.buildListResults()
           }
         }
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ top: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT })
+        .backgroundColor(HomeTheme.BgNeutral)
       }
+      .mode(NavigationMode.Stack)
+      .titleBar({
+        avoidLayoutSafeArea: true,
+        content: {
+          title: { mainTitle: '' }
+        },
+        style: {
+          scrollEffectOpts: {
+            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          },
+          originalStyle: {
+            backgroundStyle: { backgroundColor: Color.Transparent },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary'),
+                subTitleColor: $r('sys.color.font_secondary')
+              },
+              backIconStyle: { iconColor: Color.Transparent }
+            }
+          },
+          scrollEffectStyle: {
+            backgroundStyle: { backgroundColor: Color.Transparent },
+            contentStyle: {
+              titleStyle: {
+                mainTitleColor: $r('sys.color.font_primary'),
+                subTitleColor: $r('sys.color.font_secondary')
+              },
+              backIconStyle: { iconColor: Color.Transparent }
+            }
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          }
+        }
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(true)
+      .bindToScrollable([this.resultScroller, this.recommendationScroller])
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
       .width('100%')
       .height('100%')
-      .padding({ top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT })
-      .backgroundColor(HomeTheme.BgNeutral)
+      .backgroundColor(Color.Transparent)
+
+      this.buildSearchHeader()
     }
-    .mode(NavigationMode.Stack)
-    .titleBar({
-      avoidLayoutSafeArea: true,
-      content: {
-        title: { mainTitle: $r('app.string.search_page_title') },
-        backIcon: {
-          icon: $r('sys.symbol.chevron_left'),
-          action: () => this.navStack.pop()
-        }
-      },
-      style: {
-        scrollEffectOpts: {
-          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
-        },
-        originalStyle: {
-          backgroundStyle: { backgroundColor: Color.Transparent },
-          contentStyle: {
-            titleStyle: {
-              mainTitleColor: $r('sys.color.font_primary'),
-              subTitleColor: $r('sys.color.font_secondary')
-            },
-            backIconStyle: { iconColor: $r('sys.color.icon_primary') }
-          }
-        },
-        scrollEffectStyle: {
-          backgroundStyle: { backgroundColor: Color.Transparent },
-          contentStyle: {
-            titleStyle: {
-              mainTitleColor: $r('sys.color.font_primary'),
-              subTitleColor: $r('sys.color.font_secondary')
-            },
-            backIconStyle: { iconColor: $r('sys.color.icon_primary') }
-          }
-        },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-        }
-      }
-    })
-    .titleMode(HdsNavigationTitleMode.MINI)
-    .hideBackButton(false)
-    .bindToScrollable([this.resultScroller, this.recommendationScroller])
-    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
     .width('100%')
     .height('100%')
-    .backgroundColor(Color.Transparent)
+    .backgroundColor(HomeTheme.BgNeutral)
   }
 }

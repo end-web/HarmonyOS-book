@@ -101,10 +101,6 @@
       "value": "取消"
     },
     {
-      "name": "search_page_title",
-      "value": "搜索"
-    },
-    {
       "name": "search_placeholder",
       "value": "搜索书籍、作者"
     },
