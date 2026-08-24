@@ -101,6 +101,7 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 ## Conventions
 
 - **Commits**: Conventional Commits (`feat:`, `fix:`, `fix(player):`, `feat(server):` …); Chinese or English summaries OK
+- **Git 推送**: GitHub 远端使用 SSH 地址 `git@github.com:end-web/HarmonyOS-book.git`，优先使用本机 `C:\Users\ylwang112\.ssh\id_ed25519` 密钥推送；不要切回 HTTPS 推送。
 - **Naming**: `XxxPage`, `XxxService`, `XxxComponent` (PascalCase + suffix); camelCase for fields/methods
 - **SDK**: HarmonyOS 7 / API 26; `targetSdkVersion = compatibleSdkVersion = 26.0.0`; `bundleName: com.huan.listenbook`
 - **Device types**: phone only (`deviceTypes: ["phone"]`)
