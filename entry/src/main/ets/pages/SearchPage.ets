@@ -25,6 +25,7 @@ const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
 const SEARCH_HEADER_HEIGHT: number = 56;
 const RESULT_TOOLBAR_HEIGHT: number = 48;
+const SEARCH_FOCUS_DELAY_MS: number = 320;
 
 class SearchRecommendation {
   readonly label: Resource;
@@ -67,6 +68,8 @@ export struct SearchPage {
   private resultScroller: Scroller = new Scroller();
   private recommendationScroller: Scroller = new Scroller();
   private searchGen: number = 0;
+  private focusTimerId: number = -1;
+  private initialFocusRequested: boolean = false;
 
   aboutToAppear(): void {
     CoverPrefetcher.init();
@@ -75,6 +78,30 @@ export struct SearchPage {
 
   aboutToDisappear(): void {
     this.searchGen++;
+    this.cancelSearchFocus();
+  }
+
+  private scheduleSearchFocus(): void {
+    if (this.initialFocusRequested) {
+      return;
+    }
+    this.initialFocusRequested = true;
+    this.focusTimerId = setTimeout((): void => {
+      this.focusTimerId = -1;
+      try {
+        this.getUIContext().getFocusController().requestFocus('search-page-input');
+      } catch (_e) {
+        // 页面已离开或输入框尚未挂载时忽略，用户仍可点击输入框聚焦。
+      }
+    }, SEARCH_FOCUS_DELAY_MS);
+  }
+
+  private cancelSearchFocus(): void {
+    if (this.focusTimerId < 0) {
+      return;
+    }
+    clearTimeout(this.focusTimerId);
+    this.focusTimerId = -1;
   }
 
   private clearSearch(): void {
@@ -268,7 +295,7 @@ export struct SearchPage {
     .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
     .margin({ bottom: AppSpace.Sm })
     .borderRadius(AppRadius.Sm)
-    .systemMaterial(AppMaterial.InteractiveThin)
+    .backgroundColor(HomeTheme.CardSurface)
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.98 })
     .onClick(() => this.submitRecommendation(item))
   }
@@ -577,14 +604,7 @@ export struct SearchPage {
           .borderRadius(AppRadius.Pill)
           .id('search-page-input')
           .focusable(true)
-          .defaultFocus(true)
-          .onAppear(() => {
-            try {
-              this.getUIContext().getFocusController().requestFocus('search-page-input');
-            } catch (_e) {
-              // 页面转场尚未完成时请求可能失败，defaultFocus 会在下一帧兜底。
-            }
-          })
+          .onAppear(() => this.scheduleSearchFocus())
           .onSubmit(() => this.doSearch())
           .onChange((value: string) => {
             this.keyword = value;
@@ -602,7 +622,24 @@ export struct SearchPage {
     .width('100%')
     .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
       (this.hasSearched ? RESULT_TOOLBAR_HEIGHT : 0))
-    .backgroundColor(Color.Transparent)
+    .backgroundColor(this.hasSearched ? Color.Transparent : HomeTheme.BgNeutral)
+  }
+
+  @Builder
+  buildSearchBody() {
+    if (!this.hasSearched) {
+      this.buildRecommendations()
+    } else if (this.resultDataSource.totalCount() === 0 && this.searching) {
+      this.buildLoadingState()
+    } else if (this.resultDataSource.totalCount() === 0) {
+      this.buildEmptyState()
+    } else {
+      if (this.viewMode === 0) {
+        this.buildGridResults()
+      } else {
+        this.buildListResults()
+      }
+    }
   }
 
   build() {
@@ -613,71 +650,69 @@ export struct SearchPage {
         .backgroundColor(HomeTheme.BgNeutral)
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      HdsNavigation() {
-        Column() {
-          if (!this.hasSearched) {
-            this.buildRecommendations()
-          } else if (this.resultDataSource.totalCount() === 0 && this.searching) {
-            this.buildLoadingState()
-          } else if (this.resultDataSource.totalCount() === 0) {
-            this.buildEmptyState()
-          } else {
-            if (this.viewMode === 0) {
-              this.buildGridResults()
-            } else {
-              this.buildListResults()
+      if (this.hasSearched) {
+        HdsNavigation() {
+          Column() {
+            this.buildSearchBody()
+          }
+          .width('100%')
+          .height('100%')
+          .clip(false)
+          .backgroundColor(Color.Transparent)
+        }
+        .mode(NavigationMode.Stack)
+        .titleBar({
+          avoidLayoutSafeArea: true,
+          content: {
+            title: { mainTitle: '' }
+          },
+          style: {
+            scrollEffectOpts: {
+              scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+            },
+            originalStyle: {
+              backgroundStyle: { backgroundColor: Color.Transparent },
+              contentStyle: {
+                titleStyle: {
+                  mainTitleColor: $r('sys.color.font_primary'),
+                  subTitleColor: $r('sys.color.font_secondary')
+                },
+                backIconStyle: { iconColor: Color.Transparent }
+              }
+            },
+            scrollEffectStyle: {
+              backgroundStyle: { backgroundColor: Color.Transparent },
+              contentStyle: {
+                titleStyle: {
+                  mainTitleColor: $r('sys.color.font_primary'),
+                  subTitleColor: $r('sys.color.font_secondary')
+                },
+                backIconStyle: { iconColor: Color.Transparent }
+              }
+            },
+            systemMaterialEffect: {
+              materialType: hdsMaterial.MaterialType.IMMERSIVE,
+              materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
             }
           }
-        }
+        })
+        .titleMode(HdsNavigationTitleMode.MINI)
+        .hideBackButton(true)
+        .bindToScrollable([this.resultScroller, this.recommendationScroller])
+        .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
         .width('100%')
         .height('100%')
         .clip(false)
         .backgroundColor(Color.Transparent)
-      }
-      .mode(NavigationMode.Stack)
-      .titleBar({
-        avoidLayoutSafeArea: true,
-        content: {
-          title: { mainTitle: '' }
-        },
-        style: {
-          scrollEffectOpts: {
-            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
-          },
-          originalStyle: {
-            backgroundStyle: { backgroundColor: Color.Transparent },
-            contentStyle: {
-              titleStyle: {
-                mainTitleColor: $r('sys.color.font_primary'),
-                subTitleColor: $r('sys.color.font_secondary')
-              },
-              backIconStyle: { iconColor: Color.Transparent }
-            }
-          },
-          scrollEffectStyle: {
-            backgroundStyle: { backgroundColor: Color.Transparent },
-            contentStyle: {
-              titleStyle: {
-                mainTitleColor: $r('sys.color.font_primary'),
-                subTitleColor: $r('sys.color.font_secondary')
-              },
-              backIconStyle: { iconColor: Color.Transparent }
-            }
-          },
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
+      } else {
+        Column() {
+          this.buildSearchBody()
         }
-      })
-      .titleMode(HdsNavigationTitleMode.MINI)
-      .hideBackButton(true)
-      .bindToScrollable([this.resultScroller, this.recommendationScroller])
-      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
-      .width('100%')
-      .height('100%')
-      .clip(false)
-      .backgroundColor(Color.Transparent)
+        .width('100%')
+        .height('100%')
+        .clip(false)
+        .backgroundColor(HomeTheme.BgNeutral)
+      }
 
       this.buildSearchHeader()
     }

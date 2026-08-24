@@ -32,6 +32,7 @@ const MAX_ATTEMPTS: number = 5;
 const IN_FLIGHT_WATCHDOG_MS: number = 50000;
 
 export class CoverPrefetcher {
+  private static initialized: boolean = false;
   private static pending: string[] = [];
   private static inFlight: Set<string> = new Set();
   private static succeeded: Set<string> = new Set();
@@ -43,9 +44,13 @@ export class CoverPrefetcher {
 
   /** 应用启动时调用一次:文件缓存 + 内存缓存(默认内存为 0，Image 难命中)。 */
   static init(): void {
+    if (CoverPrefetcher.initialized) {
+      return;
+    }
     try {
       cacheDownload.setFileCacheSize(100 * 1024 * 1024);
       cacheDownload.setMemoryCacheSize(32 * 1024 * 1024);
+      CoverPrefetcher.initialized = true;
     } catch (_e) { /* ignore */ }
   }
 

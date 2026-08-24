@@ -4,6 +4,9 @@
 export class AdaptiveLayout {
   private static readonly COMPACT_WIDTH: number = 360;
   private static readonly COMPACT_HEIGHT: number = 760;
+  /** 播放页除封面外的固定垂直占用：标题最多两行时的安全预算。 */
+  private static readonly PLAYER_FIXED_HEIGHT: number = 438;
+  private static readonly PLAYER_MIN_COVER: number = 136;
 
   static isCompact(width: number, height: number): boolean {
     if (width <= 0 || height <= 0) return false;
@@ -23,14 +26,23 @@ export class AdaptiveLayout {
   }
 
   static playerBottomSpacing(width: number, height: number): number {
-    return AdaptiveLayout.isCompact(width, height) ? 12 : 24;
+    // 紧凑窗口直接贴合系统安全区，把额外空间留给底部功能栏与播控区之间的间隔。
+    return AdaptiveLayout.isCompact(width, height) ? 0 : 24;
   }
 
   static playerCoverSize(width: number, height: number): number {
     const horizontalSpace = AdaptiveLayout.horizontalPadding(width, height) * 2;
     const availableWidth = Math.max(152, width - horizontalSpace);
-    const heightBound = Math.max(152, Math.min(260, height * 0.34));
+    // 优先用高度剩余空间收缩封面，确保两行标题、进度条和底部播控同屏。
+    const heightBound = Math.max(
+      AdaptiveLayout.PLAYER_MIN_COVER,
+      Math.min(260, height - AdaptiveLayout.PLAYER_FIXED_HEIGHT)
+    );
     return Math.min(availableWidth, heightBound);
+  }
+
+  static playerNeedsScroll(height: number): boolean {
+    return height > 0 && height < AdaptiveLayout.PLAYER_FIXED_HEIGHT + AdaptiveLayout.PLAYER_MIN_COVER;
   }
 
   static detailHeroHeight(width: number, height: number): number {

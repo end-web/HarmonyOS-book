@@ -244,6 +244,10 @@ export struct PlayerPage {
     return AdaptiveLayout.isCompact(this.viewportWidth, this.viewportHeight);
   }
 
+  private playerNeedsScroll(): boolean {
+    return AdaptiveLayout.playerNeedsScroll(this.viewportHeight);
+  }
+
   private playerHorizontalPadding(): number {
     return AdaptiveLayout.horizontalPadding(this.viewportWidth, this.viewportHeight);
   }
@@ -452,11 +456,6 @@ export struct PlayerPage {
     // 切到不同章节(可能不同书) → AudioService 内部会 same-book/same-chapter 短路或 reset
     SearchCache.put(book);
     await AudioService.getInstance().playChapterAndSeek(book, target, this.resumeProgressMs);
-  }
-
-  private async openCastPicker(): Promise<void> {
-    const opened = await AudioService.getInstance().openCastPicker();
-    if (!opened) this.showToast($r('app.string.player_cast_unavailable'));
   }
 
   private formatMs(ms: number): string {
@@ -756,16 +755,20 @@ export struct PlayerPage {
       Column() {
         if (this.book) {
           if (this.isCompactPlayer()) {
-            Scroll() {
-              Column() {
-                this.buildPlayerContent(true)
+            if (this.playerNeedsScroll()) {
+              Scroll() {
+                Column() {
+                  this.buildPlayerContent(true)
+                }
+                .width('100%')
               }
               .width('100%')
+              .layoutWeight(1)
+              .scrollBar(BarState.Off)
+              .edgeEffect(EdgeEffect.Spring)
+            } else {
+              this.buildPlayerContent(true)
             }
-            .width('100%')
-            .height('100%')
-            .scrollBar(BarState.Off)
-            .edgeEffect(EdgeEffect.Spring)
           } else {
             this.buildPlayerContent(false)
           }
@@ -1167,19 +1170,9 @@ export struct PlayerPage {
         }
       }))
 
-      Column({ space: 4 }) {
-        SymbolGlyph($r('sys.symbol.airplayaudio'))
-          .fontSize(22)
-          .fontColor(['#FFFFFF'])
-        Text($r('app.string.player_cast'))
-          .fontSize(AppFont.Caption)
-          .fontColor('#FFFFFF')
-      }
-      .layoutWeight(1)
-      .onClick(() => this.openCastPicker())
     }
     .width('100%')
-    .padding({ top: this.isCompactPlayer() ? AppSpace.Sm : AppSpace.Lg })
+    .padding({ top: AppSpace.Lg })
   }
 
   @Builder
