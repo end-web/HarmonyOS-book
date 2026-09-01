@@ -1,0 +1,9 @@
+{
+  "app": {
+    "bundleName": "com.huan.quickjsbuild",
+    "vendor": "third_party",
+    "versionCode": 1,
+    "versionName": "1.0.0",
+    "label": "$string:app_name"
+  }
+}

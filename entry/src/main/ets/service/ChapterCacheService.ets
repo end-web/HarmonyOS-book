@@ -326,7 +326,7 @@ export class ChapterCacheService {
       if (!source) throw new Error('预加载书源不可用');
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const requestInfo: AudioRequestInfo =
-        await BookSourceService.resolveAudioRequest(source, pageUrl, book.variables);
+        await BookSourceService.resolveAudioRequest(source, pageUrl, book.variables, chapter.variables);
       const audioUrl = requestInfo.url;
       if (audioUrl && audioUrl !== pageUrl) {
         this.preloadFailureAt.delete(chapter.id);
@@ -436,8 +436,7 @@ export class ChapterCacheService {
   }
 
   private async findSource(sourceUrl: string): Promise<BookSource | null> {
-    const sources = await SourceDataService.getSources();
-    return sources.find((s) => s.bookSourceUrl === sourceUrl) || null;
+    return await SourceDataService.getSourceByUrl(sourceUrl) ?? null;
   }
 
   private evictUrlCache(): void {

@@ -1,9 +1,14 @@
 /node_modules
 /oh_modules
+**/oh_modules/
 /local.properties
 /.idea
 **/build
 /.hvigor
+**/.hvigor/
+.codex-*
+undefined
+obfuscation-cache.json
 .cxx
 /.clangd
 /.clang-format

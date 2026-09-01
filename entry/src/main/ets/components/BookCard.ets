@@ -1,16 +1,23 @@
 import { Book } from '../model/Book';
 import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
 import { CoverImage } from './CoverImage';
+import {
+  BookOneShotPayload,
+  OneShotRect,
+  OneShotTransitionCoordinator,
+  OneShotTransitionIds
+} from '../utils/OneShotTransition';
 
 /**
  * 书架卡片：封面 + 标题 + 作者
- * 点击进入详情；按压有微缩反馈；封面通过 geometryTransition 飞向详情页
+ * 点击进入详情；按压有微缩反馈；封面参与 Navigation 高级一镜到底转场
  */
 @ComponentV2
 export struct BookCard {
   @Param book: Book = {} as Book;
   @Param cardWidth: number = 110;
   @Param indexHint: number = 0;
+  @Param coverAspectRatio: number = 1;
   @Event onTap: (id: string) => void = () => {};
 
   @Local pressed: boolean = false;
@@ -18,8 +25,15 @@ export struct BookCard {
   @Local appeared: boolean = false;
 
   private static shownIds: Set<string> = new Set();
+  private static transitionIdSeed: number = 0;
+  private transitionNodeId: string = '';
 
   aboutToAppear(): void {
+    if (this.transitionNodeId.length === 0) {
+      BookCard.transitionIdSeed = BookCard.transitionIdSeed + 1;
+      this.transitionNodeId = OneShotTransitionIds.sourceCover(this.book.id) + '-' +
+        BookCard.transitionIdSeed.toString();
+    }
     if (BookCard.shownIds.has(this.book.id)) {
       this.appeared = true;
       return;
@@ -39,7 +53,9 @@ export struct BookCard {
   }
 
   private sourceName(): string {
-    if (this.book.contentType === 'text') return '电子书 · ' + (this.book.narrator || 'kk笔趣阁');
+    if (this.book.contentType === 'text') {
+      return this.book.narrator ? '电子书 · ' + this.book.narrator : '电子书';
+    }
     if (this.book.narrator) return this.book.narrator;
     if (this.book.tags && this.book.tags.length > 0) return this.book.tags[0];
     return '';
@@ -49,6 +65,28 @@ export struct BookCard {
     return path.startsWith('/data/') || path.startsWith('file://');
   }
 
+  private prepareOneShotTransition(): void {
+    const coordinator = OneShotTransitionCoordinator.getInstance();
+    try {
+      const uiContext = this.getUIContext();
+      const sourceInfo = uiContext.getComponentUtils().getRectangleById(this.transitionNodeId);
+      const viewportInfo = uiContext.getComponentUtils().getRectangleById(OneShotTransitionIds.ROOT_NAVIGATION);
+      const sourceRect = OneShotRect.fromComponentInfo(sourceInfo);
+      const viewportRect = OneShotRect.fromComponentInfo(viewportInfo);
+      if (!sourceRect.isValid() || !viewportRect.isValid()) {
+        coordinator.discardPending();
+        return;
+      }
+      const snapshot = uiContext.getComponentSnapshot().getSync(this.transitionNodeId);
+      const payload = BookOneShotPayload.create(
+        this.book.id, this.transitionNodeId, sourceRect, viewportRect, snapshot);
+      coordinator.prepare(payload);
+    } catch (error) {
+      coordinator.discardPending();
+      console.warn(`[BookCard] prepare one-shot transition failed: ${error}`);
+    }
+  }
+
   build() {
     Column({ space: AppSpace.Xs }) {
       Stack({ alignContent: Alignment.BottomStart }) {
@@ -56,24 +94,24 @@ export struct BookCard {
           CoverImage({
             url: this.book.cover,
             imgWidth: '100%',
-            aspectRatioValue: 1,
+            aspectRatioValue: this.coverAspectRatio,
             radius: AppRadius.Md,
             decodeW: 300,
-            decodeH: 300,
+            decodeH: this.coverAspectRatio < 1 ? 400 : 300,
             highPriority: this.indexHint < 24
           })
         } else if (this.book.cover && this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
             .width('100%')
-            .aspectRatio(1)
+            .aspectRatio(this.coverAspectRatio)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: 300 })
+            .sourceSize({ width: 300, height: this.coverAspectRatio < 1 ? 400 : 300 })
             .onError(() => { this.imageLoadFailed = true; })
         } else if (this.book.cover && !this.book.cover.startsWith('http') && !this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image($rawfile(this.book.cover))
             .width('100%')
-            .aspectRatio(1)
+            .aspectRatio(this.coverAspectRatio)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .onError(() => { this.imageLoadFailed = true; })
@@ -81,7 +119,7 @@ export struct BookCard {
           // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
           Image($r('app.media.app_icon_legacy'))
             .width('100%')
-            .aspectRatio(1)
+            .aspectRatio(this.coverAspectRatio)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }
@@ -99,9 +137,11 @@ export struct BookCard {
         }
       }
       .width('100%')
+      .aspectRatio(this.coverAspectRatio)
       .borderRadius(AppRadius.Md)
       .clip(true)
       .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+      .id(this.transitionNodeId)
 
       Column({ space: 2 }) {
         Text(this.book.title)
@@ -133,6 +173,9 @@ export struct BookCard {
       if (e.type === TouchType.Down) this.pressed = true;
       else if (e.type === TouchType.Up || e.type === TouchType.Cancel) this.pressed = false;
     })
-    .onClick(() => this.onTap(this.book.id))
+    .onClick(() => {
+      this.prepareOneShotTransition();
+      this.onTap(this.book.id);
+    })
   }
 }

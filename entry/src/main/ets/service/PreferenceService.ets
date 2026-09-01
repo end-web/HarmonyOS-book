@@ -22,7 +22,6 @@ const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
-const KEY_SERVER_AUDIO_API_BASE = 'server_audio_api_base';
 /** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
 const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 /** 已添加的卡片 formId 集合(按卡片名分桶) */
@@ -82,7 +81,6 @@ export class PreferenceBackupSnapshot {
   audioAutoResume: boolean = true;
   homeGridColumns: number = 3;
   preloadChapters: number = 3;
-  serverAudioApiBase: string = '';
 }
 
 /**
@@ -700,23 +698,6 @@ export class PreferenceService {
     await s.flush();
   }
 
-  static async getServerAudioApiBase(): Promise<string> {
-    const s = await PreferenceService.ensureStore();
-    return await s.get(KEY_SERVER_AUDIO_API_BASE, '') as string;
-  }
-
-  static async setServerAudioApiBase(apiBase: string): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_SERVER_AUDIO_API_BASE, apiBase);
-    await s.flush();
-  }
-
-  static async clearServerAudioApiBase(): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.delete(KEY_SERVER_AUDIO_API_BASE);
-    await s.flush();
-  }
-
   /** 导出允许跨设备迁移的白名单偏好，不包含账号、卡片和本地导入数据。 */
   static async exportBackupSnapshot(): Promise<PreferenceBackupSnapshot> {
     const snapshot = new PreferenceBackupSnapshot();
@@ -732,8 +713,6 @@ export class PreferenceService {
     snapshot.audioAutoResume = await PreferenceService.getAudioAutoResume();
     snapshot.homeGridColumns = await PreferenceService.getHomeGridColumns();
     snapshot.preloadChapters = await PreferenceService.getPreloadChapters();
-    snapshot.serverAudioApiBase = await PreferenceService.getServerAudioApiBase();
-
     const s = await PreferenceService.ensureStore();
     const all = await s.getAll() as Record<string, Object>;
     for (const key of Object.keys(all)) {
@@ -811,11 +790,6 @@ export class PreferenceService {
     await s.put(KEY_AUDIO_AUTO_RESUME, snapshot.audioAutoResume);
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
     await s.put(KEY_PRELOAD_CHAPTERS, snapshot.preloadChapters);
-    if (snapshot.serverAudioApiBase) {
-      await s.put(KEY_SERVER_AUDIO_API_BASE, snapshot.serverAudioApiBase);
-    } else {
-      await s.delete(KEY_SERVER_AUDIO_API_BASE);
-    }
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
     PreferenceService.notifyHistoryChanged();

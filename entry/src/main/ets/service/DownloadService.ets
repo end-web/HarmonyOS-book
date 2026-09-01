@@ -465,14 +465,14 @@ export class DownloadService {
         (): boolean => this.isItemCurrent(item));
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       this.emitUpdate(item.book.id, item.chapter.id);
-      const sources = await SourceDataService.getSources();
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
-      const source = sources.find((s) => s.bookSourceUrl === item.book.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(item.book.sourceUrl);
       if (!source) {
         await this.markFailed(item, '内容来源不可用');
         return;
       }
-      const requestInfo = await BookSourceService.resolveAudioRequest(source, pageUrl, item.book.variables);
+      const requestInfo = await BookSourceService.resolveAudioRequest(
+        source, pageUrl, item.book.variables, item.chapter.variables);
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       if (!this.isValidAudioUrl(pageUrl, requestInfo.url)) {
         await this.markFailed(item, '音频地址解析失败');
@@ -616,8 +616,7 @@ export class DownloadService {
   }
 
   private async refreshBookToc(book: Book): Promise<Book> {
-    const sources = await SourceDataService.getSources();
-    const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
+    const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
     if (!source || !book.bookUrl) return book;
     let tocUrl = book.bookUrl;
     const bookInfo: BookInfo | null = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
@@ -647,7 +646,8 @@ export class DownloadService {
       title: item.name,
       duration: item.duration || 0,
       source: { type: 'url', value: item.url },
-      originSourceValue: item.url
+      originSourceValue: item.url,
+      variables: item.variables
     }));
     const refreshed: Book = {
       id: book.id,
@@ -996,7 +996,8 @@ export class DownloadService {
       title: chapter.title,
       duration: chapter.duration,
       source: { type: chapter.source.type, value: chapter.source.value },
-      originSourceValue: chapter.originSourceValue
+      originSourceValue: chapter.originSourceValue,
+      variables: chapter.variables
     };
   }
 
@@ -1028,7 +1029,8 @@ export class DownloadService {
       title: record.title,
       duration: record.durationSec ?? 0,
       source: { type: 'url', value: record.pageUrl },
-      originSourceValue: record.pageUrl
+      originSourceValue: record.pageUrl,
+      variables: record.variables
     };
   }
 

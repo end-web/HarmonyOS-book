@@ -19,6 +19,8 @@ export interface Chapter {
    *  source.value 在播放期间会被解析后的真实音频 URL 覆盖，
    *  此字段保留原始章节页 URL，重启/续播时可以重新解析（避免临时签名链接过期）。 */
   originSourceValue?: string;
+  /** 本地规则源在目录阶段为当前章节生成的独立解析上下文。 */
+  variables?: Record<string, string>;
 }
 
 export interface Book {

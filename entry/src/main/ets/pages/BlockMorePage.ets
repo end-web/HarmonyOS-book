@@ -67,8 +67,7 @@ export struct BlockMorePage {
 
   private async fetchPage(url: string, append: boolean): Promise<void> {
     try {
-      const sources = await SourceDataService.getSources();
-      const source = sources.find((s) => s.bookSourceUrl === this.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(this.sourceUrl);
       if (!source) {
         this.errorMsg = '欢 FM 暂不可用';
         this.hasMore = false;

@@ -15,8 +15,8 @@ import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { registerBuiltInSources } from '../service/builtin';
 import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
 import { NetworkPreconnect } from '../service/http/NetworkPreconnect';
-import { ServerAudioConfig } from '../service/builtin/ServerAudioConfig';
 import { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
+import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -112,8 +112,10 @@ export default class EntryAbility extends UIAbility {
     await PreferenceService.init(this.context);
     hilog.info(DOMAIN, TAG, 'initServicesCore: PreferenceService ready, elapsed=%{public}dms', Date.now() - startTime);
 
-    // 云源地址此时才从 Preferences 读到真实值，用它预建链；否则自定义地址会失效。
-    NetworkPreconnect.prewarmCloud(await ServerAudioConfig.getApiBase());
+    // 本地规则是旁路能力：后台预热，但不阻塞下载和播放器状态恢复。
+    LocalRuleSourceRepository.init(this.context).catch((e: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'LocalRuleSourceRepository init failed: %{public}s', JSON.stringify(e));
+    });
 
     try {
       await StatsService.init(this.context);

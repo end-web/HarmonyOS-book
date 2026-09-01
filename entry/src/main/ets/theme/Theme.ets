@@ -48,7 +48,8 @@ export class AppMaterial {
 
   static readonly DialogUltraThick: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
-    applyShadow: true
+    applyShadow: true,
+    lightEffect: APP_LIGHT_EFFECT
   });
 
   static readonly SurfaceRegular: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({

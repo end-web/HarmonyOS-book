@@ -5,6 +5,8 @@
   "main": "",
   "author": "ylwang",
   "license": "MIT",
-  "dependencies": {}
+  "dependencies": {
+    "@devzeng/quickjs": "file:./libs/quickjs.har"
+  }
 }
 

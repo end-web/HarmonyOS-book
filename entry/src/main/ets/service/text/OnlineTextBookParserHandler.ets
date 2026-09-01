@@ -2,8 +2,8 @@ import { buffer } from '@kit.ArkTS';
 import { fileIo } from '@kit.CoreFileKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
 import { Book, Chapter } from '../../model/Book';
+import { BookSourceService } from '../BookSourceService';
 import { KkBiqugeHtmlParser } from './KkBiqugeHtmlParser';
-import { KkBiqugeTextSource } from './KkBiqugeTextSource';
 
 export class OnlineTextBookParserHandler extends bookParser.BookParserHandler {
   private book: Book;
@@ -86,7 +86,8 @@ export class OnlineTextBookParserHandler extends bookParser.BookParserHandler {
   private async loadSpineItemContent(spineIndex: number): Promise<string> {
     const chapter = this.chapterAt(spineIndex);
     const url = chapter.originSourceValue ?? chapter.source.value;
-    const content = await KkBiqugeTextSource.getChapterContent(url, chapter.title);
+    const content = await BookSourceService.getTextChapterContent(
+      this.book, url, chapter.title, chapter.variables);
     const xhtml = KkBiqugeHtmlParser.toXhtml(chapter.title, content.content);
     this.writeResourceFile(spineIndex, xhtml);
     this.contentCache.set(spineIndex, xhtml);

@@ -92,6 +92,8 @@ export class AudioService {
    *  同一章节在冷却时间内只自动重试一次,避免 AVPlayer error → 重试 → error 死循环 */
   private autoRetryChapterId: string = '';
   private autoRetryAt: number = 0;
+  /** 最近一次在线地址解析失败原因，用于把书源业务错误反馈给播放页。 */
+  private lastResolveFailure: string = '';
   private static readonly AUTO_RETRY_COOLDOWN_MS: number = 3000;
 
   private canAutoRetryLoad(chapterId: string): boolean {
@@ -855,6 +857,7 @@ export class AudioService {
       let audioHeaders: Record<string, string> = {};
       let resolveResult: AudioResolveResult = { headers: {}, success: false };
       let resolved: boolean = false;
+      this.lastResolveFailure = '';
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         resolveResult = await this.resolveAudioUrl(book, chapter);
         if (myGen !== this.playGen) {
@@ -875,7 +878,9 @@ export class AudioService {
         hilog.warn(DOMAIN, TAG, 'resolveAudioUrl failed after %d attempts, aborting playback', maxAttempts);
         this.state.isLoading = false;
         this.state.isPlaying = false;
-        this.emitPlayFailed(book.id, chapter.id, '无法获取音频地址，请检查网络或稍后重试');
+        const message = this.lastResolveFailure.length > 0
+          ? this.lastResolveFailure : '无法获取音频地址，请检查网络或稍后重试';
+        this.emitPlayFailed(book.id, chapter.id, message);
         return;
       }
       this.syncCastMediaSource(book, chapter);
@@ -955,11 +960,13 @@ export class AudioService {
       } else {
         hilog.error(DOMAIN, TAG, 'file source missing and no originSourceValue: %{public}s',
           chapter.source.value);
+        this.lastResolveFailure = '本地音频文件已丢失，且没有可重新获取的地址';
         const r: AudioResolveResult = { headers: {}, success: false };
         return r;
       }
     }
     if (!book.sourceUrl) {
+      this.lastResolveFailure = '该书籍缺少可用的内容来源';
       const r: AudioResolveResult = { headers: {}, success: false };
       return r;
     }
@@ -989,14 +996,15 @@ export class AudioService {
       }
     }
     try {
-      const sources = await SourceDataService.getSources();
-      const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) {
+        this.lastResolveFailure = '该内容来源已不可用，请重新导入后重试';
         const r: AudioResolveResult = { headers: {}, success: false };
         return r;
       }
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables);
+      const requestInfo = await this.resolveAudioRequestWithTimeout(
+        source, pageUrl, book.variables, chapter.variables);
       const audioUrl = requestInfo.url;
       // 解析失败时书源层会原样回传章节页 URL（如 tingyou://play/...），
       // 必须校验后才算成功，否则假地址会被装进 AVPlayer 并报“音频源不可用”，
@@ -1007,10 +1015,12 @@ export class AudioService {
         const r: AudioResolveResult = { headers: requestInfo.headers, success: true };
         return r;
       }
+      this.lastResolveFailure = '书源未返回可播放的音频地址';
       const r: AudioResolveResult = { headers: {}, success: false };
       return r;
     } catch (err) {
       const e = err as Error;
+      this.lastResolveFailure = e && e.message ? e.message : '音频地址解析失败';
       hilog.error(DOMAIN, TAG, 'resolveAudioUrl failed: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
       const r: AudioResolveResult = { headers: {}, success: false };
@@ -1019,14 +1029,16 @@ export class AudioService {
   }
 
   private async resolveAudioRequestWithTimeout(source: BookSource, pageUrl: string,
-    variables?: Record<string, string>): Promise<AudioRequestInfo> {
+    variables?: Record<string, string>, chapterVariables?: Record<string, string>): Promise<AudioRequestInfo> {
     let timerId: number = -1;
     const timeoutMs = BookSourceService.getAudioResolveTimeoutMs(source, AUDIO_RESOLVE_TIMEOUT_MS);
     const timeout = new Promise<AudioRequestInfo>((_resolve, reject) => {
       timerId = setTimeout(() => reject(new Error('音频地址获取超时')), timeoutMs);
     });
     try {
-      return await Promise.race([BookSourceService.resolveAudioRequest(source, pageUrl, variables), timeout]);
+      return await Promise.race([
+        BookSourceService.resolveAudioRequest(source, pageUrl, variables, chapterVariables), timeout
+      ]);
     } finally {
       if (timerId >= 0) clearTimeout(timerId);
     }
@@ -1053,12 +1065,12 @@ export class AudioService {
     if (this.isHttpUrl(cachedUrl)) return cachedUrl;
     if (!book.sourceUrl) return '';
     const pageUrl = chapter.originSourceValue || chapter.source.value;
-    if (!this.isHttpUrl(pageUrl)) return '';
+    if (pageUrl.length === 0) return '';
     try {
-      const sources = await SourceDataService.getSources();
-      const source = sources.find((item: BookSource) => item.bookSourceUrl === book.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) return '';
-      const requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables);
+      const requestInfo = await this.resolveAudioRequestWithTimeout(
+        source, pageUrl, book.variables, chapter.variables);
       return this.isHttpUrl(requestInfo.url) ? requestInfo.url : '';
     } catch (err) {
       const error = err as Error;

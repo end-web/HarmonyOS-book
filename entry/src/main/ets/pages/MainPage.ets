@@ -25,6 +25,7 @@ import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtrac
 import { WebEngineGate } from '../service/WebEngineGate';
 import { UpdateService } from '../service/UpdateService';
 import { HomeTheme } from '../theme/Theme';
+import { LocalRuleWebRuntimeHost } from '../service/rulesource/LocalRuleWebRuntime';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -374,6 +375,9 @@ export struct MainPage {
       // 欢部分音频地址需要 ArkWeb 兜底提取，按需创建隐藏宿主。
       if (this.gate.needAudioExtractor) {
         WebViewAudioExtractorHost()
+      }
+      if (this.gate.needRuleParser) {
+        LocalRuleWebRuntimeHost()
       }
     }
     .width('100%')

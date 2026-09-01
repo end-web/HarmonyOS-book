@@ -29,7 +29,7 @@ import { BookDataSource } from '../utils/BookDataSource';
 import { DownloadService } from '../service/DownloadService';
 import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { KK_BIQU_GE_SOURCE_URL } from '../service/text/KkBiqugeHtmlParser';
-import { TextReadingPosition } from '../model/TextReading';
+import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
@@ -41,6 +41,7 @@ interface BookUpdateInfo {
   title: string;
   oldCount: number;
   newCount: number;
+  unit: string;
 }
 
 function cloneChapter(ch: Chapter): Chapter {
@@ -53,7 +54,8 @@ function cloneChapter(ch: Chapter): Chapter {
       type: ch.source.type,
       value: ch.source.value
     },
-    originSourceValue: ch.originSourceValue
+    originSourceValue: ch.originSourceValue,
+    variables: ch.variables
   };
 }
 
@@ -82,7 +84,8 @@ function cloneBook(book: Book): Book {
     sourceUrl: book.sourceUrl,
     variables,
     skipIntro: book.skipIntro,
-    skipOutro: book.skipOutro
+    skipOutro: book.skipOutro,
+    completed: book.completed
   };
 }
 
@@ -93,7 +96,8 @@ function chaptersChanged(oldChapters: Chapter[], newChapters: Chapter[]): boolea
     const newChapter = newChapters[i];
     if (!oldChapter || oldChapter.title !== newChapter.title ||
       oldChapter.originSourceValue !== newChapter.originSourceValue ||
-      oldChapter.source.value !== newChapter.source.value) {
+      oldChapter.source.value !== newChapter.source.value ||
+      JSON.stringify(oldChapter.variables) !== JSON.stringify(newChapter.variables)) {
       return true;
     }
   }
@@ -211,6 +215,8 @@ export struct FavoritePage {
 
   async loadFavorites(): Promise<void> {
     if (!this.context) return;
+    // 刷新本地规则源索引；失败时 SourceDataService 会自动回退为仅内置源。
+    await SourceDataService.getSources();
     const ids = await PreferenceService.getFavorites();
     const allBooks = await DataService.getBooks(this.context);
     const byId = new Map<string, Book>();
@@ -237,7 +243,6 @@ export struct FavoritePage {
         if (this.isSupportedBook(book)) books.push(book);
         continue;
       }
-      if (id.startsWith('search_text_') || id.startsWith('home_text_')) continue;
       const progress = await PreferenceService.getProgress(id);
       const chapterTitle = map[id]?.chapterTitle ?? progress?.chapterTitle ??
         (lastPlayed?.bookId === id ? (lastPlayed.chapterTitle ?? '') : '');
@@ -299,14 +304,15 @@ export struct FavoritePage {
 
   private createMissingFavoriteBook(id: string, chapterTitle: string): Book {
     const inferredTitle = this.legacyBookNameFromChapterTitle(chapterTitle);
+    const isText = id.startsWith('search_text_') || id.startsWith('home_text_');
     return {
       id,
-      contentType: 'audio',
-      title: inferredTitle || '有声书缓存缺失',
+      contentType: isText ? 'text' : 'audio',
+      title: inferredTitle || (isText ? '电子书缓存缺失' : '有声书缓存缺失'),
       author: '收藏记录仍在',
       narrator: '',
       cover: '',
-      category: '有声书',
+      category: isText ? '电子书' : '有声书',
       intro: '',
       totalDuration: 0,
       chapterCount: 0,
@@ -343,12 +349,14 @@ export struct FavoritePage {
     return book.tags ? book.tags.includes('cache_alias') : false;
   }
 
-  /** 仅展示本地音频和当前内置欢源，屏蔽升级前遗留的文本书与规则源缓存。 */
+  /** 仅展示本地文件、当前内置源和已安装的本地规则源。 */
   private isSupportedBook(book: Book): boolean {
-    if (book.contentType === 'text') return book.sourceUrl === KK_BIQU_GE_SOURCE_URL;
+    if (book.contentType === 'text') {
+      return book.sourceUrl === KK_BIQU_GE_SOURCE_URL || SourceDataService.isLocalRuleSource(book.sourceUrl);
+    }
     if (book.category === 'text') return false;
     if (!book.sourceUrl) return true;
-    return BuiltInSourceRegistry.isBuiltIn(book.sourceUrl);
+    return BuiltInSourceRegistry.isBuiltIn(book.sourceUrl) || SourceDataService.isLocalRuleSource(book.sourceUrl);
   }
 
   private legacyBookNameFromChapterTitle(title: string): string {
@@ -398,10 +406,11 @@ export struct FavoritePage {
   /** 下拉刷新:从书源重新加载在线书籍的最新数据 */
   private async refreshOnlineBooks(): Promise<void> {
     if (!this.context) return;
-    // 筛选出在线书源的书(非本地导入)
+    // KK 文本源保持原有详情页刷新方式；其余在线来源复用统一详情/目录刷新链。
     const onlineBooks = this.favoriteBooks.filter(b =>
       !this.isMissingCachedBook(b) && !this.isFavoriteAliasBook(b) &&
-        !b.id.startsWith('import_') && b.contentType !== 'text' && b.bookUrl && b.sourceUrl);
+        !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl &&
+        b.sourceUrl !== KK_BIQU_GE_SOURCE_URL);
     if (onlineBooks.length === 0) {
       try {
         const message = this.missingFavoriteCount > 0 ?
@@ -469,7 +478,8 @@ export struct FavoritePage {
             title: item.name,
             duration: item.duration || 0,
             source: { type: 'url', value: item.url },
-            originSourceValue: item.url
+            originSourceValue: item.url,
+            variables: item.variables
           }));
           if (chaptersChanged(nextBook.chapters || [], chapters)) {
             hasChange = true;
@@ -489,7 +499,13 @@ export struct FavoritePage {
           this.syncFavoriteBook(nextBook);
           updated++;
           if (chapterChanged) {
-            updatedBooks.push({ title: nextBook.title, oldCount, newCount });
+            const updateInfo: BookUpdateInfo = {
+              title: nextBook.title,
+              oldCount,
+              newCount,
+              unit: nextBook.contentType === 'text' ? '章' : '集'
+            };
+            updatedBooks.push(updateInfo);
           }
         }
       } catch (_e) {
@@ -513,13 +529,13 @@ export struct FavoritePage {
       updatedBooks.sort((a, b) => (b.newCount - b.oldCount) - (a.newCount - a.oldCount));
       const lines = updatedBooks.map(u => {
         const delta = u.newCount - u.oldCount;
-        return `《${u.title}》  ${u.oldCount} → ${u.newCount} 集（+${delta}）`;
+        return `《${u.title}》  ${u.oldCount} → ${u.newCount} ${u.unit}（+${delta}）`;
       });
       const tail = failed > 0 ? `\n\n${failed} 本刷新失败` : '';
       prompt.showDialog({
         title: `${updatedBooks.length} 本书有更新`,
         message: lines.join('\n') + tail,
-        buttons: [{ text: '知道了', color: '#333333' }]
+        buttons: [{ text: '知道了', color: $r('app.color.text_primary') }]
       }).catch(() => { /* ignore */ });
       return;
     }
@@ -587,7 +603,8 @@ export struct FavoritePage {
     const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
     if (book.contentType === 'text') {
-      this.navStack.pushPathByName('detail', book.id, onPop);
+      const params = TextReaderRouteParams.of(book.id);
+      this.navStack.pushPathByName('reader', params, onPop);
       return;
     }
     // 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state。
@@ -664,8 +681,7 @@ export struct FavoritePage {
       try {
         this.getUIContext().getPromptAction().showToast({ message: '加载章节中...' });
       } catch (_e) { /* ignore */ }
-      const sources = await SourceDataService.getSources();
-      const source = sources.find((s) => s.bookSourceUrl === book.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) {
         this.getUIContext().getPromptAction().showToast({ message: '该内容来源已不可用，请重新搜索后加入书架' });
         return;
@@ -692,7 +708,8 @@ export struct FavoritePage {
         title: item.name,
         duration: item.duration || 0,
         source: { type: 'url', value: item.url },
-        originSourceValue: item.url
+        originSourceValue: item.url,
+        variables: item.variables
       }));
       book.chapterCount = book.chapters.length;
       // 持久化新 toc,下次点击不用再拉

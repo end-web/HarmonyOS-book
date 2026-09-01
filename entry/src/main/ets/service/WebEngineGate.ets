@@ -20,4 +20,7 @@ export class WebEngineGate {
 
   /** 需要欢音频嗅探 WebView。 */
   @Trace needAudioExtractor: boolean = false;
+
+  /** 本地规则执行到 CSS/XPath 时才挂载 DOM 解析宿主。 */
+  @Trace needRuleParser: boolean = false;
 }

@@ -406,8 +406,7 @@ export struct PlayerPage {
         return localBook;
       }
       if (!book.bookUrl || !book.sourceUrl) return book;
-      const sources = await SourceDataService.getSources();
-      const source = sources.find((item) => item.bookSourceUrl === book.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) return book;
       const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
       const tocUrl = bookInfo?.tocUrl || book.bookUrl;
@@ -420,7 +419,8 @@ export struct PlayerPage {
         title: item.name,
         duration: item.duration || 0,
         source: { type: 'url', value: item.url },
-        originSourceValue: item.url
+        originSourceValue: item.url,
+        variables: item.variables
       }));
       const hydrated = this.cloneBookWithChapters(book, chapters, bookInfo?.intro || book.intro, variables);
       await DataService.upsertCachedBook(hydrated);
@@ -1202,8 +1202,8 @@ export struct PlayerPage {
           Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
             .onChange((value: string) => this.applyChapterFilter(value))
             .height(40)
-            .systemMaterial(AppMaterial.InteractiveThin)
             .borderRadius(AppRadius.Lg)
+            .systemMaterial(AppMaterial.InteractiveClean)
             .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
           this.buildChapterItems()
@@ -1235,8 +1235,8 @@ export struct PlayerPage {
       }
       .width('100%')
       .height('55%')
-      .systemMaterial(AppMaterial.DialogUltraThick)
       .borderRadius({ topLeft: 20, topRight: 20 })
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 })
@@ -1358,9 +1358,9 @@ export struct PlayerPage {
         }
       }
       .width('100%')
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .transition(TransitionEffect.OPACITY.animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 }).animation({ curve: curves.springMotion(0.6, 0.9) })))
     }
@@ -1449,9 +1449,9 @@ export struct PlayerPage {
         .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 })
@@ -1525,9 +1525,9 @@ export struct PlayerPage {
         .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .borderRadius({ topLeft: 20, topRight: 20 })
       .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+      .borderRadius({ topLeft: 20, topRight: 20 })
+      .systemMaterial(AppMaterial.DialogUltraThick)
       .transition(TransitionEffect.OPACITY
         .animation({ curve: curves.springMotion(0.6, 0.9) })
         .combine(TransitionEffect.translate({ y: 1000 })

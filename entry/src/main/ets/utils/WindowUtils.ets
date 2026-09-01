@@ -108,6 +108,14 @@ export class WindowUtils {
     return Math.max(measuredVp, WindowUtils.FALLBACK_BOTTOM_SAFE_VP);
   }
 
+  static pxToVp(valuePx: number): number {
+    return valuePx / WindowUtils.density;
+  }
+
+  static vpToPx(valueVp: number): number {
+    return valueVp * WindowUtils.density;
+  }
+
   // 与 MainPage 中常量保持一致
   private static readonly FLOATING_TAB_HEIGHT: number = 60;
   private static readonly FLOATING_GAP: number = 12;

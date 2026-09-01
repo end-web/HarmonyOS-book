@@ -16,13 +16,13 @@ import { CoverImage } from '../components/CoverImage';
 import { BookDataSource } from '../utils/BookDataSource';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
-import { KkBiqugeTextSource } from '../service/text/KkBiqugeTextSource';
-import { TextSourceError } from '../model/TextReading';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { WindowUtils } from '../utils/WindowUtils';
 
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
+const LOCAL_RULE_SEARCH_CONCURRENCY: number = 6;
+const EBOOK_COVER_ASPECT_RATIO: number = 0.75;
 const SEARCH_HEADER_HEIGHT: number = 56;
 const RESULT_TOOLBAR_HEIGHT: number = 48;
 const SEARCH_FOCUS_DELAY_MS: number = 320;
@@ -61,8 +61,6 @@ export struct SearchPage {
   @Local textBooks: Book[] = [];
   @Local audioCount: number = 0;
   @Local textCount: number = 0;
-  @Local textSourceNeedsVerification: boolean = false;
-  @Local textSourceError: string = '';
 
   private resultDataSource: BookDataSource = new BookDataSource();
   private resultScroller: Scroller = new Scroller();
@@ -113,8 +111,6 @@ export struct SearchPage {
     this.textBooks = [];
     this.audioCount = 0;
     this.textCount = 0;
-    this.textSourceNeedsVerification = false;
-    this.textSourceError = '';
     this.resultDataSource.clear();
   }
 
@@ -139,8 +135,6 @@ export struct SearchPage {
     this.textBooks = [];
     this.audioCount = 0;
     this.textCount = 0;
-    this.textSourceNeedsVerification = false;
-    this.textSourceError = '';
     this.resultDataSource.clear();
     try {
       this.resultScroller.scrollEdge(Edge.Top);
@@ -153,10 +147,15 @@ export struct SearchPage {
       if (gen !== this.searchGen) return;
       const seen = new Set<string>();
       const tasks: Promise<void>[] = [];
+      const localSources: BookSource[] = [];
       for (const source of sources) {
-        tasks.push(this.searchOneSource(source, keyword, gen, seen));
+        if (SourceDataService.isLocalRuleSource(source.bookSourceUrl)) {
+          localSources.push(source);
+        } else {
+          tasks.push(this.searchOneSource(source, keyword, gen, seen));
+        }
       }
-      tasks.push(this.searchTextSource(keyword, gen, seen));
+      tasks.push(this.searchLocalSources(localSources, keyword, gen, seen));
       await Promise.all(tasks);
       if (gen !== this.searchGen) return;
       this.audioCount = this.audioBooks.length;
@@ -169,51 +168,56 @@ export struct SearchPage {
     }
   }
 
+  private async searchLocalSources(sources: BookSource[], keyword: string, gen: number,
+    seen: Set<string>): Promise<void> {
+    for (let start = 0; start < sources.length; start += LOCAL_RULE_SEARCH_CONCURRENCY) {
+      if (gen !== this.searchGen) return;
+      const batch: Promise<void>[] = [];
+      const end = Math.min(sources.length, start + LOCAL_RULE_SEARCH_CONCURRENCY);
+      for (let index = start; index < end; index++) {
+        batch.push(this.searchOneSource(sources[index], keyword, gen, seen));
+      }
+      await Promise.all(batch);
+    }
+  }
+
   private async searchOneSource(source: BookSource, keyword: string, gen: number,
     seen: Set<string>): Promise<void> {
     try {
       const results = await BookSourceService.searchBooks(source, keyword);
       if (gen !== this.searchGen) return;
       const books: Book[] = [];
+      const audioBooks: Book[] = [];
+      const textBooks: Book[] = [];
+      const fallbackContentType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
+        ? 'text' : 'audio';
       for (const item of results) {
         const dedupeKey = `${item.sourceUrl}\u001f${item.bookUrl}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
-        books.push(this.searchResultToBook(item));
+        const contentType: 'audio' | 'text' = item.contentType ?? fallbackContentType;
+        const book = this.searchResultToBook(item, contentType);
+        books.push(book);
+        if (contentType === 'text') {
+          textBooks.push(book);
+        } else {
+          audioBooks.push(book);
+        }
       }
       if (books.length === 0) return;
-      this.audioBooks = this.audioBooks.concat(books);
-      this.audioCount = this.audioBooks.length;
+      if (textBooks.length > 0) {
+        this.textBooks = this.textBooks.concat(textBooks);
+        this.textCount = this.textBooks.length;
+      }
+      if (audioBooks.length > 0) {
+        this.audioBooks = this.audioBooks.concat(audioBooks);
+        this.audioCount = this.audioBooks.length;
+      }
       this.refreshVisibleBooks();
       this.prefetchCovers(books);
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
         source.bookSourceName, String(e));
-    }
-  }
-
-  private async searchTextSource(keyword: string, gen: number, seen: Set<string>): Promise<void> {
-    try {
-      const books = await KkBiqugeTextSource.search(keyword);
-      if (gen !== this.searchGen) return;
-      const unique: Book[] = [];
-      for (const book of books) {
-        const dedupeKey = `${book.sourceUrl}\u001f${book.bookUrl}`;
-        if (seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
-        SearchCache.put(book);
-        unique.push(book);
-      }
-      this.textBooks = unique;
-      this.textCount = unique.length;
-      this.refreshVisibleBooks();
-      this.prefetchCovers(unique);
-    } catch (e) {
-      if (e instanceof TextSourceError) {
-        this.textSourceNeedsVerification = e.code === 'VERIFY_REQUIRED';
-        this.textSourceError = e.message;
-      }
-      hilog.warn(DOMAIN, TAG, 'text source search failed: %{public}s', String(e));
     }
   }
 
@@ -242,16 +246,23 @@ export struct SearchPage {
     this.refreshVisibleBooks();
   }
 
-  private searchResultToBook(result: SearchResult): Book {
+  private searchCoverAspectRatio(book: Book): number {
+    return book.contentType === 'text' ? EBOOK_COVER_ASPECT_RATIO : 1;
+  }
+
+  private searchResultToBook(result: SearchResult, contentType: 'audio' | 'text'): Book {
     const emptyChapters: Chapter[] = [];
+    const id = contentType === 'text'
+      ? BookIdentity.onlineTextBookId(result.sourceUrl || '', result.bookUrl || result.name)
+      : BookIdentity.onlineAudioBookId(result.sourceUrl || '', result.bookUrl || result.name);
     const book: Book = {
-      id: BookIdentity.onlineAudioBookId(result.sourceUrl || '', result.bookUrl || result.name),
+      id,
       title: result.name,
       author: result.author || '未知',
       narrator: result.sourceName,
       cover: result.coverUrl || '',
-      category: result.kind || '有声书',
-      contentType: 'audio',
+      category: result.kind || (contentType === 'text' ? '电子书' : '有声书'),
+      contentType,
       intro: result.intro || '',
       totalDuration: 0,
       chapterCount: 0,
@@ -423,24 +434,6 @@ export struct SearchPage {
       Text($r('app.string.search_try_another'))
         .fontSize(AppFont.Caption)
         .fontColor($r('sys.color.font_tertiary'))
-      if (this.textSourceNeedsVerification) {
-        Text($r('app.string.search_verify_text_source'))
-          .fontSize(AppFont.Body)
-          .fontColor(HomeTheme.Accent)
-          .fontWeight(FontWeight.Medium)
-          .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
-          .margin({ top: AppSpace.Xs })
-          .borderRadius(AppRadius.Pill)
-          .systemMaterial(AppMaterial.InteractiveThin)
-          .onClick(() => this.navStack.pushPathByName('verifyTextSource', null))
-      } else if (this.textSourceError) {
-        Text(this.textSourceError)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .maxLines(2)
-          .textAlign(TextAlign.Center)
-          .margin({ top: AppSpace.Xs, left: AppSpace.Xl, right: AppSpace.Xl })
-      }
     }
     .layoutWeight(1)
     .width('100%')
@@ -455,6 +448,7 @@ export struct SearchPage {
           BookCard({
             book: book,
             indexHint: index,
+            coverAspectRatio: this.searchCoverAspectRatio(book),
             onTap: () => this.openBook(book)
           })
         }
@@ -484,16 +478,16 @@ export struct SearchPage {
           CoverImage({
             url: book.cover,
             imgWidth: 92,
-            aspectRatioValue: 1,
+            aspectRatioValue: this.searchCoverAspectRatio(book),
             radius: AppRadius.Md,
             decodeW: 276,
-            decodeH: 276,
+            decodeH: book.contentType === 'text' ? 368 : 276,
             highPriority: false
           })
         } else {
           Image($r('app.media.app_icon_legacy'))
             .width(92)
-            .aspectRatio(1)
+            .aspectRatio(this.searchCoverAspectRatio(book))
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }

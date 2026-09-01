@@ -30,6 +30,7 @@ class PlaybackContinuationSnapshot {
   speed: number = 1.0;
   wasPlaying: boolean = false;
   variablesJson: string = '';
+  chapterVariablesJson: string = '';
   skipIntro: number = 0;
   skipOutro: number = 0;
 }
@@ -60,6 +61,7 @@ export class ContinuationService {
     snapshot.speed = ContinuationService.normalizeSpeed(state.speed);
     snapshot.wasPlaying = state.isPlaying;
     snapshot.variablesJson = book.variables ? JSON.stringify(book.variables) : '';
+    snapshot.chapterVariablesJson = chapter.variables ? JSON.stringify(chapter.variables) : '';
     snapshot.skipIntro = Math.max(0, book.skipIntro ?? 0);
     snapshot.skipOutro = Math.max(0, book.skipOutro ?? 0);
     return JSON.stringify(snapshot);
@@ -71,11 +73,19 @@ export class ContinuationService {
     const snapshot = JSON.parse(payload) as PlaybackContinuationSnapshot;
     if (!ContinuationService.isValid(snapshot)) return '';
     let variables: Record<string, string> | undefined = undefined;
+    let chapterVariables: Record<string, string> | undefined = undefined;
     if (snapshot.variablesJson) {
       try {
         variables = JSON.parse(snapshot.variablesJson) as Record<string, string>;
       } catch (_e) {
         variables = undefined;
+      }
+    }
+    if (snapshot.chapterVariablesJson) {
+      try {
+        chapterVariables = JSON.parse(snapshot.chapterVariablesJson) as Record<string, string>;
+      } catch (_e) {
+        chapterVariables = undefined;
       }
     }
     const source: AudioSource = { type: 'url', value: snapshot.chapterPageUrl };
@@ -85,7 +95,8 @@ export class ContinuationService {
       title: snapshot.chapterTitle,
       duration: Math.floor(snapshot.durationMs / 1000),
       source: source,
-      originSourceValue: snapshot.chapterPageUrl
+      originSourceValue: snapshot.chapterPageUrl,
+      variables: chapterVariables
     };
     const book: Book = {
       id: snapshot.bookId,

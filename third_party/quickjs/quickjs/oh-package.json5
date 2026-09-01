@@ -1,0 +1,14 @@
+{
+  "name": "@devzeng/quickjs",
+  "version": "0.1.0",
+  "description": "QuickJS for HarmonyOS.",
+  "main": "Index.ts",
+  "author": "zengjing <hhtczengjing@gmail.com>",
+  "keywords": [ "quickjs", "javascript", "js", "jsc" ],
+  "homepage": "https://github.com/hhtczengjing/ohos_quickjs",
+  "repository": "https://github.com/hhtczengjing/ohos_quickjs.git",
+  "license": "MIT",
+  "dependencies": {
+    "libquickjs.so": "file:./src/main/cpp/types/libquickjs"
+  }
+}

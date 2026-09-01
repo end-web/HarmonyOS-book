@@ -42,21 +42,24 @@ Pages hold `@Local` state + Service singletons. No V1 viewmodel layer exists.
 - **Loading indicators**: always set `.color(AppColor.Brand)` — never rely on HarmonyOS default brand blue
 - **Long lists**: `LazyForEach` + stable keys (e.g. `bookUrl`). Never use index as key
 - **UI copy**: change resource strings only; do not rename `.ets` files to match label text
-- **New audio sources**: implement `IBuiltInSource` interface → register in `registerBuiltInSources()` (in `service/builtin/index.ets`). Rule-heavy sources go in `server/`, not the App
-- **No client-side rule engine**: Legado/Reader rules run only in `server/`; do not reintroduce `service/js` or `service/rule`
+- **New stable native sources**: implement `IBuiltInSource` → register in `registerBuiltInSources()` (in `service/builtin/index.ets`)
+- **User rule sources**: extend only `service/rulesource/`; never reintroduce the old `service/js` / `service/rule` engine or bypass the bounded QuickJS facade
 
 ## Content Architecture (read this first)
 
-The App **no longer loads user Legado rule sources**. Online content comes only from registered built-in source IDs:
+The App keeps registered built-in sources as the primary path and adds user-imported Legado/Reader sources through an isolated local-rule side path:
 
-| Source ID | Name | How it works |
+| Source kind | ID / storage | How it works |
 |---|---|---|
-| `huan_fm` | 欢FM | App uses its built-in encrypted protocol to access the content service directly |
-| `jianhu_server` | JianHu Cloud | HTTP to `ServerAudioConfig.apiBase`, supplied by deployment or user settings |
+| Built-in | `huan_fm` | App uses its built-in encrypted protocol to access the content service directly |
+| Existing text | `KkBiqugeTextSource` | Independent search task that reuses the existing detail and ReaderKit path |
+| Local rules | encrypted `rule_sources.db` | Imported from My → Sources; supports declarative extraction, compact rule groups and a bounded QuickJS compatibility subset |
 
-Search is multi-source parallel; results are deduplicated by `sourceUrl + bookUrl`. Cloud source only routes — search result `sourceName` reflects the actual upstream audio source, not "JianHu Cloud".
+Search is multi-source parallel; built-ins and the existing text source start immediately, while local rules run in batches of six. Results are deduplicated by `sourceUrl + bookUrl`. `BookSourceService` checks `BuiltInSourceRegistry` first, so local database/runtime failures must not change built-in detail, chapter, playback, download, or favorite behavior. Home recommendations, categories, and discovery remain built-in only.
 
-Third-party closed backends (other "听书" APK plugin hosts) are **not** compatible with this API shape — do not suggest substituting their URLs into `ServerAudioConfig`.
+Local rule scripts must run through `LocalRuleScriptRuntime` → `LocalRuleQuickJsRuntime` in a taskpool, with independent contexts, native interrupt timeout, heap/stack/pending-job/input/output budgets, and guaranteed release. Do not expose unrestricted QuickJS APIs, direct `fetch`/XHR/WebSocket, platform objects, files, or databases. Hidden ArkWeb remains only the CSS/XPath DOM parser host for already-downloaded HTML. The routed source login page is the sole remote ArkWeb exception: HTTPS only, incognito mode, no platform bridge, and cookies must be copied into the encrypted source+origin store before the Web session is cleared.
+
+The optional `server/` project is not registered or configurable as an App content source. Do not reintroduce an App API-base setting without an explicit product decision.
 
 ## Project Structure
 
@@ -65,27 +68,32 @@ Single HarmonyOS module (`entry/`) + optional Node server (`server/`):
 - `entry/src/main/ets/pages/` — routed screens
 - `entry/src/main/ets/service/` — business services (singular `service/`, not `services/`)
 - `entry/src/main/ets/service/builtin/` — built-in audio source system (registry, dispatcher, source implementations)
-- `entry/src/main/ets/model/` — domain types (`Book`, `BookSource`, `PlayerState`)
+- `entry/src/main/ets/service/rulesource/` — local rule import, persistence, HTTP, extraction, QuickJS compatibility and dispatch
+- `entry/libs/quickjs.har` — locally built arm64-v8a/x86_64 bounded QuickJS dependency
+- `entry/src/main/ets/model/` — domain types (`Book`, `BookSource`, `LocalRuleSource`, `PlayerState`)
 - `entry/src/main/ets/components/` — reusable widgets
 - `entry/src/main/ets/theme/` — theme tokens (`AppColor`, `AppMaterial`)
 - `entry/src/main/ets/widget/` — desktop form widget
 - `server/` — JianHu cloud API + Vue admin + Docker deploy
+- `third_party/quickjs/` / `scripts/build-quickjs.ps1` — QuickJS source, licenses and reproducible HAR build
 
-Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, `server/node_modules/`, `server/dist/`
+Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, `server/node_modules/`, `server/dist/`, `third_party/quickjs/.hvigor/`, `third_party/quickjs/oh_modules/`, `third_party/quickjs/quickjs/.cxx/`, `third_party/quickjs/quickjs/build/`, `third_party/quickjs/quickjs/oh_modules/`
 
 ## Testing
 
 - **App unit tests**: `entry/src/test/*.test.ets` (Hypium framework) — covers `DownloadPolicy`, `TingYouRequestPolicy`, `BuiltInAudioCapability`, `AsyncSingleFlight`
 - **App device tests**: `entry/src/ohosTest/ets/test/*.test.ets`
 - **Server tests**: `cd server && npm test` (Vitest) — 7 test files covering catalog, providers, auth, DB, sync
-- After changing playback/builtin sources/download/cloud config: smoke-test search → detail → chapter → play on device
+- After changing playback/builtin sources/download: smoke-test search → detail → chapter → play on device
+- After changing local rule import/runtime/dispatch: verify no-local-source built-in behavior, then import → test → search → detail → read/play; disabled sources must leave existing favorites resolvable and one failed rule must not stop other sources
 - After changing Home/Record UI: verify skeleton loading, pull-to-refresh, double-tap-to-top, edit/long-press selection
 
 ## Security & Config
 
 - **`build-profile.json5` contains signing secrets** (key passwords, cert paths) — never commit changes to this file; signing is machine-specific and configured via DevEco Studio
 - `code-linter.json5` enforces crypto security rules (no unsafe AES/RSA/DSA/DH/3DES) on all `.ets` files
-- Cloud API base is managed by `ServerAudioConfig` and may be supplied by deployment or `PreferenceService`; do not publish concrete service addresses in documentation
+- The App has no configurable cloud API base; `server/` remains an optional independent project and must not become an implicit runtime dependency
+- QuickJS business code may call only `LocalRuleQuickJsRuntime.execute()`; that facade invokes native `evaluateBounded`. Keep the upstream license files and `THIRD_PARTY_NOTICES.md` when updating `entry/libs/quickjs.har`
 - Server's Reader/Legado engine must stay internal to Docker; never expose `/reader3` to the public internet
 
 ## Reference Documents

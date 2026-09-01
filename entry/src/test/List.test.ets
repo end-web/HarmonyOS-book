@@ -7,6 +7,15 @@ import searchCacheTest from './SearchCache.test';
 import listeningHistoryPolicyTest from './ListeningHistoryPolicy.test';
 import chapterProgressPolicyTest from './ChapterProgressPolicy.test';
 import kkBiqugeHtmlParserTest from './KkBiqugeHtmlParser.test';
+import localRuleRuntimeTest from './LocalRuleRuntime.test';
+import guangYuSourceAdapterTest from './GuangYuSourceAdapter.test';
+import onlineTextPaginatorTest from './OnlineTextPaginator.test';
+import localRuleSourceBulkTesterTest from './LocalRuleSourceBulkTester.test';
+import localRuleSourceRepositoryTest from './LocalRuleSourceRepository.test';
+import shuShanSourceIdentityTest from './ShuShanSourceIdentity.test';
+import shuShanSourceAdapterTest from './ShuShanSourceAdapter.test';
+import ruleSourceChildServiceTest from './RuleSourceChildService.test';
+import readerThemeTest from './ReaderTheme.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -18,4 +27,13 @@ export default function testsuite() {
   listeningHistoryPolicyTest();
   chapterProgressPolicyTest();
   kkBiqugeHtmlParserTest();
+  localRuleRuntimeTest();
+  guangYuSourceAdapterTest();
+  onlineTextPaginatorTest();
+  localRuleSourceBulkTesterTest();
+  localRuleSourceRepositoryTest();
+  shuShanSourceIdentityTest();
+  shuShanSourceAdapterTest();
+  ruleSourceChildServiceTest();
+  readerThemeTest();
 }

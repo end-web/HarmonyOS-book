@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial, AppCurve } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
@@ -18,12 +18,12 @@ import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
-import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { ChapterListItem, ChapterBadge, mapChapterBadge } from '../components/ChapterListItem';
+import { ChapterLoadingSkeleton } from '../components/ChapterLoadingSkeleton';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
-import { KkBiqugeTextSource } from '../service/text/KkBiqugeTextSource';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
+import { OneShotTransitionIds } from '../utils/OneShotTransition';
 
 const DETAIL_LOG_DOMAIN: number = 0x0000;
 const DETAIL_LOG_TAG: string = 'BookDetailPage';
@@ -71,6 +71,12 @@ export struct BookDetailPage {
     }
   };
 
+  @Monitor('playerState.currentBook', 'playerState.currentChapter')
+  private onPlaybackChapterChanged(_monitor: IMonitor): void {
+    if (this.displayedChapters.length === 0) return;
+    this.refreshDisplayedChapters(this.displayedChapters);
+  }
+
   aboutToAppear(): void {
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
     // 收藏状态 / TOC 拉取 / 取色等重活推迟到转场动画结束后,避免抢主线程
@@ -87,13 +93,24 @@ export struct BookDetailPage {
     const cached = SearchCache.get(this.bookId);
     if (cached) {
       this.book = cached;
-AudioService.getInstance().prewarmBookSource(cached);
+      // 搜索结果只是电子书的基础快照，章节正文仍需异步加载；数据未完整前保持详情 loading。
+      this.loadingDetail = cached.contentType === 'text' && cached.chapters.length === 0;
+      // 音频搜索结果只有基础信息时，首帧直接展示目录骨架，避免先闪出“暂无章节信息”。
+      this.loadingToc = this.needsAudioTocLoad(cached);
+      AudioService.getInstance().prewarmBookSource(cached);
       this.refreshDisplayedChapters(cached.chapters);
       const cachedRgb = ColorPickerUtils.getCached(cached.cover);
       if (cachedRgb) {
         this.applyCoverColor(cachedRgb);
       }
     }
+  }
+
+  private needsAudioTocLoad(book: Book): boolean {
+    const tocIncomplete = book.chapters.length === 0 ||
+      (book.chapters.length === 1 && book.chapterCount > 1);
+    return book.contentType !== 'text' && tocIncomplete &&
+      book.bookUrl.length > 0 && book.sourceUrl.length > 0;
   }
 
   aboutToDisappear(): void {
@@ -160,7 +177,8 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   private async loadBook(): Promise<void> {
-    this.loadingDetail = true;
+    this.loadingDetail = this.book === null ||
+      (this.book.contentType === 'text' && this.book.chapters.length === 0);
     this.loadFailed = false;
     try {
       await this.loadBookData();
@@ -205,10 +223,10 @@ AudioService.getInstance().prewarmBookSource(cached);
       // 取色异步执行,不阻塞首屏
       this.extractCoverColor(b.cover);
       // 章节懒加载
-      if ((b.chapters.length === 0 || (b.chapters.length === 1 && b.chapterCount > 1))
-        && b.bookUrl && b.sourceUrl) {
+      if (this.needsAudioTocLoad(b)) {
         this.loadTocFromSource(b);
       } else {
+        this.loadingToc = false;
         this.scrollToCurrentChapter();
       }
     }
@@ -217,7 +235,7 @@ AudioService.getInstance().prewarmBookSource(cached);
   private async loadTextBook(book: Book): Promise<void> {
     const startedAt = Date.now();
     try {
-      const sourceBook = book.chapters.length > 0 ? book : await KkBiqugeTextSource.loadBook(book);
+      const sourceBook = book.chapters.length > 0 ? book : await BookSourceService.loadTextBook(book);
       const loaded = this.copyBookForRender(sourceBook);
       this.book = loaded;
       this.refreshDisplayedChapters(loaded.chapters);
@@ -278,6 +296,7 @@ AudioService.getInstance().prewarmBookSource(cached);
     const item = history.find((h) => h.bookId === bookId);
     if (item) {
       this.lastHistory = item;
+      this.refreshDisplayedChapters(this.displayedChapters);
       // 历史就绪后再定位一次(loadBook 首次滚动时 lastHistory 可能尚未加载)
       this.scrollToCurrentChapter();
     }
@@ -324,17 +343,12 @@ AudioService.getInstance().prewarmBookSource(cached);
     this.loadingToc = true;
     this.debugInfo = `bookUrl=${book.bookUrl}\nsourceUrl=${book.sourceUrl}`;
     try {
-      const sources = await SourceDataService.getSources();
-      const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
+      const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       this.debugInfo += `\nsource=${source ? source.bookSourceName : 'NOT FOUND'}`;
       if (source && book.bookUrl) {
-        const isServerAudio = BuiltInSourceRegistry.getByUrl(source.bookSourceUrl)?.id === 'jianhu_server';
         // 先获取书籍详情，提取正确的 tocUrl
         let tocUrl = book.bookUrl;
         const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
-        if (!bookInfo && isServerAudio) {
-          SearchCache.remove(book.id);
-        }
         // 合并 search 时的 @put 变量 + getBookInfo 时的 @put 变量
         const mergedVars: Record<string, string> = {};
         if (book.variables) {
@@ -357,9 +371,6 @@ AudioService.getInstance().prewarmBookSource(cached);
         this.debugInfo += `\ntocUrl=${tocUrl}`;
 
         const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
-        if (tocItems.length === 0 && isServerAudio) {
-          SearchCache.remove(book.id);
-        }
         this.debugInfo += `\ntocItems=${tocItems.length}`;
         if (tocItems.length > 0) {
           this.debugInfo += `\nfirst=${tocItems[0].name}`;
@@ -380,7 +391,8 @@ AudioService.getInstance().prewarmBookSource(cached);
           title: item.name,
           duration: item.duration || 0,
           source: { type: 'url', value: item.url },
-          originSourceValue: item.url
+          originSourceValue: item.url,
+          variables: item.variables
         }));
         book.chapterCount = book.chapters.length;
         const cloned: Book = {
@@ -818,13 +830,10 @@ AudioService.getInstance().prewarmBookSource(cached);
   }
 
   private isPlayingChapter(ch: Chapter): boolean {
-    if (this.book?.contentType === 'text') {
-      const currentIndex = this.currentChapterIndex();
-      if (currentIndex < 0 || !this.book) return false;
-      const chapterIndex = DataService.resolveChapterIndex(this.book, ch.id, ch.title);
-      return chapterIndex === currentIndex;
-    }
-    return this.isCurrentPlaybackChapter(ch);
+    const currentIndex = this.currentChapterIndex();
+    if (currentIndex < 0 || !this.book) return false;
+    const chapterIndex = DataService.resolveChapterIndex(this.book, ch.id, ch.title);
+    return chapterIndex === currentIndex;
   }
 
   private isCurrentPlaybackChapter(ch: Chapter): boolean {
@@ -985,6 +994,11 @@ AudioService.getInstance().prewarmBookSource(cached);
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         }
       }
+      .width(this.detailCoverWidth())
+      .height(this.detailCoverHeight())
+      .borderRadius(AppRadius.Sm)
+      .clip(true)
+      .id(OneShotTransitionIds.detailCover(this.bookId))
 
       // 书名信息
       Column({ space: AppSpace.Xs }) {
@@ -1000,29 +1014,43 @@ AudioService.getInstance().prewarmBookSource(cached);
             .fontColor(this.heroTextSecondaryColor)
             .maxLines(1)
         }
-        Row({ space: 8 }) {
+        Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
           Text(this.displayCategory())
             .fontSize(AppFont.Caption)
             .fontColor(this.heroTextColor)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .backgroundColor(this.heroTagBackground)
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .margin({ right: 8, bottom: 4 })
+            .constraintSize({ maxWidth: '100%' })
           Text(this.displayStatus())
             .fontSize(AppFont.Caption)
             .fontColor(this.heroTextColor)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .backgroundColor(this.heroTagBackground)
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            .margin({ right: 8, bottom: 4 })
+            .constraintSize({ maxWidth: '100%' })
           if (this.book!.chapterCount > 0) {
             Text(this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? '章' : '集'))
               .fontSize(AppFont.Caption)
               .fontColor(this.heroTextColor)
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
               .backgroundColor(this.heroTagBackground)
               .borderRadius(AppRadius.Xs)
               .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .margin({ right: 8, bottom: 4 })
+              .constraintSize({ maxWidth: '100%' })
           }
         }
+        .width('100%')
       }
+      .width(0)
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
     }
@@ -1179,17 +1207,37 @@ AudioService.getInstance().prewarmBookSource(cached);
     .onClick(() => onAction())
   }
 
+  /** 章节区头部计数文案；首次拉目录时不显示误导性的「共 0 集」。 */
+  private chapterHeaderText(): string {
+    const unit = this.book!.contentType === 'text' ? ' 章' : ' 集';
+    if (this.chapterQuery.trim().length > 0) {
+      return `匹配 ${this.displayedChapters.length}${unit}`;
+    }
+    if (this.loadingToc && this.book!.chapters.length === 0) {
+      return this.book!.contentType === 'text' ? '目录加载中' : '节目加载中';
+    }
+    return `共 ${this.book!.chapters.length}${unit}`;
+  }
+
+  /** 按可用视口高度估算骨架行数，铺满但不过量。 */
+  private skeletonRowCount(): number {
+    if (this.viewportHeight <= 0) return 8;
+    // 视口高度的一半左右留给 hero + 简介，其余按 65vp 行高铺
+    const available = this.viewportHeight * 0.5;
+    const count = Math.ceil(available / 65);
+    return Math.min(Math.max(count, 5), 12);
+  }
+
   @Builder
   buildChapterContent() {
     Column() {
       // 章节头部
       Row() {
-        Text(this.chapterQuery.trim().length > 0
-          ? `匹配 ${this.displayedChapters.length}${this.book!.contentType === 'text' ? ' 章' : ' 集'}`
-          : `共 ${this.book!.chapters.length}${this.book!.contentType === 'text' ? ' 章' : ' 集'}`)
+        Text(this.chapterHeaderText())
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
-        if (this.loadingToc) {
+        // 首次加载由骨架屏自带提示，这里只在「已有章节 + 后台刷新」时补一个小圈
+        if (this.loadingToc && this.book!.chapters.length > 0) {
           LoadingProgress().width(16).height(16).color(AppColor.Brand).margin({ left: AppSpace.Xs })
         }
         Blank()
@@ -1218,7 +1266,14 @@ AudioService.getInstance().prewarmBookSource(cached);
       }
 
       // 章节列表
-      if (this.book!.chapters.length === 0 && !this.loadingToc) {
+      if (this.loadingToc && this.book!.chapters.length === 0) {
+        // 首次拉目录：骨架屏占位，避免空白后章节突然闪现
+        ChapterLoadingSkeleton({
+          horizontalInset: this.horizontalPadding(),
+          isTextBook: this.book!.contentType === 'text',
+          rowCount: this.skeletonRowCount()
+        })
+      } else if (this.book!.chapters.length === 0) {
         Column() {
           Text('暂无章节信息')
             .fontSize(AppFont.Body)
@@ -1257,6 +1312,12 @@ AudioService.getInstance().prewarmBookSource(cached);
           }
           .width('100%')
           .height('100%')
+          // 目录到位后淡入 + 轻微上移，接住骨架屏的位置而不是硬切
+          .transition(
+            TransitionEffect.opacity(0)
+              .combine(TransitionEffect.translate({ y: 12 }))
+              .animation({ duration: AppMotion.Base, curve: AppCurve.Decelerate })
+          )
           .cachedCount(5)
           .scrollBar(BarState.On)
           .scrollBarWidth(8)

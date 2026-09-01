@@ -1,4 +1,4 @@
-import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import {
   HdsNavigation,
   HdsNavigationTitleMode,
@@ -7,11 +7,6 @@ import {
 } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
-import {
-  ServerAudioConfig,
-  ServerAudioConfigErrorCode
-} from '../service/builtin/ServerAudioConfig';
-import { NetworkPreconnect } from '../service/http/NetworkPreconnect';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
@@ -44,94 +39,12 @@ export struct ProfilePage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   @Local auth: AuthService = AuthService.instance;
-  @Local serverApiBase: string = '';
-  @Local serverApiDraft: string = '';
-  @Local isServerConfigVisible: boolean = false;
-  @Local isServerChecking: boolean = false;
-  @Local isServerSaving: boolean = false;
-  @Local serverCheckState: number = 0;
 
   private scrollScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     this.onScrollerReady(this.scrollScroller);
     this.auth.restore();
-    this.loadServerApiBase();
-  }
-
-  private async loadServerApiBase(): Promise<void> {
-    this.serverApiBase = await ServerAudioConfig.getApiBase();
-    if (!this.isServerConfigVisible) {
-      this.serverApiDraft = this.serverApiBase;
-    }
-  }
-
-  private openServerConfig(): void {
-    this.serverApiDraft = this.serverApiBase;
-    this.serverCheckState = 0;
-    this.isServerConfigVisible = true;
-  }
-
-  private serverApiDisplay(): ResourceStr {
-    if (!this.serverApiBase) return $r('app.string.cloud_source_not_configured');
-    if (this.serverApiBase.startsWith('https://')) return this.serverApiBase.substring(8);
-    if (this.serverApiBase.startsWith('http://')) return this.serverApiBase.substring(7);
-    return this.serverApiBase;
-  }
-
-  private async testServerApi(): Promise<void> {
-    if (this.isServerChecking || this.isServerSaving) return;
-    this.isServerChecking = true;
-    this.serverCheckState = 1;
-    try {
-      const normalized = ServerAudioConfig.normalizeApiBase(this.serverApiDraft);
-      this.serverApiDraft = normalized;
-      const ready = await ServerAudioConfig.checkConnection(normalized);
-      this.serverCheckState = ready ? 2 : 4;
-    } catch (e) {
-      this.serverCheckState = 3;
-      this.showServerConfigError(e);
-    } finally {
-      this.isServerChecking = false;
-    }
-  }
-
-  private async saveServerApi(): Promise<void> {
-    if (this.isServerChecking || this.isServerSaving) return;
-    this.isServerSaving = true;
-    try {
-      const normalized = await ServerAudioConfig.saveApiBase(this.serverApiDraft);
-      this.serverApiBase = normalized;
-      this.serverApiDraft = normalized;
-      this.isServerConfigVisible = false;
-      NetworkPreconnect.prewarmCustomHost(normalized);
-      this.showToast($r('app.string.cloud_source_saved'));
-    } catch (e) {
-      this.showServerConfigError(e, true);
-    } finally {
-      this.isServerSaving = false;
-    }
-  }
-
-  private showServerConfigError(error: Object, saving: boolean = false): void {
-    const message = error instanceof Error ? error.message : '';
-    if (message === ServerAudioConfigErrorCode.EMPTY) {
-      this.showToast($r('app.string.cloud_source_error_empty'));
-    } else if (message === ServerAudioConfigErrorCode.INVALID_SCHEME) {
-      this.showToast($r('app.string.cloud_source_error_scheme'));
-    } else if (message === ServerAudioConfigErrorCode.INVALID_URL) {
-      this.showToast($r('app.string.cloud_source_error_invalid'));
-    } else if (saving) {
-      this.showToast($r('app.string.cloud_source_error_save'));
-    } else {
-      this.showToast($r('app.string.cloud_source_check_failed'));
-    }
-  }
-
-  private showToast(message: ResourceStr): void {
-    try {
-      this.getUIContext().getPromptAction().showToast({ message });
-    } catch (_e) { /* ignore */ }
   }
 
   private async handleLogin(): Promise<void> {
@@ -192,6 +105,8 @@ export struct ProfilePage {
       this.navStack.pushPathByName('downloads', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');
+    } else if (id === 'ruleSources') {
+      this.navStack.pushPathByName('ruleSources', '');
     } else if (id === 'guide') {
       this.navStack.pushPathByName('guide', '');
     } else if (id === 'about') {
@@ -219,7 +134,7 @@ export struct ProfilePage {
             if (ENABLE_HW_LOGIN) {
               this.buildAccountCard()
             }
-            this.buildServerGroup()
+            this.buildSourceGroup()
             this.buildGroup('我的内容', CONTENT_ITEMS)
             this.buildGroup('系统', SYSTEM_ITEMS)
           }
@@ -286,14 +201,6 @@ export struct ProfilePage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-    .bindSheet($$this.isServerConfigVisible, this.buildServerConfigSheet(), {
-      height: SheetSize.MEDIUM,
-      preferType: SheetType.BOTTOM,
-      showClose: false,
-      dragBar: true,
-      backgroundColor: Color.Transparent,
-      systemMaterial: AppMaterial.SurfaceClean
-    })
   }
 
   @Builder
@@ -355,16 +262,16 @@ export struct ProfilePage {
   }
 
   @Builder
-  buildServerGroup() {
+  buildSourceGroup() {
     Column() {
-      Text($r('app.string.cloud_source_group_title'))
+      Text($r('app.string.settings_content_source_group'))
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
         .padding({ left: AppSpace.Sm, bottom: AppSpace.Xs })
 
       Row({ space: AppSpace.Sm }) {
         Stack() {
-          SymbolGlyph($r('sys.symbol.cloud'))
+          SymbolGlyph($r('sys.symbol.bookshelf'))
             .fontSize(18)
             .fontColor([Color.White])
         }
@@ -374,10 +281,10 @@ export struct ProfilePage {
         .borderRadius(7)
 
         Column({ space: 2 }) {
-          Text($r('app.string.cloud_source_api_title'))
+          Text($r('app.string.rule_source_title'))
             .fontSize(AppFont.BodyL)
             .fontColor($r('sys.color.font_primary'))
-          Text(this.serverApiDisplay())
+          Text($r('app.string.settings_rule_source_desc'))
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
             .maxLines(1)
@@ -400,177 +307,10 @@ export struct ProfilePage {
       .constraintSize({ minHeight: 64 })
       .backgroundColor($r('sys.color.comp_background_primary'))
       .borderRadius(AppRadius.Lg)
-      .onClick(() => this.openServerConfig())
+      .onClick(() => this.onItemTap('ruleSources'))
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
-  }
-
-  @Builder
-  buildServerConfigSheet() {
-    Column({ space: AppSpace.Md }) {
-      Row() {
-        Text($r('app.string.cloud_source_sheet_title'))
-          .fontSize(AppFont.Title)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('sys.color.font_primary'))
-          .layoutWeight(1)
-
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(18)
-          .fontColor([$r('sys.color.font_secondary')])
-          .width(36)
-          .height(36)
-          .onClick(() => {
-            if (!this.isServerChecking && !this.isServerSaving) {
-              this.isServerConfigVisible = false;
-            }
-          })
-      }
-      .width('100%')
-
-      Text($r('app.string.cloud_source_sheet_desc'))
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_secondary'))
-        .width('100%')
-
-      Column({ space: AppSpace.Xs }) {
-        Text($r('app.string.cloud_source_api_label'))
-          .fontSize(AppFont.Body)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.font_primary'))
-          .width('100%')
-
-        TextInput({
-          text: this.serverApiDraft,
-          placeholder: $r('app.string.cloud_source_api_placeholder')
-        })
-          .height(48)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_primary'))
-          .backgroundColor($r('sys.color.comp_background_primary'))
-          .borderRadius(AppRadius.Md)
-          .padding({ left: AppSpace.Md, right: AppSpace.Md })
-          .enabled(!this.isServerChecking && !this.isServerSaving)
-          .onChange((value: string) => {
-            this.serverApiDraft = value;
-            this.serverCheckState = 0;
-          })
-
-        Text($r('app.string.cloud_source_api_hint'))
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .width('100%')
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
-
-      if (this.serverCheckState !== 0) {
-        this.buildServerCheckStatus()
-      }
-
-      Row({ space: AppSpace.Sm }) {
-        Button() {
-          Row({ space: AppSpace.Xs }) {
-            if (this.isServerChecking) {
-              LoadingProgress()
-                .width(18)
-                .height(18)
-                .color(AppColor.Brand)
-            } else {
-              SymbolGlyph($r('sys.symbol.scope'))
-                .fontSize(17)
-                .fontColor([AppColor.Brand])
-            }
-            Text(this.isServerChecking
-              ? $r('app.string.cloud_source_checking')
-              : $r('app.string.cloud_source_check'))
-              .fontSize(AppFont.Body)
-              .fontColor($r('sys.color.font_primary'))
-          }
-        }
-        .layoutWeight(1)
-        .height(44)
-        .backgroundColor($r('sys.color.comp_background_primary'))
-        .borderRadius(AppRadius.Md)
-        .enabled(!this.isServerChecking && !this.isServerSaving)
-        .onClick(() => this.testServerApi())
-
-      }
-      .width('100%')
-
-      Button() {
-        Row({ space: AppSpace.Xs }) {
-          if (this.isServerSaving) {
-            LoadingProgress()
-              .width(18)
-              .height(18)
-              .color(AppColor.OnBrand)
-          } else {
-            SymbolGlyph($r('sys.symbol.checkmark'))
-              .fontSize(17)
-              .fontColor([AppColor.OnBrand])
-          }
-          Text(this.isServerSaving
-            ? $r('app.string.cloud_source_saving')
-            : $r('app.string.cloud_source_save'))
-            .fontSize(AppFont.BodyL)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(AppColor.OnBrand)
-        }
-      }
-      .width('100%')
-      .height(48)
-      .backgroundColor(AppColor.Brand)
-      .borderRadius(AppRadius.Md)
-      .enabled(!this.isServerChecking && !this.isServerSaving)
-      .onClick(() => this.saveServerApi())
-    }
-    .width('100%')
-    .padding({
-      left: AppSpace.Md,
-      right: AppSpace.Md,
-      top: AppSpace.Xs,
-      bottom: AppSpace.Md + WindowUtils.getBottomSafeVp()
-    })
-  }
-
-  @Builder
-  buildServerCheckStatus() {
-    Row({ space: AppSpace.Xs }) {
-      if (this.serverCheckState === 1) {
-        LoadingProgress()
-          .width(18)
-          .height(18)
-          .color(AppColor.Brand)
-        Text($r('app.string.cloud_source_checking'))
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-      } else if (this.serverCheckState === 2) {
-        SymbolGlyph($r('sys.symbol.checkmark'))
-          .fontSize(17)
-          .fontColor(['#34C759'])
-        Text($r('app.string.cloud_source_check_success'))
-          .fontSize(AppFont.Caption)
-          .fontColor('#248A3D')
-      } else if (this.serverCheckState === 4) {
-        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-          .fontSize(17)
-          .fontColor(['#FF9F0A'])
-        Text($r('app.string.cloud_source_check_degraded'))
-          .fontSize(AppFont.Caption)
-          .fontColor('#C77700')
-      } else {
-        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
-          .fontSize(17)
-          .fontColor(['#FF3B30'])
-        Text($r('app.string.cloud_source_check_failed'))
-          .fontSize(AppFont.Caption)
-          .fontColor('#D70015')
-      }
-    }
-    .width('100%')
-    .constraintSize({ minHeight: 24 })
   }
 
   @Builder

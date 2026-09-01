@@ -57,12 +57,23 @@ class TestBuiltInAudioSource implements IBuiltInSource {
 
 export default function builtInAudioCapabilityTest() {
   describe('BuiltIn audio capability', () => {
-    it('registers Huan FM as the only production source', 0, () => {
+    it('registers required production sources with unique stable identities', 0, () => {
       registerBuiltInSources();
       const sources = BuiltInSourceRegistry.all();
 
-      expect(sources.length).assertEqual(1);
-      expect(sources[0].id).assertEqual('huan_fm');
+      expect(BuiltInSourceRegistry.get('huan_fm') !== undefined).assertTrue();
+      expect(BuiltInSourceRegistry.isBuiltIn('builtin://eprendre/huan_fm')).assertTrue();
+      expect(BuiltInSourceRegistry.all().length).assertEqual(1);
+
+      const ids = new Set<string>();
+      const urls = new Set<string>();
+      for (const source of sources) {
+        const sourceUrl = BuiltInSourceRegistry.toBookSource(source).bookSourceUrl;
+        expect(ids.has(source.id)).assertFalse();
+        expect(urls.has(sourceUrl)).assertFalse();
+        ids.add(source.id);
+        urls.add(sourceUrl);
+      }
     });
 
     it('dispatches prewarming and source-specific timeout', 0, async () => {

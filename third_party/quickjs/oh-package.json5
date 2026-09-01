@@ -1,0 +1,7 @@
+{
+  "modelVersion": "6.1.0",
+  "name": "quickjs-local-build",
+  "version": "1.0.0",
+  "dependencies": {},
+  "devDependencies": {}
+}

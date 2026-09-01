@@ -12,7 +12,7 @@ export class BuiltInBook {
   artist: string = '';
   intro: string = '';
   status: string = '';
-  /** 聚合服务返回的实际来源名称；sourceUrl 仍保持内置云源路由标识。 */
+  /** 聚合结果携带的实际来源名称；sourceUrl 仍保持内置来源路由标识。 */
   sourceName: string = '';
   completed: boolean = false;
 

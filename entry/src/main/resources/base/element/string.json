@@ -101,6 +101,14 @@
       "value": "取消"
     },
     {
+      "name": "common_back",
+      "value": "返回"
+    },
+    {
+      "name": "common_done",
+      "value": "完成"
+    },
+    {
       "name": "search_placeholder",
       "value": "搜索书籍、作者"
     },
@@ -217,86 +225,6 @@
       "value": "下载失败"
     },
     {
-      "name": "cloud_source_group_title",
-      "value": "云源服务"
-    },
-    {
-      "name": "cloud_source_api_title",
-      "value": "服务器音频接口"
-    },
-    {
-      "name": "cloud_source_not_configured",
-      "value": "未配置"
-    },
-    {
-      "name": "cloud_source_sheet_title",
-      "value": "云源服务地址"
-    },
-    {
-      "name": "cloud_source_sheet_desc",
-      "value": "用于简·欢云源的搜索、书籍详情、章节和播放解析。欢 FM 不受此设置影响。"
-    },
-    {
-      "name": "cloud_source_api_label",
-      "value": "API 地址"
-    },
-    {
-      "name": "cloud_source_api_placeholder",
-      "value": "请输入服务器地址"
-    },
-    {
-      "name": "cloud_source_api_hint",
-      "value": "只填域名或 IP 时，会自动使用 HTTPS 并补全 /api/v1。"
-    },
-    {
-      "name": "cloud_source_check",
-      "value": "连接检测"
-    },
-    {
-      "name": "cloud_source_checking",
-      "value": "正在检测连接"
-    },
-    {
-      "name": "cloud_source_check_success",
-      "value": "连接正常，解析服务已就绪"
-    },
-    {
-      "name": "cloud_source_check_degraded",
-      "value": "接口可访问，但解析服务暂未就绪"
-    },
-    {
-      "name": "cloud_source_check_failed",
-      "value": "连接失败，请检查地址或服务器状态"
-    },
-    {
-      "name": "cloud_source_save",
-      "value": "保存"
-    },
-    {
-      "name": "cloud_source_saving",
-      "value": "保存中"
-    },
-    {
-      "name": "cloud_source_saved",
-      "value": "云源服务地址已保存"
-    },
-    {
-      "name": "cloud_source_error_empty",
-      "value": "请输入服务器音频接口地址"
-    },
-    {
-      "name": "cloud_source_error_scheme",
-      "value": "地址只支持 HTTP 或 HTTPS"
-    },
-    {
-      "name": "cloud_source_error_invalid",
-      "value": "服务器地址格式不正确"
-    },
-    {
-      "name": "cloud_source_error_save",
-      "value": "保存失败，请稍后重试"
-    },
-    {
       "name": "book_detail_loading",
       "value": "正在加载书籍详情"
     },
@@ -313,6 +241,14 @@
       "value": "阅读"
     },
     {
+      "name": "reader_details",
+      "value": "详情"
+    },
+    {
+      "name": "reader_detail_unavailable",
+      "value": "暂无书籍详情"
+    },
+    {
       "name": "reader_loading",
       "value": "正在加载正文"
     },
@@ -323,6 +259,14 @@
     {
       "name": "reader_chapters",
       "value": "章节"
+    },
+    {
+      "name": "reader_no_chapters",
+      "value": "暂无章节"
+    },
+    {
+      "name": "reader_back_to_current_chapter",
+      "value": "回到当前章节"
     },
     {
       "name": "reader_settings",
@@ -487,6 +431,406 @@
     {
       "name": "guide_system_speed_desc",
       "value": "选择播放倍速，结果会同步到 App 播放页；系统卡片不再显示循环模式"
+    },
+    {
+      "name": "rule_source_title",
+      "value": "书源"
+    },
+    {
+      "name": "rule_source_import_title",
+      "value": "导入书源"
+    },
+    {
+      "name": "rule_source_import_hint",
+      "value": "支持选择本地 JSON、粘贴 JSON 或在线导入地址"
+    },
+    {
+      "name": "rule_source_import_file_action",
+      "value": "选择本地 JSON"
+    },
+    {
+      "name": "rule_source_import_file_empty",
+      "value": "所选 JSON 文件为空"
+    },
+    {
+      "name": "rule_source_import_file_too_large",
+      "value": "JSON 文件不能超过 10 MiB"
+    },
+    {
+      "name": "rule_source_import_file_failed",
+      "value": "无法读取所选 JSON 文件"
+    },
+    {
+      "name": "rule_source_import_placeholder",
+      "value": "粘贴书源 JSON 或 http/https 地址"
+    },
+    {
+      "name": "rule_source_import_action",
+      "value": "导入"
+    },
+    {
+      "name": "rule_source_importing",
+      "value": "导入中"
+    },
+    {
+      "name": "rule_source_import_empty",
+      "value": "请先粘贴书源 JSON"
+    },
+    {
+      "name": "rule_source_import_invalid",
+      "value": "未识别到有效书源"
+    },
+    {
+      "name": "rule_source_import_success",
+      "value": "书源已导入"
+    },
+    {
+      "name": "rule_source_installed",
+      "value": "已安装"
+    },
+    {
+      "name": "rule_source_count_unit",
+      "value": "个书源"
+    },
+    {
+      "name": "rule_source_loading",
+      "value": "正在读取书源"
+    },
+    {
+      "name": "rule_source_load_failed",
+      "value": "本地书源服务暂不可用"
+    },
+    {
+      "name": "rule_source_empty",
+      "value": "还没有本地书源"
+    },
+    {
+      "name": "rule_source_empty_hint",
+      "value": "从本地选择或在上方粘贴 JSON 后导入"
+    },
+    {
+      "name": "rule_source_type_audio",
+      "value": "音频"
+    },
+    {
+      "name": "rule_source_type_text",
+      "value": "文本"
+    },
+    {
+      "name": "rule_source_type_mixed",
+      "value": "小说 · 听书"
+    },
+    {
+      "name": "rule_source_search_enabled",
+      "value": "参与搜索"
+    },
+    {
+      "name": "rule_source_status_ready",
+      "value": "可用"
+    },
+    {
+      "name": "rule_source_status_failed",
+      "value": "测试失败"
+    },
+    {
+      "name": "rule_source_status_unsupported",
+      "value": "暂不兼容"
+    },
+    {
+      "name": "rule_source_status_unchecked",
+      "value": "待测试"
+    },
+    {
+      "name": "rule_source_waiting_test",
+      "value": "等待书源测试"
+    },
+    {
+      "name": "rule_source_test_action",
+      "value": "书源测试"
+    },
+    {
+      "name": "rule_source_account_action",
+      "value": "主书源账号"
+    },
+    {
+      "name": "rule_source_account_title",
+      "value": "主书源账号"
+    },
+    {
+      "name": "rule_source_account_email",
+      "value": "邮箱"
+    },
+    {
+      "name": "rule_source_account_email_invalid",
+      "value": "请输入正确的邮箱地址"
+    },
+    {
+      "name": "rule_source_account_password",
+      "value": "密码"
+    },
+    {
+      "name": "rule_source_account_logged_in",
+      "value": "已登录"
+    },
+    {
+      "name": "rule_source_account_logged_out",
+      "value": "未登录"
+    },
+    {
+      "name": "rule_source_account_logging_in",
+      "value": "登录中"
+    },
+    {
+      "name": "rule_source_account_login",
+      "value": "登录"
+    },
+    {
+      "name": "rule_source_account_login_success",
+      "value": "登录成功"
+    },
+    {
+      "name": "rule_source_account_logout",
+      "value": "退出登录"
+    },
+    {
+      "name": "rule_source_account_logout_success",
+      "value": "已退出登录"
+    },
+    {
+      "name": "rule_source_account_register",
+      "value": "注册账号"
+    },
+    {
+      "name": "rule_source_account_register_failed",
+      "value": "无法打开注册页"
+    },
+    {
+      "name": "rule_source_account_required",
+      "value": "请输入邮箱和密码"
+    },
+    {
+      "name": "rule_source_account_required_for_test",
+      "value": "请先登录主书源后再测试"
+    },
+    {
+      "name": "rule_source_account_web_required",
+      "value": "请先在网页中完成登录"
+    },
+    {
+      "name": "rule_source_account_clear_message",
+      "value": "将清除当前主书源的账号登录状态。"
+    },
+    {
+      "name": "rule_source_login_action",
+      "value": "登录"
+    },
+    {
+      "name": "rule_source_child_action",
+      "value": "子书源"
+    },
+    {
+      "name": "rule_source_child_title",
+      "value": "聚合子书源"
+    },
+    {
+      "name": "rule_source_child_refresh",
+      "value": "刷新子书源"
+    },
+    {
+      "name": "rule_source_child_search_placeholder",
+      "value": "搜索子书源"
+    },
+    {
+      "name": "rule_source_child_filter_all",
+      "value": "全部"
+    },
+    {
+      "name": "rule_source_child_count_unit",
+      "value": "个子源"
+    },
+    {
+      "name": "rule_source_child_catalog_refreshing",
+      "value": "正在刷新在线状态"
+    },
+    {
+      "name": "rule_source_child_catalog_updated",
+      "value": "在线状态已更新"
+    },
+    {
+      "name": "rule_source_child_catalog_fallback",
+      "value": "已显示内置目录，在线状态未刷新"
+    },
+    {
+      "name": "rule_source_child_status_known",
+      "value": "目录内"
+    },
+    {
+      "name": "rule_source_child_status_active",
+      "value": "本次有结果"
+    },
+    {
+      "name": "rule_source_child_status_disabled",
+      "value": "当前停用"
+    },
+    {
+      "name": "rule_source_child_result_unit",
+      "value": "条结果"
+    },
+    {
+      "name": "rule_source_child_web_login",
+      "value": "登录"
+    },
+    {
+      "name": "rule_source_child_login_failed",
+      "value": "无法打开网页登录页"
+    },
+    {
+      "name": "rule_source_child_refresh_failed",
+      "value": "子源在线状态刷新失败"
+    },
+    {
+      "name": "rule_source_child_empty",
+      "value": "没有匹配的子书源"
+    },
+    {
+      "name": "rule_source_test_keyword",
+      "value": "书源测试关键词"
+    },
+    {
+      "name": "rule_source_test_keyword_empty",
+      "value": "请先填写搜索测试关键词"
+    },
+    {
+      "name": "rule_source_test_success",
+      "value": "书源测试通过"
+    },
+    {
+      "name": "rule_source_test_failed",
+      "value": "书源测试失败"
+    },
+    {
+      "name": "rule_source_bulk_action",
+      "value": "一键测试并清理"
+    },
+    {
+      "name": "rule_source_bulk_running",
+      "value": "正在测试书源"
+    },
+    {
+      "name": "rule_source_bulk_confirm_title",
+      "value": "测试全部书源"
+    },
+    {
+      "name": "rule_source_bulk_confirm_message",
+      "value": "将验证全部书源的搜索和内容解析。测试失败或暂不兼容的书源会自动删除，相关登录信息也会一并清除。"
+    },
+    {
+      "name": "rule_source_bulk_confirm_action",
+      "value": "开始测试"
+    },
+    {
+      "name": "rule_source_bulk_completed",
+      "value": "批量测试完成，失败书源已清理"
+    },
+    {
+      "name": "rule_source_bulk_operation_failed",
+      "value": "批量测试未完成，请稍后重试"
+    },
+    {
+      "name": "rule_source_bulk_tested",
+      "value": "已测试"
+    },
+    {
+      "name": "rule_source_bulk_passed",
+      "value": "通过"
+    },
+    {
+      "name": "rule_source_bulk_failed_count",
+      "value": "失败"
+    },
+    {
+      "name": "rule_source_bulk_deleted",
+      "value": "已删除"
+    },
+    {
+      "name": "rule_source_delete_title",
+      "value": "删除书源"
+    },
+    {
+      "name": "rule_source_delete_message",
+      "value": "删除后，该书源将不再参与搜索和解析；依赖它的收藏可能无法继续加载。"
+    },
+    {
+      "name": "rule_source_delete_action",
+      "value": "删除"
+    },
+    {
+      "name": "rule_source_delete_success",
+      "value": "书源已删除"
+    },
+    {
+      "name": "rule_source_unsupported_action",
+      "value": "该书源包含当前版本暂不支持的规则"
+    },
+    {
+      "name": "rule_source_not_found",
+      "value": "书源已不存在，请刷新后重试"
+    },
+    {
+      "name": "rule_source_operation_failed",
+      "value": "操作失败，请稍后重试"
+    },
+    {
+      "name": "rule_source_login_invalid",
+      "value": "登录地址无效"
+    },
+    {
+      "name": "rule_source_login_prepare_failed",
+      "value": "无法打开书源登录页"
+    },
+    {
+      "name": "rule_source_login_saved",
+      "value": "登录状态已保存"
+    },
+    {
+      "name": "rule_source_login_refresh",
+      "value": "刷新登录页"
+    },
+    {
+      "name": "rule_source_login_refresh_failed",
+      "value": "登录页刷新失败"
+    },
+    {
+      "name": "rule_source_login_clear_title",
+      "value": "清除登录状态"
+    },
+    {
+      "name": "rule_source_login_clear_message",
+      "value": "将清除当前书源在此站点保存的 Cookie。"
+    },
+    {
+      "name": "rule_source_login_clear_action",
+      "value": "清除"
+    },
+    {
+      "name": "rule_source_login_cleared",
+      "value": "登录状态已清除"
+    },
+    {
+      "name": "rule_source_login_https_only",
+      "value": "已阻止非 HTTPS 页面"
+    },
+    {
+      "name": "rule_source_login_domain_blocked",
+      "value": "已阻止跳转到非书源登录站点"
+    },
+    {
+      "name": "settings_content_source_group",
+      "value": "内容来源"
+    },
+    {
+      "name": "settings_rule_source_desc",
+      "value": "导入、测试并管理本地书源"
     }
   ]
 }

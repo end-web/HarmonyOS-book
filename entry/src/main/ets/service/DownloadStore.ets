@@ -22,6 +22,7 @@ export interface DownloadChapterRecord {
   failureReason: string;
   failureCode?: DownloadFailureCode;
   updatedAt: number;
+  variables?: Record<string, string>;
 }
 
 export interface DownloadBookRecord {
@@ -293,7 +294,8 @@ export class DownloadStore {
         status,
         failureReason,
         failureCode: status === 'failed' ? failureCode : undefined,
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        variables: chapter.variables
       };
       bookRecord.chapters.push(record);
     } else {
@@ -309,6 +311,7 @@ export class DownloadStore {
       record.failureReason = failureReason;
       record.failureCode = status === 'failed' ? failureCode : undefined;
       record.updatedAt = Date.now();
+      record.variables = chapter.variables;
     }
     return record;
   }

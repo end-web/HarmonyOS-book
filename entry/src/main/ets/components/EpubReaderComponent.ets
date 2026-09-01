@@ -3,8 +3,6 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
 import { ReadPageComponent, readerCore } from '@hms.core.readerservice.readerComponent';
 
-const EPUB_READER_BACKGROUND: string = '#F5F2EA';
-
 @ComponentV2
 export struct EpubReaderComponent {
   @Param controller: readerCore.ReaderComponentController = new readerCore.ReaderComponentController();
@@ -103,7 +101,7 @@ export struct EpubReaderComponent {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(EPUB_READER_BACKGROUND)
+    // 底色/纹理由父页面的 ReaderBackground 铺；ReaderKit 自身底色走 pageConfig.themeColor
     .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions): void => {
       if (typeof newValue.width === 'number') {
         this.contentWidth = newValue.width;
