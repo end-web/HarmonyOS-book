@@ -1,5 +1,6 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
 import { PreferenceService } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
@@ -11,6 +12,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
+import { ReaderPage } from './ReaderPage';
 
 interface ThemeOption {
   mode: number;
@@ -261,6 +263,30 @@ export struct SettingsPage {
     }
   }
 
+  private clearEpubCache(): void {
+    try {
+      ReaderPage.clearEpubCache();
+      hilog.info(0xFF00, 'SettingsPage', 'epub handler cache cleared');
+      try { this.getUIContext().getPromptAction().showToast({ message: '电子书缓存已清除' }); } catch (_e) { /* ignore */ }
+    } catch (e) {
+      hilog.warn(0xFF00, 'SettingsPage', 'clear epub cache failed: %{public}s',
+        e instanceof Error ? e.message : String(e));
+      try { this.getUIContext().getPromptAction().showToast({ message: '清除失败' }); } catch (_e) { /* ignore */ }
+    }
+  }
+
+  private clearTextContentCache(): void {
+    try {
+      ReaderPage.clearTextContentCache();
+      hilog.info(0xFF00, 'SettingsPage', 'text content cache cleared');
+      try { this.getUIContext().getPromptAction().showToast({ message: '在线文本缓存已清除' }); } catch (_e) { /* ignore */ }
+    } catch (e) {
+      hilog.warn(0xFF00, 'SettingsPage', 'clear text content cache failed: %{public}s',
+        e instanceof Error ? e.message : String(e));
+      try { this.getUIContext().getPromptAction().showToast({ message: '清除失败' }); } catch (_e) { /* ignore */ }
+    }
+  }
+
   build() {
     Column() {
       this.buildHeader()
@@ -427,6 +453,24 @@ export struct SettingsPage {
           PRELOAD_OPTIONS.map((opt: PreloadOption): SelectOption => { return { value: opt.label }; }),
           PRELOAD_OPTIONS.findIndex((opt: PreloadOption) => opt.count === this.preloadCount),
           (index: number) => this.setPreloadCount(PRELOAD_OPTIONS[index].count)
+        )
+
+        this.buildDivider()
+
+        this.buildActionItem(
+          '清除电子书缓存',
+          '清除已解析的 EPUB 电子书缓存，下次打开时重新加载',
+          () => this.clearEpubCache(),
+          false
+        )
+
+        this.buildDivider()
+
+        this.buildActionItem(
+          '清除在线文本缓存',
+          '清除已缓存的在线章节内容，下次阅读时重新请求',
+          () => this.clearTextContentCache(),
+          false
         )
 
         this.buildDivider()

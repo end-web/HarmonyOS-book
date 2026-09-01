@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
-import { display, SymbolGlyphModifier } from '@kit.ArkUI';
+import { curves, display, SymbolGlyphModifier } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
 import { readerCore } from '@hms.core.readerservice.readerComponent';
@@ -83,8 +83,26 @@ export struct ReaderPage {
   private readerSetting: readerCore.ReaderSetting | null = null;
   private readerKitDomPos: string = '';
   private readerKitPageOffset: number = 0;
+  /** EPUB handler 缓存：记录已解析的文件路径，避免重复调用 getDefaultHandler */
+  private static epubHandlerCache: Map<string, bookParser.BookParserHandler> = new Map();
+  /** 缓存上限，避免内存占用过大 */
+  private static readonly MAX_HANDLER_CACHE_SIZE: number = 3;
+  /** 在线文本章节内容缓存：key 为 "bookId:chapterIndex"，避免重复请求接口 */
+  private static onlineTextContentCache: Map<string, string> = new Map();
+  /** 在线文本章节内容缓存上限 */
+  private static readonly MAX_TEXT_CONTENT_CACHE_SIZE: number = 50;
+
+  /** 供外部调用的缓存清除方法 */
+  static clearEpubCache(): void {
+    ReaderPage.epubHandlerCache.clear();
+  }
+
+  /** 清除在线文本章节缓存 */
+  static clearTextContentCache(): void {
+    ReaderPage.onlineTextContentCache.clear();
+  }
+
   private onlineTextContent: string = '';
-  private onlineTextContentCache: Map<number, string> = new Map();
   private onlineTextContentRequests: Map<number, Promise<string>> = new Map();
   private onlineTextLoadSerial: number = 0;
   private readerViewportWidthVp: number = 0;
@@ -299,8 +317,13 @@ export struct ReaderPage {
   }
 
   private async getOnlineTextChapterContent(book: Book, resourceIndex: number): Promise<string> {
-    const cached = this.onlineTextContentCache.get(resourceIndex);
-    if (cached !== undefined) return cached;
+    const cacheKey = `${book.id}:${resourceIndex}`;
+    const cached = ReaderPage.onlineTextContentCache.get(cacheKey);
+    if (cached !== undefined) {
+      hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'reuse cached text content: %{public}s chapter %{public}d',
+        book.title, resourceIndex);
+      return cached;
+    }
     const pending = this.onlineTextContentRequests.get(resourceIndex);
     if (pending !== undefined) return pending;
     const chapter = book.chapters[resourceIndex];
@@ -313,7 +336,15 @@ export struct ReaderPage {
     this.onlineTextContentRequests.set(resourceIndex, request);
     try {
       const content = await request;
-      this.onlineTextContentCache.set(resourceIndex, content);
+      // LRU 淘汰：缓存超限时移除最早的
+      if (ReaderPage.onlineTextContentCache.size >= ReaderPage.MAX_TEXT_CONTENT_CACHE_SIZE) {
+        const firstKey = ReaderPage.onlineTextContentCache.keys().next().value as string;
+        ReaderPage.onlineTextContentCache.delete(firstKey);
+        hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'evict oldest text content from cache');
+      }
+      ReaderPage.onlineTextContentCache.set(cacheKey, content);
+      hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'cached text content: %{public}s chapter %{public}d',
+        book.title, resourceIndex);
       return content;
     } finally {
       this.onlineTextContentRequests.delete(resourceIndex);
@@ -401,10 +432,28 @@ export struct ReaderPage {
 
   private async createReaderKitHandler(book: Book): Promise<bookParser.BookParserHandler> {
     const epubPath = this.resolveEpubFilePath(book);
-    if (epubPath.length > 0) {
-      return await bookParser.getDefaultHandler(epubPath);
+    if (epubPath.length === 0) {
+      throw new Error('电子书文件路径为空');
     }
-    throw new Error('电子书文件路径为空');
+    // 先查缓存
+    const cached = ReaderPage.epubHandlerCache.get(epubPath);
+    if (cached) {
+      hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'reuse cached epub handler: %{public}s',
+        epubPath.substring(epubPath.lastIndexOf('/') + 1));
+      return cached;
+    }
+    // 缓存未命中，解析并缓存
+    const handler = await bookParser.getDefaultHandler(epubPath);
+    // LRU 淘汰：缓存超限时移除最早的
+    if (ReaderPage.epubHandlerCache.size >= ReaderPage.MAX_HANDLER_CACHE_SIZE) {
+      const firstKey = ReaderPage.epubHandlerCache.keys().next().value as string;
+      ReaderPage.epubHandlerCache.delete(firstKey);
+      hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'evict oldest handler from cache');
+    }
+    ReaderPage.epubHandlerCache.set(epubPath, handler);
+    hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'cached new epub handler: %{public}s',
+      epubPath.substring(epubPath.lastIndexOf('/') + 1));
+    return handler;
   }
 
   private resolveEpubFilePath(book: Book): string {
@@ -818,6 +867,13 @@ export struct ReaderPage {
     this.readerBarVisible = false;
   }
 
+  /** 弹层关闭后恢复底部 tab：与 toggleReaderBar 的显示分支保持同一动画 */
+  private showReaderBar(): void {
+    if (this.readerBarVisible) return;
+    this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
+    this.readerBarVisible = true;
+  }
+
   private hideReaderBarAfterMount(): void {
     setTimeout((): void => {
       if (this.leaving || this.readerBarVisible) return;
@@ -847,30 +903,26 @@ export struct ReaderPage {
     this.showSettingsSheet = false;
     this.chapterListOffsetFromCurrent = 0;
     this.chapterDataSource.setChapters(currentBook.chapters);
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
-      this.showChapterSheet = true;
-    });
+    this.hideReaderBar();
+    this.showChapterSheet = true;
     this.scrollChapterListToCurrent();
   }
 
   private closeChapterSheet(): void {
-    this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseIn }, (): void => {
-      this.showChapterSheet = false;
-    });
+    this.showChapterSheet = false;
+    this.showReaderBar();
   }
 
   private openSettingsSheet(): void {
     this.showChapterSheet = false;
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, (): void => {
-      this.showSettingsSheet = true;
-    });
+    this.hideReaderBar();
+    this.showSettingsSheet = true;
   }
 
   private closeSettingsSheet(): void {
     this.saveReadingSettings();
-    this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseIn }, (): void => {
-      this.showSettingsSheet = false;
-    });
+    this.showSettingsSheet = false;
+    this.showReaderBar();
   }
 
   private scrollChapterListToCurrent(): void {
@@ -1142,15 +1194,19 @@ export struct ReaderPage {
 
   @Builder
   buildChapterSheet(): void {
-    Column() {
-      Blank()
-        .layoutWeight(1)
+    Stack({ alignContent: Alignment.Bottom }) {
+      // 背景遮罩层：仅透明度渐变，不参与位移动画
+      Column()
         .width('100%')
+        .height('100%')
         .backgroundColor('#24000000')
         .onClick((): void => {
           this.closeChapterSheet();
         })
+        .transition(TransitionEffect.OPACITY
+          .animation({ curve: curves.springMotion(0.6, 0.9) }))
 
+      // 弹窗内容：从底部滑入
       Stack({ alignContent: Alignment.BottomEnd }) {
         Column() {
           Row() {
@@ -1239,7 +1295,7 @@ export struct ReaderPage {
           }
           .width('100%')
           .layoutWeight(1)
-          .padding({ bottom: WindowUtils.getFloatingTabBottomVp(this.bottomSafeVp) + AppSpace.Sm })
+          .padding({ bottom: AppSpace.Sm })
           .scrollBar(BarState.On)
           .cachedCount(8)
           .onScrollIndex((firstIndex: number, lastIndex: number): void => {
@@ -1265,13 +1321,13 @@ export struct ReaderPage {
           .borderRadius(22)
           .backgroundColor(AppColor.Brand)
           .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-          .margin({ right: AppSpace.Lg, bottom: this.bottomSafeVp + AppSpace.Lg })
+          .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
           .onClick((): void => {
             this.jumpToCurrentChapter();
           })
           .transition(TransitionEffect.OPACITY
             .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
-            .animation({ curve: Curve.EaseOut }))
+            .animation({ curve: curves.springMotion(0.4, 0.9) }))
         }
       }
       .width('100%')
@@ -1279,9 +1335,8 @@ export struct ReaderPage {
       .borderRadius({ topLeft: 20, topRight: 20 })
       .backgroundColor(this.palette.background)
       .systemMaterial(AppMaterial.DialogUltraThick)
-      .transition(TransitionEffect.OPACITY
-        .combine(TransitionEffect.translate({ y: 1000 }))
-        .animation({ curve: Curve.EaseOut }))
+      .transition(TransitionEffect.translate({ y: 1000 })
+        .animation({ curve: curves.springMotion(0.6, 0.9) }))
     }
     .width('100%')
     .height('100%')
@@ -1289,15 +1344,19 @@ export struct ReaderPage {
 
   @Builder
   buildSettingsSheet(): void {
-    Column() {
-      Blank()
-        .layoutWeight(1)
+    Stack({ alignContent: Alignment.Bottom }) {
+      // 背景遮罩层：仅透明度渐变
+      Column()
         .width('100%')
+        .height('100%')
         .backgroundColor('#24000000')
         .onClick((): void => {
           this.closeSettingsSheet();
         })
+        .transition(TransitionEffect.OPACITY
+          .animation({ curve: curves.springMotion(0.6, 0.9) }))
 
+      // 弹窗内容：从底部滑入
       ReaderSettingsSheet({
         fontSize: this.fontSize,
         lineHeight: this.lineHeight,
@@ -1336,9 +1395,8 @@ export struct ReaderPage {
           this.closeSettingsSheet();
         }
       })
-        .transition(TransitionEffect.OPACITY
-          .combine(TransitionEffect.translate({ y: 1000 }))
-          .animation({ curve: Curve.EaseOut }))
+        .transition(TransitionEffect.translate({ y: 1000 })
+          .animation({ curve: curves.springMotion(0.6, 0.9) }))
     }
     .width('100%')
     .height('100%')
