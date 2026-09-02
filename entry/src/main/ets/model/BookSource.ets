@@ -21,7 +21,7 @@ export interface SearchResult {
   kind: string;
   /** 单条结果的内容类型；聚合源可覆盖书源级默认类型。 */
   contentType?: 'audio' | 'text';
-  /** 是否完结（源端 status=1） */
+  /** 是否完结；适配器负责把来源状态值归一化为布尔值。 */
   completed?: boolean;
   lastChapter: string;
   wordCount?: string;

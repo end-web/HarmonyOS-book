@@ -139,16 +139,21 @@ export class LocalRuleSource implements BookSource {
   }
 
   isText(): boolean {
-    return this.bookSourceType === LocalRuleSourceType.TEXT ||
-      this.bookSourceType === LocalRuleSourceType.WEB_FILE;
+    // 漫画、Web 文件和未来新增类型先走通用内容链，不能因类型枚举未知而整源失效。
+    return !this.isAudio();
   }
 
   isSearchEnabled(): boolean {
-    return this.enabled && this.canExecute();
+    return this.enabled && this.canExecute() && this.hasSearchCapability();
   }
 
   canExecute(): boolean {
-    return this.validationStatus !== LocalRuleSourceStatus.UNSUPPORTED;
+    return this.bookSourceUrl.trim().length > 0;
+  }
+
+  hasSearchCapability(): boolean {
+    return this.searchUrl.trim().length > 0 && this.ruleSearch.bookList.trim().length > 0 &&
+      this.ruleSearch.name.trim().length > 0 && this.ruleSearch.bookUrl.trim().length > 0;
   }
 }
 

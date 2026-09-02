@@ -15,6 +15,8 @@ import {
 import { LocalRuleStageExtractor } from './LocalRuleStageExtractor';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
 import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
+import { TingYouSourceAdapter } from './tingyou/TingYouSourceAdapter';
+import { CoverPrefetcher } from '../CoverPrefetcher';
 
 class LocalRuleSearchResult implements SearchResult {
   name: string = '';
@@ -106,6 +108,24 @@ export class LocalRuleDispatcher {
     variables: Record<string, string> = {}): Promise<BookInfo | null> {
     if (!source.canExecute()) return null;
     try {
+      await LocalRuleDispatcher.prepareVariables(source, variables, bookUrl);
+      const isTingYouBook = TingYouSourceAdapter.canResolveBook(source, bookUrl);
+      if (isTingYouBook) {
+        try {
+          const apiInfo = await TingYouSourceAdapter.getBookInfo(source, bookUrl);
+          if (apiInfo !== null) {
+            apiInfo.coverUrl = LocalRuleDispatcher.prepareCover(
+              source, apiInfo.coverUrl, bookUrl, variables);
+            console.info(`[LocalRuleDispatcher] detail ${source.bookSourceName}: ` +
+              `api=true, category=${apiInfo.kind}, completed=${String(apiInfo.completed)}, ` +
+              `count=${apiInfo.wordCount}`);
+            return apiInfo;
+          }
+        } catch (error) {
+          console.warn(`[LocalRuleDispatcher] TingYou API detail failed, fallback to HTML: ` +
+            LocalRuleDispatcher.errorMessage(error as Object));
+        }
+      }
       const fetch = await LocalRuleHttpClient.fetch(source, bookUrl, variables);
       LocalRuleDispatcher.assertFetch(fetch, '详情');
       const responseDocument = LocalRuleStageExtractor.createDocument(fetch.body, fetch.requestUrl);
@@ -117,14 +137,17 @@ export class LocalRuleDispatcher {
       }
 
       const info = new LocalRuleBookInfo();
-      info.name = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(fieldDocument,
+      info.name = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extractFirst(fieldDocument,
         source.ruleBookInfo.name, source, variables), 120);
       info.author = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(fieldDocument,
         source.ruleBookInfo.author, source, variables), 120);
       info.coverUrl = await LocalRuleStageExtractor.extract(fieldDocument,
         source.ruleBookInfo.coverUrl, source, variables, true);
-      info.intro = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(fieldDocument,
-        source.ruleBookInfo.intro, source, variables), LocalRuleExecutionLimits.MAX_INTRO_CHARS);
+      info.coverUrl = LocalRuleDispatcher.prepareCover(
+        source, info.coverUrl, fetch.requestUrl, variables);
+      info.intro = LocalRuleDispatcher.sanitizeIntro(LocalRuleStageExtractor.limit(
+        await LocalRuleStageExtractor.extract(fieldDocument,
+          source.ruleBookInfo.intro, source, variables), LocalRuleExecutionLimits.MAX_INTRO_CHARS));
       info.kind = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(fieldDocument,
         source.ruleBookInfo.kind, source, variables), 256);
       const status = await LocalRuleStageExtractor.extract(fieldDocument,
@@ -137,8 +160,12 @@ export class LocalRuleDispatcher {
       info.tocUrl = await LocalRuleStageExtractor.extract(fieldDocument,
         source.ruleBookInfo.tocUrl, source, variables, true);
       if (!info.tocUrl) info.tocUrl = fetch.requestUrl;
+      if (isTingYouBook) LocalRuleDispatcher.normalizeTingYouFallbackInfo(info);
       info.variables = LocalRuleDispatcher.copyVariables(variables);
       info.variables['bookUrl'] = fetch.requestUrl;
+      console.info(`[LocalRuleDispatcher] detail ${source.bookSourceName}: ` +
+        `responseChars=${fetch.body.length}, name=${info.name.length > 0}, ` +
+        `tocUrl=${info.tocUrl}`);
       return info;
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'getBookInfo', error as Object);
@@ -150,6 +177,7 @@ export class LocalRuleDispatcher {
     variables: Record<string, string> = {}): Promise<TocItem[]> {
     if (!source.canExecute()) return [];
     try {
+      await LocalRuleDispatcher.prepareVariables(source, variables, tocUrl);
       const output: TocItem[] = [];
       const chapterUrls = new Set<string>();
       const pageUrls = new Set<string>();
@@ -199,6 +227,8 @@ export class LocalRuleDispatcher {
         if (!nextUrl || pageUrls.has(nextUrl)) break;
         currentUrl = nextUrl;
       }
+      console.info(`[LocalRuleDispatcher] toc ${source.bookSourceName}: ` +
+        `responseChars=${responseCharacters}, pages=${pageCount}, results=${output.length}`);
       return output;
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'getBookToc', error as Object);
@@ -211,8 +241,12 @@ export class LocalRuleDispatcher {
     const safe = new LocalRuleContentResult();
     if (!source.canExecute()) return safe;
     try {
+      if (TingYouSourceAdapter.canResolve(source, chapterUrl)) {
+        return await TingYouSourceAdapter.resolveContent(source, chapterUrl);
+      }
+      await LocalRuleDispatcher.prepareVariables(source, variables, chapterUrl);
       await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
-      safe.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, chapterUrl);
+      safe.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, chapterUrl, variables);
       const direct = LocalRuleDispatcher.resolveDirectAudioRequest(source, chapterUrl, variables);
       if (direct !== undefined) return direct;
       return await LocalRuleDispatcher.resolveContentStrict(source, chapterUrl, variables);
@@ -251,9 +285,10 @@ export class LocalRuleDispatcher {
     }
   }
 
-  static getAudioHeaders(source: LocalRuleSource, _audioUrl: string): Record<string, string> {
+  static getAudioHeaders(source: LocalRuleSource, _audioUrl: string,
+    variables: Record<string, string> = {}): Record<string, string> {
     try {
-      const headers = LocalRuleHttpClient.getSessionHeaders(source, _audioUrl);
+      const headers = LocalRuleHttpClient.getSessionHeaders(source, _audioUrl, variables);
       const sourceHost = LocalRuleDispatcher.requestHost(source.bookSourceUrl);
       const audioHost = LocalRuleDispatcher.requestHost(_audioUrl);
       if (sourceHost && sourceHost === audioHost) return headers;
@@ -275,6 +310,7 @@ export class LocalRuleDispatcher {
     if (!source.canExecute()) throw new Error(source.validationMessage || '书源不可执行');
     if (!source.searchUrl.trim()) throw new Error('书源没有搜索地址');
     const variables: Record<string, string> = {};
+    await LocalRuleDispatcher.prepareVariables(source, variables, source.bookSourceUrl, keyword, page);
     const searchAddress = await LocalRuleScriptRuntime.resolveAddress(
       source.searchUrl, source, variables, keyword, page);
     const fetch = await LocalRuleHttpClient.fetch(source, searchAddress, variables, keyword, page);
@@ -293,6 +329,8 @@ export class LocalRuleDispatcher {
       seen.add(item.bookUrl);
       output.push(item);
     }
+    console.info(`[LocalRuleDispatcher] search ${source.bookSourceName}: ` +
+      `responseChars=${fetch.body.length}, elements=${elements.length}, results=${output.length}`);
     return output;
   }
 
@@ -305,10 +343,13 @@ export class LocalRuleDispatcher {
       source.ruleSearch.author, source, variables), 120);
     item.coverUrl = await LocalRuleStageExtractor.extract(element,
       source.ruleSearch.coverUrl, source, variables, true);
+    item.coverUrl = LocalRuleDispatcher.prepareCover(
+      source, item.coverUrl, element.baseUrl, variables);
     item.bookUrl = await LocalRuleStageExtractor.extract(element,
       source.ruleSearch.bookUrl, source, variables, true);
-    item.intro = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.intro, source, variables), LocalRuleExecutionLimits.MAX_INTRO_CHARS);
+    item.intro = LocalRuleDispatcher.sanitizeIntro(LocalRuleStageExtractor.limit(
+      await LocalRuleStageExtractor.extract(element,
+        source.ruleSearch.intro, source, variables), LocalRuleExecutionLimits.MAX_INTRO_CHARS));
     item.kind = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
       source.ruleSearch.kind, source, variables), 256);
     const status = await LocalRuleStageExtractor.extract(element,
@@ -328,7 +369,7 @@ export class LocalRuleDispatcher {
   private static async resolveContentStrict(source: LocalRuleSource, chapterUrl: string,
     variables: Record<string, string>): Promise<LocalRuleContentResult> {
     const result = new LocalRuleContentResult();
-    result.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, chapterUrl);
+    result.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, chapterUrl, variables);
     const pageUrls = new Set<string>();
     const contents: string[] = [];
     let currentUrl = chapterUrl;
@@ -383,7 +424,11 @@ export class LocalRuleDispatcher {
       currentUrl = nextUrl;
     }
     result.content = contents.join('\n\n').trim();
-    result.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, result.audioUrl || chapterUrl);
+    result.requestHeaders = LocalRuleDispatcher.getAudioHeaders(
+      source, result.audioUrl || chapterUrl, variables);
+    console.info(`[LocalRuleDispatcher] content ${source.bookSourceName}: ` +
+      `responseChars=${responseCharacters}, pages=${pageCount}, contentChars=${result.content.length}, ` +
+      `audio=${result.audioUrl.length > 0}`);
     return result;
   }
 
@@ -439,7 +484,9 @@ export class LocalRuleDispatcher {
     if (hash >= 0) suffix = Math.min(suffix, hash);
     const path = lower.substring(pathStart, suffix);
     return path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.aac') ||
-      path.endsWith('.flac') || path.endsWith('.wav') || path.endsWith('.ogg');
+      path.endsWith('.flac') || path.endsWith('.wav') || path.endsWith('.ogg') ||
+      path.endsWith('.mp4') || path.endsWith('.m3u8') || path.endsWith('.opus') ||
+      path.endsWith('.wma') || path.endsWith('.ape');
   }
 
   private static requestHost(url: string): string {
@@ -456,10 +503,83 @@ export class LocalRuleDispatcher {
     return url.substring(start, end).toLowerCase();
   }
 
+  private static prepareCover(source: LocalRuleSource, rawUrl: string,
+    refererUrl: string, variables: Record<string, string>): string {
+    if (!rawUrl.trim()) return '';
+    try {
+      const plan = LocalRuleHttpClient.prepareRequest(source, rawUrl, variables);
+      const sourceHost = LocalRuleDispatcher.requestHost(source.bookSourceUrl);
+      const coverHost = LocalRuleDispatcher.requestHost(plan.url);
+      if (sourceHost && coverHost && sourceHost !== coverHost) {
+        const filtered: Record<string, string> = {};
+        const names = Object.keys(plan.headers);
+        for (const name of names) {
+          const lower = name.toLowerCase();
+          if (lower === 'cookie' || lower === 'authorization' || lower === 'proxy-authorization') continue;
+          filtered[name] = plan.headers[name] ?? '';
+        }
+        plan.headers = filtered;
+      }
+      let hasReferer = false;
+      const headerNames = Object.keys(plan.headers);
+      for (const name of headerNames) {
+        if (name.toLowerCase() === 'referer') hasReferer = true;
+      }
+      if (!hasReferer && refererUrl.startsWith('http')) plan.headers['Referer'] = refererUrl;
+      CoverPrefetcher.registerHeaders(plan.url, plan.headers);
+      return plan.url;
+    } catch (_error) {
+      return rawUrl;
+    }
+  }
+
   private static isCompleted(value: string): boolean {
     const clean = value.trim().toLowerCase();
     return clean === '1' || clean === 'true' || clean === 'completed' || clean === 'finished' ||
       clean.includes('完结') || clean.includes('完本');
+  }
+
+  private static normalizeTingYouFallbackInfo(info: LocalRuleBookInfo): void {
+    const statusText = info.kind.trim().toLowerCase();
+    const isStatus = statusText.includes('完结') || statusText.includes('完本') ||
+      statusText.includes('连载') || statusText.includes('更新中');
+    if (!isStatus) return;
+    if (statusText.includes('连载') || statusText.includes('更新中')) {
+      info.completed = false;
+    } else {
+      info.completed = true;
+    }
+    // 旧听友规则把 album-status 配到了 kind；清空后由搜索快照保留真实分类。
+    info.kind = '';
+  }
+
+  private static sanitizeIntro(value: string): string {
+    const clean = value.trim();
+    const compact = clean.replace(new RegExp('\\s+', 'g'), '');
+    const placeholders: string[] = ['=.=','==', '暂无', '暂无简介', '暂无介绍', '无'];
+    return placeholders.includes(compact) ? '' : clean;
+  }
+
+  private static async prepareVariables(source: LocalRuleSource,
+    variables: Record<string, string>, baseUrl: string,
+    keyword: string = '', page: number = 1): Promise<void> {
+    variables['key'] = variables['key'] ?? keyword;
+    variables['searchKey'] = variables['searchKey'] ?? keyword;
+    variables['keyword'] = variables['keyword'] ?? keyword;
+    variables['searchKeyRaw'] = variables['searchKeyRaw'] ?? keyword;
+    variables['page'] = variables['page'] ?? String(Math.max(1, page));
+    variables['pageIndex'] = variables['pageIndex'] ?? String(Math.max(1, page));
+    const header = source.header.trim();
+    if (header.length === 0 || (!LocalRuleScriptRuntime.hasScript(header) && !header.includes('{{'))) return;
+    variables['__header'] = '{}';
+    try {
+      const resolved = await LocalRuleScriptRuntime.resolveText(header, baseUrl, source, variables);
+      variables['__header'] = resolved.trim().length > 0 ? resolved : '{}';
+    } catch (error) {
+      variables['__header'] = source.header;
+      console.warn(`[LocalRuleDispatcher] dynamic header ${source.bookSourceName} failed: ` +
+        LocalRuleDispatcher.errorMessage(error as Object));
+    }
   }
 
   private static assertFetch(fetch: LocalRuleFetchResult, stage: string): void {

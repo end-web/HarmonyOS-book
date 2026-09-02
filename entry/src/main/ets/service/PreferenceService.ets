@@ -22,6 +22,9 @@ const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
+/** 搜索历史记录 */
+const KEY_SEARCH_HISTORY = 'search_history_v1';
+const MAX_SEARCH_HISTORY = 20;
 /** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
 const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
 /** 已添加的卡片 formId 集合(按卡片名分桶) */
@@ -695,6 +698,51 @@ export class PreferenceService {
   static async setPreloadChapters(count: number): Promise<void> {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_PRELOAD_CHAPTERS, count);
+    await s.flush();
+  }
+
+  /** 获取搜索历史 */
+  static async getSearchHistory(): Promise<string[]> {
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_SEARCH_HISTORY, '[]') as string;
+    try {
+      return JSON.parse(raw) as string[];
+    } catch (_e) {
+      return [];
+    }
+  }
+
+  /** 添加搜索历史 */
+  static async addSearchHistory(keyword: string): Promise<void> {
+    if (!keyword || keyword.trim().length === 0) return;
+    const s = await PreferenceService.ensureStore();
+    const list = await PreferenceService.getSearchHistory();
+    const trimmed = keyword.trim();
+    const idx = list.indexOf(trimmed);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+    }
+    list.unshift(trimmed);
+    if (list.length > MAX_SEARCH_HISTORY) {
+      list.length = MAX_SEARCH_HISTORY;
+    }
+    await s.put(KEY_SEARCH_HISTORY, JSON.stringify(list));
+    await s.flush();
+  }
+
+  /** 删除单条搜索历史 */
+  static async removeSearchHistory(keyword: string): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    const list = await PreferenceService.getSearchHistory();
+    const filtered = list.filter((item: string) => item !== keyword);
+    await s.put(KEY_SEARCH_HISTORY, JSON.stringify(filtered));
+    await s.flush();
+  }
+
+  /** 清空全部搜索历史 */
+  static async clearSearchHistory(): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.delete(KEY_SEARCH_HISTORY);
     await s.flush();
   }
 

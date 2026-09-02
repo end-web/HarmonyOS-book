@@ -49,6 +49,7 @@ export class LocalRuleWebRuntime {
     if (resolveReady !== undefined) {
       this.resolveControllerReady = undefined;
       resolveReady();
+      console.info('[LocalRuleWebRuntime] DOM controller ready');
     }
   }
 
@@ -67,9 +68,6 @@ export class LocalRuleWebRuntime {
       task.attribute = attribute;
       task.resolve = resolve;
       task.reject = reject;
-      task.timerId = setTimeout((): void => {
-        this.failTimedOutTask(task);
-      }, 10000);
       this.queue.push(task);
       this.runNext();
     });
@@ -111,6 +109,9 @@ export class LocalRuleWebRuntime {
     const task = this.queue[0];
     if (controller === undefined || task === undefined) return;
     this.busy = true;
+    task.timerId = setTimeout((): void => {
+      this.failTimedOutTask(task);
+    }, 10000);
     const script = this.buildScript(task);
     controller.runJavaScript(script).then((result: string): void => {
       if (task.settled) return;
@@ -151,35 +152,156 @@ export class LocalRuleWebRuntime {
         var root=doc.body&&doc.body.children.length===1?doc.body.firstElementChild:doc.body;
         if(root)nodes.push(root);
       }else{
-        var containsText='', indexMode='', indexValue=0;
-        selector=selector.replace(/:contains\\(\\s*(["']?)(.*?)\\1\\s*\\)/gi,function(_all,_quote,text){
-          containsText=String(text||'');return '';
-        });
-        selector=selector.replace(/:(eq|lt|gt)\\(\\s*(-?\\d+)\\s*\\)\\s*$/i,function(_all,kind,index){
-          indexMode=String(kind||'').toLowerCase();indexValue=Number(index||0);return '';
-        });
-        selector=selector.replace(/:(first|last)\\s*$/i,function(_all,kind){
-          indexMode=String(kind||'').toLowerCase();return '';
-        });
-        var selected=doc.querySelectorAll(selector||'*'), filtered=[];
-        for(var si=0;si<selected.length&&filtered.length<${maxNodes};si++){
-          var candidate=selected[si];
-          if(containsText&&String(candidate.textContent||'').indexOf(containsText)<0)continue;
-          filtered.push(candidate);
-        }
-        if(indexMode==='first'&&filtered.length>0)nodes.push(filtered[0]);
-        else if(indexMode==='last'&&filtered.length>0)nodes.push(filtered[filtered.length-1]);
-        else if(indexMode==='eq'){
-          var eqIndex=indexValue<0?filtered.length+indexValue:indexValue;
-          if(eqIndex>=0&&eqIndex<filtered.length)nodes.push(filtered[eqIndex]);
-        }else if(indexMode==='lt'){
-          var ltEnd=indexValue<0?filtered.length+indexValue:indexValue;
-          for(var li=0;li<filtered.length&&li<ltEnd&&nodes.length<${maxNodes};li++)nodes.push(filtered[li]);
-        }else if(indexMode==='gt'){
-          var gtStart=indexValue<0?filtered.length+indexValue:indexValue;
-          for(var gi=gtStart+1;gi<filtered.length&&nodes.length<${maxNodes};gi++)if(gi>=0)nodes.push(filtered[gi]);
+        var nodeLimit=${maxNodes};
+        var hasLegacy=/:contains\\(/i.test(selector)||/:(?:eq|lt|gt)\\s*\\(/i.test(selector)||
+          /:(?:first|last)(?![-\\w(])/i.test(selector)||/\\.?!-?\\d+(?::-?\\d+)*/.test(selector);
+        if(!hasLegacy){
+          var nativeSelected=doc.querySelectorAll(selector);
+          for(var ni=0;ni<nativeSelected.length&&nodes.length<nodeLimit;ni++)nodes.push(nativeSelected[ni]);
         }else{
-          for(var fi=0;fi<filtered.length&&nodes.length<${maxNodes};fi++)nodes.push(filtered[fi]);
+          var splitGroups=function(value){
+            var groups=[], current='', quote='', escaped=false, square=0, round=0;
+            for(var index=0;index<value.length;index++){
+              var character=value.charAt(index);
+              if(escaped){current+=character;escaped=false;continue;}
+              if(character==='\\\\'){current+=character;escaped=true;continue;}
+              if(quote){current+=character;if(character===quote)quote='';continue;}
+              if(character==='"'||character==="'"){current+=character;quote=character;continue;}
+              if(character==='[')square++;
+              else if(character===']')square=Math.max(0,square-1);
+              else if(character==='(')round++;
+              else if(character===')')round=Math.max(0,round-1);
+              if(character===','&&square===0&&round===0){
+                if(current.trim())groups.push(current.trim());
+                current='';
+              }else current+=character;
+            }
+            if(current.trim())groups.push(current.trim());
+            return groups;
+          };
+          var parseStages=function(value){
+            var stages=[], current='', pending=' ', quote='', escaped=false, square=0, round=0;
+            for(var index=0;index<value.length;index++){
+              var character=value.charAt(index);
+              if(escaped){current+=character;escaped=false;continue;}
+              if(character==='\\\\'){current+=character;escaped=true;continue;}
+              if(quote){current+=character;if(character===quote)quote='';continue;}
+              if(character==='"'||character==="'"){current+=character;quote=character;continue;}
+              if(character==='['){square++;current+=character;continue;}
+              if(character===']'){square=Math.max(0,square-1);current+=character;continue;}
+              if(character==='('){round++;current+=character;continue;}
+              if(character===')'){round=Math.max(0,round-1);current+=character;continue;}
+              if(square===0&&round===0&&(character==='>'||character==='+'||character==='~')){
+                if(current.trim())stages.push({selector:current.trim(),combinator:pending});
+                current='';pending=character;continue;
+              }
+              if(square===0&&round===0&&/\\s/.test(character)){
+                if(current.trim()){
+                  stages.push({selector:current.trim(),combinator:pending});
+                  current='';pending=' ';
+                }
+                continue;
+              }
+              current+=character;
+            }
+            if(current.trim())stages.push({selector:current.trim(),combinator:pending});
+            return stages;
+          };
+          var appendUnique=function(target,node){
+            if(node&&target.length<nodeLimit&&target.indexOf(node)<0)target.push(node);
+          };
+          var selectRelative=function(context,combinator,nativeSelector,target){
+            if(combinator===' '){
+              var descendants=context.querySelectorAll?context.querySelectorAll(nativeSelector):[];
+              for(var di=0;di<descendants.length&&target.length<nodeLimit;di++)appendUnique(target,descendants[di]);
+              return;
+            }
+            if(combinator==='>'){
+              var parent=context.nodeType===9?(context.body||context.documentElement):context;
+              var children=parent&&parent.children?parent.children:[];
+              for(var ci=0;ci<children.length&&target.length<nodeLimit;ci++){
+                if(children[ci].matches(nativeSelector))appendUnique(target,children[ci]);
+              }
+              return;
+            }
+            if(context.nodeType!==1)return;
+            var sibling=context.nextElementSibling;
+            while(sibling&&target.length<nodeLimit){
+              if(sibling.matches(nativeSelector))appendUnique(target,sibling);
+              if(combinator==='+')break;
+              sibling=sibling.nextElementSibling;
+            }
+          };
+          var groups=splitGroups(selector);
+          for(var groupIndex=0;groupIndex<groups.length&&nodes.length<nodeLimit;groupIndex++){
+            var stages=parseStages(groups[groupIndex]), currentNodes=[doc];
+            for(var stageIndex=0;stageIndex<stages.length;stageIndex++){
+              var stage=stages[stageIndex], containsTexts=[], indexOps=[], excludedText='';
+              var nativeSelector=stage.selector.replace(
+                /:contains\\(\\s*(["']?)(.*?)\\1\\s*\\)/gi,function(_all,_quote,text){
+                  containsTexts.push(String(text||''));return '';
+                });
+              nativeSelector=nativeSelector.replace(
+                /:(eq|lt|gt)\\(\\s*(-?\\d+)\\s*\\)/gi,function(_all,kind,index){
+                  indexOps.push([String(kind||'').toLowerCase(),Number(index||0)]);return '';
+                });
+              nativeSelector=nativeSelector.replace(
+                /:(first|last)(?![-\\w(])/gi,function(_all,kind){
+                  indexOps.push([String(kind||'').toLowerCase(),0]);return '';
+                });
+              nativeSelector=nativeSelector.replace(
+                /\\.?!(\\-?\\d+(?::\\-?\\d+)*)\\s*$/i,function(_all,indexes){
+                  excludedText=String(indexes||'');return '';
+                }).trim()||'*';
+              var candidates=[];
+              for(var contextIndex=0;contextIndex<currentNodes.length&&candidates.length<nodeLimit;contextIndex++){
+                selectRelative(currentNodes[contextIndex],stage.combinator,nativeSelector,candidates);
+              }
+              var filtered=[];
+              for(var candidateIndex=0;candidateIndex<candidates.length;candidateIndex++){
+                var candidate=candidates[candidateIndex], accepted=true;
+                for(var textIndex=0;textIndex<containsTexts.length;textIndex++){
+                  if(String(candidate.textContent||'').indexOf(containsTexts[textIndex])<0){accepted=false;break;}
+                }
+                if(accepted)filtered.push(candidate);
+              }
+              for(var operationIndex=0;operationIndex<indexOps.length;operationIndex++){
+                var operation=indexOps[operationIndex], operationKind=operation[0], operationValue=operation[1], narrowed=[];
+                if(operationKind==='first'&&filtered.length>0)narrowed.push(filtered[0]);
+                else if(operationKind==='last'&&filtered.length>0)narrowed.push(filtered[filtered.length-1]);
+                else if(operationKind==='eq'){
+                  var eqIndex=operationValue<0?filtered.length+operationValue:operationValue;
+                  if(eqIndex>=0&&eqIndex<filtered.length)narrowed.push(filtered[eqIndex]);
+                }else if(operationKind==='lt'){
+                  var ltEnd=operationValue<0?filtered.length+operationValue:operationValue;
+                  for(var li=0;li<filtered.length&&li<ltEnd;li++)narrowed.push(filtered[li]);
+                }else if(operationKind==='gt'){
+                  var gtStart=operationValue<0?filtered.length+operationValue:operationValue;
+                  for(var gi=gtStart+1;gi<filtered.length;gi++)if(gi>=0)narrowed.push(filtered[gi]);
+                }
+                filtered=narrowed;
+              }
+              if(excludedText){
+                var excludedParts=excludedText.split(':'), excludedIndexes={};
+                for(var excludedIndex=0;excludedIndex<excludedParts.length;excludedIndex++){
+                  var parsedIndex=Number(excludedParts[excludedIndex]);
+                  if(!Number.isInteger(parsedIndex))continue;
+                  var resolvedIndex=parsedIndex<0?filtered.length+parsedIndex:parsedIndex;
+                  if(resolvedIndex>=0&&resolvedIndex<filtered.length)excludedIndexes[String(resolvedIndex)]=true;
+                }
+                var retained=[];
+                for(var retainedIndex=0;retainedIndex<filtered.length;retainedIndex++){
+                  if(!excludedIndexes[String(retainedIndex)])retained.push(filtered[retainedIndex]);
+                }
+                filtered=retained;
+              }
+              currentNodes=filtered;
+              if(currentNodes.length===0)break;
+            }
+            for(var resultIndex=0;resultIndex<currentNodes.length&&nodes.length<nodeLimit;resultIndex++){
+              appendUnique(nodes,currentNodes[resultIndex]);
+            }
+          }
         }
       }
       var out=[], total=0;
@@ -268,15 +390,18 @@ export struct LocalRuleWebRuntimeHost {
   private runtime: LocalRuleWebRuntime = LocalRuleWebRuntime.instance;
 
   build() {
-    Web({ src: 'about:blank', controller: this.controller })
-      .width(0)
-      .height(0)
-      .opacity(0)
+    Web({ src: $rawfile('local_rule_dom_host.html'), controller: this.controller })
+      .width(1)
+      .height(1)
+      .opacity(0.01)
       .javaScriptAccess(true)
       .domStorageAccess(false)
       .imageAccess(false)
       .onlineImageAccess(false)
-      .onControllerAttached((): void => {
+      .onPageEnd((_event): void => {
+        this.runtime.setController(this.controller);
+      })
+      .onLoadFinished((_event): void => {
         this.runtime.setController(this.controller);
       })
   }

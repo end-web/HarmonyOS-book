@@ -96,9 +96,17 @@ export class LocalRuleStageExtractor {
         LocalRuleStageExtractor.normalizeJsonRule(cleanRule));
       const output: LocalRuleDocument[] = [];
       for (const value of values) {
-        const payload = LocalRuleJsonPath.valueToString(value);
-        output.push(LocalRuleDocument.of(LocalRuleDocumentKind.JSON,
-          typeof value === 'string' ? JSON.stringify(value) : payload, document.baseUrl));
+        if (Array.isArray(value)) {
+          const items = value as Object[];
+          for (const item of items) {
+            if (item === undefined || item === null) continue;
+            LocalRuleStageExtractor.appendJsonListDocument(output, item, document.baseUrl);
+            if (output.length >= LocalRuleExecutionLimits.MAX_JSON_NODES) break;
+          }
+        } else {
+          LocalRuleStageExtractor.appendJsonListDocument(output, value, document.baseUrl);
+        }
+        if (output.length >= LocalRuleExecutionLimits.MAX_JSON_NODES) break;
       }
       return output;
     }
@@ -132,6 +140,19 @@ export class LocalRuleStageExtractor {
       if (clean) nonEmpty.push(clean);
     }
     return nonEmpty.join('\n').trim();
+  }
+
+  static async extractFirst(document: LocalRuleDocument, rule: string, source: LocalRuleSource,
+    variables: Record<string, string> = {}, resolveUrl: boolean = false): Promise<string> {
+    const values = await LocalRuleStageExtractor.extractValues(document, rule, source, variables);
+    for (const value of values) {
+      const clean = value.trim();
+      if (!clean) continue;
+      if (!resolveUrl) return clean;
+      const resolved = LocalRuleUrlAnalyzer.resolveUrl(document.baseUrl || source.bookSourceUrl, clean);
+      if (resolved) return resolved;
+    }
+    return '';
   }
 
   static async extractValues(document: LocalRuleDocument, rule: string,
@@ -281,6 +302,8 @@ export class LocalRuleStageExtractor {
     if (!LocalRuleJsonPath.isJsonPath(jsonRule)) {
       if (new RegExp('^[A-Za-z_$][A-Za-z0-9_$-]*$').test(jsonRule)) {
         jsonRule = `$[${JSON.stringify(jsonRule)}]`;
+      } else if (LocalRuleStageExtractor.isDomSelectorRule(jsonRule)) {
+        return [];
       } else {
         return [jsonRule];
       }
@@ -289,6 +312,27 @@ export class LocalRuleStageExtractor {
     const output: string[] = [];
     for (const value of values) output.push(LocalRuleJsonPath.valueToString(value));
     return output;
+  }
+
+  private static isDomSelectorRule(rule: string): boolean {
+    const clean = rule.trim();
+    if (!clean) return false;
+    const lower = clean.toLowerCase();
+    if (lower.startsWith('@css:') || lower.startsWith('@xpath:') ||
+      clean.startsWith('//') || clean.startsWith('/html') || clean.startsWith('./') ||
+      clean.startsWith('.') || clean.startsWith('#') || clean.startsWith('[')) {
+      return true;
+    }
+    if (new RegExp('^(?:class|id|tag|text)\\.', 'i').test(clean)) return true;
+    if (new RegExp('^[A-Za-z][A-Za-z0-9_-]*(?:[.#\\[]|\\s*[>+~])').test(clean)) return true;
+    const htmlSelector = new RegExp(
+      '^(?:a|article|aside|body|div|dl|dt|dd|h[1-6]|html|img|li|link|main|meta|nav|ol|option|p|section|span|table|tbody|td|th|thead|tr|ul)\\b',
+      'i');
+    if (htmlSelector.test(clean) &&
+      (new RegExp('\\s').test(clean) || LocalRuleStageExtractor.lastTopLevelAt(clean) > 0)) {
+      return true;
+    }
+    return false;
   }
 
   private static normalizeJsonRule(rule: string): string {
@@ -304,17 +348,18 @@ export class LocalRuleStageExtractor {
     let clean = rule.trim();
     if (clean.toLowerCase().startsWith('@xpath:')) {
       spec.xpath = true;
-      spec.selector = clean.substring(7).trim();
+      clean = clean.substring(7).trim();
+      LocalRuleStageExtractor.applyXpathSelectorSpec(spec, clean, listMode);
       return spec;
     }
     if (clean.startsWith('//') || clean.startsWith('/html') || clean.startsWith('./')) {
       spec.xpath = true;
-      spec.selector = clean;
+      LocalRuleStageExtractor.applyXpathSelectorSpec(spec, clean, listMode);
       return spec;
     }
     if (clean.toLowerCase().startsWith('@css:')) clean = clean.substring(5).trim();
     if (listMode) {
-      spec.selector = clean;
+      spec.selector = LocalRuleStageExtractor.cssChain(clean);
       spec.mode = LocalRuleWebExtractMode.OUTER_HTML;
       return spec;
     }
@@ -345,6 +390,23 @@ export class LocalRuleStageExtractor {
     }
     spec.selector = LocalRuleStageExtractor.cssChain(clean);
     return spec;
+  }
+
+  private static applyXpathSelectorSpec(spec: LocalRuleSelectorSpec, rule: string, listMode: boolean): void {
+    let selector = rule.trim();
+    const separator = LocalRuleStageExtractor.lastTopLevelAt(selector);
+    if (separator > 0 && selector.charAt(separator - 1) !== '/') {
+      const suffix = selector.substring(separator + 1).trim();
+      if (LocalRuleStageExtractor.isExtractionSuffix(suffix)) {
+        selector = selector.substring(0, separator).trim();
+        if (!listMode) {
+          spec.mode = LocalRuleStageExtractor.extractMode(suffix);
+          if (spec.mode === LocalRuleWebExtractMode.ATTRIBUTE) spec.attribute = suffix;
+        }
+      }
+    }
+    spec.selector = selector;
+    if (listMode) spec.mode = LocalRuleWebExtractMode.OUTER_HTML;
   }
 
   private static extractMode(suffix: string): string {
@@ -379,7 +441,46 @@ export class LocalRuleStageExtractor {
 
   private static cssChain(value: string): string {
     const parts = LocalRuleStageExtractor.splitTopLevel(value, '@');
-    return parts.length > 1 ? parts.join(' ') : value;
+    if (parts.length <= 1) return LocalRuleStageExtractor.normalizeLegacyCssSelector(value);
+    let output = '';
+    for (const part of parts) {
+      const clean = part.trim();
+      if (!clean) continue;
+      const childrenMatch = new RegExp('^children((?:\\.!|!)-?\\d+(?::-?\\d+)*)?$', 'i').exec(clean);
+      if (childrenMatch !== null) {
+        const exclusion = childrenMatch[1] ?? '';
+        output += `${output ? ' ' : ''}> *${exclusion}`;
+        continue;
+      }
+      const normalized = LocalRuleStageExtractor.normalizeLegacyCssSelector(clean);
+      if (normalized) output += `${output ? ' ' : ''}${normalized}`;
+    }
+    return output.trim();
+  }
+
+  /** 将阅读书源的 class.foo / tag.a / a.0 语法转换为受控 DOM 宿主支持的 CSS。 */
+  static normalizeLegacyCssSelector(value: string): string {
+    let output = value.trim();
+    output = output.replace(
+      new RegExp('(\\[[A-Za-z_:][A-Za-z0-9_:.\\-]*\\s*(?:[~|^$*]?=)\\s*)([^\\s"\'\\]]*:[^\\s"\'\\]]*)(\\s*(?:[iIsS]\\s*)?\\])', 'g'),
+      '$1"$2"$3');
+    output = output.replace(
+      new RegExp('(^|[\\s>+~,])class\\.([A-Za-z_][A-Za-z0-9_-]*)', 'g'), '$1.$2');
+    output = output.replace(
+      new RegExp('(^|[\\s>+~,])id\\.([A-Za-z_][A-Za-z0-9_-]*)', 'g'), '$1#$2');
+    output = output.replace(
+      new RegExp('(^|[\\s>+~,])tag\\.([A-Za-z][A-Za-z0-9_-]*)', 'g'), '$1$2');
+    output = output.replace(
+      new RegExp('((?:^|[\\s>+~,])(?:[A-Za-z][A-Za-z0-9_-]*|[.#][A-Za-z_][A-Za-z0-9_-]*))\\.(-?\\d+)(?=$|[\\s>+~,])', 'g'),
+      '$1:eq($2)');
+    return output;
+  }
+
+  private static appendJsonListDocument(output: LocalRuleDocument[], value: Object,
+    baseUrl: string): void {
+    const payload = LocalRuleJsonPath.valueToString(value);
+    output.push(LocalRuleDocument.of(LocalRuleDocumentKind.JSON,
+      typeof value === 'string' ? JSON.stringify(value) : payload, baseUrl));
   }
 
   private static async expandElementTemplate(document: LocalRuleDocument, template: string,
@@ -456,10 +557,44 @@ export class LocalRuleStageExtractor {
         key = key.substring(1, key.length - 1);
       }
       if (!new RegExp('^[A-Za-z_$][A-Za-z0-9_.$-]*$').test(key)) continue;
-      const valueRule = entry.substring(separator + 1).trim();
+      const valueRule = LocalRuleStageExtractor.unwrapPutValue(entry.substring(separator + 1));
       const values = await LocalRuleStageExtractor.extractValues(document, valueRule, source, variables);
       variables[key] = values.join('\n').trim();
     }
+  }
+
+  private static unwrapPutValue(value: string): string {
+    const clean = value.trim();
+    if (clean.length < 2) return clean;
+    const quote = clean.charAt(0);
+    if ((quote !== '"' && quote !== "'") || clean.charAt(clean.length - 1) !== quote) return clean;
+    let output = '';
+    let index = 1;
+    while (index < clean.length - 1) {
+      const character = clean.charAt(index);
+      if (character !== '\\' || index + 1 >= clean.length - 1) {
+        output += character;
+        index++;
+        continue;
+      }
+      const escaped = clean.charAt(index + 1);
+      if (escaped === quote || escaped === '"' || escaped === "'" || escaped === '\\') {
+        output += escaped;
+        index += 2;
+        continue;
+      }
+      if (escaped === 'n') output += '\n';
+      else if (escaped === 'r') output += '\r';
+      else if (escaped === 't') output += '\t';
+      else if (escaped === 'b') output += '\b';
+      else if (escaped === 'f') output += '\f';
+      else {
+        // CSS/正则常用的 \s、\d 等不是字符串转义，原样保留反斜杠。
+        output += `\\${escaped}`;
+      }
+      index += 2;
+    }
+    return output;
   }
 
   private static replaceGetReferences(value: string, variables: Record<string, string>): string {

@@ -5,11 +5,8 @@ import {
   LocalRuleSource,
   LocalRuleSourceImportReport,
   LocalRuleSourceStatus,
-  LocalRuleSourceType,
   LocalRuleTocRule
 } from '../../model/LocalRuleSource';
-import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
-import { ShuShanSourceIdentity } from './shushan/ShuShanSourceIdentity';
 
 const MAX_SOURCE_COUNT: number = 1000;
 
@@ -84,7 +81,7 @@ export class LocalRuleSourceImportParser {
     source.bookSourceUrl = sourceUrl;
     source.bookSourceName = sourceName;
     source.bookSourceType = LocalRuleSourceImportParser.readNumber(record, 'bookSourceType', 0);
-    source.bookSourceGroup = LocalRuleSourceImportParser.readString(record, 'bookSourceGroup');
+    source.bookSourceGroup = LocalRuleSourceImportParser.readGroupString(record, 'bookSourceGroup');
     source.bookSourceComment = LocalRuleSourceImportParser.readString(record, 'bookSourceComment');
     source.enabled = LocalRuleSourceImportParser.readBoolean(record, 'enabled', true);
     source.enabledExplore = LocalRuleSourceImportParser.readBoolean(record, 'enabledExplore', false);
@@ -112,15 +109,8 @@ export class LocalRuleSourceImportParser {
     source.ruleContent = LocalRuleSourceImportParser.parseContentRule(
       LocalRuleSourceImportParser.ruleRecord(record, 'ruleContent', 'contentRule', compactRuleNames));
 
-    const unsupported = LocalRuleSourceImportParser.unsupportedReasons(source, compactRuleNames);
-    if (unsupported.length > 0) {
-      source.validationStatus = LocalRuleSourceStatus.UNSUPPORTED;
-      source.validationMessage = unsupported.join('；');
-      source.enabled = false;
-    } else {
-      source.validationStatus = LocalRuleSourceStatus.UNCHECKED;
-      source.validationMessage = '等待测试';
-    }
+    source.validationStatus = LocalRuleSourceStatus.UNCHECKED;
+    source.validationMessage = LocalRuleSourceImportParser.capabilityMessage(source, compactRuleNames);
     return source;
   }
 
@@ -317,31 +307,14 @@ export class LocalRuleSourceImportParser {
     return -1;
   }
 
-  private static unsupportedReasons(source: LocalRuleSource, compactRules: string[]): string[] {
-    const reasons: string[] = [];
-    const usesNativeAdapter = GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl) ||
-      ShuShanSourceIdentity.isSourceUrl(source.bookSourceUrl);
-    if (!usesNativeAdapter && !source.bookSourceUrl.startsWith('http://') &&
-      !source.bookSourceUrl.startsWith('https://')) {
-      reasons.push('书源地址只支持 HTTP 或 HTTPS');
+  private static capabilityMessage(source: LocalRuleSource, compactRules: string[]): string {
+    const notes: string[] = [];
+    if (!source.hasSearchCapability()) notes.push('未配置完整搜索规则');
+    if (compactRules.length > 0) notes.push(`保留未识别规则组：${compactRules.join(', ')}`);
+    if (!source.bookSourceUrl.startsWith('http://') && !source.bookSourceUrl.startsWith('https://')) {
+      notes.push('非 HTTP(S) 地址将在实际请求阶段校验');
     }
-    if (source.bookSourceType === LocalRuleSourceType.COMIC) {
-      reasons.push('当前应用暂不支持漫画书源');
-    } else if (!source.isText() && !source.isAudio()) {
-      reasons.push(`未知书源类型 ${source.bookSourceType}`);
-    }
-    if (!source.searchUrl || !source.ruleSearch.bookList || !source.ruleSearch.name ||
-      !source.ruleSearch.bookUrl) {
-      reasons.push('缺少搜索地址或搜索必填规则');
-    }
-    // 紧凑规则和 jsLib 由本地兼容运行时处理，导入阶段不再一刀切禁用。
-    if (compactRules.length > 0 && source.ruleSearch.bookList.length === 0) {
-      reasons.push('紧凑搜索规则无法解析');
-    }
-    if (!usesNativeAdapter && (source.loginCheckJs.trim().length > 0 || source.loginUi.trim().length > 0)) {
-      reasons.push('书源依赖脚本登录');
-    }
-    return reasons;
+    return notes.length > 0 ? `${notes.join('；')}；其他能力仍可使用` : '等待测试';
   }
 
   private static asRecord(value: Object | undefined): Record<string, Object> | undefined {
@@ -356,6 +329,54 @@ export class LocalRuleSourceImportParser {
     if (value === undefined || value === null) return '';
     if (typeof value === 'object') return '';
     return String(value).trim();
+  }
+
+  private static readGroupString(record: Record<string, Object>, key: string): string {
+    const groups: string[] = [];
+    LocalRuleSourceImportParser.collectGroupValues(record[key], groups);
+    return groups.join(' · ');
+  }
+
+  private static collectGroupValues(value: Object | undefined, groups: string[]): void {
+    if (value === undefined || value === null) return;
+    if (typeof value === 'string') {
+      LocalRuleSourceImportParser.appendGroupValue(value, groups);
+      return;
+    }
+    if (Array.isArray(value)) {
+      const items = value as Object[];
+      for (const item of items) {
+        LocalRuleSourceImportParser.collectGroupValues(item, groups);
+      }
+      return;
+    }
+    if (typeof value !== 'object') return;
+
+    const groupRecord = value as Record<string, Object>;
+    const preferredKeys: string[] = ['name', 'title', 'label', 'group'];
+    let foundPreferred = false;
+    for (const preferredKey of preferredKeys) {
+      const preferredValue = groupRecord[preferredKey];
+      if (typeof preferredValue === 'string' && preferredValue.trim().length > 0) {
+        LocalRuleSourceImportParser.appendGroupValue(preferredValue, groups);
+        foundPreferred = true;
+      }
+    }
+    if (foundPreferred) return;
+
+    const keys = Object.keys(groupRecord);
+    for (const groupKey of keys) {
+      const groupValue = groupRecord[groupKey];
+      if (typeof groupValue === 'string') {
+        LocalRuleSourceImportParser.appendGroupValue(groupValue, groups);
+      }
+    }
+  }
+
+  private static appendGroupValue(value: string, groups: string[]): void {
+    const group = value.trim();
+    if (group.length === 0 || group.toLowerCase() === '[object object]' || groups.includes(group)) return;
+    groups.push(group);
   }
 
   private static readJsonString(record: Record<string, Object>, key: string): string {

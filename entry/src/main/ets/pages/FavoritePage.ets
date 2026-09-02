@@ -27,8 +27,6 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 import { DownloadService } from '../service/DownloadService';
-import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
-import { KK_BIQU_GE_SOURCE_URL } from '../service/text/KkBiqugeHtmlParser';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 
@@ -215,7 +213,7 @@ export struct FavoritePage {
 
   async loadFavorites(): Promise<void> {
     if (!this.context) return;
-    // 刷新本地规则源索引；失败时 SourceDataService 会自动回退为仅内置源。
+    // 刷新已导入规则源索引，来源库不可用时在线收藏不会被误判为可用。
     await SourceDataService.getSources();
     const ids = await PreferenceService.getFavorites();
     const allBooks = await DataService.getBooks(this.context);
@@ -349,14 +347,10 @@ export struct FavoritePage {
     return book.tags ? book.tags.includes('cache_alias') : false;
   }
 
-  /** 仅展示本地文件、当前内置源和已安装的本地规则源。 */
+  /** 仅展示本地文件和仍然安装的用户规则源。 */
   private isSupportedBook(book: Book): boolean {
-    if (book.contentType === 'text') {
-      return book.sourceUrl === KK_BIQU_GE_SOURCE_URL || SourceDataService.isLocalRuleSource(book.sourceUrl);
-    }
-    if (book.category === 'text') return false;
     if (!book.sourceUrl) return true;
-    return BuiltInSourceRegistry.isBuiltIn(book.sourceUrl) || SourceDataService.isLocalRuleSource(book.sourceUrl);
+    return SourceDataService.isLocalRuleSource(book.sourceUrl);
   }
 
   private legacyBookNameFromChapterTitle(title: string): string {
@@ -406,11 +400,10 @@ export struct FavoritePage {
   /** 下拉刷新:从书源重新加载在线书籍的最新数据 */
   private async refreshOnlineBooks(): Promise<void> {
     if (!this.context) return;
-    // KK 文本源保持原有详情页刷新方式；其余在线来源复用统一详情/目录刷新链。
+    // 所有在线收藏统一通过已导入规则源刷新详情与目录。
     const onlineBooks = this.favoriteBooks.filter(b =>
       !this.isMissingCachedBook(b) && !this.isFavoriteAliasBook(b) &&
-        !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl &&
-        b.sourceUrl !== KK_BIQU_GE_SOURCE_URL);
+        !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
     if (onlineBooks.length === 0) {
       try {
         const message = this.missingFavoriteCount > 0 ?

@@ -21,8 +21,8 @@ class LocalRuleScriptStep {
  * 每个阶段使用独立输入和变量副本，完成后才提交变量，避免失败脚本污染后续规则。
  */
 export class LocalRuleScriptRuntime {
-  private static readonly MAX_SCRIPT_CHARS: number = 64 * 1024;
-  private static readonly MAX_REPLAY_STEPS: number = 8;
+  private static readonly MAX_SCRIPT_CHARS: number = 2 * 1024 * 1024;
+  private static readonly MAX_REPLAY_STEPS: number = 32;
   private static readonly MAX_ACTION_RESPONSE_CHARS: number = 4 * 1024 * 1024;
 
   static hasScript(rule: string): boolean {
@@ -44,16 +44,51 @@ export class LocalRuleScriptRuntime {
 
   static async resolveAddress(rawRule: string, source: LocalRuleSource,
     variables: Record<string, string>, keyword: string = '', page: number = 1): Promise<string> {
-    const code = LocalRuleScriptRuntime.standaloneCode(rawRule);
-    if (!code) return rawRule;
     const scoped = LocalRuleScriptRuntime.copyVariables(variables);
-    scoped['key'] = encodeURIComponent(keyword);
-    scoped['searchKey'] = encodeURIComponent(keyword);
-    scoped['keyword'] = encodeURIComponent(keyword);
+    scoped['key'] = keyword;
+    scoped['searchKey'] = keyword;
+    scoped['keyword'] = keyword;
     scoped['searchKeyRaw'] = keyword;
     scoped['page'] = String(Math.max(1, page));
     scoped['pageIndex'] = String(Math.max(1, page));
-    return LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl, code, source, scoped, '');
+    return LocalRuleScriptRuntime.resolveText(rawRule, source.bookSourceUrl, source, scoped);
+  }
+
+  /** 计算 Legado 字段中的 @js/<js> 与 {{ JavaScript 表达式 }}，失败表达式原样保留。 */
+  static async resolveText(rawRule: string, baseUrl: string, source: LocalRuleSource,
+    variables: Record<string, string>): Promise<string> {
+    const code = LocalRuleScriptRuntime.standaloneCode(rawRule);
+    if (code.length > 0) {
+      return LocalRuleScriptRuntime.evaluate('', baseUrl, code, source, variables, '');
+    }
+    let output = '';
+    let position = 0;
+    while (position < rawRule.length) {
+      const start = rawRule.indexOf('{{', position);
+      if (start < 0) {
+        output += rawRule.substring(position);
+        break;
+      }
+      output += rawRule.substring(position, start);
+      const end = rawRule.indexOf('}}', start + 2);
+      if (end < 0) {
+        output += rawRule.substring(start);
+        break;
+      }
+      const expression = rawRule.substring(start + 2, end).trim();
+      let replacement = rawRule.substring(start, end + 2);
+      if (expression.length > 0) {
+        try {
+          replacement = await LocalRuleScriptRuntime.evaluate(
+            '', baseUrl, expression, source, variables, '');
+        } catch (_error) {
+          // 未知变量可能由后续元素规则提供，保留给下一解析阶段。
+        }
+      }
+      output += replacement;
+      position = end + 2;
+    }
+    return output;
   }
 
   static async evaluate(content: string, baseUrl: string, code: string,
@@ -61,6 +96,12 @@ export class LocalRuleScriptRuntime {
     LocalRuleScriptRuntime.validate(code, source.jsLib);
     const responses: Record<string, string> = {};
     const initialVariables = LocalRuleScriptRuntime.copyVariables(variables);
+    if ((initialVariables['__scriptNow'] ?? '').length === 0) {
+      initialVariables['__scriptNow'] = String(Date.now());
+    }
+    if ((initialVariables['__scriptSeed'] ?? '').length === 0) {
+      initialVariables['__scriptSeed'] = String((Date.now() + baseUrl.length * 2654435761) >>> 0);
+    }
     let responseCharacters = 0;
     if (baseUrl.toLowerCase().startsWith('http://') || baseUrl.toLowerCase().startsWith('https://')) {
       await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
@@ -94,7 +135,7 @@ export class LocalRuleScriptRuntime {
         if (responseCharacters > LocalRuleScriptRuntime.MAX_ACTION_RESPONSE_CHARS) {
           throw new Error('书源脚本网络动作响应超过 4 MiB 预算');
         }
-        responses[step.pendingAddress] = response.body;
+        responses[step.pendingAddress] = LocalRuleScriptRuntime.encodeResponse(response);
         continue;
       }
       if (step.errorMessage.length > 0) throw new Error(`书源脚本执行失败：${step.errorMessage}`);
@@ -107,14 +148,8 @@ export class LocalRuleScriptRuntime {
   private static validate(code: string, jsLib: string): void {
     const combined = `${jsLib}\n${code}`;
     if (combined.length > LocalRuleScriptRuntime.MAX_SCRIPT_CHARS) {
-      throw new Error('书源脚本超过 64 KiB 执行预算');
+      throw new Error('书源脚本超过 2 MiB 执行预算');
     }
-    const unmanaged = new RegExp('\\bfetch\\s*\\(|\\bXMLHttpRequest\\b|\\bWebSocket\\b', 'i');
-    if (unmanaged.test(combined)) throw new Error('书源脚本必须通过 java.ajax 发起网络请求');
-    const platform = new RegExp('\\b(?:Packages|JavaImporter|JavaAdapter)\\b', 'i');
-    if (platform.test(combined)) throw new Error('书源脚本不允许调用 Android/Java 平台对象');
-    const dynamicCode = new RegExp('\\b(?:eval|Function)\\s*\\(', 'i');
-    if (dynamicCode.test(combined)) throw new Error('书源脚本不允许动态生成代码');
   }
 
   private static buildScript(content: string, baseUrl: string, code: string,
@@ -144,7 +179,10 @@ export class LocalRuleScriptRuntime {
       `let pending='';const parseValue=function(v){if(typeof v!=='string')return v;` +
       `const t=v.trim();if((t[0]==='{'&&t[t.length-1]==='}')||(t[0]==='['&&t[t.length-1]===']')){` +
       `try{return JSON.parse(t);}catch(_e){}}return v;};` +
-      `const root=parseValue(I.content||'');let result=I.initialResult?parseValue(I.initialResult):root;const $=root;` +
+      `const src=String(I.content||''),root=parseValue(src);let result=I.initialResult!==''?I.initialResult:src;const $=root;` +
+      `const fixedNow=Number(V.__scriptNow||Date.now()),initialSeed=Number(V.__scriptSeed||1)>>>0;let randomSeed=initialSeed||1;` +
+      `Date.now=function(){return fixedNow;};Math.random=function(){randomSeed=(randomSeed*1664525+1013904223)>>>0;` +
+      `return randomSeed/4294967296;};` +
       `const readPath=function(value,path){let p=String(path||'').trim().replace(/^@json:/i,'');` +
       `if(p[0]==='@')p='$'+p.substring(1);if(p[0]!=='$')p='$.'+p;` +
       `const tokens=[];p.replace(/(?:^\\$|\\.([A-Za-z_$][\\w$-]*)|\\[['\"]([^'\"]+)['\"]\\]|\\[(-?\\d+)\\])/g,` +
@@ -154,11 +192,18 @@ export class LocalRuleScriptRuntime {
       `if(typeof k==='number'&&Array.isArray(current)&&k<0)k=current.length+k;current=current[k];}return current;};` +
       `const stringify=function(v){if(v==null)return '';if(typeof v==='string')return v;` +
       `if(typeof v==='object'){try{return JSON.stringify(v);}catch(_e){return '';}}return String(v);};` +
-      `const request=function(spec){const key=String(spec==null?'':spec);if(Object.prototype.hasOwnProperty.call(R,key))` +
-      `return String(R[key]??'');if(!pending)pending=key;return '';};` +
-      `const responseObject=function(spec){const body=request(spec);return {body:function(){return body;},` +
-      `code:function(){return body?200:599;},isSuccessful:function(){return !!body;},` +
-      `headers:function(){return {};},toString:function(){return body;}};};` +
+      `const responseData=function(spec){const key=String(spec==null?'':spec);` +
+      `if(!Object.prototype.hasOwnProperty.call(R,key)){if(!pending)pending=key;` +
+      `return {body:'',statusCode:599,headers:{},requestUrl:key};}` +
+      `const raw=String(R[key]??'');if(raw.indexOf('__LOCAL_RULE_RESPONSE__')===0){` +
+      `try{return JSON.parse(raw.substring(23));}catch(_e){}}` +
+      `return {body:raw,statusCode:raw?200:599,headers:{},requestUrl:key};};` +
+      `const request=function(spec){return String(responseData(spec).body??'');};` +
+      `const responseObject=function(spec){const data=responseData(spec);return {body:function(){return String(data.body??'');},` +
+      `code:function(){return Number(data.statusCode||0);},isSuccessful:function(){const c=Number(data.statusCode||0);return c>=200&&c<400;},` +
+      `headers:function(name){const h=data.headers||{};if(name===undefined)return h;const expected=String(name).toLowerCase();` +
+      `const keys=Object.keys(h);for(let i=0;i<keys.length;i++)if(keys[i].toLowerCase()===expected)return [String(h[keys[i]]??'')];` +
+      `return [];},url:function(){return String(data.requestUrl||'');},toString:function(){return String(data.body??'');}};};` +
       `const requestSpec=function(method,u,b,h){const o={method:String(method||'GET').toUpperCase()};` +
       `if(b!==undefined&&b!==null)o.body=typeof b==='string'?b:JSON.stringify(b);` +
       `if(h&&typeof h==='object')o.headers=h;return String(u??'')+','+JSON.stringify(o);};` +
@@ -206,24 +251,32 @@ export class LocalRuleScriptRuntime {
       `setCookie:function(_u,v){V.__cookie=String(v??'');return v;},replaceCookie:function(_u,v){V.__cookie=String(v??'');return v;},` +
       `removeCookie:function(_u,n){const name=String(n??'');V.__cookie=String(V.__cookie||'').split(';').filter(function(x){` +
       `return x.trim().substring(0,name.length+1)!==name+'=';}).join(';');return true;}};` +
+      `const isAddress=function(v){const s=String(v??'').trim().toLowerCase();return s.indexOf('http://')===0||` +
+      `s.indexOf('https://')===0||s.indexOf('/')===0||s.indexOf('./')===0||s.indexOf('../')===0;};` +
       `const java={ajax:request,ajaxAll:function(v){const list=Array.isArray(v)?v:[v];return list.map(responseObject);},` +
-      `get:function(k,h){if(arguments.length>1)return responseObject(requestSpec('GET',k,null,h));` +
-      `const key=String(k??'');return Object.prototype.hasOwnProperty.call(V,key)?V[key]:null;},` +
+      `get:function(k,h){if(arguments.length>1||isAddress(k))return responseObject(requestSpec('GET',k,null,h));` +
+      `const variableKey=String(k??'');return Object.prototype.hasOwnProperty.call(V,variableKey)?V[variableKey]:null;},` +
       `post:function(u,b,h){return responseObject(requestSpec('POST',u,b,h));},` +
+      `delete:function(u,h){return responseObject(requestSpec('DELETE',u,null,h));},` +
       `put:function(k,v){V[String(k||'')]=stringify(v);return v;},getVariable:function(k){return V[String(k||'')]??'';},` +
       `getString:function(p){return stringify(readPath(root,p));},getStringList:function(p){const v=readPath(root,p);` +
       `return Array.isArray(v)?v.map(stringify):(v==null?[]:[stringify(v)]);},` +
       `base64Encode:b64encode,base64EncodeToString:b64encode,base64Decode:b64decode,` +
       `base64DecodeToString:b64decode,hexEncodeToString:hexEncode,hexDecodeToString:hexDecode,` +
-      `md5Encode:md5,md5Encode32:md5,md5Encode16:function(v){return md5(v).substring(8,24);},` +
+      `md5:md5,md5Encode:md5,md5Encode32:md5,md5Encode16:function(v){return md5(v).substring(8,24);},` +
       `urlEncode:function(v){return encodeURIComponent(String(v??''));},` +
       `urlDecode:function(v){return decodeURIComponent(String(v??''));},encodeURI:function(v){return encodeURI(String(v??''));},` +
       `htmlDecode:htmlDecode,htmlEncode:htmlEncode,getCookie:function(u,n){return arguments.length>1?cookie.getKey(u,n):cookie.getCookie(u);},` +
+      `t2s:function(v){return String(v??'');},s2t:function(v){return String(v??'');},` +
+      `toNumChapter:function(v){return String(v??'');},getWebViewUA:function(){return 'Mozilla/5.0 Mobile Safari/537.36';},` +
+      `timeFormat:function(v){const d=new Date(Number(v)||fixedNow);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+` +
+      `'-'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');},` +
       `randomUUID:function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){` +
       `const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16);});},` +
       `lang:function(){return 'zh';},log:function(){},toast:function(){},longToast:function(){}};` +
       `const S=Object.assign({},I.source||{});const source={bookSourceUrl:S.bookSourceUrl||'',` +
       `bookSourceName:S.bookSourceName||'',bookSourceGroup:S.bookSourceGroup||'',variable:S.variable||'',` +
+      `key:S.bookSourceUrl||'',tag:S.bookSourceName||'',` +
       `getKey:function(){return S.bookSourceUrl||'';},getTag:function(){return S.bookSourceName||'';},` +
       `getSource:function(){return source;},getVariable:function(){return S.variable||'';},` +
       `setVariable:function(v){S.variable=String(v??'');source.variable=S.variable;return S.variable;},` +
@@ -232,12 +285,15 @@ export class LocalRuleScriptRuntime {
       `const book=Object.assign({},V);book.getVariable=function(k){return V[String(k??'')]??'';};` +
       `book.putVariable=function(k,v){V[String(k??'')]=stringify(v);return v;};book.setVariable=book.putVariable;` +
       `const chapter=Object.assign({},V);chapter.getVariable=book.getVariable;chapter.putVariable=book.putVariable;` +
-      `let runner;try{runner=new Function('result','$','java','source','cookie','baseUrl','book','chapter',` +
-      `String(I.jsLib||'')+'\\nreturn ('+String(I.code||'')+'\\n);');}catch(_expressionError){` +
-      `runner=new Function('result','$','java','source','cookie','baseUrl','book','chapter',` +
-      `String(I.jsLib||'')+'\\n'+String(I.code||'')+'\\n;return typeof result===\\'undefined\\'?\\'\\':result;');}` +
-      `let value='';try{value=runner(result,$,java,source,cookie,String(I.baseUrl||''),book,chapter);}` +
-      `catch(e){if(!pending)throw e;}if(value===undefined)value=result;value=stringify(value);` +
+      `const baseUrl=String(I.baseUrl||''),url=baseUrl,key=String(V.key??V.searchKey??''),` +
+      `searchKey=String(V.searchKey??key),page=Number(V.page||1),pageIndex=Number(V.pageIndex||page),title=String(V.title??'');` +
+      `const args=['result','$','java','source','cookie','baseUrl','book','chapter','src','url','key','searchKey',` +
+      `'page','pageIndex','title','__code'];let runner=new Function(...args,String(I.jsLib||'')+'\\nreturn eval(__code);');` +
+      `let value='';try{value=runner(result,$,java,source,cookie,baseUrl,book,chapter,src,url,key,searchKey,page,pageIndex,title,String(I.code||''));}` +
+      `catch(e){if(!pending&&e instanceof SyntaxError){runner=new Function(...args,String(I.jsLib||'')+'\\n'+String(I.code||'')+` +
+      `'\\n;return typeof result===\\'undefined\\'?\\'\\':result;');value=runner(result,$,java,source,cookie,baseUrl,book,chapter,` +
+      `src,url,key,searchKey,page,pageIndex,title,String(I.code||''));}else if(!pending)throw e;}` +
+      `if(value===undefined)value=result;value=stringify(value);` +
       `if(value.length>${maxOutput})throw new Error('脚本输出超过预算');` +
       `return JSON.stringify({value:value,pendingAddress:pending,variables:V,errorMessage:''});` +
       `}catch(e){return JSON.stringify({value:'',pendingAddress:'',variables:{},` +
@@ -279,6 +335,15 @@ export class LocalRuleScriptRuntime {
       }
     }
     return String(value);
+  }
+
+  private static encodeResponse(response: LocalRuleFetchResult): string {
+    const record: Record<string, Object> = {};
+    record['body'] = response.body;
+    record['statusCode'] = response.statusCode;
+    record['headers'] = response.headers;
+    record['requestUrl'] = response.requestUrl;
+    return `__LOCAL_RULE_RESPONSE__${JSON.stringify(record)}`;
   }
 
   private static copyVariables(input: Record<string, string>): Record<string, string> {

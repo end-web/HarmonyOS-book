@@ -20,14 +20,14 @@ export default function localRuleSourceRepositoryTest() {
       expect(incoming[1].enabled).assertTrue();
     });
 
-    it('does not re-enable an unsupported imported source', 0, () => {
+    it('preserves the user enabled state for a legacy unsupported source', 0, () => {
       const incoming = sourceOf('unsupported', true);
       incoming.validationStatus = LocalRuleSourceStatus.UNSUPPORTED;
       const existing = sourceOf('unsupported', true);
 
       LocalRuleSourceRepository.preserveEnabledStates([incoming], [existing]);
 
-      expect(incoming.enabled).assertFalse();
+      expect(incoming.enabled).assertTrue();
     });
   });
 }

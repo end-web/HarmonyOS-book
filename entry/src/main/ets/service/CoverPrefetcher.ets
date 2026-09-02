@@ -17,11 +17,10 @@ import { HttpClient } from './http/HttpClient';
 const DOMAIN = 0x0000;
 const TAG = 'CoverPrefetcher';
 
-/** 防盗链头:不带 Referer/UA 时 file.* CDN 明显更慢甚至失败 */
+/** 通用图片请求只携带 UA，避免把某个书源的 Referer 泄漏给其他图片站点。 */
 const COVER_HEADERS: Record<string, string> = {
   'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  'Referer': 'https://www.tingyou.fm/'
+    'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
 };
 
 /** 同时进行的预下载上限（冷启 TLS 握手重，过高会集体超时） */
@@ -38,6 +37,8 @@ export class CoverPrefetcher {
   private static succeeded: Set<string> = new Set();
   private static attemptCount: Map<string, number> = new Map();
   private static warmedOrigins: Set<string> = new Set();
+  private static requestHeaders: Map<string, Record<string, string>> =
+    new Map<string, Record<string, string>>();
   private static activeCount: number = 0;
   private static successHandlers: Map<string, () => void> = new Map();
   private static errorHandlers: Map<string, (err: cacheDownload.DownloadError) => void> = new Map();
@@ -52,6 +53,22 @@ export class CoverPrefetcher {
       cacheDownload.setMemoryCacheSize(32 * 1024 * 1024);
       CoverPrefetcher.initialized = true;
     } catch (_e) { /* ignore */ }
+  }
+
+  /** 注册规则源解析出的图片请求头；同 URL 后注册的详情上下文优先。 */
+  static registerHeaders(url: string, headers: Record<string, string>): void {
+    if (!url.startsWith('http')) return;
+    const copied: Record<string, string> = {};
+    const names = Object.keys(headers);
+    for (const name of names) {
+      const lower = name.toLowerCase();
+      if (lower === 'host' || lower === 'content-length' || lower === 'accept-encoding') continue;
+      copied[name] = headers[name] ?? '';
+    }
+    if (!CoverPrefetcher.hasHeader(copied, 'user-agent')) {
+      copied['User-Agent'] = COVER_HEADERS['User-Agent'] ?? '';
+    }
+    CoverPrefetcher.requestHeaders.set(url, copied);
   }
 
   /**
@@ -185,7 +202,7 @@ export class CoverPrefetcher {
         httpTotalTimeout: 45
       };
       const options: cacheDownload.CacheDownloadOptions = {
-        headers: COVER_HEADERS,
+        headers: CoverPrefetcher.requestHeaders.get(url) ?? COVER_HEADERS,
         cacheStrategy: cacheDownload.CacheStrategy.LAZY,
         retry: retryOpts,
         timeout: timeoutOpts
@@ -275,5 +292,13 @@ export class CoverPrefetcher {
       return m[1];
     }
     return '';
+  }
+
+  private static hasHeader(headers: Record<string, string>, expected: string): boolean {
+    const names = Object.keys(headers);
+    for (const name of names) {
+      if (name.toLowerCase() === expected.toLowerCase()) return true;
+    }
+    return false;
   }
 }

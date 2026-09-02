@@ -6,6 +6,7 @@ import {
 } from '../main/ets/model/LocalRuleSource';
 import {
   LocalRuleSourceBulkTestExecutor,
+  LocalRuleSourceBulkTestProgress,
   LocalRuleSourceBulkTestReport,
   LocalRuleSourceBulkTester,
   LocalRuleSourceBulkTestStore
@@ -63,25 +64,47 @@ class TestBulkExecutor implements LocalRuleSourceBulkTestExecutor {
 
 class TestBulkStore implements LocalRuleSourceBulkTestStore {
   savedSources: LocalRuleSource[] = [];
-  deletedSourceUrls: string[] = [];
+  savedBatchSizes: number[] = [];
   saveCalls: number = 0;
-  deleteAttempts: number = 0;
-  successfulDeleteCount: number = 0;
-  failDelete: boolean = false;
+  failSave: boolean = false;
 
-  async saveReady(sources: LocalRuleSource[]): Promise<void> {
+  async saveTested(sources: LocalRuleSource[]): Promise<void> {
     this.saveCalls++;
-    this.savedSources = sources.slice();
+    if (this.failSave) throw new Error('save transaction failed');
+    this.savedBatchSizes.push(sources.length);
+    for (const source of sources) this.savedSources.push(source);
+  }
+}
+
+class SlowFirstBulkExecutor implements LocalRuleSourceBulkTestExecutor {
+  calls: number = 0;
+  active: number = 0;
+  maxActive: number = 0;
+  private firstGate: Promise<void>;
+  private releaseFirstHandler: (() => void) | undefined = undefined;
+
+  constructor() {
+    this.firstGate = new Promise<void>((resolve: () => void) => {
+      this.releaseFirstHandler = resolve;
+    });
   }
 
-  async deleteFailed(sourceUrls: string[]): Promise<number> {
-    this.deleteAttempts++;
-    this.deletedSourceUrls = sourceUrls.slice();
-    if (this.failDelete) {
-      throw new Error('delete transaction failed');
-    }
-    this.successfulDeleteCount = sourceUrls.length;
-    return this.successfulDeleteCount;
+  async test(source: LocalRuleSource, _keyword: string): Promise<LocalRuleSourceHealth> {
+    this.calls++;
+    this.active++;
+    if (this.active > this.maxActive) this.maxActive = this.active;
+    if (source.bookSourceUrl === 'slow') await this.firstGate;
+    this.active--;
+    const health = new LocalRuleSourceHealth();
+    health.sourceUrl = source.bookSourceUrl;
+    health.status = LocalRuleSourceStatus.READY;
+    health.message = 'ready';
+    return health;
+  }
+
+  releaseFirst(): void {
+    const handler = this.releaseFirstHandler;
+    if (handler !== undefined) handler();
   }
 }
 
@@ -125,7 +148,7 @@ export default function localRuleSourceBulkTesterTest() {
       expect(true).assertTrue();
     });
 
-    it('keeps READY sources and deletes FAILED or UNSUPPORTED sources', 0, async () => {
+    it('retests legacy UNSUPPORTED sources and persists every result', 0, async () => {
       const executor = new TestBulkExecutor();
       executor.statuses.set('ready', LocalRuleSourceStatus.READY);
       executor.statuses.set('failed', LocalRuleSourceStatus.FAILED);
@@ -138,15 +161,31 @@ export default function localRuleSourceBulkTesterTest() {
 
       expect(report.total).assertEqual(3);
       expect(report.completed).assertEqual(3);
-      expect(report.passed).assertEqual(1);
-      expect(report.failed).assertEqual(2);
-      expect(report.deleted).assertEqual(2);
-      expect(executor.calls).assertEqual(2);
-      expect(store.savedSources.length).assertEqual(1);
+      expect(report.passed).assertEqual(2);
+      expect(report.failed).assertEqual(1);
+      expect(report.retained).assertEqual(1);
+      expect(executor.calls).assertEqual(3);
+      expect(store.savedSources.length).assertEqual(3);
       expect(store.savedSources[0].bookSourceUrl).assertEqual('ready');
-      expect(store.deletedSourceUrls.length).assertEqual(2);
-      expect(store.deletedSourceUrls[0]).assertEqual('failed');
-      expect(store.deletedSourceUrls[1]).assertEqual('unsupported');
+      expect(store.savedSources[1].bookSourceUrl).assertEqual('failed');
+      expect(store.savedSources[2].bookSourceUrl).assertEqual('unsupported');
+    });
+
+    it('reports each completed source so the page can update availability immediately', 0, async () => {
+      const executor = new TestBulkExecutor();
+      const store = new TestBulkStore();
+      const updatedUrls: string[] = [];
+
+      await new LocalRuleSourceBulkTester(executor, store).run(
+        [sourceOf('first'), sourceOf('second')], 'test',
+        (progress: LocalRuleSourceBulkTestProgress) => {
+          const testedSource = progress.testedSource;
+          if (testedSource !== undefined) updatedUrls.push(testedSource.bookSourceUrl);
+        });
+
+      expect(updatedUrls.length).assertEqual(2);
+      expect(updatedUrls.includes('first')).assertTrue();
+      expect(updatedUrls.includes('second')).assertTrue();
     });
 
     it('continues testing other sources when one executor call throws', 0, async () => {
@@ -165,15 +204,16 @@ export default function localRuleSourceBulkTesterTest() {
       expect(report.failed).assertEqual(1);
       expect(failedSource.validationStatus).assertEqual(LocalRuleSourceStatus.FAILED);
       expect(failedSource.validationMessage).assertContain('test failed');
-      expect(store.savedSources[0].bookSourceUrl).assertEqual('continues');
-      expect(store.deletedSourceUrls[0]).assertEqual('throws');
+      expect(store.savedSources.length).assertEqual(2);
+      expect(store.savedSources[0].bookSourceUrl).assertEqual('throws');
+      expect(store.savedSources[1].bookSourceUrl).assertEqual('continues');
     });
 
-    it('rejects the run instead of reporting deletion success when delete fails', 0, async () => {
+    it('rejects the run when persisting test results fails', 0, async () => {
       const executor = new TestBulkExecutor();
       executor.statuses.set('failed', LocalRuleSourceStatus.FAILED);
       const store = new TestBulkStore();
-      store.failDelete = true;
+      store.failSave = true;
       let rejected = false;
 
       try {
@@ -183,8 +223,7 @@ export default function localRuleSourceBulkTesterTest() {
       }
 
       expect(rejected).assertTrue();
-      expect(store.deleteAttempts).assertEqual(1);
-      expect(store.successfulDeleteCount).assertEqual(0);
+      expect(store.saveCalls).assertEqual(1);
     });
 
     it('returns an empty report without touching storage for an empty source list', 0, async () => {
@@ -198,10 +237,9 @@ export default function localRuleSourceBulkTesterTest() {
       expect(report.completed).assertEqual(0);
       expect(report.passed).assertEqual(0);
       expect(report.failed).assertEqual(0);
-      expect(report.deleted).assertEqual(0);
+      expect(report.retained).assertEqual(0);
       expect(executor.calls).assertEqual(0);
       expect(store.saveCalls).assertEqual(0);
-      expect(store.deleteAttempts).assertEqual(0);
     });
 
     it('runs at most six source tests concurrently', 0, async () => {
@@ -217,6 +255,26 @@ export default function localRuleSourceBulkTesterTest() {
       expect(report.passed).assertEqual(13);
       expect(executor.maxActive).assertEqual(6);
       expect(executor.maxActive <= 6).assertTrue();
+      expect(store.saveCalls).assertEqual(3);
+      expect(store.savedBatchSizes[0]).assertEqual(6);
+      expect(store.savedBatchSizes[1]).assertEqual(6);
+      expect(store.savedBatchSizes[2]).assertEqual(1);
+    });
+
+    it('starts the next source without waiting for the slowest active source', 0, async () => {
+      const executor = new SlowFirstBulkExecutor();
+      const store = new TestBulkStore();
+      const sources: LocalRuleSource[] = [sourceOf('slow')];
+      for (let index = 1; index < 8; index++) sources.push(sourceOf(`source-${index}`));
+
+      const running = new LocalRuleSourceBulkTester(executor, store).run(sources, 'test');
+      for (let index = 0; index < 12; index++) await Promise.resolve<void>(undefined);
+
+      expect(executor.calls >= 7).assertTrue();
+      expect(executor.maxActive <= 6).assertTrue();
+      executor.releaseFirst();
+      const report = await running;
+      expect(report.completed).assertEqual(8);
     });
   });
 }

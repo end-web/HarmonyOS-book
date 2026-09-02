@@ -11,13 +11,13 @@ class LocalRuleUrlParts {
 export class LocalRuleUrlAnalyzer {
   static analyze(source: LocalRuleSource, rawAddress: string,
     variables: Record<string, string> = {}, keyword: string = '', page: number = 1): LocalRuleRequestPlan {
-    const expanded = LocalRuleUrlAnalyzer.expandTemplate(rawAddress.trim(), source, variables, keyword, page);
-    const parts = LocalRuleUrlAnalyzer.splitOptions(expanded);
+    const parts = LocalRuleUrlAnalyzer.splitOptions(rawAddress.trim());
     const plan = new LocalRuleRequestPlan();
-    let address = parts.address.trim();
+    let address = LocalRuleUrlAnalyzer.expandTemplate(
+      parts.address, source, variables, keyword, page).trim();
     const inlineHeaders: Record<string, string> = {};
 
-    const headerStart = address.indexOf('@Header:');
+    const headerStart = address.toLowerCase().indexOf('@header:');
     if (headerStart >= 0) {
       const headerEnd = address.indexOf('@End', headerStart + 8);
       if (headerEnd > headerStart) {
@@ -41,7 +41,11 @@ export class LocalRuleUrlAnalyzer {
 
     plan.url = LocalRuleUrlAnalyzer.resolveUrl(source.bookSourceUrl, address);
     LocalRuleUrlAnalyzer.assertHttpUrl(plan.url);
-    plan.headers = LocalRuleUrlAnalyzer.parseHeaders(source.header);
+    const headerOverride = variables['__header'];
+    let headerText = LocalRuleUrlAnalyzer.expandBodyTemplate(
+      headerOverride !== undefined ? headerOverride : source.header, source, variables, keyword, page);
+    headerText = LocalRuleUrlAnalyzer.replaceAll(headerText, '{{baseUrl}}', plan.url);
+    plan.headers = LocalRuleUrlAnalyzer.parseHeaders(headerText);
     plan.timeoutMs = LocalRuleUrlAnalyzer.clamp(source.respondTime,
       LocalRuleExecutionLimits.MIN_TIMEOUT_MS, LocalRuleExecutionLimits.MAX_TIMEOUT_MS);
     LocalRuleUrlAnalyzer.applyOptions(plan, parts.options, source, variables, keyword, page);
@@ -119,12 +123,23 @@ export class LocalRuleUrlAnalyzer {
 
   static expandTemplate(template: string, source: LocalRuleSource,
     variables: Record<string, string>, keyword: string, page: number): string {
-    let output = template;
-    const encodedKeyword = encodeURIComponent(keyword);
-    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{key}}', encodedKeyword);
-    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{searchKey}}', encodedKeyword);
-    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{keyword}}', encodedKeyword);
-    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{searchKeyRaw}}', keyword);
+    return LocalRuleUrlAnalyzer.expandTemplateWithKeyword(
+      template, source, variables, encodeURIComponent(keyword), keyword, page);
+  }
+
+  private static expandBodyTemplate(template: string, source: LocalRuleSource,
+    variables: Record<string, string>, keyword: string, page: number): string {
+    return LocalRuleUrlAnalyzer.expandTemplateWithKeyword(
+      template, source, variables, keyword, keyword, page);
+  }
+
+  private static expandTemplateWithKeyword(template: string, source: LocalRuleSource,
+    variables: Record<string, string>, keywordValue: string, rawKeyword: string, page: number): string {
+    let output = LocalRuleUrlAnalyzer.expandPageExpressions(template, page);
+    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{key}}', keywordValue);
+    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{searchKey}}', keywordValue);
+    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{keyword}}', keywordValue);
+    output = LocalRuleUrlAnalyzer.replaceAll(output, '{{searchKeyRaw}}', rawKeyword);
     output = LocalRuleUrlAnalyzer.replaceAll(output, '{{page}}', String(Math.max(1, page)));
     output = LocalRuleUrlAnalyzer.replaceAll(output, '{{pageIndex}}', String(Math.max(1, page)));
     output = LocalRuleUrlAnalyzer.replaceAll(output, '{{source.bookSourceUrl}}', source.bookSourceUrl);
@@ -140,6 +155,23 @@ export class LocalRuleUrlAnalyzer {
     return output;
   }
 
+  private static expandPageExpressions(value: string, page: number): string {
+    const pattern = new RegExp('\\{\\{(page|pageIndex)\\s*([+-])\\s*(\\d+)\\}\\}', 'g');
+    let output = '';
+    let position = 0;
+    let match: RegExpExecArray | null = pattern.exec(value);
+    while (match !== null) {
+      const operator = match[2] ?? '+';
+      const amount = Number(match[3] ?? '0');
+      const offset = Number.isFinite(amount) ? Math.trunc(amount) : 0;
+      const calculated = operator === '-' ? page - offset : page + offset;
+      output += value.substring(position, match.index) + String(Math.max(0, calculated));
+      position = pattern.lastIndex;
+      match = pattern.exec(value);
+    }
+    return output + value.substring(position);
+  }
+
   static safeLogUrl(value: string): string {
     const queryIndex = value.indexOf('?');
     const clean = queryIndex >= 0 ? value.substring(0, queryIndex) : value;
@@ -152,7 +184,8 @@ export class LocalRuleUrlAnalyzer {
     if (methodValue !== undefined && methodValue !== null) {
       plan.method = String(methodValue).trim().toUpperCase();
     }
-    if (plan.method !== 'GET' && plan.method !== 'POST') {
+    const allowedMethods: string[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'];
+    if (!allowedMethods.includes(plan.method)) {
       throw new Error(`不支持的请求方法：${plan.method}`);
     }
 
@@ -184,6 +217,12 @@ export class LocalRuleUrlAnalyzer {
         }
       }
     }
+    const headerValue = options['header'];
+    if (headerValue !== undefined && headerValue !== null) {
+      const optionHeaders = LocalRuleUrlAnalyzer.parseHeaders(String(headerValue));
+      const headerNames = Object.keys(optionHeaders);
+      for (const name of headerNames) plan.headers[name] = optionHeaders[name] ?? '';
+    }
 
     const rawBodyValue = options['rawBody'];
     if (rawBodyValue !== undefined && rawBodyValue !== null) {
@@ -194,13 +233,17 @@ export class LocalRuleUrlAnalyzer {
     if (bodyValue !== undefined && bodyValue !== null) {
       if (typeof bodyValue === 'object') {
         const bodyJson = JSON.stringify(bodyValue);
-        const expandedJson = LocalRuleUrlAnalyzer.expandTemplate(bodyJson, source, variables, keyword, page);
+        const expandedJson = LocalRuleUrlAnalyzer.expandBodyTemplate(
+          bodyJson, source, variables, keyword, page);
         plan.body = JSON.parse(expandedJson) as Object;
       } else {
-        plan.body = LocalRuleUrlAnalyzer.expandTemplate(String(bodyValue), source, variables, keyword, page);
+        const bodyTemplate = String(bodyValue);
+        plan.body = LocalRuleUrlAnalyzer.looksLikeStructuredBody(bodyTemplate) ?
+          LocalRuleUrlAnalyzer.expandBodyTemplate(bodyTemplate, source, variables, keyword, page) :
+          LocalRuleUrlAnalyzer.expandTemplate(bodyTemplate, source, variables, keyword, page);
       }
     }
-    if (plan.method === 'GET') plan.body = undefined;
+    if (plan.method === 'GET' || plan.method === 'HEAD') plan.body = undefined;
   }
 
   private static splitOptions(value: string): LocalRuleUrlParts {

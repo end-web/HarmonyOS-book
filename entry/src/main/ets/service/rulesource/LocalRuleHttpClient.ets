@@ -138,11 +138,20 @@ export class LocalRuleHttpClient {
     LocalRuleHttpClient.hydratedSources.add(normalizedUrl);
   }
 
-  static getSessionHeaders(source: LocalRuleSource, requestUrl: string): Record<string, string> {
+  static clearCookieCacheBatch(sourceUrls: string[]): void {
+    for (const sourceUrl of sourceUrls) {
+      const normalizedUrl = sourceUrl.trim();
+      if (normalizedUrl.length > 0) LocalRuleHttpClient.removeCachedSource(normalizedUrl);
+    }
+  }
+
+  static getSessionHeaders(source: LocalRuleSource, requestUrl: string,
+    variables: Record<string, string> = {}): Record<string, string> {
     const plan = new LocalRuleRequestPlan();
     plan.url = requestUrl;
-    plan.headers = LocalRuleUrlAnalyzer.parseHeaders(source.header);
+    plan.headers = LocalRuleUrlAnalyzer.parseHeaders(variables['__header'] ?? source.header);
     if (source.enabledCookieJar) LocalRuleHttpClient.applyCookies(source, plan);
+    if (source.enabledCookieJar) LocalRuleHttpClient.applyVariableCookies(variables, plan);
     return plan.headers;
   }
 

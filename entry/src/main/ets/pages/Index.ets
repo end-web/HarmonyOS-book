@@ -15,7 +15,6 @@ import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
 import { ReaderPage } from './ReaderPage';
 import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
-import { TextSourceVerifyPage } from './TextSourceVerifyPage';
 import { SearchPage } from './SearchPage';
 import { RuleSourcePage } from './RuleSourcePage';
 import { RuleSourceAccountPage } from './RuleSourceAccountPage';
@@ -323,13 +322,6 @@ struct Index {
         }
         return undefined;
       })
-    } else if (name === 'verifyTextSource') {
-      NavDestination() {
-        TextSourceVerifyPage({ navStack: this.navStack })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'readerKitVerify') {
       NavDestination() {
         ReaderKitVerifyPage({ navStack: this.navStack })

@@ -16,6 +16,8 @@ import shuShanSourceIdentityTest from './ShuShanSourceIdentity.test';
 import shuShanSourceAdapterTest from './ShuShanSourceAdapter.test';
 import ruleSourceChildServiceTest from './RuleSourceChildService.test';
 import readerThemeTest from './ReaderTheme.test';
+import tingYouExternalSourceTest from './TingYouExternalSource.test';
+import searchHistoryTest from './SearchHistory.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -36,4 +38,6 @@ export default function testsuite() {
   shuShanSourceAdapterTest();
   ruleSourceChildServiceTest();
   readerThemeTest();
+  tingYouExternalSourceTest();
+  searchHistoryTest();
 }

@@ -109,6 +109,10 @@
       "value": "完成"
     },
     {
+      "name": "common_edit",
+      "value": "编辑"
+    },
+    {
       "name": "search_placeholder",
       "value": "搜索书籍、作者"
     },
@@ -117,8 +121,32 @@
       "value": "搜索"
     },
     {
+      "name": "home_imported_source_label",
+      "value": "已导入书源"
+    },
+    {
+      "name": "home_imported_source_hint",
+      "value": "从已导入书源中查找"
+    },
+    {
+      "name": "home_tingyou_source_label",
+      "value": "精品推荐"
+    },
+    {
+      "name": "home_source_required",
+      "value": "请先导入并启用可用书源"
+    },
+    {
       "name": "search_recommendations",
       "value": "搜索推荐"
+    },
+    {
+      "name": "search_recommend_loading",
+      "value": "正在从书源加载推荐"
+    },
+    {
+      "name": "search_recommend_empty",
+      "value": "暂无可用的书源推荐"
     },
     {
       "name": "search_recommend_mystery",
@@ -175,6 +203,14 @@
     {
       "name": "search_try_another",
       "value": "试试其他关键词"
+    },
+    {
+      "name": "search_history",
+      "value": "搜索历史"
+    },
+    {
+      "name": "search_clear_history",
+      "value": "清空"
     },
     {
       "name": "search_verify_text_source",
@@ -434,11 +470,87 @@
     },
     {
       "name": "rule_source_title",
-      "value": "书源"
+      "value": "书源管理"
+    },
+    {
+      "name": "rule_source_search_placeholder",
+      "value": "搜索名称、地址或分组"
+    },
+    {
+      "name": "rule_source_address_label",
+      "value": "书源地址"
+    },
+    {
+      "name": "rule_source_no_match",
+      "value": "没有匹配的书源"
+    },
+    {
+      "name": "rule_source_no_match_hint",
+      "value": "调整搜索词后重试"
+    },
+    {
+      "name": "rule_source_selected_count",
+      "value": "已选择 %d 个"
+    },
+    {
+      "name": "rule_source_select_hint",
+      "value": "请选择书源"
+    },
+    {
+      "name": "rule_source_select_all",
+      "value": "全选"
+    },
+    {
+      "name": "rule_source_deselect_all",
+      "value": "取消全选"
+    },
+    {
+      "name": "rule_source_batch_enable",
+      "value": "启用"
+    },
+    {
+      "name": "rule_source_batch_disable",
+      "value": "禁用"
+    },
+    {
+      "name": "rule_source_batch_delete",
+      "value": "删除"
+    },
+    {
+      "name": "rule_source_batch_enable_success",
+      "value": "已启用所选书源"
+    },
+    {
+      "name": "rule_source_batch_disable_success",
+      "value": "已禁用所选书源"
+    },
+    {
+      "name": "rule_source_batch_delete_title",
+      "value": "批量删除书源"
+    },
+    {
+      "name": "rule_source_batch_delete_message",
+      "value": "确定删除已选择的 %d 个书源吗？删除后无法恢复。"
+    },
+    {
+      "name": "rule_source_batch_delete_success",
+      "value": "所选书源已删除"
     },
     {
       "name": "rule_source_import_title",
       "value": "导入书源"
+    },
+    {
+      "name": "rule_source_import_short",
+      "value": "导入"
+    },
+    {
+      "name": "rule_source_manage",
+      "value": "管理"
+    },
+    {
+      "name": "rule_source_close_import",
+      "value": "收起导入"
     },
     {
       "name": "rule_source_import_hint",
@@ -510,11 +622,11 @@
     },
     {
       "name": "rule_source_type_audio",
-      "value": "音频"
+      "value": "听书"
     },
     {
       "name": "rule_source_type_text",
-      "value": "文本"
+      "value": "网文"
     },
     {
       "name": "rule_source_type_mixed",
@@ -546,11 +658,11 @@
     },
     {
       "name": "rule_source_test_action",
-      "value": "书源测试"
+      "value": "测试"
     },
     {
       "name": "rule_source_account_action",
-      "value": "主书源账号"
+      "value": "账号"
     },
     {
       "name": "rule_source_account_title",
@@ -710,11 +822,19 @@
     },
     {
       "name": "rule_source_bulk_action",
-      "value": "一键测试并清理"
+      "value": "一键测试全部"
+    },
+    {
+      "name": "rule_source_bulk_action_short",
+      "value": "批量测试"
     },
     {
       "name": "rule_source_bulk_running",
       "value": "正在测试书源"
+    },
+    {
+      "name": "rule_source_bulk_running_short",
+      "value": "测试中"
     },
     {
       "name": "rule_source_bulk_confirm_title",
@@ -722,7 +842,7 @@
     },
     {
       "name": "rule_source_bulk_confirm_message",
-      "value": "将验证全部书源的搜索和内容解析。测试失败或暂不兼容的书源会自动删除，相关登录信息也会一并清除。"
+      "value": "将逐一验证全部书源。失败书源会保留，并记录具体原因供后续修复。"
     },
     {
       "name": "rule_source_bulk_confirm_action",
@@ -730,7 +850,7 @@
     },
     {
       "name": "rule_source_bulk_completed",
-      "value": "批量测试完成，失败书源已清理"
+      "value": "批量测试完成，失败书源已保留"
     },
     {
       "name": "rule_source_bulk_operation_failed",
@@ -749,8 +869,8 @@
       "value": "失败"
     },
     {
-      "name": "rule_source_bulk_deleted",
-      "value": "已删除"
+      "name": "rule_source_bulk_retained",
+      "value": "已保留"
     },
     {
       "name": "rule_source_delete_title",

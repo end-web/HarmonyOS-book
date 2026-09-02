@@ -13,19 +13,22 @@ export class LocalRuleSourceBulkTestProgress {
   completed: number = 0;
   passed: number = 0;
   failed: number = 0;
+  testedSource: LocalRuleSource | undefined = undefined;
 
-  static copy(report: LocalRuleSourceBulkTestReport): LocalRuleSourceBulkTestProgress {
+  static copy(report: LocalRuleSourceBulkTestReport,
+    testedSource?: LocalRuleSource): LocalRuleSourceBulkTestProgress {
     const progress = new LocalRuleSourceBulkTestProgress();
     progress.total = report.total;
     progress.completed = report.completed;
     progress.passed = report.passed;
     progress.failed = report.failed;
+    progress.testedSource = testedSource;
     return progress;
   }
 }
 
 export class LocalRuleSourceBulkTestReport extends LocalRuleSourceBulkTestProgress {
-  deleted: number = 0;
+  retained: number = 0;
 }
 
 export type LocalRuleSourceBulkTestProgressHandler =
@@ -36,29 +39,25 @@ export interface LocalRuleSourceBulkTestExecutor {
 }
 
 export interface LocalRuleSourceBulkTestStore {
-  saveReady(sources: LocalRuleSource[]): Promise<void>;
-  deleteFailed(sourceUrls: string[]): Promise<number>;
+  saveTested(sources: LocalRuleSource[]): Promise<void>;
 }
 
 class DefaultLocalRuleSourceBulkTestExecutor implements LocalRuleSourceBulkTestExecutor {
   async test(source: LocalRuleSource, keyword: string): Promise<LocalRuleSourceHealth> {
-    return BookSourceService.testLocalSource(source, keyword);
+    return BookSourceService.testLocalSourceAvailability(source, keyword);
   }
 }
 
 class DefaultLocalRuleSourceBulkTestStore implements LocalRuleSourceBulkTestStore {
-  async saveReady(sources: LocalRuleSource[]): Promise<void> {
-    await LocalRuleSourceRepository.upsertBatch(sources);
-  }
-
-  async deleteFailed(sourceUrls: string[]): Promise<number> {
-    return LocalRuleSourceRepository.deleteBatch(sourceUrls);
+  async saveTested(sources: LocalRuleSource[]): Promise<void> {
+    await LocalRuleSourceRepository.updateValidationBatch(sources);
   }
 }
 
 class LocalRuleSourceBulkTestOutcome {
   source: LocalRuleSource = new LocalRuleSource();
   ready: boolean = false;
+  sourceIndex: number = -1;
 }
 
 export class LocalRuleSourceBulkTester {
@@ -82,39 +81,57 @@ export class LocalRuleSourceBulkTester {
 
     const report = new LocalRuleSourceBulkTestReport();
     report.total = sources.length;
-    const readySources: LocalRuleSource[] = [];
-    const failedUrls: string[] = [];
+    const activeTasks: Promise<LocalRuleSourceBulkTestOutcome>[] = [];
+    const activeIndexes: number[] = [];
+    const pendingSave: LocalRuleSource[] = [];
+    let nextIndex = 0;
     LocalRuleSourceBulkTester.notifyProgress(report, onProgress);
 
-    for (let start = 0; start < sources.length; start += BULK_TEST_BATCH_SIZE) {
-      const tasks: Promise<LocalRuleSourceBulkTestOutcome>[] = [];
-      const end = Math.min(start + BULK_TEST_BATCH_SIZE, sources.length);
-      for (let index = start; index < end; index++) {
-        tasks.push(this.testOne(sources[index], cleanKeyword));
+    while (nextIndex < sources.length && activeTasks.length < BULK_TEST_BATCH_SIZE) {
+      activeTasks.push(this.testOne(sources[nextIndex], cleanKeyword, nextIndex));
+      activeIndexes.push(nextIndex);
+      nextIndex++;
+    }
+
+    while (activeTasks.length > 0) {
+      const outcome: LocalRuleSourceBulkTestOutcome =
+        await Promise.race<LocalRuleSourceBulkTestOutcome>(activeTasks);
+      const activePosition = activeIndexes.indexOf(outcome.sourceIndex);
+      if (activePosition >= 0) {
+        activeTasks.splice(activePosition, 1);
+        activeIndexes.splice(activePosition, 1);
       }
-      const outcomes: LocalRuleSourceBulkTestOutcome[] = await Promise.all(tasks);
-      for (const outcome of outcomes) {
-        report.completed++;
-        if (outcome.ready) {
-          report.passed++;
-          readySources.push(outcome.source);
-        } else {
-          report.failed++;
-          failedUrls.push(outcome.source.bookSourceUrl);
-        }
-        LocalRuleSourceBulkTester.notifyProgress(report, onProgress);
+      if (nextIndex < sources.length) {
+        activeTasks.push(this.testOne(sources[nextIndex], cleanKeyword, nextIndex));
+        activeIndexes.push(nextIndex);
+        nextIndex++;
+      }
+
+      report.completed++;
+      pendingSave.push(outcome.source);
+      if (outcome.ready) {
+        report.passed++;
+      } else {
+        report.failed++;
+      }
+      LocalRuleSourceBulkTester.notifyProgress(report, onProgress, outcome.source);
+
+      if (pendingSave.length >= BULK_TEST_BATCH_SIZE) {
+        await this.store.saveTested(pendingSave.slice());
+        pendingSave.length = 0;
       }
     }
 
-    if (readySources.length > 0) await this.store.saveReady(readySources);
-    if (failedUrls.length > 0) report.deleted = await this.store.deleteFailed(failedUrls);
+    if (pendingSave.length > 0) await this.store.saveTested(pendingSave);
+    report.retained = report.failed;
     return report;
   }
 
   private async testOne(source: LocalRuleSource,
-    keyword: string): Promise<LocalRuleSourceBulkTestOutcome> {
+    keyword: string, sourceIndex: number): Promise<LocalRuleSourceBulkTestOutcome> {
     const outcome = new LocalRuleSourceBulkTestOutcome();
     outcome.source = source;
+    outcome.sourceIndex = sourceIndex;
     if (!source.canExecute()) {
       source.validationStatus = LocalRuleSourceStatus.UNSUPPORTED;
       if (source.validationMessage.length === 0) {
@@ -136,9 +153,9 @@ export class LocalRuleSourceBulkTester {
   }
 
   private static notifyProgress(report: LocalRuleSourceBulkTestReport,
-    onProgress?: LocalRuleSourceBulkTestProgressHandler): void {
+    onProgress?: LocalRuleSourceBulkTestProgressHandler, testedSource?: LocalRuleSource): void {
     if (onProgress !== undefined) {
-      onProgress(LocalRuleSourceBulkTestProgress.copy(report));
+      onProgress(LocalRuleSourceBulkTestProgress.copy(report, testedSource));
     }
   }
 }

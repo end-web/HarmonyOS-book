@@ -9,15 +9,17 @@ import {
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
-import { SearchResult, HomeBlockSection } from '../model/BookSource';
+import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
 import { BookDataSource } from '../utils/BookDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
-import { BuiltInSourceRegistry } from '../service/builtin/BuiltInSourceRegistry';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
+import { BookSourceService, ExploreFetchResult } from '../service/BookSourceService';
+import { SourceDataService } from '../service/SourceDataService';
+import { TingYouSourceIdentity } from '../service/rulesource/tingyou/TingYouSourceIdentity';
 
 /** 首页分类入口项 */
 interface HomeCategory {
@@ -26,32 +28,25 @@ interface HomeCategory {
   url: string;
 }
 
-const LATEST_CATEGORY_URL = 'rank/recommend_novel/latest/p1';
-
-/** 最新榜单 + 完整的16个分类。 */
+/** 听友公开分类；只有用户已导入并启用听友源时才会请求。 */
 const HOME_CATEGORIES: HomeCategory[] = [
-  { name: '最新', url: LATEST_CATEGORY_URL },
-  { name: '玄幻奇幻', url: 'types/46/comprehensive/p1' },
-  { name: '武侠小说', url: 'types/11/comprehensive/p1' },
-  { name: '恐怖惊悚', url: 'types/14/comprehensive/p1' },
-  { name: '言情通俗', url: 'types/19/comprehensive/p1' },
-  { name: '历史军事', url: 'types/15/comprehensive/p1' },
-  { name: '官场商战', url: 'types/17/comprehensive/p1' },
-  { name: '百家讲坛', url: 'types/9/comprehensive/p1' },
-  { name: '有声文学', url: 'types/10/comprehensive/p1' },
-  { name: '刑侦反腐', url: 'types/16/comprehensive/p1' },
-  { name: '广播剧', url: 'types/36/comprehensive/p1' },
-  { name: '人物纪实', url: 'types/18/comprehensive/p1' },
-  { name: '相声小品', url: 'types/21/comprehensive/p1' },
-  { name: '健康养生', url: 'types/33/comprehensive/p1' },
-  { name: '商业财经', url: 'types/42/comprehensive/p1' },
-  { name: '童话寓言', url: 'types/20/comprehensive/p1' },
-  { name: '单田芳', url: 'types/1/comprehensive/p1' },
+  { name: '玄幻奇幻', url: 'types/46/popular/p1' },
+  { name: '武侠小说', url: 'types/11/popular/p1' },
+  { name: '恐怖惊悚', url: 'types/14/popular/p1' },
+  { name: '言情通俗', url: 'types/19/popular/p1' },
+  { name: '历史军事', url: 'types/15/popular/p1' },
+  { name: '官场商战', url: 'types/17/popular/p1' },
+  { name: '百家讲坛', url: 'types/9/popular/p1' },
+  { name: '有声文学', url: 'types/10/popular/p1' },
+  { name: '刑侦反腐', url: 'types/16/popular/p1' },
+  { name: '广播剧', url: 'types/36/popular/p1' },
+  { name: '人物纪实', url: 'types/18/popular/p1' },
+  { name: '相声小品', url: 'types/21/popular/p1' },
+  { name: '健康养生', url: 'types/33/popular/p1' },
+  { name: '商业财经', url: 'types/42/popular/p1' },
+  { name: '童话寓言', url: 'types/20/popular/p1' },
+  { name: '单田芳', url: 'types/1/popular/p1' }
 ];
-
-/** 欢FM内置源标识(分类入口固定走该源) */
-const HUAN_SOURCE_URL = 'builtin://eprendre/huan_fm';
-const HUAN_SOURCE_NAME = '欢FM';
 
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
@@ -70,7 +65,7 @@ const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
 
 @ComponentV2
 struct CategoryLightNavItem {
-  @Param label: string = '';
+  @Param label: ResourceStr = '';
   @Param selected: boolean = false;
   @Event onTap: () => void = () => {};
 
@@ -272,7 +267,7 @@ export struct HomePage {
   /** 分类书单数据 */
   @Local categoryBooks: Book[] = [];
   @Local categoryLoading: boolean = false;
-  @Local categoryError: string = '';
+  @Local categoryError: ResourceStr = '';
   @Local categoryHasMore: boolean = true;
   @Local categoryNextUrl: string = '';
   @Local isRefreshing: boolean = false;
@@ -327,77 +322,35 @@ export struct HomePage {
   }
 
   private async loadHomeBlocks(preserveContent: boolean = false): Promise<void> {
-    hilog.info(DOMAIN, TAG, 'loadHomeBlocks START, gen=%{public}d', this.homeGen);
     this.homeGen++;
-    const gen = this.homeGen;
+    const generation = this.homeGen;
     if (this.homeBlocks.length === 0) this.loadingHome = true;
     if (!preserveContent) {
       this.homeBlocks = [];
       this.homeBlockDataSource.clear();
     }
-    hilog.info(DOMAIN, TAG, 'loadHomeBlocks: cleared data, loadingHome=%{public}s', String(this.loadingHome));
+    this.categoryBooks = [];
+    this.categoryDS.setBooks([]);
     try {
-      // 只加载内置书源的首页推荐,不加载导入的书源
-      const plugin = BuiltInSourceRegistry.getByUrl(HUAN_SOURCE_URL);
-      if (!plugin) {
-        hilog.warn(DOMAIN, TAG, 'loadHomeBlocks: Built-in source not available');
-        this.loadingHome = false;
+      const source = await this.findEnabledTingYouSource();
+      if (source === undefined) {
         return;
       }
-      hilog.info(DOMAIN, TAG, 'loadHomeBlocks: calling plugin.getHomeBlocks()');
-
-      const blocks = await plugin.getHomeBlocks();
-      hilog.info(DOMAIN, TAG, 'loadHomeBlocks: got %{public}d blocks', blocks.length);
-      if (gen !== this.homeGen) return;
-
-      // 转换为 HomeBlockSection 格式
-      const sections: HomeBlockSection[] = [];
-      for (const b of blocks) {
-        const books: SearchResult[] = [];
-        for (const book of b.books) {
-          BuiltInSourceRegistry.cacheBookMeta(book);
-          books.push({
-            name: book.title,
-            author: book.author,
-            coverUrl: book.coverUrl,
-            bookUrl: book.bookUrl,
-            intro: book.intro,
-            kind: book.status || '',
-            completed: book.completed,
-            lastChapter: '',
-            sourceName: plugin.name,
-            sourceUrl: HUAN_SOURCE_URL
-          });
-        }
-        sections.push({
-          title: b.title,
-          books: books,
-          moreUrl: b.moreUrl,
-          layout: b.layout,
-          sourceName: plugin.name,
-          sourceUrl: HUAN_SOURCE_URL
-        });
-      }
-
-      this.homeBlocks = sections;
-      this.homeBlockDataSource.setBlocks(sections);
-      this.loadingHome = false;
-      hilog.info(DOMAIN, TAG, 'loadHomeBlocks: SUCCESS, sections=%{public}d, loadingHome=false', sections.length);
-      // 预下载首页所有网络封面：前 12 张高优，其余排队，失败会自动重试直到完成
+      const blocks = await BookSourceService.getHomeBlocks(source);
+      if (generation !== this.homeGen) return;
+      this.homeBlocks = blocks;
+      this.homeBlockDataSource.setBlocks(blocks);
       const covers: string[] = [];
-      for (const s of sections) {
-        for (const b of s.books) {
-          if (b.coverUrl && b.coverUrl.startsWith('http')) covers.push(b.coverUrl);
+      for (const block of blocks) {
+        for (const book of block.books) {
+          if (book.coverUrl.startsWith('http')) covers.push(book.coverUrl);
         }
       }
       CoverPrefetcher.prefetchMany(covers, 12);
-
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'loadHomeBlocks failed: %{public}s', String(e));
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'loadHomeBlocks failed: %{public}s', String(error));
     } finally {
-      if (gen === this.homeGen) {
-        this.loadingHome = false;
-      }
+      if (generation === this.homeGen) this.loadingHome = false;
     }
   }
 
@@ -409,23 +362,18 @@ export struct HomePage {
 
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
   private async switchCategory(index: number, forceReload: boolean = false): Promise<void> {
-    if (this.selectedCategoryIndex === index && !forceReload) return; // 重复点击不处理
-
+    if (this.selectedCategoryIndex === index && !forceReload) return;
     this.selectedCategoryIndex = index;
     this.resetSearchCollapse();
     this.scrollContentToTop();
-
     if (index === -1) {
-      // 切回推荐
       this.categoryBooks = [];
       this.categoryDS.setBooks([]);
+      if (this.homeBlocks.length === 0) await this.loadHomeBlocks();
       return;
     }
-
-    // 加载分类书单
-    const cat = HOME_CATEGORIES[index];
-    if (!cat) return;
-
+    const category = HOME_CATEGORIES[index];
+    if (category === undefined) return;
     if (!forceReload) {
       this.categoryBooks = [];
       this.categoryDS.setBooks([]);
@@ -434,58 +382,46 @@ export struct HomePage {
     this.categoryError = '';
     this.categoryHasMore = true;
     this.categoryNextUrl = '';
-
     try {
-      const plugin = BuiltInSourceRegistry.getByUrl(HUAN_SOURCE_URL);
-      if (!plugin) {
-        this.categoryLoading = false;
-        this.categoryError = '欢FM源不可用';
+      const source = await this.findEnabledTingYouSource();
+      if (source === undefined) {
+        this.categoryError = $r('app.string.home_source_required');
         return;
       }
-
       const books: Book[] = [];
-      let nextUrl = cat.url;
-      const MIN_BOOKS = 50; // 至少加载50本
-
-      // 循环加载直到达到50本以上
-      while (books.length < MIN_BOOKS && nextUrl) {
-        const result = await plugin.getCategoryList(nextUrl);
-
-        for (const b of result.books) {
-          BuiltInSourceRegistry.cacheBookMeta(b);
-          const sr: SearchResult = {
-            name: b.title, author: b.author, coverUrl: b.coverUrl,
-            bookUrl: b.bookUrl, intro: b.intro, kind: b.status, lastChapter: '',
-            sourceName: plugin.name, sourceUrl: HUAN_SOURCE_URL,
-            completed: b.completed,
-          };
-          books.push(this.homeBookFromResult(sr));
-        }
-
-        nextUrl = result.nextUrl || '';
-
-        // 如果没有更多数据了就退出
-        if (!nextUrl || result.books.length === 0) {
-          break;
-        }
+      const visited = new Set<string>();
+      let nextUrl = category.url;
+      while (books.length < 50 && nextUrl.length > 0 && !visited.has(nextUrl)) {
+        visited.add(nextUrl);
+        const page: ExploreFetchResult = await BookSourceService.getExploreBooksByUrl(
+          source, nextUrl, 1);
+        for (const item of page.books) books.push(this.homeBookFromResult(item));
+        nextUrl = page.nextUrl;
+        if (page.books.length === 0) break;
       }
-
       this.categoryBooks = books;
       this.categoryDS.setBooks(books);
       this.categoryNextUrl = nextUrl;
       this.categoryHasMore = nextUrl.length > 0;
-      this.categoryLoading = false;
-      hilog.info(DOMAIN, TAG, 'switchCategory: loaded %{public}d books for category %{public}d', books.length, index);
       const covers: string[] = [];
-      for (const b of books) {
-        if (b.cover && b.cover.startsWith('http')) covers.push(b.cover);
+      for (const book of books) {
+        if (book.cover.startsWith('http')) covers.push(book.cover);
       }
       CoverPrefetcher.prefetchMany(covers, 16);
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'switchCategory failed: %{public}s', String(e));
+    } catch (error) {
+      this.categoryError = `加载失败：${String(error)}`;
+      hilog.error(DOMAIN, TAG, 'switchCategory failed: %{public}s', String(error));
+    } finally {
       this.categoryLoading = false;
-      this.categoryError = '加载失败：' + String(e);
     }
+  }
+
+  private async findEnabledTingYouSource(): Promise<BookSource | undefined> {
+    const sources = await SourceDataService.getEnabledSources();
+    for (const source of sources) {
+      if (TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl)) return source;
+    }
+    return undefined;
   }
 
   /** 通过 URL 切换分类 */
@@ -720,11 +656,11 @@ export struct HomePage {
                 SymbolGlyph($r('sys.symbol.magnifyingglass'))
                   .fontSize(48)
                   .fontColor([$r('sys.color.font_tertiary')])
-                Text('搜索你想听的书')
+                Text($r('app.string.search_placeholder'))
                   .fontSize(AppFont.Body)
                   .fontColor($r('sys.color.font_tertiary'))
                   .margin({ top: AppSpace.Md })
-                Text(HUAN_SOURCE_NAME)
+                Text($r('app.string.home_imported_source_hint'))
                   .fontSize(AppFont.Caption)
                   .fontColor($r('sys.color.font_tertiary'))
                   .margin({ top: AppSpace.Xs })
@@ -732,6 +668,7 @@ export struct HomePage {
               .width('100%')
               .height(300)
               .justifyContent(FlexAlign.Center)
+              .onClick(() => this.onSearchTap())
             }
           }
         } else if (this.categoryLoading && this.categoryBooks.length === 0) {
@@ -768,6 +705,7 @@ export struct HomePage {
               BookCard({
                 book: book,
                 indexHint: idx,
+                showSourceBadge: false,
                 onTap: () => this.openBook(book)
               })
             }, (book: Book) => book.id)
@@ -864,9 +802,6 @@ export struct HomePage {
           .fontSize(AppFont.Title)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
-        Text(` · ${block.sourceName}`)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
         Blank()
         Row({ space: AppSpace.Xxs }) {
           Text('更多')
@@ -967,12 +902,14 @@ export struct HomePage {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
-          Text(r.author || r.sourceName)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
+          if (r.author) {
+            Text(r.author)
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+          }
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
@@ -1008,6 +945,7 @@ export struct HomePage {
         book: this.homeBookFromResult(r),
         cardWidth: HOME_COVER_CARD_SIZE,
         indexHint: indexHint,
+        showSourceBadge: false,
         onTap: () => {
           const book = this.homeBookFromResult(r);
           this.openBook(book);
@@ -1081,7 +1019,7 @@ export struct HomePage {
     Scroll() {
       Row({ space: AppSpace.Xs }) {
         CategoryLightNavItem({
-          label: '推荐',
+          label: $r('app.string.home_tingyou_source_label'),
           selected: this.selectedCategoryIndex === -1,
           onTap: () => this.switchCategory(-1)
         })

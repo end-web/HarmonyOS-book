@@ -24,6 +24,7 @@ import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 import { OneShotTransitionIds } from '../utils/OneShotTransition';
+import { CoverImage } from '../components/CoverImage';
 
 const DETAIL_LOG_DOMAIN: number = 0x0000;
 const DETAIL_LOG_TAG: string = 'BookDetailPage';
@@ -164,7 +165,9 @@ export struct BookDetailPage {
     if (!this.book) return '有声书';
     const category = this.book.category.trim();
     const normalized = category.toLowerCase();
-    if (normalized.length === 0 || normalized === 'audio') {
+    const isStatus = normalized.includes('完结') || normalized.includes('完本') ||
+      normalized.includes('连载') || normalized.includes('更新中');
+    if (normalized.length === 0 || normalized === 'audio' || isStatus) {
       return this.book.contentType === 'text' ? '电子书' : '有声书';
     }
     if (normalized === 'text') return '电子书';
@@ -174,6 +177,19 @@ export struct BookDetailPage {
   /** 状态缺失时按默认完结处理，只有明确的 false 才是连载中。 */
   private displayStatus(): string {
     return this.book?.completed === false ? '连载中' : '已完结';
+  }
+
+  private parseAudioChapterCount(rawValue: string): number {
+    const match = rawValue.match(new RegExp('[0-9]+'));
+    if (match === null || match.length === 0) return 0;
+    const count = Number(match[0]);
+    return Number.isSafeInteger(count) && count > 0 ? count : 0;
+  }
+
+  private isPlaceholderIntro(value: string): boolean {
+    const compact = value.trim().replace(new RegExp('\\s+', 'g'), '');
+    const placeholders: string[] = ['=.=','==', '暂无', '暂无简介', '暂无介绍', '无'];
+    return placeholders.includes(compact);
   }
 
   private async loadBook(): Promise<void> {
@@ -363,10 +379,18 @@ export struct BookDetailPage {
         }
         if (bookInfo) {
           if (bookInfo.tocUrl) tocUrl = bookInfo.tocUrl;
-          if (bookInfo.intro && !book.intro) book.intro = bookInfo.intro;
-          // 详情返回的分类/完结作为更权威来源补全（搜索快照可能因硬编码丢失）
-          if (bookInfo.kind && bookInfo.kind.trim().length > 0 && !book.category.trim()) book.category = bookInfo.kind;
+          if (bookInfo.name.trim().length > 0) book.title = bookInfo.name;
+          if (bookInfo.author.trim().length > 0) book.author = bookInfo.author;
+          if (bookInfo.coverUrl.trim().length > 0) book.cover = bookInfo.coverUrl;
+          if (bookInfo.intro.trim().length > 0) book.intro = bookInfo.intro;
+          else if (this.isPlaceholderIntro(book.intro)) book.intro = '';
+          if (bookInfo.kind.trim().length > 0) book.category = bookInfo.kind;
           if (bookInfo.completed !== undefined) book.completed = bookInfo.completed;
+          const declaredChapterCount = this.parseAudioChapterCount(bookInfo.wordCount);
+          if (declaredChapterCount > 0) book.chapterCount = declaredChapterCount;
+          const detailBook = this.copyBookForRender(book);
+          this.book = detailBook;
+          SearchCache.put(detailBook);
         }
         this.debugInfo += `\ntocUrl=${tocUrl}`;
 
@@ -394,7 +418,7 @@ export struct BookDetailPage {
           originSourceValue: item.url,
           variables: item.variables
         }));
-        book.chapterCount = book.chapters.length;
+        book.chapterCount = Math.max(book.chapterCount, book.chapters.length);
         const cloned: Book = {
           id: book.id,
           title: book.title,
@@ -961,14 +985,16 @@ export struct BookDetailPage {
       // 封面（共享元素，飞向 PlayerPage / 飞回 BookCard）
       Stack() {
         if (this.book!.cover && this.book!.cover.startsWith('http')) {
-          Image(this.book!.cover)
-            .width(this.detailCoverWidth())
-            .height(this.detailCoverHeight())
-            .borderRadius(AppRadius.Sm)
-            .objectFit(ImageFit.Cover)
-            // 与列表统一解码尺寸,复用同一份解码缓存(100x130vp 显示足够清晰)
-            .sourceSize({ width: 300, height: 400 })
-            .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
+          CoverImage({
+            url: this.book!.cover,
+            imgWidth: this.detailCoverWidth(),
+            imgHeight: this.detailCoverHeight(),
+            useFixedHeight: true,
+            radius: AppRadius.Sm,
+            decodeW: 300,
+            decodeH: 400,
+            highPriority: true
+          })
         } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
           // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
           Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
@@ -1216,7 +1242,8 @@ export struct BookDetailPage {
     if (this.loadingToc && this.book!.chapters.length === 0) {
       return this.book!.contentType === 'text' ? '目录加载中' : '节目加载中';
     }
-    return `共 ${this.book!.chapters.length}${unit}`;
+    const totalCount = Math.max(this.book!.chapterCount, this.book!.chapters.length);
+    return `共 ${totalCount}${unit}`;
   }
 
   /** 按可用视口高度估算骨架行数，铺满但不过量。 */

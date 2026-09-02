@@ -15,6 +15,9 @@ export class SearchCache {
         book.chapterCount = existing.chapters.length;
       }
     }
+    if (existing && book.cover.trim().length === 0 && existing.cover.trim().length > 0) {
+      book.cover = existing.cover;
+    }
     // 若已存在先删除，确保重新插入后在 Map 末尾（LRU 顺序）
     if (searchCache.has(id)) {
       searchCache.delete(id);

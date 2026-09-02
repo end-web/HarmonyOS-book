@@ -9,8 +9,6 @@ import {
   LocalRuleSourceStatus
 } from '../../model/LocalRuleSource';
 import { LocalRuleSourceImportParser } from './LocalRuleSourceImportParser';
-import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
-import { ShuShanSourceIdentity } from './shushan/ShuShanSourceIdentity';
 
 const DATABASE_NAME = 'rule_sources.db';
 const TABLE_NAME = 'rule_sources';
@@ -20,6 +18,7 @@ const MAX_SOURCE_JSON_BYTES = 512 * 1024;
 const MAX_SESSION_TOKEN_LENGTH = 4096;
 const MAX_SESSION_DEVICE_ID_LENGTH = 256;
 const MAX_COOKIE_HEADER_LENGTH = 64 * 1024;
+const BATCH_PREDICATE_LIMIT = 400;
 
 const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
   source_url TEXT PRIMARY KEY NOT NULL,
@@ -334,10 +333,83 @@ export class LocalRuleSourceRepository {
     }
   }
 
+  /** 批量测试仅更新健康状态，避免重复解析和重写整份书源 JSON。 */
+  static async updateValidationBatch(sources: LocalRuleSource[]): Promise<void> {
+    if (sources.length === 0) return;
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const transaction = await store.createTransaction();
+    try {
+      for (const source of sources) {
+        const sourceUrl = LocalRuleSourceRepository.requireSourceUrl(source.bookSourceUrl);
+        const values: relationalStore.ValuesBucket = {
+          'validation_status': source.validationStatus,
+          'validation_message': source.validationMessage,
+          'updated_at': Date.now()
+        };
+        const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+        predicates.equalTo('source_url', sourceUrl);
+        const updated = await transaction.update(values, predicates);
+        if (updated !== 1) throw new Error(`书源状态更新失败：${sourceUrl}`);
+      }
+      await transaction.commit();
+    } catch (error) {
+      try {
+        await transaction.rollback();
+      } catch (_rollbackError) {
+        // 事务可能已关闭，保留原始状态更新错误。
+      }
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
   static async setEnabled(sourceUrl: string, enabled: boolean): Promise<void> {
     const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
     const updated = await LocalRuleSourceRepository.updateEnabled(normalizedUrl, enabled);
     if (!updated) throw new Error(`书源不存在：${normalizedUrl}`);
+  }
+
+  /** 在同一事务中启用或禁用多条书源，任一书源不存在则整批回滚。 */
+  static async setEnabledBatch(sourceUrls: string[], enabled: boolean): Promise<number> {
+    if (sourceUrls.length === 0) return 0;
+    const normalizedUrls: string[] = [];
+    const seen = new Set<string>();
+    for (const sourceUrl of sourceUrls) {
+      const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
+      if (seen.has(normalizedUrl)) continue;
+      seen.add(normalizedUrl);
+      normalizedUrls.push(normalizedUrl);
+    }
+
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const transaction = await store.createTransaction();
+    const values: relationalStore.ValuesBucket = {
+      'enabled': enabled ? 1 : 0,
+      'updated_at': Date.now()
+    };
+    let updatedCount = 0;
+    try {
+      for (let start = 0; start < normalizedUrls.length; start += BATCH_PREDICATE_LIMIT) {
+        const end = Math.min(normalizedUrls.length, start + BATCH_PREDICATE_LIMIT);
+        const batchValues: relationalStore.ValueType[] = [];
+        for (let index = start; index < end; index++) batchValues.push(normalizedUrls[index]);
+        const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+        predicates.in('source_url', batchValues);
+        const updated = await transaction.update(values, predicates);
+        if (updated !== batchValues.length) throw new Error('部分书源不存在，批量启停已取消');
+        updatedCount += updated;
+      }
+      await transaction.commit();
+      return updatedCount;
+    } catch (error) {
+      try {
+        await transaction.rollback();
+      } catch (_rollbackError) {
+        // 事务可能已关闭，保留原始更新错误。
+      }
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
   }
 
   static async toggle(sourceUrl: string): Promise<boolean> {
@@ -378,7 +450,7 @@ export class LocalRuleSourceRepository {
     }
   }
 
-  /** 在同一事务中删除多条书源及其登录会话，任一删除失败则整批回滚。 */
+  /** 在同一事务中分块删除多条书源、登录会话和 Cookie，避免大批量逐行调用。 */
   static async deleteBatch(sourceUrls: string[]): Promise<number> {
     if (sourceUrls.length === 0) return 0;
     const normalizedUrls: string[] = [];
@@ -394,17 +466,21 @@ export class LocalRuleSourceRepository {
     const transaction = await store.createTransaction();
     let deletedCount = 0;
     try {
-      for (const sourceUrl of normalizedUrls) {
+      for (let start = 0; start < normalizedUrls.length; start += BATCH_PREDICATE_LIMIT) {
+        const end = Math.min(normalizedUrls.length, start + BATCH_PREDICATE_LIMIT);
+        const batchValues: relationalStore.ValueType[] = [];
+        for (let index = start; index < end; index++) batchValues.push(normalizedUrls[index]);
         const sessionPredicates = new relationalStore.RdbPredicates(SESSION_TABLE_NAME);
-        sessionPredicates.equalTo('source_url', sourceUrl);
+        sessionPredicates.in('source_url', batchValues);
         const cookiePredicates = new relationalStore.RdbPredicates(COOKIE_TABLE_NAME);
-        cookiePredicates.equalTo('source_url', sourceUrl);
+        cookiePredicates.in('source_url', batchValues);
         const sourcePredicates = new relationalStore.RdbPredicates(TABLE_NAME);
-        sourcePredicates.equalTo('source_url', sourceUrl);
+        sourcePredicates.in('source_url', batchValues);
         await transaction.delete(sessionPredicates);
         await transaction.delete(cookiePredicates);
         deletedCount += await transaction.delete(sourcePredicates);
       }
+      if (deletedCount !== normalizedUrls.length) throw new Error('部分书源不存在，批量删除已取消');
       await transaction.commit();
       return deletedCount;
     } catch (error) {
@@ -528,17 +604,12 @@ export class LocalRuleSourceRepository {
       source.validationStatus = LocalRuleSourceStatus.UNSUPPORTED;
       source.validationMessage = report.message.length > 0
         ? `持久化书源无法解析：${report.message}` : '持久化书源无法解析';
-    } else if (source.validationStatus !== LocalRuleSourceStatus.UNSUPPORTED) {
-      const usesNativeAdapter = GuangYuSourceIdentity.isSourceUrl(sourceUrl) ||
-        ShuShanSourceIdentity.isSourceUrl(sourceUrl);
-      const staleNativeAdapterGate = usesNativeAdapter &&
-        validationStatus === LocalRuleSourceStatus.UNSUPPORTED;
-      if (staleNativeAdapterGate) {
-        source.enabled = enabled;
+    } else {
+      source.enabled = enabled;
+      if (validationStatus === LocalRuleSourceStatus.UNSUPPORTED) {
         source.validationStatus = LocalRuleSourceStatus.UNCHECKED;
-        source.validationMessage = '等待测试';
+        source.validationMessage = '兼容层已更新，等待重新测试';
       } else {
-        source.enabled = enabled;
         source.validationStatus = validationStatus;
         source.validationMessage = validationMessage;
       }

@@ -12,9 +12,7 @@ import { ChapterCacheService } from '../service/ChapterCacheService';
 import { DownloadService } from '../service/DownloadService';
 import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
-import { registerBuiltInSources } from '../service/builtin';
 import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
-import { NetworkPreconnect } from '../service/http/NetworkPreconnect';
 import { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 
@@ -57,10 +55,6 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     WidgetUpdater.setContext(this.context);
-    // 注册唯一在线内容源：欢 FM。
-    registerBuiltInSources();
-    // 冷启预建链：固定域名（欢FM 站点 + CDN）立即建链，与首屏请求并行。
-    NetworkPreconnect.prewarmBuiltIns();
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
     DownloadService.getInstance().setContext(this.context);

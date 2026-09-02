@@ -18,6 +18,7 @@ export struct BookCard {
   @Param cardWidth: number = 110;
   @Param indexHint: number = 0;
   @Param coverAspectRatio: number = 1;
+  @Param showSourceBadge: boolean = true;
   @Event onTap: (id: string) => void = () => {};
 
   @Local pressed: boolean = false;
@@ -124,7 +125,7 @@ export struct BookCard {
             .objectFit(ImageFit.Cover)
         }
 
-        if (this.sourceName()) {
+        if (this.showSourceBadge && this.sourceName()) {
           Text(this.sourceName())
             .fontSize(10)
             .fontColor(Color.White)

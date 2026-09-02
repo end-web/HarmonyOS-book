@@ -1,18 +1,16 @@
-/** 内置源优先、本地规则源旁路的统一内容门面。 */
+/** 用户导入规则源的统一内容门面。 */
 import { AudioSource, Book, Chapter } from '../model/Book';
 import { BookInfo, BookSource, HomeBlockSection, SearchResult, TocItem } from '../model/BookSource';
 import { LocalRuleSource, LocalRuleSourceHealth, LocalRuleSourceStatus } from '../model/LocalRuleSource';
 import { TextChapterContent, TextSourceError } from '../model/TextReading';
 import { ChapterTitleFormatter } from '../utils/ChapterTitleFormatter';
 import { DownloadPolicy } from './DownloadPolicy';
-import { BuiltInDispatcher } from './builtin/BuiltInDispatcher';
-import { BuiltInSourceRegistry } from './builtin/BuiltInSourceRegistry';
 import { LocalRuleContentResult } from './rulesource/LocalRuleRuntimeTypes';
 import { LocalRuleDispatcher } from './rulesource/LocalRuleDispatcher';
 import { NativeRuleSourceDispatcher } from './rulesource/NativeRuleSourceDispatcher';
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
-import { KK_BIQU_GE_SOURCE_URL } from './text/KkBiqugeHtmlParser';
-import { KkBiqugeTextSource } from './text/KkBiqugeTextSource';
+import { TingYouSourceAdapter } from './rulesource/tingyou/TingYouSourceAdapter';
+import { TingYouSourceIdentity } from './rulesource/tingyou/TingYouSourceIdentity';
 
 export interface ExploreFetchResult {
   books: SearchResult[];
@@ -62,16 +60,11 @@ export class NativeRuleSourceHealthPolicy {
 }
 
 export class BookSourceService {
-  static async prepareAudioSource(bookSourceUrl: string): Promise<void> {
-    if (BuiltInSourceRegistry.isBuiltIn(bookSourceUrl)) {
-      await BuiltInDispatcher.prepareAudio(bookSourceUrl);
-    }
+  static async prepareAudioSource(_bookSourceUrl: string): Promise<void> {
+    return;
   }
 
   static getAudioResolveTimeoutMs(source: BookSource, fallbackMs: number): number {
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      return BuiltInDispatcher.getAudioResolveTimeoutMs(source, fallbackMs);
-    }
     if (source instanceof LocalRuleSource) {
       return Math.max(3000, Math.min(60000, source.respondTime));
     }
@@ -79,9 +72,6 @@ export class BookSourceService {
   }
 
   static async searchBooks(source: BookSource, keyword: string, page: number = 1): Promise<SearchResult[]> {
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      return BuiltInDispatcher.search(source, keyword, page);
-    }
     if (source instanceof LocalRuleSource && !source.isSearchEnabled()) return [];
     if (NativeRuleSourceDispatcher.isSource(source)) {
       return NativeRuleSourceDispatcher.search(source, keyword, page);
@@ -118,6 +108,43 @@ export class BookSourceService {
     } catch (error) {
       health.status = LocalRuleSourceStatus.FAILED;
       health.message = error instanceof Error ? error.message : String(error);
+      console.warn(`[BookSourceService] testLocalSource ${source.bookSourceName} failed: ${health.message}`);
+    }
+    health.responseTimeMs = Date.now() - startedAt;
+    return health;
+  }
+
+  /** 批量测试只探测搜索链路；单源测试仍使用 testLocalSource 做全链路校验。 */
+  static async testLocalSourceAvailability(source: LocalRuleSource,
+    keyword: string): Promise<LocalRuleSourceHealth> {
+    const health = new LocalRuleSourceHealth();
+    health.sourceUrl = source.bookSourceUrl;
+    health.checkedAt = Date.now();
+    const startedAt = Date.now();
+    if (!source.canExecute()) {
+      health.status = LocalRuleSourceStatus.UNSUPPORTED;
+      health.message = source.validationMessage || '书源包含当前版本不支持的能力';
+      return health;
+    }
+
+    const cleanKeyword = keyword.trim();
+    if (cleanKeyword.length === 0) {
+      health.status = LocalRuleSourceStatus.FAILED;
+      health.message = '搜索测试关键词不能为空';
+      return health;
+    }
+
+    try {
+      const results = NativeRuleSourceDispatcher.isSource(source)
+        ? await NativeRuleSourceDispatcher.searchForHealthCheck(source, cleanKeyword, 1)
+        : await LocalRuleDispatcher.searchForHealthCheck(source, cleanKeyword, 1);
+      health.status = LocalRuleSourceStatus.READY;
+      health.message = results.length > 0 ? `搜索正常，共 ${results.length} 条` :
+        '搜索请求正常，当前关键词暂无匹配';
+    } catch (error) {
+      health.status = LocalRuleSourceStatus.FAILED;
+      health.message = error instanceof Error ? error.message : String(error);
+      console.warn(`[BookSourceService] availability ${source.bookSourceName} failed: ${health.message}`);
     }
     health.responseTimeMs = Date.now() - startedAt;
     return health;
@@ -315,9 +342,6 @@ export class BookSourceService {
 
   static async getBookInfo(source: BookSource, bookUrl: string,
     _variables?: Record<string, string>): Promise<BookInfo | null> {
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      return BuiltInDispatcher.getBookInfo(source, bookUrl);
-    }
     if (NativeRuleSourceDispatcher.isSource(source)) {
       return NativeRuleSourceDispatcher.getBookInfo(source.bookSourceUrl, bookUrl);
     }
@@ -329,9 +353,7 @@ export class BookSourceService {
   static async getBookToc(source: BookSource, tocUrl: string,
     _variables?: Record<string, string>, bookName?: string): Promise<TocItem[]> {
     let items: TocItem[] = [];
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      items = await BuiltInDispatcher.getBookToc(source, tocUrl);
-    } else if (NativeRuleSourceDispatcher.isSource(source)) {
+    if (NativeRuleSourceDispatcher.isSource(source)) {
       items = await NativeRuleSourceDispatcher.getBookToc(source.bookSourceUrl, tocUrl);
     } else {
       const localSource = await BookSourceService.resolveLocalSource(source);
@@ -353,9 +375,6 @@ export class BookSourceService {
 
   static async getAudioUrl(source: BookSource, chapterUrl: string,
     _variables?: Record<string, string>): Promise<string> {
-    if (BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      return BuiltInDispatcher.getAudioUrl(source, chapterUrl);
-    }
     if (NativeRuleSourceDispatcher.isSource(source)) {
       return NativeRuleSourceDispatcher.getAudioUrl(source.bookSourceUrl, chapterUrl);
     }
@@ -376,28 +395,22 @@ export class BookSourceService {
       };
       return info;
     }
-    if (!BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) {
-      const localSource = await BookSourceService.resolveLocalSource(source);
-      if (localSource !== undefined) {
-        const scopedVariables = BookSourceService.mergeVariables(
-          BookSourceService.copyVariables(variables), chapterVariables);
-        const result: LocalRuleContentResult = await LocalRuleDispatcher.resolveContent(
-          localSource, chapterUrl, scopedVariables);
-        const localUrl = result.audioUrl || chapterUrl;
-        const localHeaders = Object.keys(result.requestHeaders).length > 0
-          ? result.requestHeaders : LocalRuleDispatcher.getAudioHeaders(localSource, localUrl);
-        return { url: localUrl, headers: localHeaders };
-      }
+    const localSource = await BookSourceService.resolveLocalSource(source);
+    if (localSource !== undefined) {
+      const scopedVariables = BookSourceService.mergeVariables(
+        BookSourceService.copyVariables(variables), chapterVariables);
+      const result: LocalRuleContentResult = await LocalRuleDispatcher.resolveContent(
+        localSource, chapterUrl, scopedVariables);
+      const localUrl = result.audioUrl || chapterUrl;
+      const localHeaders = Object.keys(result.requestHeaders).length > 0
+        ? result.requestHeaders : LocalRuleDispatcher.getAudioHeaders(localSource, localUrl);
+      return { url: localUrl, headers: localHeaders };
     }
-    const url = await BookSourceService.getAudioUrl(source, chapterUrl, variables);
-    const headers = BuiltInDispatcher.getAudioHeaders(source, url);
-    return { url, headers };
+    const emptyHeaders: Record<string, string> = {};
+    return { url: chapterUrl, headers: emptyHeaders };
   }
 
   static async loadTextBook(book: Book): Promise<Book> {
-    if (book.sourceUrl === KK_BIQU_GE_SOURCE_URL) {
-      return KkBiqugeTextSource.loadBook(book);
-    }
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
     const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
     if (localSource === undefined || (!usesNativeAdapter && !localSource.isText()) ||
@@ -450,9 +463,6 @@ export class BookSourceService {
 
   static async getTextChapterContent(book: Book, chapterUrl: string,
     title: string, chapterVariables?: Record<string, string>): Promise<TextChapterContent> {
-    if (book.sourceUrl === KK_BIQU_GE_SOURCE_URL) {
-      return KkBiqugeTextSource.getChapterContent(chapterUrl, title);
-    }
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
     const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
     if (localSource === undefined || (!usesNativeAdapter && !localSource.isText()) ||
@@ -471,19 +481,31 @@ export class BookSourceService {
   }
 
   static async getExploreBooksByUrl(source: BookSource, categoryUrl: string,
-    page: number = 1): Promise<ExploreFetchResult> {
-    if (!BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) return { books: [], nextUrl: '' };
-    return BuiltInDispatcher.getExploreBooksByUrl(source, categoryUrl, page);
+    _page: number = 1): Promise<ExploreFetchResult> {
+    const localSource = await BookSourceService.resolveLocalSource(source);
+    if (localSource !== undefined && TingYouSourceIdentity.isSourceUrl(localSource.bookSourceUrl)) {
+      const category = await TingYouSourceAdapter.getCategory(localSource, categoryUrl);
+      const result: ExploreFetchResult = {
+        books: category.books,
+        nextUrl: category.nextUrl
+      };
+      return result;
+    }
+    return { books: [], nextUrl: '' };
   }
 
   static async getExploreBooks(source: BookSource): Promise<SearchResult[]> {
-    if (!BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) return [];
-    return BuiltInDispatcher.getExploreBooks(source);
+    const result = await BookSourceService.getExploreBooksByUrl(
+      source, 'types/46/popular/p1', 1);
+    return result.books;
   }
 
   static async getHomeBlocks(source: BookSource): Promise<HomeBlockSection[]> {
-    if (!BuiltInSourceRegistry.isBuiltIn(source.bookSourceUrl)) return [];
-    return BuiltInDispatcher.getHomeBlocks(source);
+    const localSource = await BookSourceService.resolveLocalSource(source);
+    if (localSource !== undefined && TingYouSourceIdentity.isSourceUrl(localSource.bookSourceUrl)) {
+      return TingYouSourceAdapter.getHomeBlocks(localSource);
+    }
+    return [];
   }
 
   private static async resolveLocalSource(source: BookSource): Promise<LocalRuleSource | undefined> {

@@ -1,7 +1,6 @@
-/** 内置源与本地规则源的只读聚合入口。 */
+/** 用户导入规则源的只读聚合入口。 */
 import { BookSource } from '../model/BookSource';
 import { LocalRuleSource } from '../model/LocalRuleSource';
-import { BuiltInSourceRegistry } from './builtin/BuiltInSourceRegistry';
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
 
 export class SourceDataService {
@@ -9,20 +8,17 @@ export class SourceDataService {
   private static localSourcesByUrl: Map<string, LocalRuleSource> = new Map<string, LocalRuleSource>();
 
   static async getSources(): Promise<BookSource[]> {
-    const builtIns: BookSource[] = BuiltInSourceRegistry.materialize();
     try {
       const localSources = await LocalRuleSourceRepository.getAll();
-      const accepted = SourceDataService.acceptLocalSources(localSources);
-      return builtIns.concat(accepted);
+      return SourceDataService.acceptLocalSources(localSources);
     } catch (error) {
       console.warn(`[SourceDataService] local rules unavailable: ${SourceDataService.errorMessage(error)}`);
-      SourceDataService.localSourceUrls.clear();
-      return builtIns;
+      SourceDataService.invalidateLocalSources();
+      return [];
     }
   }
 
   static async getEnabledSources(): Promise<BookSource[]> {
-    const builtIns: BookSource[] = BuiltInSourceRegistry.materialize();
     try {
       const localSources = await LocalRuleSourceRepository.getAll();
       const accepted = SourceDataService.acceptLocalSources(localSources);
@@ -30,17 +26,16 @@ export class SourceDataService {
       for (const source of accepted) {
         if (source.isSearchEnabled()) enabled.push(source);
       }
-      return builtIns.concat(enabled);
+      return enabled;
     } catch (error) {
       console.warn(`[SourceDataService] enabled local rules unavailable: ${SourceDataService.errorMessage(error)}`);
-      return builtIns;
+      SourceDataService.invalidateLocalSources();
+      return [];
     }
   }
 
-  /** 单源热路径：内置源只查内存注册表，本地规则源才访问独立数据库。 */
+  /** 单源热路径优先使用导入源缓存，未命中时查询独立数据库。 */
   static async getSourceByUrl(sourceUrl: string): Promise<BookSource | undefined> {
-    const builtIn = BuiltInSourceRegistry.getByUrl(sourceUrl);
-    if (builtIn !== undefined) return BuiltInSourceRegistry.toBookSource(builtIn);
     const cached = SourceDataService.localSourcesByUrl.get(sourceUrl);
     if (cached !== undefined) return cached;
     try {

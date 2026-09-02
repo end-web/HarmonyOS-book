@@ -45,6 +45,6 @@ export interface Book {
   skipIntro?: number;
   /** 跳过片尾秒数（每本书独立设置） */
   skipOutro?: number;
-  /** 是否完结（源端 status=1；用于详情页"状态"展示） */
+  /** 是否完结；不同来源状态值语义不同，听友协议中 status=0 表示已完结。 */
   completed?: boolean;
 }

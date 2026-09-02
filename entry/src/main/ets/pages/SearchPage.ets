@@ -7,7 +7,8 @@ import {
 } from '@kit.UIDesignKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
-import { BookSource, SearchResult } from '../model/BookSource';
+import { BookSource, HomeBlockSection, SearchResult } from '../model/BookSource';
+import { LocalRuleSource, LocalRuleSourceStatus } from '../model/LocalRuleSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { SearchCache } from '../utils/SearchCache';
@@ -18,34 +19,24 @@ import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { WindowUtils } from '../utils/WindowUtils';
+import { PreferenceService } from '../service/PreferenceService';
+import { TingYouSourceIdentity } from '../service/rulesource/tingyou/TingYouSourceIdentity';
 
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
 const LOCAL_RULE_SEARCH_CONCURRENCY: number = 6;
-const EBOOK_COVER_ASPECT_RATIO: number = 0.75;
+const LOCAL_RULE_COVER_CONCURRENCY: number = 3;
+const LOCAL_RULE_COVER_LIMIT: number = 12;
+const SEARCH_COVER_ASPECT_RATIO: number = 0.75;
 const SEARCH_HEADER_HEIGHT: number = 56;
 const RESULT_TOOLBAR_HEIGHT: number = 48;
 const SEARCH_FOCUS_DELAY_MS: number = 320;
-
-class SearchRecommendation {
-  readonly label: Resource;
-  readonly keyword: string;
-
-  constructor(label: Resource, keyword: string) {
-    this.label = label;
-    this.keyword = keyword;
-  }
-}
-
-const SEARCH_RECOMMENDATIONS: SearchRecommendation[] = [
-  new SearchRecommendation($r('app.string.search_recommend_mystery'), '悬疑推理'),
-  new SearchRecommendation($r('app.string.search_recommend_classics'), '经典名著'),
-  new SearchRecommendation($r('app.string.search_recommend_history'), '历史故事'),
-  new SearchRecommendation($r('app.string.search_recommend_city'), '都市生活'),
-  new SearchRecommendation($r('app.string.search_recommend_fantasy'), '玄幻修仙'),
-  new SearchRecommendation($r('app.string.search_recommend_comedy'), '相声评书'),
-  new SearchRecommendation($r('app.string.search_recommend_children'), '儿童故事'),
-  new SearchRecommendation($r('app.string.search_recommend_biography'), '人物传记')
+const SEARCH_RECOMMENDATION_COUNT: number = 5;
+const SEARCH_RECOMMENDATION_SOURCE_LIMIT: number = 6;
+const SEARCH_RECOMMENDATION_BATCH_SIZE: number = 3;
+const SEARCH_HISTORY_DELETE_COLOR: string = '#D03050';
+const SEARCH_RECOMMENDATION_KEYWORDS: string[] = [
+  '斗破苍穹', '三体', '凡人修仙传', '诡秘之主', '红楼梦', '盗墓笔记', '西游记', '庆余年'
 ];
 
 @ComponentV2
@@ -61,22 +52,38 @@ export struct SearchPage {
   @Local textBooks: Book[] = [];
   @Local audioCount: number = 0;
   @Local textCount: number = 0;
+  @Local visibleResultCount: number = 0;
+  @Local searchHistory: string[] = [];
+  @Local recommendationBooks: Book[] = [];
+  @Local recommendationsLoading: boolean = false;
 
   private resultDataSource: BookDataSource = new BookDataSource();
   private resultScroller: Scroller = new Scroller();
   private recommendationScroller: Scroller = new Scroller();
   private searchGen: number = 0;
+  private recommendationGen: number = 0;
   private focusTimerId: number = -1;
   private initialFocusRequested: boolean = false;
 
   aboutToAppear(): void {
     CoverPrefetcher.init();
     BookCard.resetAnimations();
+    this.loadSearchHistory();
+    this.loadRecommendations();
   }
 
   aboutToDisappear(): void {
     this.searchGen++;
+    this.recommendationGen++;
     this.cancelSearchFocus();
+  }
+
+  private async loadSearchHistory(): Promise<void> {
+    try {
+      this.searchHistory = await PreferenceService.getSearchHistory();
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'load search history failed: %{public}s', String(e));
+    }
   }
 
   private scheduleSearchFocus(): void {
@@ -111,12 +118,158 @@ export struct SearchPage {
     this.textBooks = [];
     this.audioCount = 0;
     this.textCount = 0;
+    this.visibleResultCount = 0;
     this.resultDataSource.clear();
   }
 
-  private submitRecommendation(item: SearchRecommendation): void {
-    this.keyword = item.keyword;
+  private submitHistoryKeyword(keyword: string): void {
+    this.keyword = keyword;
     this.doSearch();
+  }
+
+  private async removeHistoryItem(keyword: string): Promise<void> {
+    try {
+      await PreferenceService.removeSearchHistory(keyword);
+      this.searchHistory = await PreferenceService.getSearchHistory();
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'remove search history failed: %{public}s', String(e));
+    }
+  }
+
+  private async clearAllHistory(): Promise<void> {
+    try {
+      await PreferenceService.clearSearchHistory();
+      this.searchHistory = [];
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'clear search history failed: %{public}s', String(e));
+    }
+  }
+
+  private async loadRecommendations(): Promise<void> {
+    this.recommendationGen++;
+    const generation = this.recommendationGen;
+    this.recommendationsLoading = true;
+    try {
+      const sources = await SourceDataService.getEnabledSources();
+      if (generation !== this.recommendationGen) return;
+      const orderedSources = this.shuffleSources(sources);
+      const books: Book[] = [];
+      const seen = new Set<string>();
+
+      for (const source of orderedSources) {
+        if (!TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl)) continue;
+        try {
+          const blocks = await BookSourceService.getHomeBlocks(source);
+          if (generation !== this.recommendationGen) return;
+          this.appendHomeRecommendationBooks(source, blocks, books, seen);
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'load source home recommendations failed: %{public}s', String(error));
+        }
+        break;
+      }
+
+      if (books.length < SEARCH_RECOMMENDATION_COUNT) {
+        await this.appendSearchRecommendationBooks(orderedSources, books, seen, generation);
+      }
+      if (generation !== this.recommendationGen) return;
+      this.recommendationBooks = this.pickRecommendationBooks(books);
+      this.prefetchCovers(this.recommendationBooks);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'load recommendations failed: %{public}s', String(error));
+      if (generation === this.recommendationGen) this.recommendationBooks = [];
+    } finally {
+      if (generation === this.recommendationGen) this.recommendationsLoading = false;
+    }
+  }
+
+  private shuffleSources(sources: BookSource[]): BookSource[] {
+    const shuffled = sources.slice();
+    for (let index = shuffled.length - 1; index > 0; index--) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      const current = shuffled[index];
+      shuffled[index] = shuffled[randomIndex];
+      shuffled[randomIndex] = current;
+    }
+    return shuffled;
+  }
+
+  private appendHomeRecommendationBooks(source: BookSource, blocks: HomeBlockSection[],
+    books: Book[], seen: Set<string>): void {
+    const fallbackType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
+      ? 'text' : 'audio';
+    for (const block of blocks) {
+      for (const result of block.books) {
+        const book = this.searchResultToBook(result, result.contentType ?? fallbackType);
+        this.appendRecommendationBook(book, books, seen);
+      }
+    }
+  }
+
+  private async appendSearchRecommendationBooks(sources: BookSource[], books: Book[], seen: Set<string>,
+    generation: number): Promise<void> {
+    const readySources: BookSource[] = [];
+    for (const source of sources) {
+      if (source instanceof LocalRuleSource && source.validationStatus === LocalRuleSourceStatus.READY) {
+        readySources.push(source);
+      }
+    }
+    const sourcePool = readySources.length > 0 ? readySources : sources;
+    const candidates: BookSource[] = [];
+    for (const source of sourcePool) {
+      candidates.push(source);
+      if (candidates.length >= SEARCH_RECOMMENDATION_SOURCE_LIMIT) break;
+    }
+    for (let start = 0; start < candidates.length; start += SEARCH_RECOMMENDATION_BATCH_SIZE) {
+      if (generation !== this.recommendationGen) return;
+      const tasks: Promise<Book[]>[] = [];
+      const end = Math.min(candidates.length, start + SEARCH_RECOMMENDATION_BATCH_SIZE);
+      for (let index = start; index < end; index++) {
+        const keywordIndex = Math.floor(Math.random() * SEARCH_RECOMMENDATION_KEYWORDS.length);
+        tasks.push(this.loadSourceRecommendationBooks(candidates[index],
+          SEARCH_RECOMMENDATION_KEYWORDS[keywordIndex]));
+      }
+      const batches = await Promise.all(tasks);
+      if (generation !== this.recommendationGen) return;
+      for (const batch of batches) {
+        for (const book of batch) this.appendRecommendationBook(book, books, seen);
+      }
+      if (books.length >= SEARCH_RECOMMENDATION_COUNT * 2) return;
+    }
+  }
+
+  private async loadSourceRecommendationBooks(source: BookSource, keyword: string): Promise<Book[]> {
+    try {
+      const results = await BookSourceService.searchBooks(source, keyword);
+      const fallbackType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
+        ? 'text' : 'audio';
+      const books: Book[] = [];
+      for (const result of results) {
+        books.push(this.searchResultToBook(result, result.contentType ?? fallbackType));
+      }
+      return books;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'recommendation source failed [%{public}s]: %{public}s',
+        source.bookSourceName, String(error));
+      return [];
+    }
+  }
+
+  private appendRecommendationBook(book: Book, books: Book[], seen: Set<string>): void {
+    const key = `${book.sourceUrl}\u001f${book.bookUrl}`;
+    if (book.title.trim().length === 0 || book.bookUrl.trim().length === 0 || seen.has(key)) return;
+    seen.add(key);
+    books.push(book);
+  }
+
+  private pickRecommendationBooks(books: Book[]): Book[] {
+    const shuffled = books.slice();
+    for (let index = shuffled.length - 1; index > 0; index--) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      const current = shuffled[index];
+      shuffled[index] = shuffled[randomIndex];
+      shuffled[randomIndex] = current;
+    }
+    return shuffled.slice(0, SEARCH_RECOMMENDATION_COUNT);
   }
 
   private async doSearch(): Promise<void> {
@@ -126,6 +279,12 @@ export struct SearchPage {
       return;
     }
     this.keyword = keyword;
+    PreferenceService.addSearchHistory(keyword).catch((e: Error) => {
+      hilog.warn(DOMAIN, TAG, 'save search history failed: %{public}s', e.message);
+    });
+    this.loadSearchHistory().catch((e: Error) => {
+      hilog.warn(DOMAIN, TAG, 'reload search history failed: %{public}s', e.message);
+    });
     this.searchGen++;
     const gen = this.searchGen;
     this.searching = true;
@@ -135,6 +294,7 @@ export struct SearchPage {
     this.textBooks = [];
     this.audioCount = 0;
     this.textCount = 0;
+    this.visibleResultCount = 0;
     this.resultDataSource.clear();
     try {
       this.resultScroller.scrollEdge(Edge.Top);
@@ -215,6 +375,13 @@ export struct SearchPage {
       }
       this.refreshVisibleBooks();
       this.prefetchCovers(books);
+      if (source instanceof LocalRuleSource && source.ruleSearch.coverUrl.trim().length === 0 &&
+        source.ruleBookInfo.coverUrl.trim().length > 0) {
+        this.hydrateMissingLocalRuleCovers(source, books, gen).catch((error: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'cover hydration failed [%{public}s]: %{public}s',
+            source.bookSourceName, error.message);
+        });
+      }
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
         source.bookSourceName, String(e));
@@ -229,6 +396,90 @@ export struct SearchPage {
     CoverPrefetcher.prefetchMany(covers, 12);
   }
 
+  private async hydrateMissingLocalRuleCovers(source: LocalRuleSource, books: Book[],
+    gen: number): Promise<void> {
+    const candidates: Book[] = [];
+    for (const book of books) {
+      if (book.cover.trim().length > 0 || book.bookUrl.trim().length === 0) continue;
+      candidates.push(book);
+      if (candidates.length >= LOCAL_RULE_COVER_LIMIT) break;
+    }
+    for (let start = 0; start < candidates.length; start += LOCAL_RULE_COVER_CONCURRENCY) {
+      if (gen !== this.searchGen) return;
+      const tasks: Promise<Book | undefined>[] = [];
+      const end = Math.min(candidates.length, start + LOCAL_RULE_COVER_CONCURRENCY);
+      for (let index = start; index < end; index++) {
+        tasks.push(this.hydrateOneLocalRuleCover(source, candidates[index], gen));
+      }
+      const hydratedBooks = await Promise.all(tasks);
+      if (gen !== this.searchGen) return;
+      for (const hydratedBook of hydratedBooks) {
+        if (hydratedBook !== undefined) this.replaceSearchBook(hydratedBook);
+      }
+      this.refreshVisibleBooks();
+    }
+    this.prefetchCovers(candidates);
+  }
+
+  private async hydrateOneLocalRuleCover(source: LocalRuleSource, book: Book,
+    gen: number): Promise<Book | undefined> {
+    const info = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
+    if (gen !== this.searchGen || info === null) return undefined;
+    const coverUrl = info.coverUrl.trim();
+    if (coverUrl.length === 0) return undefined;
+    book.cover = coverUrl;
+    const hydratedBook = this.cloneBook(book);
+    SearchCache.put(hydratedBook);
+    return hydratedBook;
+  }
+
+  private replaceSearchBook(book: Book): void {
+    const audioBooks = this.audioBooks.slice();
+    let audioChanged = false;
+    for (let index = 0; index < audioBooks.length; index++) {
+      if (audioBooks[index].id !== book.id) continue;
+      audioBooks[index] = book;
+      audioChanged = true;
+      break;
+    }
+    if (audioChanged) this.audioBooks = audioBooks;
+
+    const textBooks = this.textBooks.slice();
+    let textChanged = false;
+    for (let index = 0; index < textBooks.length; index++) {
+      if (textBooks[index].id !== book.id) continue;
+      textBooks[index] = book;
+      textChanged = true;
+      break;
+    }
+    if (textChanged) this.textBooks = textBooks;
+  }
+
+  private cloneBook(book: Book): Book {
+    const cloned: Book = {
+      id: book.id,
+      contentType: book.contentType,
+      title: book.title,
+      author: book.author,
+      narrator: book.narrator,
+      cover: book.cover,
+      category: book.category,
+      intro: book.intro,
+      totalDuration: book.totalDuration,
+      chapterCount: book.chapterCount,
+      rating: book.rating,
+      tags: book.tags,
+      chapters: book.chapters,
+      bookUrl: book.bookUrl,
+      sourceUrl: book.sourceUrl,
+      variables: book.variables,
+      skipIntro: book.skipIntro,
+      skipOutro: book.skipOutro,
+      completed: book.completed
+    };
+    return cloned;
+  }
+
   private refreshVisibleBooks(): void {
     const visible: Book[] = [];
     if (this.searchTab === 0 || this.searchTab === 1) {
@@ -238,16 +489,13 @@ export struct SearchPage {
       for (const book of this.textBooks) visible.push(book);
     }
     this.resultDataSource.setBooks(visible);
+    this.visibleResultCount = visible.length;
   }
 
   private selectSearchTab(index: number): void {
     if (index < 0 || index > 2 || this.searchTab === index) return;
     this.searchTab = index;
     this.refreshVisibleBooks();
-  }
-
-  private searchCoverAspectRatio(book: Book): number {
-    return book.contentType === 'text' ? EBOOK_COVER_ASPECT_RATIO : 1;
   }
 
   private searchResultToBook(result: SearchResult, contentType: 'audio' | 'text'): Book {
@@ -290,43 +538,111 @@ export struct SearchPage {
   }
 
   @Builder
-  buildRecommendation(item: SearchRecommendation) {
-    Row({ space: AppSpace.Xs }) {
-      SymbolGlyph($r('sys.symbol.magnifyingglass'))
-        .fontSize(16)
-        .fontColor([HomeTheme.Accent])
-      Text(item.label)
-        .fontSize(AppFont.Body)
+  buildHistoryItem(keyword: string) {
+    Row({ space: AppSpace.Xxs }) {
+      Text(keyword)
+        .fontSize(13)
         .fontColor($r('sys.color.font_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: 144 })
+        .height(32)
+        .padding({ left: AppSpace.Sm })
+        .onClick(() => this.submitHistoryKeyword(keyword))
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(12)
+          .fontColor([SEARCH_HISTORY_DELETE_COLOR])
+      }
+      .width(28)
+      .height(28)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(AppRadius.Pill)
+      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
+      .onClick(() => this.removeHistoryItem(keyword))
     }
-    .width('48%')
-    .height(44)
-    .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-    .margin({ bottom: AppSpace.Sm })
-    .borderRadius(AppRadius.Sm)
-    .backgroundColor(HomeTheme.CardSurface)
-    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.98 })
-    .onClick(() => this.submitRecommendation(item))
+    .height(32)
+    .padding({ right: 2 })
+    .borderRadius(AppRadius.Pill)
+    .backgroundColor(Color.Transparent)
+    .systemMaterial(AppMaterial.InteractiveThin)
+    .margin({ right: AppSpace.Xs, bottom: AppSpace.Xs })
+  }
+
+  @Builder
+  buildSearchHistory() {
+    if (this.searchHistory.length > 0) {
+      Column({ space: AppSpace.Sm }) {
+        Row() {
+          Text($r('app.string.search_history'))
+            .fontSize(AppFont.Title)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('sys.color.font_primary'))
+            .layoutWeight(1)
+
+          Text($r('app.string.search_clear_history'))
+            .fontSize(AppFont.Caption)
+            .fontColor(HomeTheme.Accent)
+            .padding({ left: AppSpace.Xs, right: AppSpace.Xs, top: 4, bottom: 4 })
+            .borderRadius(AppRadius.Xs)
+            .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
+            .onClick(() => this.clearAllHistory())
+        }
+        .width('100%')
+
+        Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+          ForEach(this.searchHistory, (keyword: string) => {
+            this.buildHistoryItem(keyword)
+          }, (keyword: string) => keyword)
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .margin({ bottom: AppSpace.Md })
+    }
   }
 
   @Builder
   buildRecommendations() {
     Scroll(this.recommendationScroller) {
       Column({ space: AppSpace.Md }) {
+        this.buildSearchHistory()
+
         Text($r('app.string.search_recommendations'))
           .fontSize(AppFont.Title)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
           .width('100%')
 
-        Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween }) {
-          ForEach(SEARCH_RECOMMENDATIONS, (item: SearchRecommendation) => {
-            this.buildRecommendation(item)
-          }, (item: SearchRecommendation) => item.keyword)
+        if (this.recommendationsLoading && this.recommendationBooks.length === 0) {
+          Row({ space: AppSpace.Xs }) {
+            LoadingProgress()
+              .width(20)
+              .height(20)
+              .color(AppColor.Brand)
+            Text($r('app.string.search_recommend_loading'))
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
+          .width('100%')
+          .height(72)
+          .justifyContent(FlexAlign.Center)
+        } else if (this.recommendationBooks.length === 0) {
+          Text($r('app.string.search_recommend_empty'))
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+            .width('100%')
+            .height(56)
+            .textAlign(TextAlign.Center)
+        } else {
+          Column() {
+            ForEach(this.recommendationBooks, (book: Book) => {
+              this.buildListItem(book)
+            }, (book: Book) => book.id)
+          }
+          .width('100%')
         }
-        .width('100%')
       }
       .width('100%')
       .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Md })
@@ -448,7 +764,7 @@ export struct SearchPage {
           BookCard({
             book: book,
             indexHint: index,
-            coverAspectRatio: this.searchCoverAspectRatio(book),
+            coverAspectRatio: SEARCH_COVER_ASPECT_RATIO,
             onTap: () => this.openBook(book)
           })
         }
@@ -478,16 +794,16 @@ export struct SearchPage {
           CoverImage({
             url: book.cover,
             imgWidth: 92,
-            aspectRatioValue: this.searchCoverAspectRatio(book),
+            aspectRatioValue: SEARCH_COVER_ASPECT_RATIO,
             radius: AppRadius.Md,
             decodeW: 276,
-            decodeH: book.contentType === 'text' ? 368 : 276,
+            decodeH: 368,
             highPriority: false
           })
         } else {
           Image($r('app.media.app_icon_legacy'))
             .width(92)
-            .aspectRatio(this.searchCoverAspectRatio(book))
+            .aspectRatio(SEARCH_COVER_ASPECT_RATIO)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }
@@ -623,9 +939,9 @@ export struct SearchPage {
   buildSearchBody() {
     if (!this.hasSearched) {
       this.buildRecommendations()
-    } else if (this.resultDataSource.totalCount() === 0 && this.searching) {
+    } else if (this.visibleResultCount === 0 && this.searching) {
       this.buildLoadingState()
-    } else if (this.resultDataSource.totalCount() === 0) {
+    } else if (this.visibleResultCount === 0) {
       this.buildEmptyState()
     } else {
       if (this.viewMode === 0) {
