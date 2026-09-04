@@ -21,6 +21,7 @@ obfuscation-cache.json
 
 # 本地 UI 验证截图与层级 dump
 /artifacts/*.png
+/artifacts/*.hap
 /ui-dump-current/
 
 # Build logs
