@@ -23,6 +23,7 @@ const LOCAL_RULE_COVER_CONCURRENCY: number = 3;
 const LOCAL_RULE_COVER_LIMIT: number = 12;
 const SEARCH_COVER_ASPECT_RATIO: number = 0.75;
 const SEARCH_HEADER_HEIGHT: number = 56;
+const SEARCH_TITLE_CONTROL_HEIGHT: number = 44;
 const RESULT_TOOLBAR_HEIGHT: number = 48;
 const SEARCH_FOCUS_DELAY_MS: number = 320;
 const SEARCH_RECOMMENDATION_COUNT: number = 5;
@@ -897,8 +898,8 @@ export struct SearchPage {
           .fontSize(22)
           .fontColor([$r('sys.color.icon_primary')])
       }
-      .width(40)
-      .height(40)
+      .width(SEARCH_TITLE_CONTROL_HEIGHT)
+      .height(SEARCH_TITLE_CONTROL_HEIGHT)
       .borderRadius(AppRadius.Pill)
       .backgroundColor(Color.Transparent)
       .systemMaterial(AppMaterial.InteractiveClean)
@@ -911,7 +912,7 @@ export struct SearchPage {
         .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
         .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
         .layoutWeight(1)
-        .height(42)
+        .height(SEARCH_TITLE_CONTROL_HEIGHT)
         .backgroundColor(Color.Transparent)
         .borderRadius(AppRadius.Pill)
         .systemMaterial(AppMaterial.InteractiveClean)
