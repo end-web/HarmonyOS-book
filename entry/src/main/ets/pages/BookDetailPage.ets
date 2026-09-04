@@ -820,47 +820,19 @@ export struct BookDetailPage {
 
   @Builder
   buildAmbientHeroBackground() {
-    Stack() {
-      Column()
-        .width('100%')
-        .height('100%')
-        .linearGradient({
-          angle: 180,
-          colors: [
-            [$r('sys.color.comp_background_primary'), 0.0],
-            [$r('sys.color.background_primary'), 0.86],
-            [$r('sys.color.background_primary'), 1.0]
-          ]
-        })
-
-      Column()
-        .width('100%')
-        .height('100%')
-        .linearGradient({
-          angle: 135,
-          colors: [
-            [AppColor.BrandSoft, 0.0],
-            [Color.Transparent, 0.46],
-            [Color.Transparent, 1.0]
-          ]
-        })
-
-      // 最上层纵向收口，确保斜向氛围色在 Hero 结束前完全融入正文底色。
-      Column()
-        .width('100%')
-        .height('100%')
-        .linearGradient({
-          angle: 180,
-          colors: [
-            [Color.Transparent, 0.0],
-            [Color.Transparent, 0.58],
-            [$r('sys.color.background_primary'), 0.86],
-            [$r('sys.color.background_primary'), 1.0]
-          ]
-        })
-    }
+    // 全部使用同主题的不透明色插值，避免 Color.Transparent 被当作透明黑而产生灰黑横带。
+    Column()
     .width('100%')
     .height(this.detailHeroHeight())
+    .linearGradient({
+      angle: 180,
+      colors: [
+        [$r('app.color.home_card_surface_soft'), 0.0],
+        [$r('sys.color.comp_background_primary'), 0.36],
+        [$r('sys.color.background_primary'), 0.84],
+        [$r('sys.color.background_primary'), 1.0]
+      ]
+    })
     .clip(true)
   }
 

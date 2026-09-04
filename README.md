@@ -1,6 +1,6 @@
-# ListenBook（简·欢 / 欢FM）
+# ListenBook（简·欢）
 
-ListenBook（简·欢 / 欢FM）是一款面向 HarmonyOS Next 的本地优先听书 App。App 直接接入欢FM，并在设备端导入、执行 Legado/Reader 规则；仓库中的 Node 服务和运维后台作为可选独立工程保留，不是 App 的运行依赖。
+ListenBook（简·欢）是一款面向 HarmonyOS Next 的本地优先听书 App。App 支持在设备端导入、执行 Legado/Reader 规则；仓库中的 Node 服务和运维后台作为可选独立工程保留，不是 App 的运行依赖。
 
 | 部分 | 使用者 | 代码 / 入口 | 主要职责 |
 |---|---|---|---|
@@ -10,8 +10,8 @@ ListenBook（简·欢 / 欢FM）是一款面向 HarmonyOS Next 的本地优先�
 
 三部分边界明确：
 
-- App 只注册欢FM内置源；用户导入的 Legado/Reader 规则通过独立旁路参与搜索、详情、目录、正文和音频解析。
-- 本地规则源或规则数据库失败时降级为欢FM和既有文本源，不能中断内置搜索与播放链。
+- 用户导入的 Legado/Reader 规则通过独立旁路参与搜索、详情、目录、正文和音频解析。
+- 本地规则源或规则数据库失败时只影响对应来源，不能中断其他来源的搜索与播放链。
 - 书架、播放记录、每本书进度、设置和书源 Cookie 默认保存在设备本地，不上传到可选服务工程。
 - 书源网页登录在 App 内的 HTTPS 隐私 WebView 中完成，Cookie 按书源和站点隔离并写入 S2 加密数据库。
 - 运维后台不是用户听书网页，它只管理服务端来源和运行状态。
@@ -22,7 +22,7 @@ ListenBook（简·欢 / 欢FM）是一款面向 HarmonyOS Next 的本地优先�
 
 ### 用户前台
 
-- **多源在线内容**：欢FM内置协议 + 既有文本源 + 用户导入的本地 Legado/Reader 规则源。
+- **多源在线内容**：既有文本搜索能力 + 用户导入的本地 Legado/Reader 规则源。
 - **首页浏览体验**：HarmonyOS 7 沉浸材质搜索/分类控件、首次进入骨架屏、下拉刷新和每个推荐板块的“更多”入口。
 - **完整阅读与收听流程**：多源搜索、书籍详情、章节目录、正文阅读、播放地址解析、跳过片头片尾与章节级续播。
 - **播放状态反馈**：底部迷你播放栏的小圆封面保持静止，外圈展示当前章节收听进度。
@@ -38,7 +38,7 @@ ListenBook（简·欢 / 欢FM）是一款面向 HarmonyOS Next 的本地优先�
 ### 开始使用
 
 1. 首次打开 App，阅读并同意隐私政策。App 的书架、记录、阅读进度、播放进度和设置默认保存在本机。
-2. 在首页浏览推荐或分类，点击搜索框输入书名、作者后提交搜索。首页下拉刷新推荐内容；双击当前底部页签可快速回到顶部。
+2. 在首页进入搜索，输入书名或作者后提交搜索。首页下拉刷新内容；双击当前底部页签可快速回到顶部。
 3. 点击书籍进入详情页，在章节列表选择内容。点击播放按钮开始收听，底部迷你播放栏可展开，点击标题区域进入完整播放页。
 
 ### 播放与离线
@@ -97,11 +97,11 @@ ListenBook（简·欢 / 欢FM）是一款面向 HarmonyOS Next 的本地优先�
 ## 架构一览
 
 ```
-┌──────────────────────────┐     内置协议      ┌──────────────────┐
-│ HarmonyOS 用户前台 entry/ │ ───────────────► │ 欢FM 内容源       │
-│ 首页 / 书架 / 记录 / 我的  │                  └──────────────────┘
+┌──────────────────────────┐
+│ HarmonyOS 用户前台 entry/ │
+│ 首页 / 书架 / 记录 / 我的  │
 └─────────────┬────────────┘
-              ├─ 本地规则旁路 ─► HTTP(S) 站点（JSON / HTML / 文本 / 音频）
+              ├─ 本地规则书源 ─► HTTP(S) 站点（JSON / HTML / 文本 / 音频）
               │                  └─ CSS / XPath / JSONPath / Regex / QuickJS 沙箱
               └─ HTTPS 内嵌登录 ─► 站点账号页
 
@@ -123,9 +123,9 @@ App 对用户导入规则只执行当前兼容子集：声明式提取由本地�
 
 | 页面或流程 | 调用层 | 接口 / 数据 |
 |---|---|---|
-| App 首页推荐、分类与搜索 | `HomePage`、`SearchPage`、`SourceDataService`、`BookSourceService` | 推荐和分类仅走内置源；搜索并行聚合内置源、每批最多 6 个本地规则源和既有文本源 |
-| App 书籍详情、章节与阅读 | `BookSourceService`、`LocalRuleDispatcher`、`DataService` | 内置源保持原接口；本地规则源按来源定义请求并提取详情、目录和正文；本地 TOC sidecar 缓存 |
-| App 播放与下载 | `AudioService`、`DownloadService`、`BookSourceService` | 欢FM保持内置协议；本地音频规则解析真实地址和请求头；音频直连上游或写入设备沙箱 |
+| App 首页搜索与发现 | `HomePage`、`SearchPage`、`SourceDataService`、`BookSourceService` | 搜索并行聚合已安装规则源和既有文本源，每批最多 6 个本地规则源 |
+| App 书籍详情、章节与阅读 | `BookSourceService`、`LocalRuleDispatcher`、`DataService` | 按来源定义请求并提取详情、目录和正文；本地 TOC sidecar 缓存 |
+| App 播放与下载 | `AudioService`、`DownloadService`、`BookSourceService` | 本地音频规则解析真实地址和请求头；音频直连上游或写入设备沙箱 |
 | App 本地书源管理 | `ProfilePage`、`RuleSourcePage`、`RuleSourceChildrenPage`、`RuleSourceLoginPage` | JSON / HTTP(S) 导入、测试、启停、子源查看和内嵌登录；定义与按 `source_url + origin` 隔离的 Cookie 存入 S2 加密 `rule_sources.db` |
 | App 收听记录 | `ReadingStatsPage`、`StatsService`、`PreferenceService` | 本地统计、播放历史和每本书进度；编辑模式批量管理，不使用服务端用户表 |
 | App 书架与设置 | `PreferenceService`、`DataService` | 设备 Preferences、本地书籍索引和章节文件；不使用服务端用户表 |
@@ -142,7 +142,6 @@ ListenBook/
 │   ├── src/main/ets/       # 鸿蒙业务代码
 │   │   ├── pages/          # 首页/书架/记录/我的 + 播放器/详情/下载…
 │   │   ├── service/        # 播放、下载、偏好及统一内容分发
-│   │   │   ├── builtin/    # 欢FM内置实现
 │   │   │   └── rulesource/ # 本地规则导入、HTTP、提取、QuickJS 与分发
 │   │   └── model/ components/ theme/ utils/ widget/
 │   └── libs/quickjs.har    # 双 ABI 受限 QuickJS 本地依赖
@@ -163,9 +162,8 @@ ListenBook/
 | 服务 | 职责 |
 |---|---|
 | `AudioService` | AVPlayer 播放核心、音频焦点、后台任务、AVSession、在线媒体系统缓存、续播和进度落盘 |
-| `BookSourceService` | 内置源优先、本地规则旁路的搜索、详情、目录、正文和播放解析门面；首页/发现仍只走内置源 |
-| `SourceDataService` | 聚合内置源与已安装本地规则源；按来源地址查询时内置源只查注册表，本地源才访问规则数据库 |
-| `BuiltInSourceRegistry` | 注册 `huan_fm` |
+| `BookSourceService` | 本地规则源和既有文本源的搜索、详情、目录、正文和播放解析门面 |
+| `SourceDataService` | 聚合已安装本地规则源；按来源地址查询时读取规则数据库 |
 | `LocalRuleSourceRepository` / `LocalRuleDispatcher` | 本地规则源、会话与隔离 Cookie 的加密持久化、测试、启停，以及搜索到正文/音频的阶段分发 |
 | `LocalRuleStageExtractor` / `LocalRuleWebRuntime` | JSONPath、CSS、XPath、正则及组合规则提取；ArkWeb 只处理已下载 DOM，不执行站点脚本 |
 | `LocalRuleScriptRuntime` / `LocalRuleQuickJsRuntime` | 兼容紧凑规则、`@js` / `jsLib` 和受控 `java.ajax` 等常用桥接；在 taskpool 独立 context 中执行并限制超时、heap、stack、pending jobs 与输入输出 |
@@ -239,13 +237,13 @@ Docker 部署见 `server/deploy/` 与 `server/README.md`。
 - 搜索多源并行，单源失败不拖垮整体
 - 加载态使用项目主题 `AppColor.Brand`，不要直接使用鸿蒙默认品牌蓝色
 - 首页和主 Tab 交互改动需同步 [`docs/APP_UI.md`](docs/APP_UI.md)
-- 新增稳定原生来源：实现 `IBuiltInSource` 并注册；用户规则兼容能力统一扩展 `service/rulesource/`，不得绕过 `LocalRuleQuickJsRuntime` 直接调用不受限 QuickJS API
+- 用户规则兼容能力统一扩展 `service/rulesource/`，不得绕过 `LocalRuleQuickJsRuntime` 直接调用不受限 QuickJS API
 
 ## 测试
 
 - App：`entry/src/test/*.test.ets`（Hypium）
 - Server：`cd server && npm test`（Vitest）
-- 本地规则运行时改动需验证：无本地源时内置链不变，以及“导入 → 测试 → 搜索 → 详情 → 阅读或播放”；单源失败不得影响其他来源。
+- 本地规则运行时改动需验证：“导入 → 测试 → 搜索 → 详情 → 阅读或播放”；单源失败不得影响其他来源。
 - App UI 改动还需真机检查：首页首次骨架、下拉刷新收尾、双击 Tab 回顶，以及记录页编辑/长按多选。
 
 ## 许可证
