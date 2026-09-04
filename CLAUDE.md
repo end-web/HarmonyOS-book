@@ -28,7 +28,7 @@
 ### HarmonyOS 7 SDK 边界
 
 - UI 使用 API 26 `uiMaterial.ImmersiveMaterial` / `systemMaterial`，统一首页悬浮控件、播放器弹层和配置 Sheet。
-- `MiniPlayer` 的小圆封面由官方 `Animator` 驱动：播放时旋转，暂停时定格，继续播放时从当前角度续转；完整播放页封面不旋转。
+- `MiniPlayer` 的小圆封面保持静止，外圈使用原生 `ProgressType.Ring` 展示当前集收听进度；完整播放页封面同样不旋转。
 - `AVSessionService` 向系统媒体中心声明倍速、上一集、下一集和收藏控件，不在系统卡片显示循环模式；倍速变更与 App 播放状态双向同步。
 - 在线音频通过 `MediaSource.enableOfflineCache(true)` 使用系统托管缓存；用户主动下载的完整章节仍由 `DownloadService` 持久化，两者不互相替代。
 - Beta2 已接入 `setSupportedPlaySpeeds`、`setSupportedLoopModes` 和 `setMediaCenterControlType`；媒体中心控件优先展示倍速，循环模式仅保留 App 内控制。这些增强能力失败时按单项降级，不阻断 AVSession 激活。
@@ -259,7 +259,7 @@ cd server && npm test && npm run build:all
 - [x] 本地规则源旁路（导入、加密存储、测试、启停、文本/音频解析、紧凑规则与受限 QuickJS）
 - [x] 服务端聚合、网络目录同步、运维后台、Docker 部署
 - [x] AudioService 焦点 / AVSession / 后台播放
-- [x] HarmonyOS 7 系统材质、迷你封面播放旋转、AVSession 倍速/上下集/收藏控制、在线媒体系统缓存
+- [x] HarmonyOS 7 系统材质、迷你封面单集进度圆环、AVSession 倍速/上下集/收藏控制、在线媒体系统缓存
 - [x] 本地播放进度恢复
 - [x] 本地音频导入
 - [x] 章节下载、下载管理与文件管理导出

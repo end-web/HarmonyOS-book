@@ -17,7 +17,6 @@ import { DownloadPolicy } from '../service/DownloadPolicy';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
-import { ColorPickerUtils, RgbColor } from '../utils/ColorPickerUtils';
 import { ChapterListItem, ChapterBadge, mapChapterBadge } from '../components/ChapterListItem';
 import { ChapterLoadingSkeleton } from '../components/ChapterLoadingSkeleton';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
@@ -43,12 +42,6 @@ export struct BookDetailPage {
   @Local lastHistory: PlayHistoryItem | null = null;
   @Local textReadingProgress: TextReadingPosition | null = null;
   @Local introExpanded: boolean = false;
-  @Local bgColor: string = '#3A3A3A';
-  @Local bgColorDark: string = '#1A1A1A';
-  @Local heroTextColor: string = '#FFFFFF';
-  @Local heroTextSecondaryColor: string = '#FFFFFFCC';
-  @Local heroTagBackground: string = '#33FFFFFF';
-  @Local hasThemeColor: boolean = false;
   @Local debugInfo: string = '';
   /** 节目搜索关键词。 */
   @Local chapterQuery: string = '';
@@ -79,31 +72,35 @@ export struct BookDetailPage {
   }
 
   aboutToAppear(): void {
+    hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, '====== BookDetailPage aboutToAppear START, bookId=%{public}s ======', this.bookId);
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
-    // 收藏状态 / TOC 拉取 / 取色等重活推迟到转场动画结束后,避免抢主线程
+    // 首帧先展示缓存内容，再推迟数据加载到转场后。
     this.primeBookFromCache();
     this.downloadTick = this.downloadTick + 1;
     this.chapterDownloadTick = this.chapterDownloadTick + 1;
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
-    WindowUtils.setStatusBarLight(true);
-    setTimeout(() => { this.loadBook(); }, AppMotion.Page);
+    WindowUtils.setStatusBarLight(false);
+    // 转场动画 380ms，在动画进行时并行加载数据，用户感知不到等待
+    hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'aboutToAppear: scheduling loadBook in 200ms');
+    setTimeout(() => { this.loadBook(); }, 200);
   }
 
   /** 同步从 SearchCache 取 book,让首帧有内容,后续重活推迟 */
   private primeBookFromCache(): void {
+    hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'primeBookFromCache: START');
     const cached = SearchCache.get(this.bookId);
     if (cached) {
+      hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'primeBookFromCache: found cached book, title=%{public}s, cover=%{public}s',
+        cached.title, cached.cover.substring(0, 60));
       this.book = cached;
       // 搜索结果只是电子书的基础快照，章节正文仍需异步加载；数据未完整前保持详情 loading。
       this.loadingDetail = cached.contentType === 'text' && cached.chapters.length === 0;
-      // 音频搜索结果只有基础信息时，首帧直接展示目录骨架，避免先闪出“暂无章节信息”。
+      // 音频搜索结果只有基础信息时，首帧直接展示目录骨架，避免先闪出”暂无章节信息”。
       this.loadingToc = this.needsAudioTocLoad(cached);
       AudioService.getInstance().prewarmBookSource(cached);
       this.refreshDisplayedChapters(cached.chapters);
-      const cachedRgb = ColorPickerUtils.getCached(cached.cover);
-      if (cachedRgb) {
-        this.applyCoverColor(cachedRgb);
-      }
+    } else {
+      hilog.warn(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'primeBookFromCache: NO cached book found in SearchCache');
     }
   }
 
@@ -231,13 +228,6 @@ export struct BookDetailPage {
       this.isFavorite = await PreferenceService.isFavorite(b.id);
       // 加载播放历史，用于"继续播放"入口
       this.loadHistory(b.id);
-      // 先同步检查封面色缓存，命中则直接用，避免异步提取期间的默认灰闪烁
-      const cached = ColorPickerUtils.getCached(b.cover);
-      if (cached) {
-        this.applyCoverColor(cached);
-      }
-      // 取色异步执行,不阻塞首屏
-      this.extractCoverColor(b.cover);
       // 章节懒加载
       if (this.needsAudioTocLoad(b)) {
         this.loadTocFromSource(b);
@@ -316,32 +306,6 @@ export struct BookDetailPage {
       // 历史就绪后再定位一次(loadBook 首次滚动时 lastHistory 可能尚未加载)
       this.scrollToCurrentChapter();
     }
-  }
-
-  /** 一次性应用封面色，避免多次状态更新触发多次重绘 */
-  private applyCoverColor(rgb: RgbColor): void {
-    // 压亮度:白色系封面的主色直接铺背景会让白字不可读
-    const safe = ColorPickerUtils.normalizeAmbient(rgb);
-    const ambientLuminance = safe.r * 0.299 + safe.g * 0.587 + safe.b * 0.114;
-    const lightAmbient = ambientLuminance >= 156;
-    const neutralLight: RgbColor = { r: 255, g: 255, b: 255 };
-    // 浅色封面不再强行压成深色,让过渡保持同一亮度方向,文字则自动反色。
-    // 封面色只负责 Hero 的氛围，不让上下端点形成过重的色带。
-    // 浅色封面向白色多混一点，深色封面少压暗一点，正文过渡会更柔和。
-    const bottomColor = lightAmbient
-      ? ColorPickerUtils.blend(safe, neutralLight, 0.28)
-      : ColorPickerUtils.darken(safe, 0.18);
-    const foreground = lightAmbient ? '#202124' : '#FFFFFF';
-    // 颜色变化包进 animateTo:背景主色随封面就绪/切换平滑过渡,而不是硬跳
-    this.getUIContext().animateTo({ duration: 500, curve: Curve.Linear }, () => {
-      this.bgColor = ColorPickerUtils.toHex(safe);
-      this.bgColorDark = ColorPickerUtils.toHex(bottomColor);
-      this.heroTextColor = foreground;
-      this.heroTextSecondaryColor = ColorPickerUtils.withAlpha(foreground, 'CC');
-      this.heroTagBackground = lightAmbient ? '#1F000000' : '#33FFFFFF';
-      WindowUtils.setStatusBarLight(!lightAmbient);
-      this.hasThemeColor = true;
-    });
   }
 
   private async findBookById(id: string): Promise<Book | null> {
@@ -454,24 +418,6 @@ export struct BookDetailPage {
     }
     this.loadingToc = false;
     this.scrollToCurrentChapter();
-  }
-
-  private async extractCoverColor(cover: string): Promise<void> {
-    if (!cover) return;
-    let rgb: RgbColor | null = null;
-    try {
-      if (cover.startsWith('http')) {
-        rgb = await ColorPickerUtils.pickFromUrl(cover);
-      } else if (cover.startsWith('/')) {
-        rgb = await ColorPickerUtils.pickFromFile(cover);
-      } else {
-        const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-        rgb = await ColorPickerUtils.pickFromRawfile(ctx, cover);
-      }
-    } catch (_e) { /* ignore */ }
-    if (!rgb) return;
-    // 一次性更新，避免 3 次独立赋值触发 3 次重绘
-    this.applyCoverColor(rgb);
   }
 
   /**
@@ -872,6 +818,52 @@ export struct BookDetailPage {
     return idx >= 0 && this.book.chapters[idx].id === ch.id;
   }
 
+  @Builder
+  buildAmbientHeroBackground() {
+    Stack() {
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [$r('sys.color.comp_background_primary'), 0.0],
+            [$r('sys.color.background_primary'), 0.86],
+            [$r('sys.color.background_primary'), 1.0]
+          ]
+        })
+
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 135,
+          colors: [
+            [AppColor.BrandSoft, 0.0],
+            [Color.Transparent, 0.46],
+            [Color.Transparent, 1.0]
+          ]
+        })
+
+      // 最上层纵向收口，确保斜向氛围色在 Hero 结束前完全融入正文底色。
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [Color.Transparent, 0.0],
+            [Color.Transparent, 0.58],
+            [$r('sys.color.background_primary'), 0.86],
+            [$r('sys.color.background_primary'), 1.0]
+          ]
+        })
+    }
+    .width('100%')
+    .height(this.detailHeroHeight())
+    .clip(true)
+  }
+
   build() {
     Column() {
       if (this.loadingDetail) {
@@ -907,10 +899,7 @@ export struct BookDetailPage {
         .justifyContent(FlexAlign.Center)
       } else if (this.book) {
         Stack({ alignContent: Alignment.TopStart }) {
-          // 只保留顶部占位高度,背景由页面根容器统一绘制,避免中段出现第二层色带
-          Column()
-            .width('100%')
-            .height(this.detailHeroHeight())
+          this.buildAmbientHeroBackground()
 
           Column() {
             this.buildTopBar()
@@ -934,15 +923,7 @@ export struct BookDetailPage {
     }
     .width('100%')
     .height('100%')
-    .linearGradient({
-      angle: 180,
-      colors: [
-        [this.bgColor, 0.0],
-        [this.bgColorDark, 0.16],
-        [$r('sys.color.background_primary'), 0.38],
-        [$r('sys.color.background_primary'), 1.0]
-      ]
-    })
+    .backgroundColor($r('sys.color.background_primary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
       this.handleViewportSizeChange(newValue);
@@ -952,21 +933,11 @@ export struct BookDetailPage {
   @Builder
   buildTopBar() {
     Row() {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(24)
-          .fontColor([this.heroTextColor])
-      }
-      .width(40)
-      .height(40)
-      .borderRadius(20)
-      .systemMaterial(AppMaterial.FloatingControl)
-      .onClick(() => this.navStack.pop())
       Blank()
       Stack({ alignContent: Alignment.Center }) {
         SymbolGlyph(this.isFavorite ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
           .fontSize(22)
-          .fontColor([this.isFavorite ? '#FF6B8A' : this.heroTextColor])
+          .fontColor([this.isFavorite ? '#FF6B8A' : $r('sys.color.font_primary')])
       }
       .width(40)
       .height(40)
@@ -1030,33 +1001,33 @@ export struct BookDetailPage {
       Column({ space: AppSpace.Xs }) {
         Text(this.book!.title)
           .fontSize(AppFont.TitleL)
-          .fontColor(this.heroTextColor)
+          .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
           .maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         if (this.book!.author) {
           Text(this.book!.author)
             .fontSize(AppFont.Body)
-            .fontColor(this.heroTextSecondaryColor)
+            .fontColor($r('sys.color.font_secondary'))
             .maxLines(1)
         }
         Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
           Text(this.displayCategory())
             .fontSize(AppFont.Caption)
-            .fontColor(this.heroTextColor)
+            .fontColor(AppColor.BrandDark)
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .backgroundColor(this.heroTagBackground)
+            .backgroundColor(AppColor.BrandSoft)
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
             .margin({ right: 8, bottom: 4 })
             .constraintSize({ maxWidth: '100%' })
           Text(this.displayStatus())
             .fontSize(AppFont.Caption)
-            .fontColor(this.heroTextColor)
+            .fontColor($r('sys.color.font_secondary'))
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .backgroundColor(this.heroTagBackground)
+            .backgroundColor($r('sys.color.comp_background_tertiary'))
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
             .margin({ right: 8, bottom: 4 })
@@ -1064,10 +1035,10 @@ export struct BookDetailPage {
           if (this.book!.chapterCount > 0) {
             Text(this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? '章' : '集'))
               .fontSize(AppFont.Caption)
-              .fontColor(this.heroTextColor)
+              .fontColor($r('sys.color.font_secondary'))
               .maxLines(2)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .backgroundColor(this.heroTagBackground)
+              .backgroundColor($r('sys.color.comp_background_tertiary'))
               .borderRadius(AppRadius.Xs)
               .padding({ left: 6, right: 6, top: 2, bottom: 2 })
               .margin({ right: 8, bottom: 4 })

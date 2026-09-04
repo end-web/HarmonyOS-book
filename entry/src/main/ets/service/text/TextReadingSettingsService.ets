@@ -11,6 +11,7 @@ const KEY_CUSTOM_BACKGROUND: string = 'custom_background';
 const KEY_PATTERN: string = 'background_pattern';
 const KEY_BACKGROUND_IMAGE: string = 'background_image';
 const KEY_OVERLAY_ALPHA: string = 'overlay_alpha';
+const KEY_PAGE_TURN_MODE: string = 'page_turn_mode';
 
 export class TextReadingSettingsService {
   private static store: preferences.Preferences | null = null;
@@ -40,6 +41,7 @@ export class TextReadingSettingsService {
     const savedPattern = store.getSync(KEY_PATTERN, ReaderPattern.None as string);
     const savedImage = store.getSync(KEY_BACKGROUND_IMAGE, '');
     const savedOverlay = store.getSync(KEY_OVERLAY_ALPHA, TextReadingSettings.OVERLAY_DEFAULT);
+    const savedPageTurnMode = store.getSync(KEY_PAGE_TURN_MODE, TextReadingSettings.PAGE_TURN_MODE_DEFAULT);
     const fontSize = typeof savedFontSize === 'number' ? savedFontSize : TextReadingSettings.FONT_SIZE_DEFAULT;
     const lineHeight = typeof savedLineHeight === 'number' ? savedLineHeight : TextReadingSettings.LINE_HEIGHT_DEFAULT;
     const themeId = typeof savedThemeId === 'string' ? savedThemeId : TextReadingSettings.THEME_DEFAULT;
@@ -48,7 +50,8 @@ export class TextReadingSettingsService {
     const pattern = typeof savedPattern === 'string' ? savedPattern : ReaderPattern.None as string;
     const image = typeof savedImage === 'string' ? savedImage : '';
     const overlay = typeof savedOverlay === 'number' ? savedOverlay : TextReadingSettings.OVERLAY_DEFAULT;
-    return TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay);
+    const pageTurnMode = typeof savedPageTurnMode === 'string' ? savedPageTurnMode : TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
+    return TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay, pageTurnMode);
   }
 
   static async save(context: common.Context, settings: TextReadingSettings): Promise<void> {
@@ -62,6 +65,7 @@ export class TextReadingSettingsService {
     store.putSync(KEY_PATTERN, TextReadingSettings.normalizePattern(settings.pattern));
     store.putSync(KEY_BACKGROUND_IMAGE, settings.backgroundImage);
     store.putSync(KEY_OVERLAY_ALPHA, TextReadingSettings.normalizeOverlay(settings.overlayAlpha));
+    store.putSync(KEY_PAGE_TURN_MODE, TextReadingSettings.normalizePageTurnMode(settings.pageTurnMode));
     await store.flush();
   }
 }

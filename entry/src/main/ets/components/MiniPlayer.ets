@@ -1,5 +1,4 @@
-import { AnimatorOptions, AnimatorResult } from '@kit.ArkUI';
-import { AppSpace, AppFont } from '../theme/Theme';
+import { AppColor, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { PlayerState } from '../model/PlayerState';
 
 @ComponentV2
@@ -10,66 +9,15 @@ export struct MiniPlayer {
   @Event onToggle: () => void = () => {};
   @Event onNext: () => void = () => {};
   @Event onExpand: () => void = () => {};
-  @Local coverRotationAngle: number = 0;
 
-  private coverAnimator: AnimatorResult | null = null;
-  private coverAnimatorPlaying: boolean = false;
-
-  aboutToAppear(): void {
-    this.initCoverAnimator();
-  }
-
-  aboutToDisappear(): void {
-    this.disposeCoverAnimator();
-  }
-
-  @Monitor('playerState.isPlaying')
-  private onPlayingStateChanged(_monitor: IMonitor): void {
-    this.syncCoverAnimator();
-  }
-
-  private initCoverAnimator(): void {
-    if (this.coverAnimator !== null) return;
-    const startAngle: number = this.coverRotationAngle;
-    const options: AnimatorOptions = {
-      duration: 20000,
-      easing: 'linear',
-      delay: 0,
-      fill: 'forwards',
-      direction: 'normal',
-      iterations: -1,
-      begin: startAngle,
-      end: startAngle + 360
-    };
-    const animator: AnimatorResult = this.getUIContext().createAnimator(options);
-    animator.onFrame = (angle: number): void => {
-      this.coverRotationAngle = angle;
-    };
-    this.coverAnimator = animator;
-    this.syncCoverAnimator();
-  }
-
-  private syncCoverAnimator(): void {
-    const animator = this.coverAnimator;
-    if (animator === null) return;
-    if (this.playerState.isPlaying) {
-      if (!this.coverAnimatorPlaying) {
-        animator.play();
-        this.coverAnimatorPlaying = true;
-      }
-      return;
-    }
-    if (this.coverAnimatorPlaying) {
-      animator.pause();
-      this.coverAnimatorPlaying = false;
-    }
-  }
-
-  private disposeCoverAnimator(): void {
-    if (this.coverAnimator === null) return;
-    this.coverAnimator.cancel();
-    this.coverAnimator = null;
-    this.coverAnimatorPlaying = false;
+  @Computed
+  get chapterProgressPercent(): number {
+    const durationMs: number = this.playerState.durationMs > 0
+      ? this.playerState.durationMs
+      : this.playerState.savedDurationMs;
+    if (durationMs <= 0) return 0;
+    const percent: number = this.playerState.progressMs / durationMs * 100;
+    return Math.min(100, Math.max(0, percent));
   }
 
   @Builder
@@ -113,15 +61,26 @@ export struct MiniPlayer {
     if (this.playerState.currentBook) {
       Row({ space: this.collapsed ? 0 : AppSpace.Sm }) {
         Stack() {
+          Progress({ value: this.chapterProgressPercent, total: 100, type: ProgressType.Ring })
+            .width('100%')
+            .height('100%')
+            .color(AppColor.Brand)
+            .backgroundColor(HomeTheme.ProgressTrack)
+            .style({
+              strokeWidth: 2.5,
+              enableSmoothEffect: false,
+              enableScanEffect: false,
+              shadow: false
+            })
+
           Stack() {
             this.coverImageBuilder()
           }
-          .width('100%')
-          .height('100%')
+          .width('86%')
+          .height('86%')
           .borderRadius(this.collapsed ? 999 : 22)
           .backgroundColor($r('sys.color.comp_background_tertiary'))
           .clip(true)
-          .rotate({ angle: this.coverRotationAngle })
         }
         .width(this.collapsed ? '100%' : 44)
         .height(this.collapsed ? '100%' : 44)

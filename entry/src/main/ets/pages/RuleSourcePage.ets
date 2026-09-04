@@ -1212,7 +1212,7 @@ export struct RuleSourcePage {
         Row({ space: AppSpace.Xs }) {
           Button() {
             Row({ space: AppSpace.Xxs }) {
-              SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              SymbolGlyph($r('sys.symbol.bolt'))
                 .fontSize(16)
                 .fontColor([source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary')])
               Text($r('app.string.rule_source_test_action'))

@@ -15,6 +15,7 @@
     { "name": "home_status_scrim", "value": "#E61A1A1A" },
     { "name": "home_accent", "value": "#FF8A5A" },
     { "name": "home_accent_soft", "value": "#33FF8A5A" },
+    { "name": "home_top_control_tint", "value": "#E62C2C2C" },
     { "name": "home_card_surface", "value": "#2C2C2C" },
     { "name": "home_card_surface_soft", "value": "#2A241F" },
     { "name": "home_card_shadow", "value": "#33000000" },
@@ -27,6 +28,17 @@
     { "name": "app_brand_dark", "value": "#E07042" },
     { "name": "app_on_brand", "value": "#FFFFFF" },
     { "name": "app_divider", "value": "#1FFFFFFF" },
-    { "name": "app_shadow", "value": "#33000000" }
+    { "name": "app_shadow", "value": "#33000000" },
+    { "name": "glass_control_fallback", "value": "#D12C2C2C" },
+    { "name": "glass_sheet_fallback", "value": "#F2171A1D" },
+    { "name": "glass_control_tint", "value": "#E62C2C2C" },
+    { "name": "glass_sheet_control_tint", "value": "#1FFFFFFF" },
+    { "name": "glass_sheet_stroke", "value": "#3DFFFFFF" },
+    { "name": "glass_text_primary", "value": "#F2FFFFFF" },
+    { "name": "glass_text_secondary", "value": "#B8FFFFFF" },
+    { "name": "glass_text_tertiary", "value": "#80FFFFFF" },
+    { "name": "glass_divider", "value": "#2EFFFFFF" },
+    { "name": "glass_stroke", "value": "#38FFFFFF" },
+    { "name": "glass_shadow", "value": "#99000000" }
   ]
 }

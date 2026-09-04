@@ -433,12 +433,200 @@
       "value": "迷你播放栏"
     },
     {
+      "name": "guide_group_home",
+      "value": "首页"
+    },
+    {
+      "name": "guide_home_search_action",
+      "value": "点击首页搜索框"
+    },
+    {
+      "name": "guide_home_search_desc",
+      "value": "搜索书名或作者，进入独立结果页"
+    },
+    {
+      "name": "guide_home_refresh_action",
+      "value": "首页顶部回到最上方后下拉"
+    },
+    {
+      "name": "guide_home_refresh_desc",
+      "value": "刷新推荐和分类内容；搜索页不参与下拉刷新"
+    },
+    {
+      "name": "guide_home_top_action",
+      "value": "双击底部「首页」页签"
+    },
+    {
+      "name": "guide_home_top_desc",
+      "value": "快速回到首页顶部，不会重新加载数据"
+    },
+    {
+      "name": "guide_group_common",
+      "value": "通用"
+    },
+    {
+      "name": "guide_common_top_action",
+      "value": "双击「书架 / 记录 / 我的」页签"
+    },
+    {
+      "name": "guide_common_top_desc",
+      "value": "快速回到当前页面顶部"
+    },
+    {
+      "name": "guide_group_favorite",
+      "value": "书架"
+    },
+    {
+      "name": "guide_favorite_open_action",
+      "value": "点击电子书"
+    },
+    {
+      "name": "guide_favorite_open_desc",
+      "value": "直接进入正文，并恢复上次阅读位置"
+    },
+    {
+      "name": "guide_favorite_refresh_action",
+      "value": "在书架下拉"
+    },
+    {
+      "name": "guide_favorite_refresh_desc",
+      "value": "从书源刷新在线书籍的最新数据"
+    },
+    {
+      "name": "guide_favorite_remove_action",
+      "value": "长按书籍并拖到底部删除区"
+    },
+    {
+      "name": "guide_favorite_remove_desc",
+      "value": "移出书架，可选择是否删除本地文件"
+    },
+    {
+      "name": "guide_group_record",
+      "value": "记录"
+    },
+    {
+      "name": "guide_record_select_action",
+      "value": "长按任一条记录，或点击顶部「编辑」"
+    },
+    {
+      "name": "guide_record_select_desc",
+      "value": "进入多选模式，可全选、批量删除或取消"
+    },
+    {
+      "name": "guide_record_play_action",
+      "value": "点击记录右侧播放按钮"
+    },
+    {
+      "name": "guide_record_play_desc",
+      "value": "从这本书上次的章节和进度继续播放"
+    },
+    {
+      "name": "guide_group_player",
+      "value": "播放页"
+    },
+    {
+      "name": "guide_player_chapter_action",
+      "value": "点击章节按钮"
+    },
+    {
+      "name": "guide_player_chapter_desc",
+      "value": "选择章节；播放进度会按书籍和章节分别保存"
+    },
+    {
+      "name": "guide_player_speed_action",
+      "value": "点击或长按「倍速」"
+    },
+    {
+      "name": "guide_player_speed_desc",
+      "value": "拖动选择 0.5x 至 3.0x；长按恢复 1.0x"
+    },
+    {
+      "name": "guide_player_sleep_action",
+      "value": "点击「定时」并选择时长"
+    },
+    {
+      "name": "guide_player_sleep_desc",
+      "value": "支持 15/30/45/60 分钟；开启章节结束后停止可避免在章中暂停，长按可取消"
+    },
+    {
+      "name": "guide_player_skip_action",
+      "value": "点击或长按「跳过」"
+    },
+    {
+      "name": "guide_player_skip_desc",
+      "value": "设置片头和片尾秒数；长按清除跳过设置"
+    },
+    {
+      "name": "guide_player_cast_action",
+      "value": "点击「投播」"
+    },
+    {
+      "name": "guide_player_cast_desc",
+      "value": "将在线音频交给系统设备选择器；本地导入内容暂不支持"
+    },
+    {
+      "name": "guide_group_reader",
+      "value": "电子书阅读"
+    },
+    {
+      "name": "guide_reader_open_action",
+      "value": "点击正文左侧或右侧区域"
+    },
+    {
+      "name": "guide_reader_open_desc",
+      "value": "切换上一页或下一页；阅读页会避让状态栏和手势区"
+    },
+    {
+      "name": "guide_reader_toolbar_action",
+      "value": "点击正文中央区域"
+    },
+    {
+      "name": "guide_reader_toolbar_desc",
+      "value": "显示或隐藏详情、章节和设置悬浮栏"
+    },
+    {
+      "name": "guide_reader_settings_action",
+      "value": "打开「设置」"
+    },
+    {
+      "name": "guide_reader_settings_desc",
+      "value": "调整字号、行高、翻页方式、主题、底色和背景图案，设置会自动保存"
+    },
+    {
+      "name": "guide_group_source",
+      "value": "书源"
+    },
+    {
+      "name": "guide_source_import_action",
+      "value": "我的 → 书源 → 点击加号"
+    },
+    {
+      "name": "guide_source_import_desc",
+      "value": "可选择本地 JSON、粘贴 JSON 或输入 HTTP(S) 地址导入规则书源"
+    },
+    {
+      "name": "guide_source_test_action",
+      "value": "导入后点击书源测试"
+    },
+    {
+      "name": "guide_source_test_desc",
+      "value": "先确认书源兼容并测试搜索；关闭「参与搜索」不会影响已有收藏解析"
+    },
+    {
+      "name": "guide_source_login_action",
+      "value": "点击主账号或子源「登录」"
+    },
+    {
+      "name": "guide_source_login_desc",
+      "value": "登录信息按书源和站点隔离保存在设备本地，删除书源时一并清除"
+    },
+    {
       "name": "guide_mini_cover_action",
       "value": "播放时查看底部小圆封面"
     },
     {
       "name": "guide_mini_cover_desc",
-      "value": "封面持续旋转；暂停后定格，继续播放时从当前角度续转"
+      "value": "封面保持静止，外圈展示当前集收听进度，切换章节后重新计算"
     },
     {
       "name": "guide_mini_expand_action",
@@ -467,6 +655,10 @@
     {
       "name": "guide_system_speed_desc",
       "value": "选择播放倍速，结果会同步到 App 播放页；系统卡片不再显示循环模式"
+    },
+    {
+      "name": "guide_footer",
+      "value": "部分操作带轻震反馈，更多用法会持续补充"
     },
     {
       "name": "rule_source_title",

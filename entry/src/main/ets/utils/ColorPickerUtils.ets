@@ -126,13 +126,9 @@ export class ColorPickerUtils {
     const cached = ColorPickerUtils.paletteCache.get(key);
     if (cached) return cached;
     try {
-      const buf = await ColorPickerUtils.downloadImage(url);
-      if (!buf) {
-        console.error('[ColorPicker] downloadImage returned null');
-        return null;
-      }
-      const source = image.createImageSource(buf);
-      const pixelMap = await source.createPixelMap();
+      // 尝试从 Image URL 直接创建 ImageSource（会利用 cacheDownload 的缓存）
+      const source = image.createImageSource(url);
+      const pixelMap = await source.createPixelMap({ desiredSize: { width: 200, height: 200 } });
       try {
         const palette = await ColorPickerUtils.pickPaletteFromPixelMap(pixelMap);
         ColorPickerUtils.savePalette(key, palette);
@@ -142,8 +138,28 @@ export class ColorPickerUtils {
         source.release();
       }
     } catch (e) {
-      console.error('[ColorPicker] pickPaletteFromUrl error: ' + JSON.stringify(e));
-      return null;
+      console.warn('[ColorPicker] pickPaletteFromUrl via ImageSource failed, fallback to http: ' + JSON.stringify(e));
+      // 如果从 URL 创建失败（缓存未命中或网络问题），降级到 http 下载
+      try {
+        const buf = await ColorPickerUtils.downloadImage(url);
+        if (!buf) {
+          console.error('[ColorPicker] downloadImage returned null');
+          return null;
+        }
+        const source = image.createImageSource(buf);
+        const pixelMap = await source.createPixelMap();
+        try {
+          const palette = await ColorPickerUtils.pickPaletteFromPixelMap(pixelMap);
+          ColorPickerUtils.savePalette(key, palette);
+          return palette;
+        } finally {
+          pixelMap.release();
+          source.release();
+        }
+      } catch (e2) {
+        console.error('[ColorPicker] pickPaletteFromUrl fallback also failed: ' + JSON.stringify(e2));
+        return null;
+      }
     }
   }
 
@@ -209,13 +225,9 @@ export class ColorPickerUtils {
       return cached;
     }
     try {
-      const buf = await ColorPickerUtils.downloadImage(url);
-      if (!buf) {
-        console.error('[ColorPicker] downloadImage returned null');
-        return null;
-      }
-      const source = image.createImageSource(buf);
-      const pixelMap = await source.createPixelMap();
+      // 尝试从 Image URL 直接创建 ImageSource（会利用 cacheDownload 的缓存）
+      const source = image.createImageSource(url);
+      const pixelMap = await source.createPixelMap({ desiredSize: { width: 200, height: 200 } });
       try {
         const picker = await effectKit.createColorPicker(pixelMap);
         const color = picker.getMainColorSync();
@@ -227,8 +239,59 @@ export class ColorPickerUtils {
         source.release();
       }
     } catch (e) {
-      console.error('[ColorPicker] pickFromUrl error: ' + JSON.stringify(e));
-      return null;
+      console.warn('[ColorPicker] pickFromUrl via ImageSource failed, fallback to http: ' + JSON.stringify(e));
+      // 如果从 URL 创建失败（缓存未命中或网络问题），降级到 http 下载
+      try {
+        const buf = await ColorPickerUtils.downloadImage(url);
+        if (!buf) {
+          console.error('[ColorPicker] downloadImage returned null');
+          return null;
+        }
+        const source = image.createImageSource(buf);
+        const pixelMap = await source.createPixelMap();
+        try {
+          const picker = await effectKit.createColorPicker(pixelMap);
+          const color = picker.getMainColorSync();
+          const rgb: RgbColor = { r: color.red, g: color.green, b: color.blue };
+          ColorPickerUtils.cache.set(key, rgb);
+          return rgb;
+        } finally {
+          pixelMap.release();
+          source.release();
+        }
+      } catch (e2) {
+        console.error('[ColorPicker] pickFromUrl fallback also failed: ' + JSON.stringify(e2));
+        return null;
+      }
+    }
+  }
+
+  /**
+   * 预取封面色（后台异步）。
+   * 在首页封面加载完成时调用，提前把颜色缓存好，详情页打开时就能立即应用。
+   */
+  static prefetchColor(cover: string): void {
+    if (!cover) return;
+    const key = ColorPickerUtils.cacheKey(cover);
+    if (ColorPickerUtils.cache.has(key)) {
+      console.info(`[ColorPicker] prefetchColor skipped (cached): ${cover.substring(0, 60)}`);
+      return; // 已缓存，跳过
+    }
+    console.info(`[ColorPicker] prefetchColor start: ${cover.substring(0, 60)}`);
+    const startTime = Date.now();
+    // 后台异步取色，不阻塞主线程，失败也不影响业务
+    if (cover.startsWith('http')) {
+      ColorPickerUtils.pickFromUrl(cover)
+        .then((rgb) => {
+          if (rgb) {
+            console.info(`[ColorPicker] prefetchColor success in ${Date.now() - startTime}ms`);
+          } else {
+            console.warn(`[ColorPicker] prefetchColor failed in ${Date.now() - startTime}ms`);
+          }
+        })
+        .catch(() => {
+          console.error(`[ColorPicker] prefetchColor error in ${Date.now() - startTime}ms`);
+        });
     }
   }
 
@@ -367,9 +430,16 @@ export class ColorPickerUtils {
     try {
       const resp = await req.request(url, {
         method: http.RequestMethod.GET,
-        connectTimeout: 10000,
-        readTimeout: 15000,
-        expectDataType: http.HttpDataType.ARRAY_BUFFER
+        connectTimeout: 10000,   // 10秒连接超时
+        readTimeout: 15000,      // 15秒读取超时
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        header: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ListenBook/1.0)',
+          'Accept': 'image/webp,image/apng,image/jpeg,image/png,image/*,*/*;q=0.8',
+          'Accept-Encoding': 'gzip, deflate',
+          'Connection': 'close',  // 禁用连接复用，避免 CDN 限制导致的挂起
+          'Cache-Control': 'no-cache'
+        }
       });
       if (resp.responseCode !== 200) {
         console.error('[ColorPicker] downloadImage failed with code ' + resp.responseCode);

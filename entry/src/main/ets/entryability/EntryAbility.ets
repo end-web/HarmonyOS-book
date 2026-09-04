@@ -301,10 +301,8 @@ export default class EntryAbility extends UIAbility {
   private consumeRouteWant(want: Want): void {
     const action = want.action ?? '';
     if (action === 'readerKitVerify') {
-      const route: WidgetRoute = { target: 'readerKitVerify', bookId: '', ts: Date.now() };
-      AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
-      emitter.emit(EVT_WIDGET_ROUTE, { data: { target: 'readerKitVerify', bookId: '', ts: route.ts } });
-      hilog.info(DOMAIN, TAG, 'consume route action: target=readerKitVerify');
+      // ReaderKit 验证功能已禁用（需要 HMS Core ReaderService 依赖）
+      hilog.warn(DOMAIN, TAG, 'readerKitVerify action ignored: ReaderKit dependency disabled');
       return;
     }
     const params = this.extractRouteParams(want);

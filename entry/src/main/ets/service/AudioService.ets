@@ -1298,25 +1298,37 @@ export class AudioService {
     try { await this.persistHistory(); } catch (_e) { /* ignore */ }
   }
 
-  setSleepTimer(minutes: number): void {
+  setSleepTimer(minutes: number, smartStop: boolean = false, fadeOut: boolean = false): void {
     this.cancelSleepTimer();
     if (!this.state) return;
     if (minutes <= 0) {
       this.state.sleepMinutes = 0;
       this.state.sleepRemainingMs = 0;
+      this.state.sleepSmartStop = false;
+      this.state.sleepFadeOut = false;
       return;
     }
     this.state.sleepMinutes = minutes;
+    this.state.sleepSmartStop = smartStop;
+    this.state.sleepFadeOut = fadeOut;
     this.sleepEndTime = Date.now() + minutes * 60 * 1000;
     this.state.sleepRemainingMs = minutes * 60 * 1000;
+
     this.sleepTimer = setInterval(() => {
       if (!this.state) return;
       const remaining = this.sleepEndTime - Date.now();
+
       if (remaining <= 0) {
         this.state.sleepRemainingMs = 0;
         this.state.sleepMinutes = 0;
         this.cancelSleepTimer();
-        this.pauseForSleep();
+
+        // 智能停止：章节结束后停止
+        if (smartStop) {
+          this.pauseForSleepSmart();
+        } else {
+          this.pauseForSleep();
+        }
       } else {
         this.state.sleepRemainingMs = remaining;
       }
@@ -1327,6 +1339,53 @@ export class AudioService {
     if (this.sleepTimer >= 0) {
       clearInterval(this.sleepTimer);
       this.sleepTimer = -1;
+    }
+  }
+
+  /** 智能停止：播完当前章节后暂停 */
+  private async pauseForSleepSmart(): Promise<void> {
+    if (!this.state || !this.player) {
+      await this.pauseForSleep();
+      return;
+    }
+
+    // 如果当前没有在播放，直接暂停
+    if (this.player.state !== 'playing') {
+      await this.pauseForSleep();
+      return;
+    }
+
+    // 计算当前章节剩余时长
+    const remainingMs = this.state.durationMs - this.state.progressMs;
+    const maxWaitMs = 10 * 60 * 1000; // 最多等待10分钟
+
+    // 如果剩余时长超过10分钟，直接暂停
+    if (remainingMs > maxWaitMs || remainingMs <= 0) {
+      await this.pauseForSleep();
+      return;
+    }
+
+    // 等待章节播完，监听 completed 事件
+    hilog.info(DOMAIN, TAG, 'Smart stop: waiting for chapter to complete, remaining: %{public}d ms', remainingMs);
+
+    // 设置超时兜底
+    const timeoutId = setTimeout(() => {
+      this.pauseForSleep();
+    }, remainingMs + 5000);
+
+    // 监听状态变化
+    const stateHandler = (newState: media.AVPlayerState): void => {
+      if (newState === 'completed' || newState === 'paused' || newState === 'stopped') {
+        clearTimeout(timeoutId);
+        if (this.player) {
+          this.player.off('stateChange', stateHandler);
+        }
+        this.pauseForSleep();
+      }
+    };
+
+    if (this.player) {
+      this.player.on('stateChange', stateHandler);
     }
   }
 

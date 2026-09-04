@@ -3,8 +3,8 @@ import { LengthMetrics } from '@kit.ArkUI';
 import {
   HdsNavigation,
   HdsNavigationTitleMode,
-  ScrollEffectType,
-  hdsMaterial
+  HideMode,
+  ScrollEffectType
 } from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -48,6 +48,32 @@ const HOME_CATEGORIES: HomeCategory[] = [
   { name: '单田芳', url: 'types/1/popular/p1' }
 ];
 
+class HomeCategoryDataSource implements IDataSource {
+  private categories: HomeCategory[] = HOME_CATEGORIES;
+  private listeners: DataChangeListener[] = [];
+
+  totalCount(): number {
+    return this.categories.length;
+  }
+
+  getData(index: number): HomeCategory {
+    return this.categories[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    if (!this.listeners.includes(listener)) {
+      this.listeners.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const index: number = this.listeners.indexOf(listener);
+    if (index >= 0) {
+      this.listeners.splice(index, 1);
+    }
+  }
+}
+
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
 
@@ -56,6 +82,7 @@ const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
 const CATEGORY_NAV_WIDTH: number = 76;
 const CATEGORY_NAV_ROW_HEIGHT: number = 48;
+const COLLAPSED_SEARCH_SIZE: number = 42;
 const FEATURED_PAGE_SIZE: number = 3;
 const FEATURED_ROW_HEIGHT: number = 72;
 const FEATURED_COVER_SIZE: number = 60;
@@ -64,6 +91,7 @@ const HOME_COVER_CARD_SIZE: number = 128;
 const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
 
 @ComponentV2
+@ReusableV2
 struct CategoryLightNavItem {
   @Param label: ResourceStr = '';
   @Param selected: boolean = false;
@@ -103,6 +131,7 @@ struct CategoryLightNavItem {
     .height(CATEGORY_NAV_HEIGHT)
     .borderRadius(AppRadius.Pill)
     .justifyContent(FlexAlign.Center)
+    .backgroundColor(Color.Transparent)
     .systemMaterial(AppMaterial.InteractiveClean)
     .animation({ duration: AppMotion.Base, curve: AppCurve.Spring })
     .onClick(() => this.onTap())
@@ -282,6 +311,7 @@ export struct HomePage {
 
   private contentScroller: Scroller = new Scroller();
   private categoryDS: BookDataSource = new BookDataSource();
+  private categoryNavDataSource: HomeCategoryDataSource = new HomeCategoryDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private homeGen: number = 0;
   private refreshInFlight: boolean = false;
@@ -491,29 +521,9 @@ export struct HomePage {
     return `${firstBook.sourceUrl}#${firstBook.bookUrl}`;
   }
 
-  /**
-   * 列表纵向偏移。搜索折叠由滚动驱动：collapse = clamp(y, 0, SEARCH_ROW)，
-   * 一次滑动即可收起/展开，不再二次消费手势。
-   */
-  @Local listScrollY: number = 0;
-
-  /** 搜索行已折叠像素(0=展开, SEARCH_FIELD_ROW_HEIGHT=完全收起) */
-  @Computed
-  get searchCollapsePx(): number {
-    if (this.listScrollY <= 0) {
-      return 0;
-    }
-    if (this.listScrollY >= SEARCH_FIELD_ROW_HEIGHT) {
-      return SEARCH_FIELD_ROW_HEIGHT;
-    }
-    return this.listScrollY;
-  }
-
-  /** 搜索行当前可视高度 */
-  @Computed
-  get searchRowHeight(): number {
-    return SEARCH_FIELD_ROW_HEIGHT - this.searchCollapsePx;
-  }
+  /** 仅在滚动跨过关键阈值时更新，避免每帧重建标题栏。 */
+  @Local isAtContentTop: boolean = true;
+  @Local isSearchCollapsed: boolean = false;
 
   /**
    * 列表顶部占位始终为完整顶栏高度（状态栏+搜索+吸顶次行）。
@@ -524,74 +534,55 @@ export struct HomePage {
     return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + CATEGORY_NAV_ROW_HEIGHT;
   }
 
-  /** 搜索是否完全展开（在顶部），允许下拉刷新 */
-  @Computed
-  get isSearchFullyExpanded(): boolean {
-    return this.listScrollY <= 0.5;
-  }
-
-  /** 搜索折叠进度 0~1，用于透明度 */
-  @Computed
-  get searchCollapseProgress(): number {
-    return this.searchCollapsePx / SEARCH_FIELD_ROW_HEIGHT;
-  }
-
-  private syncListScrollY(): void {
+  private syncHeaderScrollState(): void {
     try {
       const y: number = this.contentScroller.currentOffset().yOffset;
-      this.listScrollY = y > 0 ? y : 0;
+      const nextAtTop: boolean = y <= 0.5;
+      const nextCollapsed: boolean = y >= SEARCH_FIELD_ROW_HEIGHT - 0.5;
+      if (nextAtTop !== this.isAtContentTop) {
+        this.isAtContentTop = nextAtTop;
+      }
+      if (nextCollapsed !== this.isSearchCollapsed) {
+        this.isSearchCollapsed = nextCollapsed;
+      }
     } catch (_e) {
-      this.listScrollY = 0;
+      this.isAtContentTop = true;
+      this.isSearchCollapsed = false;
     }
   }
 
   private resetSearchCollapse(): void {
-    this.listScrollY = 0;
+    this.isAtContentTop = true;
+    this.isSearchCollapsed = false;
   }
 
-  /**
-   * 方案2 浮层顶栏：HDS 渐变模糊 + 搜索折叠 + 分类吸顶。
-   */
+  /** 标题栏主区域：放入 Navigation 生效范围，启用原生沉浸光感。 */
   @Builder
-  fixedSearchBar() {
+  buildSearchTitleBar() {
     Column() {
-      // 仅保留状态栏布局空间，模糊由 HdsNavigation 渐变材质统一绘制。
-      Column()
-        .width('100%')
-        .height(WindowUtils.getStatusBarHeightVp())
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
-
-      Column() {
-        Row({ space: AppSpace.Xs }) {
-          SymbolGlyph($r('sys.symbol.magnifyingglass'))
-            .fontSize(17)
-            .fontColor([$r('sys.color.icon_secondary')])
-          Text($r('app.string.search_placeholder'))
-            .fontSize(AppFont.Body)
-            .fontColor($r('sys.color.font_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Blank()
-        }
-          .width('100%')
-          .height(SEARCH_FIELD_HEIGHT)
-          .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-          .borderRadius(AppRadius.Pill)
-          .systemMaterial(AppMaterial.InteractiveClean)
-          .margin({ top: AppSpace.Xs, bottom: AppSpace.Xs })
-          .opacity(1 - this.searchCollapseProgress)
-          .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
-          .onClick(() => this.onSearchTap())
+      Row({ space: AppSpace.Xs }) {
+        SymbolGlyph($r('sys.symbol.magnifyingglass'))
+          .fontSize(17)
+          .fontColor([$r('sys.color.icon_secondary')])
+        Text($r('app.string.search_placeholder'))
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_tertiary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Blank()
       }
       .width('100%')
-      .height(this.searchRowHeight)
-      .padding({ left: AppSpace.Md, right: AppSpace.Md })
-      .clip(true)
-      .opacity(this.searchRowHeight > 0 ? 1 : 0)
-
-      this.buildCategoryTags()
+      .height(SEARCH_FIELD_HEIGHT)
+      .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+      .borderRadius(AppRadius.Pill)
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(AppMaterial.InteractiveClean)
+      .onClick(() => this.onSearchTap())
     }
     .width('100%')
+    .height(SEARCH_FIELD_ROW_HEIGHT)
+    .padding({ left: AppSpace.Md, right: AppSpace.Md })
+    .justifyContent(FlexAlign.Center)
     .backgroundColor(Color.Transparent)
   }
 
@@ -731,7 +722,7 @@ export struct HomePage {
     .clip(false)
     .backgroundColor(Color.Transparent)
     .onDidScroll(() => {
-      this.syncListScrollY();
+      this.syncHeaderScrollState();
     })
     }
     .onStateChange((state: RefreshStatus) => {
@@ -742,7 +733,7 @@ export struct HomePage {
         })
         .refreshOffset(64)
         // 列表在顶部、搜索入口完全展开时才允许下拉刷新
-        .pullToRefresh(this.isSearchFullyExpanded)
+        .pullToRefresh(this.isAtContentTop)
         .width('100%')
         .height('100%')
         .clip(false)
@@ -750,7 +741,14 @@ export struct HomePage {
     }
     .titleBar({
       avoidLayoutSafeArea: true,
-      content: { title: { mainTitle: '' } },
+      content: {
+        title: { mainTitle: '' },
+        stackBuilder: (): void => this.buildSearchTitleBar(),
+        bottomBuilder: {
+          builder: (): void => this.buildCategoryTags(),
+          height: CATEGORY_NAV_ROW_HEIGHT
+        }
+      },
       style: {
         scrollEffectOpts: {
           scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
@@ -765,10 +763,7 @@ export struct HomePage {
             backgroundColor: Color.Transparent
           }
         },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-        }
+        thermoCtrl: true
       }
     })
     .titleMode(HdsNavigationTitleMode.MINI)
@@ -776,7 +771,18 @@ export struct HomePage {
     // 首页没有独立的导航栏，始终使用全宽 Stack 模式。
     .mode(NavigationMode.Stack)
     .hideBackButton(true)
+    .systemBarStyle(
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() },
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() }
+    )
     .bindToScrollable([this.contentScroller])
+    .dynamicHideTitleBar({
+      hideTitleArea: true,
+      hideBottomBuilder: false,
+      hideStatusBar: false,
+      mode: HideMode.SCROLL_UP_TO,
+      hideRatio: 1.0
+    })
     .backgroundColor(Color.Transparent)
 
       if (this.loadingHome && this.homeBlocks.length === 0) {
@@ -787,9 +793,6 @@ export struct HomePage {
         .height('100%')
         .padding({ top: this.headerHeight })
       }
-
-      // 方案2：浮层顶栏，搜索折叠 + 分类吸顶
-      this.fixedSearchBar()
     }
   }
 
@@ -803,16 +806,18 @@ export struct HomePage {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Blank()
-        Row({ space: AppSpace.Xxs }) {
-          Text('更多')
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary'))
-          SymbolGlyph($r('sys.symbol.chevron_right'))
-            .fontSize(12)
-            .fontColor([$r('sys.color.font_secondary')])
+        if (block.moreUrl && block.moreUrl.length > 0) {
+          Row({ space: AppSpace.Xxs }) {
+            Text('更多')
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary'))
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(12)
+              .fontColor([$r('sys.color.font_secondary')])
+          }
+          .padding({ left: AppSpace.Xs, right: AppSpace.Xs, top: 6, bottom: 6 })
+          .onClick(() => this.onBlockMore(block))
         }
-        .padding({ left: AppSpace.Xs, right: AppSpace.Xs, top: 6, bottom: 6 })
-        .onClick(() => this.onBlockMore(block))
       }
       .width('100%')
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
@@ -1016,31 +1021,56 @@ export struct HomePage {
 
   @Builder
   buildCategoryTags() {
-    Scroll() {
-      Row({ space: AppSpace.Xs }) {
-        CategoryLightNavItem({
-          label: $r('app.string.home_tingyou_source_label'),
-          selected: this.selectedCategoryIndex === -1,
-          onTap: () => this.switchCategory(-1)
-        })
-
-        ForEach(HOME_CATEGORIES, (cat: HomeCategory) => {
+    Row({ space: AppSpace.Xs }) {
+      List({ space: AppSpace.Xs }) {
+        ListItem() {
           CategoryLightNavItem({
-            label: cat.name,
-            selected: this.isCategorySelected(cat),
-            onTap: () => this.switchCategoryByUrl(cat.url)
+            label: $r('app.string.home_tingyou_source_label'),
+            selected: this.selectedCategoryIndex === -1,
+            onTap: () => this.switchCategory(-1)
           })
+        }
+
+        LazyForEach(this.categoryNavDataSource, (cat: HomeCategory) => {
+          ListItem() {
+            CategoryLightNavItem({
+              label: cat.name,
+              selected: this.isCategorySelected(cat),
+              onTap: () => this.switchCategoryByUrl(cat.url)
+            })
+          }
         }, (cat: HomeCategory) => cat.url)
       }
-      .height(CATEGORY_NAV_ROW_HEIGHT)
-      .padding({ left: AppSpace.Md, right: AppSpace.Md })
-      .alignItems(VerticalAlign.Center)
+      .layoutWeight(1)
+      .height(CATEGORY_NAV_HEIGHT)
+      .listDirection(Axis.Horizontal)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+      .cachedCount(1)
+
+      if (this.isSearchCollapsed) {
+        Stack() {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              .fontSize(21)
+              .fontColor([$r('sys.color.icon_primary')])
+          }
+          .width(COLLAPSED_SEARCH_SIZE)
+          .height(COLLAPSED_SEARCH_SIZE)
+          .borderRadius(AppRadius.Pill)
+          .backgroundColor(Color.Transparent)
+          .systemMaterial(AppMaterial.InteractiveClean)
+          .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
+          .onClick(() => this.onSearchTap())
+        }
+        .width(COLLAPSED_SEARCH_SIZE)
+        .height(COLLAPSED_SEARCH_SIZE)
+      }
     }
     .height(CATEGORY_NAV_ROW_HEIGHT)
     .width('100%')
-    .scrollable(ScrollDirection.Horizontal)
-    .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .padding({ left: AppSpace.Md, right: AppSpace.Md, top: 3, bottom: 3 })
+    .alignItems(VerticalAlign.Center)
   }
 
 }

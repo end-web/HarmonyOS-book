@@ -19,6 +19,10 @@ obfuscation-cache.json
 /.tmp_shots
 /screenshot
 
+# 本地 UI 验证截图与层级 dump
+/artifacts/*.png
+/ui-dump-current/
+
 # Build logs
 *.log
 .build_log*

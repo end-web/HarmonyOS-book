@@ -22,7 +22,8 @@ import {
 } from '../service/text/OnlineTextPaginator';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 import { TextReadingSettingsService } from '../service/text/TextReadingSettingsService';
-import { AppColor, AppFont, AppMaterial, AppSpace } from '../theme/Theme';
+import { AppColor, AppFont, AppSpace } from '../theme/Theme';
+import { GlassSheetSurface } from '../components/GlassSurface';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -58,6 +59,7 @@ export struct ReaderPage {
   @Local backgroundPattern: string = ReaderPattern.None;
   @Local bgImagePath: string = '';
   @Local overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
+  @Local pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
   /** 由 themeId / customBackground 解析出的当前配色；所有阅读色都从这里取 */
   @Local palette: ReaderPalette = resolvePalette(TextReadingSettings.THEME_DEFAULT,
     TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT);
@@ -499,6 +501,7 @@ export struct ReaderPage {
       this.backgroundPattern = settings.pattern;
       this.bgImagePath = settings.backgroundImage;
       this.overlayAlpha = settings.overlayAlpha;
+      this.pageTurnMode = settings.pageTurnMode;
       this.refreshPalette();
     } catch (e) {
       hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'restore settings failed: %{public}s',
@@ -516,6 +519,7 @@ export struct ReaderPage {
     this.backgroundPattern = ReaderPattern.None;
     this.bgImagePath = '';
     this.overlayAlpha = TextReadingSettings.OVERLAY_DEFAULT;
+    this.pageTurnMode = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
     this.refreshPalette();
   }
 
@@ -530,7 +534,7 @@ export struct ReaderPage {
     const currentContext = this.context;
     if (currentContext === null) return;
     const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
-      this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha);
+      this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode);
     TextReadingSettingsService.save(currentContext, settings).catch((e: Error): void => {
       hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'save settings failed: %{public}s', e.message);
     });
@@ -615,6 +619,11 @@ export struct ReaderPage {
   private handleOverlayChange(value: number, commit: boolean): void {
     this.overlayAlpha = TextReadingSettings.normalizeOverlay(value);
     if (commit) this.saveReadingSettings();
+  }
+
+  private handlePageTurnModeChange(mode: string): void {
+    this.pageTurnMode = TextReadingSettings.normalizePageTurnMode(mode);
+    this.saveReadingSettings();
   }
 
   private handleResetDefaults(): void {
@@ -1195,11 +1204,10 @@ export struct ReaderPage {
   @Builder
   buildChapterSheet(): void {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 背景遮罩层：仅透明度渐变，不参与位移动画
+      // 透明点击层：不遮暗阅读内容，只负责点击关闭。
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor('#24000000')
         .onClick((): void => {
           this.closeChapterSheet();
         })
@@ -1207,18 +1215,19 @@ export struct ReaderPage {
           .animation({ curve: curves.springMotion(0.6, 0.9) }))
 
       // 弹窗内容：从底部滑入
-      Stack({ alignContent: Alignment.BottomEnd }) {
-        Column() {
+      GlassSheetSurface() {
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          Column() {
           Row() {
             Column({ space: AppSpace.Xxs }) {
               Text($r('app.string.reader_chapters'))
                 .fontSize(AppFont.Title)
-                .fontColor(this.palette.primary)
+                .fontColor(AppColor.GlassTextPrimary)
                 .fontWeight(FontWeight.Bold)
               if (this.book !== null) {
                 Text(this.book.title)
                   .fontSize(AppFont.Caption)
-                  .fontColor(this.palette.secondary)
+                  .fontColor(AppColor.GlassTextSecondary)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
               }
@@ -1229,14 +1238,14 @@ export struct ReaderPage {
             if (this.book !== null && this.book.chapters.length > 0) {
               Text(`${this.currentResourceIndex + 1}/${this.book.chapters.length}`)
                 .fontSize(AppFont.Body)
-                .fontColor(this.palette.secondary)
+                .fontColor(AppColor.GlassTextSecondary)
                 .margin({ right: AppSpace.Sm })
             }
 
             Stack({ alignContent: Alignment.Center }) {
               SymbolGlyph($r('sys.symbol.xmark'))
                 .fontSize(20)
-                .fontColor([this.palette.secondary])
+                .fontColor([AppColor.GlassTextSecondary])
             }
             .width(40)
             .height(40)
@@ -1250,7 +1259,7 @@ export struct ReaderPage {
           .padding({ left: AppSpace.Lg, right: AppSpace.Md, top: AppSpace.Md, bottom: AppSpace.Sm })
 
           Divider()
-            .color(this.palette.divider)
+            .color(AppColor.GlassDivider)
 
           List({ space: 0, scroller: this.chapterListScroller }) {
             LazyForEach(this.chapterDataSource, (chapter: Chapter) => {
@@ -1265,13 +1274,14 @@ export struct ReaderPage {
                   Column({ space: AppSpace.Xxs }) {
                     Text(chapter.title)
                       .fontSize(AppFont.BodyL)
-                      .fontColor(this.isCurrentChapter(chapter) ? this.palette.primary : this.palette.secondary)
+                      .fontColor(this.isCurrentChapter(chapter) ? AppColor.GlassTextPrimary :
+                        AppColor.GlassTextSecondary)
                       .fontWeight(this.isCurrentChapter(chapter) ? FontWeight.Medium : FontWeight.Normal)
                       .maxLines(2)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                     Text(`${this.chapterResourceIndex(chapter) + 1}`)
                       .fontSize(AppFont.Caption)
-                      .fontColor(this.palette.secondary)
+                      .fontColor(AppColor.GlassTextTertiary)
                   }
                   .alignItems(HorizontalAlign.Start)
                   .layoutWeight(1)
@@ -1286,7 +1296,7 @@ export struct ReaderPage {
                 .constraintSize({ minHeight: READER_CHAPTER_ROW_HEIGHT })
                 .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
                 .backgroundColor(this.isCurrentChapter(chapter) ?
-                  this.palette.highlight : Color.Transparent)
+                  AppColor.BrandSoft : Color.Transparent)
                 .onClick((): void => {
                   this.selectChapter(chapter);
                 })
@@ -1303,40 +1313,36 @@ export struct ReaderPage {
             this.chapterListOffsetFromCurrent =
               (centerIndex - this.currentResourceIndex) * READER_CHAPTER_ROW_HEIGHT;
           })
+          }
+          .width('100%')
+          .height('100%')
+
+          if (this.shouldShowChapterJumpButton()) {
+            Row({ space: AppSpace.Xs }) {
+              SymbolGlyph($r('sys.symbol.scope'))
+                .fontSize(16)
+                .fontColor(['#FFFFFF'])
+              Text($r('app.string.reader_back_to_current_chapter'))
+                .fontSize(AppFont.Caption)
+                .fontColor('#FFFFFF')
+                .fontWeight(FontWeight.Medium)
+            }
+            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+            .borderRadius(22)
+            .backgroundColor(AppColor.Brand)
+            .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+            .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
+            .onClick((): void => {
+              this.jumpToCurrentChapter();
+            })
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
+              .animation({ curve: curves.springMotion(0.4, 0.9) }))
+          }
         }
         .width('100%')
-        .height('100%')
-
-        if (this.shouldShowChapterJumpButton()) {
-          Row({ space: AppSpace.Xs }) {
-            SymbolGlyph($r('sys.symbol.scope'))
-              .fontSize(16)
-              .fontColor(['#FFFFFF'])
-            Text($r('app.string.reader_back_to_current_chapter'))
-              .fontSize(AppFont.Caption)
-              .fontColor('#FFFFFF')
-              .fontWeight(FontWeight.Medium)
-          }
-          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-          .borderRadius(22)
-          .backgroundColor(AppColor.Brand)
-          .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-          .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
-          .onClick((): void => {
-            this.jumpToCurrentChapter();
-          })
-          .transition(TransitionEffect.OPACITY
-            .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
-            .animation({ curve: curves.springMotion(0.4, 0.9) }))
-        }
+        .height('58%')
       }
-      .width('100%')
-      .height('58%')
-      .borderRadius({ topLeft: 20, topRight: 20 })
-      .backgroundColor(this.palette.background)
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .transition(TransitionEffect.translate({ y: 1000 })
-        .animation({ curve: curves.springMotion(0.6, 0.9) }))
     }
     .width('100%')
     .height('100%')
@@ -1345,11 +1351,10 @@ export struct ReaderPage {
   @Builder
   buildSettingsSheet(): void {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 背景遮罩层：仅透明度渐变
+      // 透明点击层：保持阅读背景原亮度。
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor('#24000000')
         .onClick((): void => {
           this.closeSettingsSheet();
         })
@@ -1365,6 +1370,7 @@ export struct ReaderPage {
         pattern: this.backgroundPattern,
         bgImagePath: this.bgImagePath,
         overlayAlpha: this.overlayAlpha,
+        pageTurnMode: this.pageTurnMode,
         palette: this.palette,
         bottomSafeVp: this.bottomSafeVp,
         onFontSizeChange: (value: number, commit: boolean): void => {
@@ -1384,6 +1390,9 @@ export struct ReaderPage {
         },
         onOverlayChange: (value: number, commit: boolean): void => {
           this.handleOverlayChange(value, commit);
+        },
+        onPageTurnModeChange: (mode: string): void => {
+          this.handlePageTurnModeChange(mode);
         },
         onPickImage: (): void => {
           this.pickBackgroundImage();

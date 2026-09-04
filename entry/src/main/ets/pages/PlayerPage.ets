@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius, AppMaterial } from '../theme/Theme';
+import { GlassSheetSurface } from '../components/GlassSurface';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
@@ -717,8 +718,27 @@ export struct PlayerPage {
   }
 
   private setSleep(minutes: number): void {
-    AudioService.getInstance().setSleepTimer(minutes);
+    if (minutes > 0) {
+      // 设置定时：使用当前的智能停止状态
+      const smartStop = this.playerState.sleepSmartStop;
+      AudioService.getInstance().setSleepTimer(minutes, smartStop, false);
+    } else {
+      // 取消定时：重置所有相关状态
+      this.playerState.sleepSmartStop = false;
+      this.playerState.sleepFadeOut = false;
+      AudioService.getInstance().setSleepTimer(0, false, false);
+    }
     this.showSleepSheet = false;
+  }
+
+  private toggleSleepSmartStop(isOn: boolean): void {
+    this.playerState.sleepSmartStop = isOn;
+    // 如果当前已设置定时，重新应用配置
+    const minutes = this.playerState.sleepMinutes;
+    if (minutes > 0) {
+      AudioService.getInstance().setSleepTimer(minutes, isOn, false);
+    }
+    // 如果未设置定时，只更新状态，用户选择时长时会自动应用
   }
 
   private cyclePlayMode(): void {
@@ -1182,17 +1202,18 @@ export struct PlayerPage {
         .layoutWeight(1)
         .onClick(() => { this.showChapterList = false; })
 
-      Stack({ alignContent: Alignment.BottomEnd }) {
-        Column({ space: AppSpace.Sm }) {
+      GlassSheetSurface() {
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          Column({ space: AppSpace.Sm }) {
           Row() {
             Text('章节列表')
               .fontSize(AppFont.Title)
-              .fontColor($r('sys.color.font_primary'))
+              .fontColor(AppColor.GlassTextPrimary)
               .fontWeight(FontWeight.Bold)
             Blank()
             SymbolGlyph($r('sys.symbol.xmark'))
               .fontSize(20)
-              .fontColor([$r('sys.color.font_tertiary')])
+              .fontColor([AppColor.GlassTextSecondary])
               .onClick(() => { this.showChapterList = false; })
           }
           .width('100%')
@@ -1201,46 +1222,45 @@ export struct PlayerPage {
           // 章节搜索框（原生 Search,与首页一致）
           Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
             .onChange((value: string) => this.applyChapterFilter(value))
+            .fontColor(AppColor.GlassTextPrimary)
+            .placeholderColor(AppColor.GlassTextTertiary)
+            .searchIcon({ size: 18, color: AppColor.GlassTextSecondary })
             .height(40)
             .borderRadius(AppRadius.Lg)
-            .systemMaterial(AppMaterial.InteractiveClean)
+            .backgroundColor(AppColor.GlassSheetControlTint)
+            .border({ width: 0.5, color: AppColor.GlassSheetStroke })
             .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
           this.buildChapterItems()
+          }
+          .width('100%')
+          .height('100%')
+
+          // "回到当前章节"浮动按钮:列表滚远时显示
+          if (this.shouldShowJumpButton()) {
+            Row({ space: AppSpace.Xs }) {
+              SymbolGlyph($r('sys.symbol.scope'))
+                .fontSize(16)
+                .fontColor(['#FFFFFF'])
+              Text('回到当前章节')
+                .fontSize(AppFont.Caption)
+                .fontColor('#FFFFFF')
+                .fontWeight(FontWeight.Medium)
+            }
+            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+            .borderRadius(22)
+            .backgroundColor(AppColor.Brand)
+            .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+            .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
+            .onClick(() => this.jumpToCurrentChapter())
+            .transition(TransitionEffect.OPACITY
+              .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
+              .animation({ curve: curves.springMotion(0.4, 0.9) }))
+          }
         }
         .width('100%')
-        .height('100%')
-
-        // "回到当前章节"浮动按钮:列表滚远时显示
-        if (this.shouldShowJumpButton()) {
-          Row({ space: AppSpace.Xs }) {
-            SymbolGlyph($r('sys.symbol.scope'))
-              .fontSize(16)
-              .fontColor(['#FFFFFF'])
-            Text('回到当前章节')
-              .fontSize(AppFont.Caption)
-              .fontColor('#FFFFFF')
-              .fontWeight(FontWeight.Medium)
-          }
-          .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-          .borderRadius(22)
-          .backgroundColor(AppColor.Brand)
-          .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-          .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
-          .onClick(() => this.jumpToCurrentChapter())
-          .transition(TransitionEffect.OPACITY
-            .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
-            .animation({ curve: curves.springMotion(0.4, 0.9) }))
-        }
+        .height('55%')
       }
-      .width('100%')
-      .height('55%')
-      .borderRadius({ topLeft: 20, topRight: 20 })
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .transition(TransitionEffect.OPACITY
-        .animation({ curve: curves.springMotion(0.6, 0.9) })
-        .combine(TransitionEffect.translate({ y: 1000 })
-          .animation({ curve: curves.springMotion(0.6, 0.9) })))
     }
     .width('100%')
     .height('100%')
@@ -1255,12 +1275,12 @@ export struct PlayerPage {
             Column({ space: 2 }) {
               Text(ch.title)
                 .fontSize(AppFont.BodyL)
-                .fontColor(this.isCurrentChapter(ch) ? AppColor.Brand : $r('sys.color.font_primary'))
+                .fontColor(this.isCurrentChapter(ch) ? AppColor.Brand : AppColor.GlassTextPrimary)
                 .fontWeight(this.isCurrentChapter(ch) ? FontWeight.Medium : FontWeight.Normal)
               if (this.chapterDurationSec(ch) > 0) {
                 Text(this.formatDuration(this.chapterDurationSec(ch)))
                   .fontSize(AppFont.Caption)
-                  .fontColor($r('sys.color.font_tertiary'))
+                  .fontColor(AppColor.GlassTextSecondary)
               }
             }
             .alignItems(HorizontalAlign.Start)
@@ -1313,26 +1333,28 @@ export struct PlayerPage {
         .layoutWeight(1)
         .onClick(() => { this.showSleepSheet = false; })
 
-      Column({ space: AppSpace.Md }) {
-        Row() {
+      GlassSheetSurface() {
+        Column({ space: AppSpace.Md }) {
+          Row() {
           Text('定时关闭')
             .fontSize(AppFont.Title)
-            .fontColor($r('sys.color.font_primary'))
+            .fontColor(AppColor.GlassTextPrimary)
             .fontWeight(FontWeight.Bold)
           Blank()
           SymbolGlyph($r('sys.symbol.xmark'))
             .fontSize(20)
-            .fontColor([$r('sys.color.font_tertiary')])
+            .fontColor([AppColor.GlassTextSecondary])
             .onClick(() => { this.showSleepSheet = false; })
-        }
-        .width('100%')
-        .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
 
-        ForEach([15, 30, 45, 60], (min: number) => {
+        // 预设时间选项
+          ForEach([15, 30, 45, 60], (min: number) => {
           Row() {
             Text(min + ' 分钟')
               .fontSize(AppFont.BodyL)
-              .fontColor(this.playerState.sleepMinutes === min ? AppColor.Brand : $r('sys.color.font_primary'))
+              .fontColor(this.playerState.sleepMinutes === min ? AppColor.Brand : AppColor.GlassTextPrimary)
               .layoutWeight(1)
             if (this.playerState.sleepMinutes === min) {
               SymbolGlyph($r('sys.symbol.checkmark'))
@@ -1343,26 +1365,55 @@ export struct PlayerPage {
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
           .onClick(() => this.setSleep(min))
-        }, (min: number) => min.toString())
+          }, (min: number) => min.toString())
 
-        if (this.playerState.sleepMinutes > 0) {
+        // 分隔线
+          Divider()
+          .color(AppColor.GlassDivider)
+          .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
+
+        // 增强选项：章节结束后停止（始终显示）
           Row() {
-            Text('取消定时')
+          Column({ space: 2 }) {
+            Text('章节结束后停止')
               .fontSize(AppFont.BodyL)
-              .fontColor('#FF6B6B')
-              .layoutWeight(1)
+              .fontColor(AppColor.GlassTextPrimary)
+            Text('定时到后播完当前章节再暂停')
+              .fontSize(AppFont.Caption)
+              .fontColor(AppColor.GlassTextSecondary)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Toggle({ type: ToggleType.Switch, isOn: this.playerState.sleepSmartStop })
+            .selectedColor(AppColor.Brand)
+            .onChange((isOn: boolean) => {
+              this.toggleSleepSmartStop(isOn);
+            })
           }
           .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-          .onClick(() => this.setSleep(0))
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
+
+        // 取消定时按钮
+          if (this.playerState.sleepMinutes > 0) {
+            Divider()
+              .color(AppColor.GlassDivider)
+              .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
+
+            Row() {
+              Text('取消定时')
+                .fontSize(AppFont.BodyL)
+                .fontColor('#FF6B6B')
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+            .onClick(() => this.setSleep(0))
+          }
         }
+        .width('100%')
+        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       }
-      .width('100%')
-      .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      .borderRadius({ topLeft: 20, topRight: 20 })
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .transition(TransitionEffect.OPACITY.animation({ curve: curves.springMotion(0.6, 0.9) })
-        .combine(TransitionEffect.translate({ y: 1000 }).animation({ curve: curves.springMotion(0.6, 0.9) })))
     }
     .width('100%')
     .height('100%')
@@ -1375,16 +1426,17 @@ export struct PlayerPage {
         .layoutWeight(1)
         .onClick(() => { this.showSkipSheet = false; })
 
-      Column({ space: AppSpace.Md }) {
+      GlassSheetSurface() {
+        Column({ space: AppSpace.Md }) {
         Row() {
           Text('跳过片头片尾')
             .fontSize(AppFont.Title)
-            .fontColor($r('sys.color.font_primary'))
+            .fontColor(AppColor.GlassTextPrimary)
             .fontWeight(FontWeight.Bold)
           Blank()
           SymbolGlyph($r('sys.symbol.xmark'))
             .fontSize(20)
-            .fontColor([$r('sys.color.font_tertiary')])
+            .fontColor([AppColor.GlassTextSecondary])
             .onClick(() => { this.showSkipSheet = false; })
         }
         .width('100%')
@@ -1394,7 +1446,7 @@ export struct PlayerPage {
           Row() {
             Text('片头')
               .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_primary'))
+              .fontColor(AppColor.GlassTextPrimary)
             Blank()
             Text(`${this.skipIntroValue} 秒`)
               .fontSize(AppFont.BodyL)
@@ -1406,7 +1458,7 @@ export struct PlayerPage {
 
           Slider({ value: this.skipIntroValue, min: 0, max: 120, step: 1 })
             .blockColor(AppColor.Brand)
-            .trackColor($r('sys.color.comp_background_tertiary'))
+            .trackColor(AppColor.GlassDivider)
             .selectedColor(AppColor.Brand)
             .onChange((value: number) => { this.skipIntroValue = Math.round(value); })
             .onTouch((event: TouchEvent) => {
@@ -1423,7 +1475,7 @@ export struct PlayerPage {
           Row() {
             Text('片尾')
               .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_primary'))
+              .fontColor(AppColor.GlassTextPrimary)
             Blank()
             Text(`${this.skipOutroValue} 秒`)
               .fontSize(AppFont.BodyL)
@@ -1435,7 +1487,7 @@ export struct PlayerPage {
 
           Slider({ value: this.skipOutroValue, min: 0, max: 120, step: 1 })
             .blockColor(AppColor.Brand)
-            .trackColor($r('sys.color.comp_background_tertiary'))
+            .trackColor(AppColor.GlassDivider)
             .selectedColor(AppColor.Brand)
             .onChange((value: number) => { this.skipOutroValue = Math.round(value); })
             .onTouch((event: TouchEvent) => {
@@ -1447,15 +1499,10 @@ export struct PlayerPage {
         }
         .width('100%')
         .padding({ top: AppSpace.Sm })
+        }
+        .width('100%')
+        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       }
-      .width('100%')
-      .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      .borderRadius({ topLeft: 20, topRight: 20 })
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .transition(TransitionEffect.OPACITY
-        .animation({ curve: curves.springMotion(0.6, 0.9) })
-        .combine(TransitionEffect.translate({ y: 1000 })
-          .animation({ curve: curves.springMotion(0.6, 0.9) })))
     }
     .width('100%')
     .height('100%')
@@ -1468,16 +1515,17 @@ export struct PlayerPage {
         .layoutWeight(1)
         .onClick(() => { this.showSpeedSheet = false; })
 
-      Column({ space: AppSpace.Md }) {
+      GlassSheetSurface() {
+        Column({ space: AppSpace.Md }) {
         Row() {
           Text('播放速度')
             .fontSize(AppFont.Title)
-            .fontColor($r('sys.color.font_primary'))
+            .fontColor(AppColor.GlassTextPrimary)
             .fontWeight(FontWeight.Bold)
           Blank()
           SymbolGlyph($r('sys.symbol.xmark'))
             .fontSize(20)
-            .fontColor([$r('sys.color.font_tertiary')])
+            .fontColor([AppColor.GlassTextSecondary])
             .onClick(() => { this.showSpeedSheet = false; })
         }
         .width('100%')
@@ -1487,7 +1535,7 @@ export struct PlayerPage {
           Row() {
             Text('倍速')
               .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_primary'))
+              .fontColor(AppColor.GlassTextPrimary)
             Blank()
             Text(this.fmtSpeed(this.speedValue) + 'x')
               .fontSize(AppFont.TitleL)
@@ -1499,7 +1547,7 @@ export struct PlayerPage {
 
           Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
             .blockColor(AppColor.Brand)
-            .trackColor($r('sys.color.comp_background_tertiary'))
+            .trackColor(AppColor.GlassDivider)
             .selectedColor(AppColor.Brand)
             .onChange((value: number) => { this.speedValue = Math.round(value * 20) / 20; })
             .onTouch((event: TouchEvent) => {
@@ -1512,26 +1560,21 @@ export struct PlayerPage {
           Row() {
             Text('0.5x')
               .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
+              .fontColor(AppColor.GlassTextTertiary)
             Blank()
             Text('3.0x')
               .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
+              .fontColor(AppColor.GlassTextTertiary)
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
         }
         .width('100%')
         .padding({ top: AppSpace.Sm })
+        }
+        .width('100%')
+        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       }
-      .width('100%')
-      .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      .borderRadius({ topLeft: 20, topRight: 20 })
-      .systemMaterial(AppMaterial.DialogUltraThick)
-      .transition(TransitionEffect.OPACITY
-        .animation({ curve: curves.springMotion(0.6, 0.9) })
-        .combine(TransitionEffect.translate({ y: 1000 })
-          .animation({ curve: curves.springMotion(0.6, 0.9) })))
     }
     .width('100%')
     .height('100%')
@@ -1591,7 +1634,7 @@ export struct PlayerPage {
     } else if (this.chapterCacheTick >= 0 && !ChapterCacheService.getInstance().isAudioChapterCached(this.book!, ch)) {
       SymbolGlyph($r('sys.symbol.cloud'))
         .fontSize(16)
-        .fontColor([$r('sys.color.font_tertiary')])
+        .fontColor([AppColor.GlassTextTertiary])
     }
   }
 }

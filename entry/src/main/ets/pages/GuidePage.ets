@@ -1,90 +1,98 @@
 import { AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
-interface GuideItem {
-  id: string;
-  action: ResourceStr;
-  desc: ResourceStr;
+class GuideItem {
+  id: string = '';
+  action: ResourceStr = '';
+  desc: ResourceStr = '';
+
+  constructor(id: string, action: ResourceStr, desc: ResourceStr) {
+    this.id = id;
+    this.action = action;
+    this.desc = desc;
+  }
 }
 
-interface GuideGroup {
-  id: string;
-  title: ResourceStr;
-  items: GuideItem[];
+class GuideGroup {
+  id: string = '';
+  title: ResourceStr = '';
+  items: GuideItem[] = [];
+
+  constructor(id: string, title: ResourceStr, items: GuideItem[]) {
+    this.id = id;
+    this.title = title;
+    this.items = items;
+  }
 }
 
 /** 使用说明内容:每一条都对应代码里真实存在的交互 */
 const GUIDE_GROUPS: GuideGroup[] = [
-  {
-    id: 'home',
-    title: '首页',
-    items: [
-      { id: 'home-double-tap', action: '双击底部「首页」页签', desc: '快速回到首页顶部' },
-    ]
-  },
-  {
-    id: 'common',
-    title: '通用',
-    items: [
-      { id: 'tab-double-tap', action: '双击「书架 / 记录 / 我的」页签', desc: '快速回到当前页顶部' },
-    ]
-  },
-  {
-    id: 'favorite',
-    title: '书架',
-    items: [
-      { id: 'favorite-refresh', action: '下拉', desc: '从欢 FM 刷新在线书籍的最新数据' },
-      { id: 'favorite-remove', action: '长按书籍并拖到底部删除区', desc: '移出书架(可选仅移除,或删除本地文件)' },
-    ]
-  },
-  {
-    id: 'record',
-    title: '记录',
-    items: [
-      { id: 'record-select', action: '长按任一条记录', desc: '进入多选,批量删除收听记录' },
-    ]
-  },
-  {
-    id: 'player',
-    title: '播放页',
-    items: [
-      { id: 'player-speed-reset', action: '长按「倍速」', desc: '恢复 1.0 倍速' },
-      { id: 'player-sleep-cancel', action: '长按「定时」', desc: '取消睡眠定时' },
-      { id: 'player-skip-clear', action: '长按「跳过」', desc: '清除片头 / 片尾跳过设置' },
-    ]
-  },
-  {
-    id: 'mini-player',
-    title: $r('app.string.guide_group_mini_player'),
-    items: [
-      {
-        id: 'mini-cover-rotation',
-        action: $r('app.string.guide_mini_cover_action'),
-        desc: $r('app.string.guide_mini_cover_desc')
-      },
-      {
-        id: 'mini-cover-expand',
-        action: $r('app.string.guide_mini_expand_action'),
-        desc: $r('app.string.guide_mini_expand_desc')
-      },
-    ]
-  },
-  {
-    id: 'system-media',
-    title: $r('app.string.guide_group_system_media'),
-    items: [
-      {
-        id: 'system-media-open',
-        action: $r('app.string.guide_system_media_open_action'),
-        desc: $r('app.string.guide_system_media_open_desc')
-      },
-      {
-        id: 'system-media-speed',
-        action: $r('app.string.guide_system_speed_action'),
-        desc: $r('app.string.guide_system_speed_desc')
-      },
-    ]
-  },
+  new GuideGroup('home', $r('app.string.guide_group_home'), [
+    new GuideItem('home-search', $r('app.string.guide_home_search_action'),
+      $r('app.string.guide_home_search_desc')),
+    new GuideItem('home-refresh', $r('app.string.guide_home_refresh_action'),
+      $r('app.string.guide_home_refresh_desc')),
+    new GuideItem('home-double-tap', $r('app.string.guide_home_top_action'),
+      $r('app.string.guide_home_top_desc')),
+  ]),
+  new GuideGroup('common', $r('app.string.guide_group_common'), [
+    new GuideItem('tab-double-tap', $r('app.string.guide_common_top_action'),
+      $r('app.string.guide_common_top_desc')),
+  ]),
+  new GuideGroup('favorite', $r('app.string.guide_group_favorite'), [
+    new GuideItem('favorite-open', $r('app.string.guide_favorite_open_action'),
+      $r('app.string.guide_favorite_open_desc')),
+    new GuideItem('favorite-refresh', $r('app.string.guide_favorite_refresh_action'),
+      $r('app.string.guide_favorite_refresh_desc')),
+    new GuideItem('favorite-remove', $r('app.string.guide_favorite_remove_action'),
+      $r('app.string.guide_favorite_remove_desc')),
+  ]),
+  new GuideGroup('record', $r('app.string.guide_group_record'), [
+    new GuideItem('record-select', $r('app.string.guide_record_select_action'),
+      $r('app.string.guide_record_select_desc')),
+    new GuideItem('record-play', $r('app.string.guide_record_play_action'),
+      $r('app.string.guide_record_play_desc')),
+  ]),
+  new GuideGroup('player', $r('app.string.guide_group_player'), [
+    new GuideItem('player-chapter', $r('app.string.guide_player_chapter_action'),
+      $r('app.string.guide_player_chapter_desc')),
+    new GuideItem('player-speed-reset', $r('app.string.guide_player_speed_action'),
+      $r('app.string.guide_player_speed_desc')),
+    new GuideItem('player-sleep', $r('app.string.guide_player_sleep_action'),
+      $r('app.string.guide_player_sleep_desc')),
+    new GuideItem('player-skip-clear', $r('app.string.guide_player_skip_action'),
+      $r('app.string.guide_player_skip_desc')),
+    new GuideItem('player-cast', $r('app.string.guide_player_cast_action'),
+      $r('app.string.guide_player_cast_desc')),
+  ]),
+  new GuideGroup('reader', $r('app.string.guide_group_reader'), [
+    new GuideItem('reader-open', $r('app.string.guide_reader_open_action'),
+      $r('app.string.guide_reader_open_desc')),
+    new GuideItem('reader-toolbar', $r('app.string.guide_reader_toolbar_action'),
+      $r('app.string.guide_reader_toolbar_desc')),
+    new GuideItem('reader-settings', $r('app.string.guide_reader_settings_action'),
+      $r('app.string.guide_reader_settings_desc')),
+  ]),
+  new GuideGroup('source', $r('app.string.guide_group_source'), [
+    new GuideItem('source-import', $r('app.string.guide_source_import_action'),
+      $r('app.string.guide_source_import_desc')),
+    new GuideItem('source-test', $r('app.string.guide_source_test_action'),
+      $r('app.string.guide_source_test_desc')),
+    new GuideItem('source-login', $r('app.string.guide_source_login_action'),
+      $r('app.string.guide_source_login_desc')),
+  ]),
+  new GuideGroup('mini-player', $r('app.string.guide_group_mini_player'), [
+    new GuideItem('mini-cover-progress', $r('app.string.guide_mini_cover_action'),
+      $r('app.string.guide_mini_cover_desc')),
+    new GuideItem('mini-cover-expand', $r('app.string.guide_mini_expand_action'),
+      $r('app.string.guide_mini_expand_desc')),
+  ]),
+  new GuideGroup('system-media', $r('app.string.guide_group_system_media'), [
+    new GuideItem('system-media-open', $r('app.string.guide_system_media_open_action'),
+      $r('app.string.guide_system_media_open_desc')),
+    new GuideItem('system-media-speed', $r('app.string.guide_system_speed_action'),
+      $r('app.string.guide_system_speed_desc')),
+  ]),
 ];
 
 @ComponentV2
@@ -151,7 +159,7 @@ export struct GuidePage {
             this.groupCard(group)
           }, (group: GuideGroup) => group.id)
 
-          Text('部分手势带轻震反馈,更多用法会持续补充')
+          Text($r('app.string.guide_footer'))
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
             .textAlign(TextAlign.Center)

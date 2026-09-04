@@ -42,6 +42,16 @@ export class TextReadingPosition {
   }
 }
 
+/** 翻页模式 */
+export enum PageTurnMode {
+  /** 覆盖翻页（默认） */
+  Cover = 'cover',
+  /** 仿真翻页 */
+  Simulation = 'simulation',
+  /** 滑动翻页 */
+  Slide = 'slide'
+}
+
 export class TextReadingSettings {
   static readonly FONT_SIZE_MIN: number = 14;
   static readonly FONT_SIZE_MAX: number = 30;
@@ -55,6 +65,7 @@ export class TextReadingSettings {
   static readonly OVERLAY_DEFAULT: number = 0.35;
   static readonly THEME_DEFAULT: string = ReaderThemeId.Parchment;
   static readonly CUSTOM_BACKGROUND_DEFAULT: string = '#F5F2EA';
+  static readonly PAGE_TURN_MODE_DEFAULT: string = PageTurnMode.Cover;
 
   fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
@@ -68,6 +79,8 @@ export class TextReadingSettings {
   backgroundImage: string = '';
   /** 背景图上的底色蒙层浓度 */
   overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
+  /** 翻页模式 */
+  pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
 
   static of(fontSize: number, lineHeight: number): TextReadingSettings {
     const value = new TextReadingSettings();
@@ -79,13 +92,14 @@ export class TextReadingSettings {
   /** 完整构造；服务层读盘后用它一次装配。 */
   static ofAll(fontSize: number, lineHeight: number, themeId: string,
     customBackground: string, pattern: string, backgroundImage: string,
-    overlayAlpha: number): TextReadingSettings {
+    overlayAlpha: number, pageTurnMode?: string): TextReadingSettings {
     const value = TextReadingSettings.of(fontSize, lineHeight);
     value.themeId = TextReadingSettings.normalizeThemeId(themeId);
     value.customBackground = normalizeHex(customBackground);
     value.pattern = TextReadingSettings.normalizePattern(pattern);
     value.backgroundImage = typeof backgroundImage === 'string' ? backgroundImage : '';
     value.overlayAlpha = TextReadingSettings.normalizeOverlay(overlayAlpha);
+    value.pageTurnMode = TextReadingSettings.normalizePageTurnMode(pageTurnMode);
     // 声明了图片图案但没有实际路径时退回无图案，避免画出空白层
     if (value.pattern === ReaderPattern.Image && value.backgroundImage.length === 0) {
       value.pattern = ReaderPattern.None;
@@ -123,6 +137,13 @@ export class TextReadingSettings {
     const clamped = Math.max(TextReadingSettings.LINE_HEIGHT_MIN,
       Math.min(TextReadingSettings.LINE_HEIGHT_MAX, value));
     return Math.round(clamped * 10) / 10;
+  }
+
+  static normalizePageTurnMode(value?: string): string {
+    if (value === PageTurnMode.Cover || value === PageTurnMode.Simulation || value === PageTurnMode.Slide) {
+      return value;
+    }
+    return TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
   }
 }
 

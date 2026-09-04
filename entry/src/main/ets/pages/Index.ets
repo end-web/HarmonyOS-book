@@ -14,7 +14,7 @@ import { PrivacyPage } from './PrivacyPage';
 import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
 import { ReaderPage } from './ReaderPage';
-import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
+// import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
 import { SearchPage } from './SearchPage';
 import { RuleSourcePage } from './RuleSourcePage';
 import { RuleSourceAccountPage } from './RuleSourceAccountPage';
@@ -50,9 +50,6 @@ struct Index {
   // detail 路由自定义转场:缩放淡入,无方向位移
   @Local detailScale: number = 1;
   @Local detailOpacity: number = 1;
-  @Local searchRenderGroup: boolean = false;
-  @Local searchOpacity: number = 1;
-  @Local searchTranslateX: number = 0;
   private widgetSubscribed: boolean = false;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
@@ -277,54 +274,18 @@ struct Index {
       .backgroundColor('#F5F2EA')
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'search') {
-      NavDestination() {
-        SearchPage({ navStack: this.navStack })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.NONE)
-      .renderGroup(this.searchRenderGroup)
-      .opacity(this.searchOpacity)
-      .translate({ x: this.searchTranslateX })
-      .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        if (op === NavigationOperation.PUSH && isEnter) {
-          this.searchRenderGroup = true;
-          this.searchOpacity = 0;
-          this.searchTranslateX = 24;
-          return [{
-            duration: 220,
-            curve: Curve.FastOutSlowIn,
-            event: () => {
-              this.searchOpacity = 1;
-              this.searchTranslateX = 0;
-            },
-            onTransitionEnd: () => {
-              this.searchRenderGroup = false;
-            }
-          }];
-        } else if (op === NavigationOperation.POP && !isEnter) {
-          this.searchRenderGroup = true;
-          this.searchOpacity = 1;
-          this.searchTranslateX = 0;
-          return [{
-            duration: 160,
-            curve: Curve.FastOutLinearIn,
-            event: () => {
-              this.searchOpacity = 0;
-              this.searchTranslateX = 24;
-            },
-            onTransitionEnd: () => {
-              this.searchOpacity = 1;
-              this.searchTranslateX = 0;
-              this.searchRenderGroup = false;
-            }
-          }];
-        }
-        return undefined;
-      })
+      SearchPage({ navStack: this.navStack })
     } else if (name === 'readerKitVerify') {
+      // 华为 ReaderKit 验证页面已禁用（需要 HMS Core ReaderService 依赖）
       NavDestination() {
-        ReaderKitVerifyPage({ navStack: this.navStack })
+        Column() {
+          Text('ReaderKit 验证功能暂时禁用')
+            .fontSize(16)
+            .fontColor('#999999')
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
       }
       .hideTitleBar(true)
       .backgroundColor('#F5F2EA')

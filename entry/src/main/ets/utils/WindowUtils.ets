@@ -81,6 +81,12 @@ export class WindowUtils {
     await WindowUtils.applySystemBarContent();
   }
 
+  /** 与 HDS/Navigation 页面级状态栏样式保持同一套深浅色判断。 */
+  static getSystemBarContentColor(): string {
+    const isDark = WindowUtils.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+    return WindowUtils.forceLight || isDark ? '#FFFFFFFF' : '#FF000000';
+  }
+
   /** 深浅色模式变更时调用（EntryAbility.onConfigurationUpdate），重新刷新当前状态栏字色 */
   static updateColorMode(colorMode: ConfigurationConstant.ColorMode): void {
     WindowUtils.colorMode = colorMode;
@@ -89,10 +95,7 @@ export class WindowUtils {
 
   private static async applySystemBarContent(): Promise<void> {
     if (!WindowUtils.mainWindow) return;
-    const isDark = WindowUtils.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
-    // 强制白字，或深色模式 → 白字；否则黑字
-    const useWhite = WindowUtils.forceLight || isDark;
-    const content = useWhite ? '#FFFFFFFF' : '#FF000000';
+    const content = WindowUtils.getSystemBarContentColor();
     await WindowUtils.mainWindow.setWindowSystemBarProperties({
       statusBarContentColor: content,
       navigationBarContentColor: content

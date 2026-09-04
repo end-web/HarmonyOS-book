@@ -235,16 +235,16 @@ export struct MainPage {
     );
   }
 
-  private buildTabBar(iconNormal: Resource, iconSelected: Resource, label: string): BottomTabBarStyle {
+  private buildTabBar(icon: Resource, label: string): BottomTabBarStyle {
     return new BottomTabBarStyle(
       {
-        normal: new SymbolGlyphModifier(iconNormal).fontColor([$r('sys.color.font_secondary')]).fontSize(24),
-        selected: new SymbolGlyphModifier(iconSelected).fontColor([$r('sys.color.font_primary')]).fontSize(26)
+        normal: new SymbolGlyphModifier(icon).fontColor([$r('sys.color.font_primary')]).fontSize(24),
+        selected: new SymbolGlyphModifier(icon).fontColor([$r('app.color.app_brand')]).fontSize(26)
       },
       label
     ).labelStyle({
-      unselectedColor: $r('sys.color.font_secondary'),
-      selectedColor: $r('sys.color.font_primary')
+      unselectedColor: $r('sys.color.font_primary'),
+      selectedColor: $r('app.color.app_brand')
     });
   }
 
@@ -294,7 +294,7 @@ export struct MainPage {
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(0, scroller); }
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.house'), $r('sys.symbol.house_fill'), '首页'))
+        .tabBar(this.buildTabBar($r('sys.symbol.house_fill'), '首页'))
 
         TabContent() {
           FavoritePage({
@@ -305,7 +305,7 @@ export struct MainPage {
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(1, scroller); }
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.bookshelf'), $r('sys.symbol.bookshelf'), '书架'))
+        .tabBar(this.buildTabBar($r('sys.symbol.books_vertical_fill'), '书架'))
 
         TabContent() {
           ReadingStatsPage({
@@ -314,7 +314,7 @@ export struct MainPage {
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(2, scroller); }
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.calendar'), $r('sys.symbol.calendar_fill'), '记录'))
+        .tabBar(this.buildTabBar($r('sys.symbol.calendar_fill'), '记录'))
 
         TabContent() {
           ProfilePage({
@@ -322,7 +322,7 @@ export struct MainPage {
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(3, scroller); }
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.person'), $r('sys.symbol.person_fill'), '我的'))
+        .tabBar(this.buildTabBar($r('sys.symbol.person_fill'), '我的'))
       }
       .barOverlap(true)
       .barPosition(BarPosition.End)

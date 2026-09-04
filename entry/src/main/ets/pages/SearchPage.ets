@@ -1,10 +1,4 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import {
-  HdsNavigation,
-  HdsNavigationTitleMode,
-  ScrollEffectType,
-  hdsMaterial
-} from '@kit.UIDesignKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, HomeBlockSection, SearchResult } from '../model/BookSource';
@@ -56,6 +50,9 @@ export struct SearchPage {
   @Local searchHistory: string[] = [];
   @Local recommendationBooks: Book[] = [];
   @Local recommendationsLoading: boolean = false;
+  @Local pageRenderGroup: boolean = false;
+  @Local pageOpacity: number = 1;
+  @Local pageTranslateX: number = 0;
 
   private resultDataSource: BookDataSource = new BookDataSource();
   private resultScroller: Scroller = new Scroller();
@@ -66,6 +63,7 @@ export struct SearchPage {
   private initialFocusRequested: boolean = false;
 
   aboutToAppear(): void {
+    WindowUtils.setStatusBarLight(false);
     CoverPrefetcher.init();
     BookCard.resetAnimations();
     this.loadSearchHistory();
@@ -565,8 +563,8 @@ export struct SearchPage {
     .height(32)
     .padding({ right: 2 })
     .borderRadius(AppRadius.Pill)
-    .backgroundColor(Color.Transparent)
-    .systemMaterial(AppMaterial.InteractiveThin)
+    .backgroundColor(AppColor.GlassControlTint)
+    .border({ width: 0.5, color: AppColor.GlassStroke })
     .margin({ right: AppSpace.Xs, bottom: AppSpace.Xs })
   }
 
@@ -660,7 +658,7 @@ export struct SearchPage {
     Row({ space: AppSpace.Xxs }) {
       Text(label)
         .fontSize(12)
-        .fontColor(this.searchTab === index ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
+        .fontColor(this.searchTab === index ? HomeTheme.Accent : $r('sys.color.font_secondary'))
         .fontWeight(this.searchTab === index ? FontWeight.Medium : FontWeight.Regular)
       Text((index === 0 ? this.audioCount + this.textCount :
         (index === 1 ? this.audioCount : this.textCount)).toString())
@@ -669,51 +667,61 @@ export struct SearchPage {
     }
     .padding({ left: 9, right: 9, top: 5, bottom: 5 })
     .borderRadius(AppRadius.Pill)
-    .backgroundColor(this.searchTab === index ? HomeTheme.AccentSoft : Color.Transparent)
+    .backgroundColor(Color.Transparent)
     .onClick(() => this.selectSearchTab(index))
   }
 
   @Builder
   buildResultToolbar() {
     Row() {
-      Row({ space: AppSpace.Xxs }) {
-        this.buildSearchTypeTab($r('app.string.search_type_all'), 0)
-        this.buildSearchTypeTab($r('app.string.search_type_audio'), 1)
-        this.buildSearchTypeTab($r('app.string.search_type_text'), 2)
+      Stack() {
+        Row() {
+          Row({ space: AppSpace.Xxs }) {
+            this.buildSearchTypeTab($r('app.string.search_type_all'), 0)
+            this.buildSearchTypeTab($r('app.string.search_type_audio'), 1)
+            this.buildSearchTypeTab($r('app.string.search_type_text'), 2)
+          }
+          .padding({ left: 4, right: 4, top: 3, bottom: 3 })
+
+          if (this.searching) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color(AppColor.Brand)
+              .margin({ left: AppSpace.Xs })
+          }
+
+          Blank()
+
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph(this.viewMode === 0 ?
+              $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
+              .fontSize(18)
+              .fontColor([$r('sys.color.font_primary')])
+          }
+          .width(40)
+          .height(40)
+          .borderRadius(AppRadius.Pill)
+          .onClick(() => {
+            this.getUIContext().animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard }, () => {
+              this.viewMode = this.viewMode === 0 ? 1 : 0;
+              try {
+                this.resultScroller.scrollEdge(Edge.Top);
+              } catch (_e) {
+                // 切换布局的同一帧可能暂时没有可滚动节点。
+              }
+            });
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ left: AppSpace.Xxs, right: AppSpace.Xxs })
       }
-      .padding({ left: 4, right: 4, top: 3, bottom: 3 })
+      .width('100%')
+      .height(40)
       .borderRadius(AppRadius.Pill)
-      .systemMaterial(AppMaterial.InteractiveThin)
-
-      if (this.searching) {
-        LoadingProgress()
-          .width(18)
-          .height(18)
-          .color(AppColor.Brand)
-          .margin({ left: AppSpace.Xs })
-      }
-
-      Blank()
-
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph(this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
-          .fontSize(18)
-          .fontColor([$r('sys.color.font_primary')])
-      }
-        .width(40)
-        .height(40)
-        .borderRadius(AppRadius.Pill)
-        .systemMaterial(AppMaterial.InteractiveThin)
-        .onClick(() => {
-          this.getUIContext().animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard }, () => {
-            this.viewMode = this.viewMode === 0 ? 1 : 0;
-            try {
-              this.resultScroller.scrollEdge(Edge.Top);
-            } catch (_e) {
-              // 切换布局的同一帧可能暂时没有可滚动节点。
-            }
-          });
-        })
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(AppMaterial.InteractiveClean)
     }
     .width('100%')
     .height(48)
@@ -882,49 +890,57 @@ export struct SearchPage {
   }
 
   @Builder
-  buildSearchHeader() {
+  buildSearchTitleBar() {
+    Row({ space: AppSpace.Xs }) {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(22)
+          .fontColor([$r('sys.color.icon_primary')])
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(AppRadius.Pill)
+      .backgroundColor(Color.Transparent)
+      .systemMaterial(AppMaterial.InteractiveClean)
+      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
+      .onClick(() => this.navStack.pop())
+
+      Search({ value: this.keyword, placeholder: $r('app.string.search_placeholder') })
+        .searchButton($r('app.string.search_action'), { fontColor: HomeTheme.Accent })
+        .placeholderColor($r('sys.color.font_tertiary'))
+        .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
+        .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
+        .layoutWeight(1)
+        .height(42)
+        .backgroundColor(Color.Transparent)
+        .borderRadius(AppRadius.Pill)
+        .systemMaterial(AppMaterial.InteractiveClean)
+        .id('search-page-input')
+        .focusable(true)
+        .onAppear(() => this.scheduleSearchFocus())
+        .onSubmit(() => this.doSearch())
+        .onChange((value: string) => {
+          this.keyword = value;
+          if (value.length === 0 && this.hasSearched) this.clearSearch();
+        })
+    }
+    .width('100%')
+    .height(SEARCH_HEADER_HEIGHT)
+    .padding({ left: AppSpace.Xs, right: AppSpace.Md })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(Color.Transparent)
+  }
+
+  @Builder
+  buildSearchNavigationTitle() {
     Column() {
       Column()
         .width('100%')
         .height(WindowUtils.getStatusBarHeightVp())
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
-      Row({ space: AppSpace.Xs }) {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(22)
-            .fontColor([$r('sys.color.icon_primary')])
-        }
-          .width(40)
-          .height(40)
-          .borderRadius(AppRadius.Pill)
-          .systemMaterial(AppMaterial.InteractiveThin)
-          .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
-          .onClick(() => this.navStack.pop())
+      this.buildSearchTitleBar()
 
-        Search({ value: this.keyword, placeholder: $r('app.string.search_placeholder') })
-          .searchButton($r('app.string.search_action'), { fontColor: HomeTheme.Accent })
-          .placeholderColor($r('sys.color.font_tertiary'))
-          .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
-          .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
-          .layoutWeight(1)
-          .height(42)
-          .backgroundColor(Color.Transparent)
-          .systemMaterial(AppMaterial.InteractiveClean)
-          .borderRadius(AppRadius.Pill)
-          .id('search-page-input')
-          .focusable(true)
-          .onAppear(() => this.scheduleSearchFocus())
-          .onSubmit(() => this.doSearch())
-          .onChange((value: string) => {
-            this.keyword = value;
-            if (value.length === 0 && this.hasSearched) this.clearSearch();
-          })
-      }
-      .width('100%')
-      .height(SEARCH_HEADER_HEIGHT)
-      .padding({ left: AppSpace.Xs, right: AppSpace.Md })
-      .alignItems(VerticalAlign.Center)
       if (this.hasSearched) {
         this.buildResultToolbar()
       }
@@ -932,7 +948,7 @@ export struct SearchPage {
     .width('100%')
     .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
       (this.hasSearched ? RESULT_TOOLBAR_HEIGHT : 0))
-    .backgroundColor(this.hasSearched ? Color.Transparent : HomeTheme.BgNeutral)
+    .backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -953,81 +969,77 @@ export struct SearchPage {
   }
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor(HomeTheme.BgNeutral)
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-
-      if (this.hasSearched) {
-        HdsNavigation() {
-          Column() {
-            this.buildSearchBody()
-          }
+    NavDestination() {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Column()
           .width('100%')
           .height('100%')
-          .clip(false)
-          .backgroundColor(Color.Transparent)
-        }
-        .mode(NavigationMode.Stack)
-        .titleBar({
-          avoidLayoutSafeArea: true,
-          content: {
-            title: { mainTitle: '' }
-          },
-          style: {
-            scrollEffectOpts: {
-              scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
-            },
-            originalStyle: {
-              backgroundStyle: { backgroundColor: Color.Transparent },
-              contentStyle: {
-                titleStyle: {
-                  mainTitleColor: $r('sys.color.font_primary'),
-                  subTitleColor: $r('sys.color.font_secondary')
-                },
-                backIconStyle: { iconColor: Color.Transparent }
-              }
-            },
-            scrollEffectStyle: {
-              backgroundStyle: { backgroundColor: Color.Transparent },
-              contentStyle: {
-                titleStyle: {
-                  mainTitleColor: $r('sys.color.font_primary'),
-                  subTitleColor: $r('sys.color.font_secondary')
-                },
-                backIconStyle: { iconColor: Color.Transparent }
-              }
-            },
-            systemMaterialEffect: {
-              materialType: hdsMaterial.MaterialType.IMMERSIVE,
-              materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-            }
-          }
-        })
-        .titleMode(HdsNavigationTitleMode.MINI)
-        .hideBackButton(true)
-        .bindToScrollable([this.resultScroller, this.recommendationScroller])
-        .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
-        .width('100%')
-        .height('100%')
-        .clip(false)
-        .backgroundColor(Color.Transparent)
-      } else {
+          .backgroundColor(HomeTheme.BgNeutral)
+          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
         Column() {
           this.buildSearchBody()
         }
         .width('100%')
         .height('100%')
         .clip(false)
-        .backgroundColor(HomeTheme.BgNeutral)
+        .backgroundColor(Color.Transparent)
       }
-
-      this.buildSearchHeader()
+      .width('100%')
+      .height('100%')
+      .backgroundColor(HomeTheme.BgNeutral)
     }
-    .width('100%')
-    .height('100%')
+    .title({
+      builder: (): void => this.buildSearchNavigationTitle(),
+      height: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+        (this.hasSearched ? RESULT_TOOLBAR_HEIGHT : 0)
+    }, {
+      backgroundColor: Color.Transparent,
+      barStyle: BarStyle.STACK
+    })
+    .hideBackButton(true)
+    .systemBarStyle({ statusBarContentColor: WindowUtils.getSystemBarContentColor() })
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(HomeTheme.BgNeutral)
+    .systemTransition(NavigationSystemTransitionType.NONE)
+    .renderGroup(this.pageRenderGroup)
+    .opacity(this.pageOpacity)
+    .translate({ x: this.pageTranslateX })
+    .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
+      if (op === NavigationOperation.PUSH && isEnter) {
+        this.pageRenderGroup = true;
+        this.pageOpacity = 0;
+        this.pageTranslateX = 24;
+        return [{
+          duration: 220,
+          curve: Curve.FastOutSlowIn,
+          event: () => {
+            this.pageOpacity = 1;
+            this.pageTranslateX = 0;
+          },
+          onTransitionEnd: () => {
+            this.pageRenderGroup = false;
+          }
+        }];
+      } else if (op === NavigationOperation.POP && !isEnter) {
+        this.pageRenderGroup = true;
+        this.pageOpacity = 1;
+        this.pageTranslateX = 0;
+        return [{
+          duration: 160,
+          curve: Curve.FastOutLinearIn,
+          event: () => {
+            this.pageOpacity = 0;
+            this.pageTranslateX = 24;
+          },
+          onTransitionEnd: () => {
+            this.pageOpacity = 1;
+            this.pageTranslateX = 0;
+            this.pageRenderGroup = false;
+          }
+        }];
+      }
+      return undefined;
+    })
   }
 }

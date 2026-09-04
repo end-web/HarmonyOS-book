@@ -1,7 +1,5 @@
 import { curves, uiMaterial } from '@kit.ArkUI';
 
-const APP_LIGHT_EFFECT: uiMaterial.LightEffectOptions = {};
-
 export class AppColor {
   static readonly Brand: Resource = $r('app.color.app_brand');
   static readonly BrandHover: Resource = $r('app.color.app_brand_hover');
@@ -12,12 +10,26 @@ export class AppColor {
   static readonly OnBrand: Resource = $r('app.color.app_on_brand');
   static readonly Divider: Resource = $r('app.color.app_divider');
   static readonly Shadow: Resource = $r('app.color.app_shadow');
+  static readonly GlassControlFallback: Resource = $r('app.color.glass_control_fallback');
+  static readonly GlassSheetFallback: Resource = $r('app.color.glass_sheet_fallback');
+  static readonly GlassControlTint: Resource = $r('app.color.glass_control_tint');
+  static readonly GlassSheetControlTint: Resource = $r('app.color.glass_sheet_control_tint');
+  static readonly GlassSheetStroke: Resource = $r('app.color.glass_sheet_stroke');
+  static readonly GlassTextPrimary: Resource = $r('app.color.glass_text_primary');
+  static readonly GlassTextSecondary: Resource = $r('app.color.glass_text_secondary');
+  static readonly GlassTextTertiary: Resource = $r('app.color.glass_text_tertiary');
+  static readonly GlassDivider: Resource = $r('app.color.glass_divider');
+  static readonly GlassStroke: Resource = $r('app.color.glass_stroke');
+  static readonly GlassShadow: Resource = $r('app.color.glass_shadow');
 
-  // 半透明蒙层保留字面 hex（玻璃态、覆盖层），不深浅适配
+  // Legacy literal overlays retained for existing call sites.
   static readonly GlassBg: string = '#33FFFFFF';
   static readonly GlassBgDark: string = '#33000000';
-  static readonly GlassStroke: string = '#1FFFFFFF';
 }
+
+const APP_LIGHT_EFFECT: uiMaterial.LightEffectOptions = {
+  color: AppColor.Brand
+};
 
 /** HarmonyOS 7 immersive material presets shared by floating controls and sheets. */
 export class AppMaterial {
@@ -29,6 +41,7 @@ export class AppMaterial {
 
   static readonly InteractiveClean: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
     style: uiMaterial.ImmersiveStyle.THIN,
+    colorInvert: true,
     applyShadow: false,
     interactive: true,
     lightEffect: APP_LIGHT_EFFECT
@@ -57,6 +70,32 @@ export class AppMaterial {
     materialColor: AppColor.BrandSoft,
     applyShadow: true
   });
+}
+
+/**
+ * System blur presets used by the current frosted-glass surfaces.
+ * AppMaterial stays available so immersive material can be restored when the platform re-enables it.
+ */
+export class AppGlass {
+  static readonly ControlBlur: BlurStyle = BlurStyle.BACKGROUND_THIN;
+  static readonly SheetBlur: BlurStyle = BlurStyle.BACKGROUND_REGULAR;
+
+  static readonly ControlOptions: BackgroundBlurStyleOptions = {
+    colorMode: ThemeColorMode.SYSTEM,
+    adaptiveColor: AdaptiveColor.AVERAGE,
+    scale: 0.62,
+    policy: BlurStyleActivePolicy.FOLLOWS_WINDOW_ACTIVE_STATE,
+    inactiveColor: AppColor.GlassControlFallback
+  };
+
+  static readonly SheetOptions: BackgroundBlurStyleOptions = {
+    colorMode: ThemeColorMode.DARK,
+    adaptiveColor: AdaptiveColor.AVERAGE,
+    scale: 0.65,
+    policy: BlurStyleActivePolicy.FOLLOWS_WINDOW_ACTIVE_STATE,
+    inactiveColor: AppColor.GlassSheetFallback
+  };
+
 }
 
 export class AppRadius {
@@ -124,6 +163,7 @@ export class HomeTheme {
   static readonly StatusScrim: Resource = $r('app.color.home_status_scrim');
   static readonly Accent: Resource = $r('app.color.home_accent');
   static readonly AccentSoft: Resource = $r('app.color.home_accent_soft');
+  static readonly TopControlTint: Resource = $r('app.color.home_top_control_tint');
   static readonly CardSurface: Resource = $r('app.color.home_card_surface');
   static readonly CardShadow: Resource = $r('app.color.home_card_shadow');
   static readonly ProgressTrack: Resource = $r('app.color.home_progress_track');

@@ -34,6 +34,10 @@ export class PlayerState {
   @Trace speed: number = 1.0;
   @Trace sleepMinutes: number = 0;
   @Trace sleepRemainingMs: number = 0;
+  /** 睡眠定时是否启用"章节结束后停止"（智能停止） */
+  @Trace sleepSmartStop: boolean = false;
+  /** 睡眠定时是否启用"渐弱淡出" */
+  @Trace sleepFadeOut: boolean = false;
   @Trace playMode: PlayMode = PlayMode.Sequence;
 
   reset(): void {
