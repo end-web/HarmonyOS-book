@@ -2,6 +2,11 @@ import { window } from '@kit.ArkUI';
 import { display } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 
+interface SafeAreaInsets {
+  top: number;
+  bottom: number;
+}
+
 /**
  * 沉浸式 + 安全区域工具
  * 全屏布局 + 透明系统栏，业务页面用 expandSafeArea 自行延伸
@@ -109,6 +114,13 @@ export class WindowUtils {
   static getBottomSafeVp(): number {
     const measuredVp = WindowUtils.bottomPx / WindowUtils.density;
     return Math.max(measuredVp, WindowUtils.FALLBACK_BOTTOM_SAFE_VP);
+  }
+
+  static getSafeAreaInsets(): SafeAreaInsets {
+    return {
+      top: WindowUtils.getStatusBarHeightVp(),
+      bottom: WindowUtils.getBottomSafeVp()
+    };
   }
 
   static pxToVp(valuePx: number): number {

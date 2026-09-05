@@ -20,6 +20,8 @@ import { RuleSourcePage } from './RuleSourcePage';
 import { RuleSourceAccountPage } from './RuleSourceAccountPage';
 import { RuleSourceChildrenPage } from './RuleSourceChildrenPage';
 import { RuleSourceLoginPage } from './RuleSourceLoginPage';
+import { RuleSourceEditPage } from './RuleSourceEditPage';
+import { RuleSourceDebugPage } from './RuleSourceDebugPage';
 import { TextReaderRouteParams } from '../model/TextReading';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { emitter } from '@kit.BasicServicesKit';
@@ -328,6 +330,26 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'RuleSourceEditPage') {
+      NavDestination() {
+        RuleSourceEditPage({
+          navStack: this.navStack,
+          sourceUrl: param ? String((param as Record<string, string>).sourceUrl) : undefined
+        })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_secondary'))
+      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'RuleSourceDebugPage') {
+      NavDestination() {
+        RuleSourceDebugPage({
+          navStack: this.navStack,
+          sourceUrl: param ? String((param as Record<string, string>).sourceUrl) : ''
+        })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_secondary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'downloads') {
       NavDestination() {

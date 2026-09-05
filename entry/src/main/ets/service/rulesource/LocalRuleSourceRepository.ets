@@ -146,6 +146,18 @@ export class LocalRuleSourceRepository {
     return LocalRuleSourceRepository.get(sourceUrl);
   }
 
+  static async findByUrl(sourceUrl: string): Promise<LocalRuleSource | undefined> {
+    return LocalRuleSourceRepository.get(sourceUrl);
+  }
+
+  static async insert(source: LocalRuleSource): Promise<void> {
+    await LocalRuleSourceRepository.upsert(source);
+  }
+
+  static async update(source: LocalRuleSource): Promise<void> {
+    await LocalRuleSourceRepository.upsert(source);
+  }
+
   static async getSession(sourceUrl: string): Promise<LocalRuleSourceSession | undefined> {
     const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
     const store = await LocalRuleSourceRepository.ensureStore();

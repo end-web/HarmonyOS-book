@@ -22,6 +22,14 @@ import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { CharsetCodec } from '../utils/CharsetCodec';
 import { WindowUtils } from '../utils/WindowUtils';
 
+interface RuleSourceEditParams {
+  sourceUrl: string;
+}
+
+interface RuleSourceDebugParams {
+  sourceUrl: string;
+}
+
 const RULE_SOURCE_SUCCESS: string = '#168A5B';
 const RULE_SOURCE_DANGER: string = '#D03050';
 const RULE_SOURCE_DANGER_SOFT: string = '#14D03050';
@@ -431,6 +439,20 @@ export struct RuleSourcePage {
     }
   }
 
+  private createNewSource(): void {
+    this.navStack.pushPathByName('RuleSourceEditPage', null);
+  }
+
+  private editSource(source: LocalRuleSource): void {
+    const params: RuleSourceEditParams = { sourceUrl: source.bookSourceUrl };
+    this.navStack.pushPathByName('RuleSourceEditPage', params);
+  }
+
+  private debugSource(source: LocalRuleSource): void {
+    const params: RuleSourceDebugParams = { sourceUrl: source.bookSourceUrl };
+    this.navStack.pushPathByName('RuleSourceDebugPage', params);
+  }
+
   private async testSource(source: LocalRuleSource): Promise<void> {
     if (this.busySourceUrl.length > 0 || this.isImporting || this.isBulkTesting || !source.canExecute()) return;
     if (!(await this.hasMainAccount(source))) {
@@ -784,6 +806,19 @@ export struct RuleSourcePage {
             .accessibilityText($r('app.string.rule_source_bulk_action'))
             .onClick(() => this.confirmBulkTest())
           }
+
+          Button() {
+            SymbolGlyph($r('sys.symbol.plus'))
+              .fontSize(20)
+              .fontColor([AppColor.Brand])
+          }
+          .width(36)
+          .height(36)
+          .padding(0)
+          .backgroundColor(Color.Transparent)
+          .borderRadius(AppRadius.Pill)
+          .accessibilityText('新建书源')
+          .onClick(() => this.createNewSource())
 
           Button() {
             Text(this.showImportPanel ? $r('app.string.rule_source_close_import') :
@@ -1210,6 +1245,44 @@ export struct RuleSourcePage {
           .color($r('sys.color.comp_divider'))
 
         Row({ space: AppSpace.Xs }) {
+          Button() {
+            Row({ space: AppSpace.Xxs }) {
+              SymbolGlyph($r('sys.symbol.square_and_pencil'))
+                .fontSize(16)
+                .fontColor([AppColor.Brand])
+              Text('编辑')
+                .fontSize(AppFont.Caption)
+                .fontColor(AppColor.Brand)
+            }
+            .justifyContent(FlexAlign.Center)
+          }
+          .layoutWeight(1)
+          .height(36)
+          .constraintSize({ minWidth: 0 })
+          .backgroundColor(AppColor.BrandSoft)
+          .borderRadius(AppRadius.Sm)
+          .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+          .onClick(() => this.editSource(source))
+
+          Button() {
+            Row({ space: AppSpace.Xxs }) {
+              SymbolGlyph($r('sys.symbol.scope'))
+                .fontSize(16)
+                .fontColor([AppColor.Brand])
+              Text('调试')
+                .fontSize(AppFont.Caption)
+                .fontColor(AppColor.Brand)
+            }
+            .justifyContent(FlexAlign.Center)
+          }
+          .layoutWeight(1)
+          .height(36)
+          .constraintSize({ minWidth: 0 })
+          .backgroundColor($r('sys.color.comp_background_secondary'))
+          .borderRadius(AppRadius.Sm)
+          .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+          .onClick(() => this.debugSource(source))
+
           Button() {
             Row({ space: AppSpace.Xxs }) {
               SymbolGlyph($r('sys.symbol.bolt'))
