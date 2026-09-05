@@ -9,11 +9,13 @@ import {
   LocalRuleSourceStatus
 } from '../../model/LocalRuleSource';
 import { LocalRuleSourceImportParser } from './LocalRuleSourceImportParser';
+import { LocalRuleSourceCodec } from './LocalRuleSourceCodec';
 
 const DATABASE_NAME = 'rule_sources.db';
 const TABLE_NAME = 'rule_sources';
 const SESSION_TABLE_NAME = 'rule_source_sessions';
 const COOKIE_TABLE_NAME = 'rule_source_cookies';
+const STATE_TABLE_NAME = 'rule_source_script_state';
 const MAX_SOURCE_JSON_BYTES = 512 * 1024;
 const MAX_SESSION_TOKEN_LENGTH = 4096;
 const MAX_SESSION_DEVICE_ID_LENGTH = 256;
@@ -81,6 +83,31 @@ class PreparedRuleSource {
 export class LocalRuleSourceRepository {
   private static store: relationalStore.RdbStore | null = null;
   private static initPromise: Promise<void> | null = null;
+
+  static isInitialized(): boolean {
+    return LocalRuleSourceRepository.store !== null;
+  }
+
+  static async readScriptState(sourceUrl: string): Promise<string> {
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const args: relationalStore.ValueType[] = [sourceUrl];
+    const rows = await store.querySql(`SELECT state_json FROM ${STATE_TABLE_NAME} WHERE source_url = ?`, args);
+    try {
+      return rows.goToFirstRow() ? rows.getString(0) : '';
+    } finally {
+      rows.close();
+    }
+  }
+
+  static async writeScriptState(sourceUrl: string, stateJson: string): Promise<void> {
+    if (buffer.byteLength(stateJson, 'utf-8') > MAX_SOURCE_JSON_BYTES) {
+      throw new Error('书源运行状态超过 512 KiB');
+    }
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const args: relationalStore.ValueType[] = [sourceUrl, stateJson, sourceUrl];
+    await store.execute(`INSERT OR REPLACE INTO ${STATE_TABLE_NAME} (source_url, state_json) ` +
+      `SELECT ?, ? WHERE EXISTS (SELECT 1 FROM ${TABLE_NAME} WHERE source_url = ?)`, args);
+  }
 
   static async init(context: common.BaseContext): Promise<void> {
     if (LocalRuleSourceRepository.store !== null) return;
@@ -448,6 +475,9 @@ export class LocalRuleSourceRepository {
     try {
       await transaction.delete(sessionPredicates);
       await transaction.delete(cookiePredicates);
+      const statePredicates = new relationalStore.RdbPredicates(STATE_TABLE_NAME);
+      statePredicates.equalTo('source_url', normalizedUrl);
+      await transaction.delete(statePredicates);
       const deleted = await transaction.delete(sourcePredicates);
       await transaction.commit();
       return deleted > 0;
@@ -490,6 +520,9 @@ export class LocalRuleSourceRepository {
         sourcePredicates.in('source_url', batchValues);
         await transaction.delete(sessionPredicates);
         await transaction.delete(cookiePredicates);
+        const statePredicates = new relationalStore.RdbPredicates(STATE_TABLE_NAME);
+        statePredicates.in('source_url', batchValues);
+        await transaction.delete(statePredicates);
         deletedCount += await transaction.delete(sourcePredicates);
       }
       if (deletedCount !== normalizedUrls.length) throw new Error('部分书源不存在，批量删除已取消');
@@ -521,6 +554,8 @@ export class LocalRuleSourceRepository {
     await store.execute(CREATE_TABLE_SQL);
     await store.execute(CREATE_SESSION_TABLE_SQL);
     await store.execute(CREATE_COOKIE_TABLE_SQL);
+    await store.execute(`CREATE TABLE IF NOT EXISTS ${STATE_TABLE_NAME} (` +
+      'source_url TEXT PRIMARY KEY NOT NULL, state_json TEXT NOT NULL)');
     LocalRuleSourceRepository.store = store;
   }
 
@@ -551,8 +586,7 @@ export class LocalRuleSourceRepository {
       throw new Error(`书源名称为空：${sourceUrl}`);
     }
 
-    const sourceJson = source.rawSourceJson.trim().length > 0
-      ? source.rawSourceJson : JSON.stringify(source);
+    const sourceJson = LocalRuleSourceCodec.stringify(source);
     const sourceBytes = buffer.byteLength(sourceJson, 'utf-8');
     if (sourceBytes > MAX_SOURCE_JSON_BYTES) {
       throw new Error(`书源数据超过 512 KiB：${source.bookSourceName}`);

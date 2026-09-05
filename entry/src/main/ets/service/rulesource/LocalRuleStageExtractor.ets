@@ -1,6 +1,8 @@
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleJsonPath } from './LocalRuleJsonPath';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
+import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
+import { LocalRuleTemplate } from './LocalRuleTemplate';
 import {
   LocalRuleDocument,
   LocalRuleDocumentKind,
@@ -126,7 +128,9 @@ export class LocalRuleStageExtractor {
 
   static async extract(document: LocalRuleDocument, rule: string, source: LocalRuleSource,
     variables: Record<string, string> = {}, resolveUrl: boolean = false): Promise<string> {
+    LocalRuleDiagnostics.check(variables);
     const values = await LocalRuleStageExtractor.extractValues(document, rule, source, variables);
+    if (rule) LocalRuleDiagnostics.record(variables, 'info', `规则返回 ${values.length} 项`, rule);
     if (resolveUrl) {
       for (const value of values) {
         const resolved = LocalRuleUrlAnalyzer.resolveUrl(document.baseUrl || source.bookSourceUrl, value);
@@ -244,6 +248,7 @@ export class LocalRuleStageExtractor {
     if (cleanRule.includes('{{')) {
       return [await LocalRuleStageExtractor.expandElementTemplate(document, cleanRule, source, variables)];
     }
+    if (new RegExp('^(https?://|data:)', 'i').test(cleanRule)) return [cleanRule];
 
     const alternatives = LocalRuleStageExtractor.splitTopLevel(cleanRule, '||');
     if (alternatives.length > 1) {
@@ -298,7 +303,7 @@ export class LocalRuleStageExtractor {
   }
 
   private static extractJson(payload: string, rule: string): string[] {
-    let jsonRule = rule;
+    let jsonRule = LocalRuleStageExtractor.normalizeJsonRule(rule);
     if (!LocalRuleJsonPath.isJsonPath(jsonRule)) {
       if (new RegExp('^[A-Za-z_$][A-Za-z0-9_$-]*$').test(jsonRule)) {
         jsonRule = `$[${JSON.stringify(jsonRule)}]`;
@@ -337,6 +342,9 @@ export class LocalRuleStageExtractor {
 
   private static normalizeJsonRule(rule: string): string {
     if (LocalRuleJsonPath.isJsonPath(rule)) return rule;
+    if (new RegExp('^[A-Za-z_$][A-Za-z0-9_$-]*(?:\\.[A-Za-z_$][A-Za-z0-9_$-]*|\\[[\\s\\S]+\\])+$').test(rule)) {
+      return `$.${rule}`;
+    }
     if (new RegExp('^[A-Za-z_$][A-Za-z0-9_$-]*$').test(rule)) {
       return `$[${JSON.stringify(rule)}]`;
     }
@@ -494,7 +502,7 @@ export class LocalRuleStageExtractor {
         break;
       }
       output += template.substring(position, start);
-      const end = template.indexOf('}}', start + 2);
+      const end = LocalRuleTemplate.end(template, start + 2);
       if (end < 0) {
         output += template.substring(start);
         break;
@@ -512,10 +520,17 @@ export class LocalRuleStageExtractor {
     if (expression === 'source.bookSourceName') return source.bookSourceName;
     if (expression === 'source.bookSourceGroup') return source.bookSourceGroup;
     if (expression === 'source.bookSourceComment') return source.bookSourceComment;
-    if (expression === 'source.getKey()' || expression === 'source.getTag()') return source.bookSourceUrl;
-    if (expression === 'source.getVariable()') return source.variable;
+    if (expression === 'source.getKey()') return source.bookSourceUrl;
+    if (expression === 'source.getTag()') return source.bookSourceName;
+    if (expression === 'source.getVariable()') {
+      return LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl, expression, source, variables);
+    }
     const variable = variables[expression];
     if (variable !== undefined) return variable;
+    if (!new RegExp('^(\\$[.\\[]|@@|@json:|@css:|@xpath:|//)', 'i').test(expression) &&
+      !new RegExp('^[A-Za-z_$][\\w$-]*$').test(expression)) {
+      return LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl, expression, source, variables);
+    }
     let rule = expression;
     if (rule.startsWith('@@')) rule = rule.substring(2);
     const values = await LocalRuleStageExtractor.extractValues(document, rule, source, variables);
@@ -525,14 +540,18 @@ export class LocalRuleStageExtractor {
   private static async prepareContextRule(document: LocalRuleDocument, rawRule: string,
     source: LocalRuleSource, variables: Record<string, string>): Promise<string> {
     let rule = rawRule.trim();
+    if (LocalRuleScriptRuntime.standaloneCode(rule)) return rule;
     let guard = 0;
-    while (rule.toLowerCase().startsWith('@put:{') && guard < 16) {
-      const open = rule.indexOf('{');
+    while (guard < 16) {
+      const sections = LocalRuleStageExtractor.splitTopLevel(rule, '@put:');
+      if (sections.length < 2 || !sections[1].startsWith('{') || LocalRuleScriptRuntime.hasScript(sections[0])) break;
+      const putStart = sections[0].length;
+      const open = putStart + 5;
       const close = LocalRuleStageExtractor.findMatchingBrace(rule, open);
       if (close < 0) throw new Error('@put 变量规则缺少右花括号');
       const body = rule.substring(open + 1, close);
       await LocalRuleStageExtractor.applyPutBody(document, body, source, variables);
-      rule = rule.substring(close + 1).trim();
+      rule = (rule.substring(0, putStart) + rule.substring(close + 1)).trim();
       guard++;
     }
     return LocalRuleStageExtractor.replaceGetReferences(rule, variables);
@@ -659,13 +678,10 @@ export class LocalRuleStageExtractor {
       const scripted = await LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl,
         chain.code, source, variables, baseValue);
       if (chain.trailingRule.length > 0) {
-        const scriptedDocuments = LocalRuleStageExtractor.documentsFromScriptValues(
-          LocalRuleStageExtractor.expandScriptValue(scripted), document.baseUrl);
-        for (const scriptedDocument of scriptedDocuments) {
-          const values = await LocalRuleStageExtractor.extractValues(
-            scriptedDocument, chain.trailingRule, source, variables);
-          output.push(...values);
-        }
+        const scriptedDocument = LocalRuleStageExtractor.createDocument(scripted, document.baseUrl);
+        const values = await LocalRuleStageExtractor.extractValues(
+          scriptedDocument, chain.trailingRule, source, variables);
+        output.push(...values);
       } else {
         output.push(...LocalRuleStageExtractor.expandScriptValue(scripted));
       }

@@ -4,7 +4,7 @@ import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { SearchResult } from '../model/BookSource';
 import { SourceDataService } from '../service/SourceDataService';
-import { BookSourceService } from '../service/BookSourceService';
+import { BookSourceService, ExploreFetchResult } from '../service/BookSourceService';
 import { SearchCache } from '../utils/SearchCache';
 import { BookDataSource } from '../utils/BookDataSource';
 import { BookCard } from '../components/BookCard';
@@ -24,6 +24,7 @@ export struct BlockMorePage {
   @Param sourceName: string = '';
   @Param title: string = '';
   @Param moreUrl: string = '';
+  @Param keyword: string = '';
 
   @Local books: Book[] = [];
   @Local loading: boolean = true;
@@ -44,8 +45,9 @@ export struct BlockMorePage {
   }
 
   private async loadFirstPage(): Promise<void> {
-    if (!this.moreUrl || !this.sourceUrl) {
+    if ((!this.moreUrl && !this.keyword) || !this.sourceUrl) {
       this.errorMsg = '参数错误';
+      this.loading = false;
       return;
     }
     this.loading = true;
@@ -59,7 +61,7 @@ export struct BlockMorePage {
   }
 
   private async loadNextPage(): Promise<void> {
-    if (this.loadingMore || this.loading || !this.hasMore || !this.nextUrl) return;
+    if (this.loadingMore || this.loading || !this.hasMore || (!this.nextUrl && !this.keyword)) return;
     this.loadingMore = true;
     await this.fetchPage(this.nextUrl, true);
     this.loadingMore = false;
@@ -76,8 +78,13 @@ export struct BlockMorePage {
 
       const newBooks: Book[] = [];
       const page = append ? this.nextPage : 1;
-      const result = await BookSourceService.getExploreBooksByUrl(source, url, page);
+      const result: ExploreFetchResult = this.keyword.length > 0
+        ? { books: await BookSourceService.searchBooks(source, this.keyword, page), nextUrl: this.keyword }
+        : await BookSourceService.getExploreBooksByUrl(source, url, page);
+      const seen = new Set<string>(append ? this.books.map((book: Book): string => book.bookUrl ?? '') : []);
       for (const item of result.books) {
+        if (seen.has(item.bookUrl)) continue;
+        seen.add(item.bookUrl);
         newBooks.push(this.searchResultToBook(item));
       }
       const nextUrl = result.nextUrl || '';
@@ -108,13 +115,14 @@ export struct BlockMorePage {
   private searchResultToBook(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
     const book: Book = {
-      id: BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
+      id: r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl, r.bookUrl) :
+        BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
       title: r.name,
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-category: r.kind || '有声书',
-      contentType: 'audio',
+      category: r.kind || '',
+      contentType: r.contentType ?? 'audio',
       intro: r.intro || '',
       totalDuration: 0,
       chapterCount: 0,

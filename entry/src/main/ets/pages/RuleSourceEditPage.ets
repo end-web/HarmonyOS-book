@@ -1,11 +1,16 @@
 import { LocalRuleSource, LocalRuleSearchRule, LocalRuleBookInfoRule, LocalRuleTocRule, LocalRuleContentRule } from '../model/LocalRuleSource';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
+import { LocalRuleSourceCodec } from '../service/rulesource/LocalRuleSourceCodec';
+import { LocalRuleSourceImportParser } from '../service/rulesource/LocalRuleSourceImportParser';
+import { LocalRuleScriptRuntime } from '../service/rulesource/LocalRuleScriptRuntime';
+import { SourceDataService } from '../service/SourceDataService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { promptAction } from '@kit.ArkUI';
+import { fileIo, picker } from '@kit.CoreFileKit';
 
 interface FormFieldParams {
-  label: string;
+  label: ResourceStr;
   value: string;
   placeholder?: string;
   multiline?: boolean;
@@ -21,21 +26,28 @@ function FormFieldBuilder(params: FormFieldParams) {
       .fontColor($r('sys.color.font_secondary'))
       .width('100%')
 
-    if (params.multiline) {
-      TextArea({ text: params.value, placeholder: params.placeholder || `请输入${params.label}` })
+    if (params.multiline || params.value.includes('\n') || LocalRuleScriptRuntime.hasScript(params.value)) {
+      TextArea({ text: params.value, placeholder: params.placeholder || params.label })
         .width('100%')
-        .height(80)
+        .height(144)
         .fontSize(AppFont.Body)
+        .fontFamily('monospace')
+        .padding(AppSpace.Sm)
+        .caretColor(AppColor.Brand)
+        .selectedBackgroundColor(AppColor.BrandSoft)
         .fontColor($r('sys.color.font_primary'))
         .backgroundColor($r('sys.color.comp_background_secondary'))
         .borderRadius(AppRadius.Xs)
         .enabled(params.enabled !== false)
         .onChange((value: string) => params.onChange(value))
     } else {
-      TextInput({ text: params.value, placeholder: params.placeholder || `请输入${params.label}` })
+      TextInput({ text: params.value, placeholder: params.placeholder || params.label })
         .width('100%')
-        .height(44)
+        .height(48)
         .fontSize(AppFont.Body)
+        .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+        .caretColor(AppColor.Brand)
+        .selectedBackgroundColor(AppColor.BrandSoft)
         .fontColor($r('sys.color.font_primary'))
         .backgroundColor($r('sys.color.comp_background_secondary'))
         .borderRadius(AppRadius.Xs)
@@ -52,14 +64,28 @@ export struct RuleSourceEditPage {
   @Param sourceUrl: string = '';
   @Local source: LocalRuleSource = new LocalRuleSource();
   @Local currentTab: number = 0;
+  @Local sourceType: number = 1;
+  @Local safeTop: number = WindowUtils.getStatusBarHeightVp();
+  @Local safeBottom: number = WindowUtils.getBottomSafeVp();
   @Local isLoading: boolean = false;
   @Local isSaving: boolean = false;
+  @Local isExporting: boolean = false;
   @Local hasUnsavedChanges: boolean = false;
-  @Local showUnsavedDialog: boolean = false;
   @Local originalSnapshot: string = '';
+  @Local rawDraft: string = '';
+  @Local rawError: string = '';
+  @Local exploreDraft: string = '';
+  private rawSnapshot: string = '';
+  private exploreSnapshot: string = '';
   private isNewSource: boolean = true;
+  private formScroller: Scroller = new Scroller();
+  private safeAreaListener: (top: number, bottom: number) => void = (top, bottom) => {
+    this.safeTop = top;
+    this.safeBottom = bottom;
+  };
 
   aboutToAppear(): void {
+    WindowUtils.addSafeAreaListener(this.safeAreaListener);
     if (this.sourceUrl && this.sourceUrl.length > 0) {
       this.isNewSource = false;
       this.loadSource();
@@ -76,12 +102,17 @@ export struct RuleSourceEditPage {
     }
   }
 
+  aboutToDisappear(): void {
+    WindowUtils.removeSafeAreaListener(this.safeAreaListener);
+  }
+
   private async loadSource(): Promise<void> {
     this.isLoading = true;
     try {
       const loaded = await LocalRuleSourceRepository.findByUrl(this.sourceUrl!);
       if (loaded) {
         this.source = loaded;
+        this.sourceType = loaded.bookSourceType;
         this.markSaved();
       } else {
         promptAction.showToast({ message: '书源不存在' });
@@ -109,6 +140,9 @@ export struct RuleSourceEditPage {
   }
 
   private async saveSource(): Promise<void> {
+    if (this.isSaving || this.isLoading) return;
+    if (this.currentTab === 7 && !this.applyRawDraft()) return;
+    if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
     if (!this.source.bookSourceUrl || this.source.bookSourceUrl.trim().length === 0) {
       promptAction.showToast({ message: '请输入书源地址' });
       return;
@@ -125,6 +159,7 @@ export struct RuleSourceEditPage {
       } else {
         await LocalRuleSourceRepository.update(this.source);
       }
+      SourceDataService.invalidateLocalSources(this.source.bookSourceUrl);
       this.markSaved();
       promptAction.showToast({ message: '保存成功' });
       this.navStack.pop();
@@ -135,13 +170,90 @@ export struct RuleSourceEditPage {
     }
   }
 
+  private applyRawDraft(): boolean {
+    if (this.rawDraft === this.rawSnapshot) return true;
+    const report = LocalRuleSourceImportParser.parse(this.rawDraft);
+    if (report.sources.length !== 1 || report.rejectedCount > 0) {
+      this.rawError = report.message || this.getUIContext().getHostContext()?.resourceManager
+        .getStringSync($r('app.string.rule_source_json_single').id) || 'Invalid source JSON';
+      return false;
+    }
+    const parsed = report.sources[0];
+    if (!this.isNewSource && parsed.bookSourceUrl !== this.sourceUrl) {
+      this.rawError = this.getUIContext().getHostContext()?.resourceManager
+        .getStringSync($r('app.string.rule_source_json_identity').id) || 'Source identity cannot change';
+      return false;
+    }
+    this.source = parsed;
+    this.sourceType = parsed.bookSourceType;
+    this.rawError = '';
+    this.markChanged();
+    return true;
+  }
+
+  private selectTab(index: number): void {
+    if (index === this.currentTab) return;
+    if (this.currentTab === 7 && !this.applyRawDraft()) return;
+    if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
+    if (index === 5) {
+      const definition: Record<string, Object> = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
+      const fields = definition['ruleExplore'];
+      this.exploreDraft = JSON.stringify(fields !== null && typeof fields === 'object' && !Array.isArray(fields)
+        ? fields : this.source.ruleExplore, null, 2);
+      this.exploreSnapshot = this.exploreDraft;
+    }
+    if (index === 7) {
+      const definition: Object = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
+      this.rawDraft = JSON.stringify(definition, null, 2);
+      this.rawSnapshot = this.rawDraft;
+    }
+    this.currentTab = index;
+    this.rawError = '';
+    this.formScroller.scrollEdge(Edge.Top);
+  }
+
   private requestBack(): boolean {
+    if (this.isSaving) return true;
     if (this.hasUnsavedChanges) {
-      this.showUnsavedDialog = true;
+      this.getUIContext().showAlertDialog({
+        title: $r('app.string.rule_source_unsaved_title'),
+        message: $r('app.string.rule_source_unsaved_message'),
+        buttons: [
+          { value: $r('app.string.common_cancel'), action: () => {} },
+          { value: $r('app.string.rule_source_discard_changes'), action: () => { this.navStack.pop(); } },
+          { value: $r('app.string.rule_source_save_and_back'), fontColor: AppColor.Brand,
+            action: () => { this.saveSource(); } }
+        ]
+      });
       return true;
     }
     this.navStack.pop();
     return true;
+  }
+
+  private async exportSource(): Promise<void> {
+    if (this.isExporting || this.isSaving) return;
+    if (this.currentTab === 7 && !this.applyRawDraft()) return;
+    if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) return;
+    this.isExporting = true;
+    try {
+      const definition: Object = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
+      const text = JSON.stringify(definition, null, 2);
+      const options = new picker.DocumentSaveOptions();
+      options.newFileNames = [`book-source-${Date.now()}.json`];
+      const uris = await new picker.DocumentViewPicker(context).save(options);
+      if (uris.length === 0) return;
+      const file = await fileIo.open(uris[0], fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+      try { await fileIo.write(file.fd, text); }
+      finally { await fileIo.close(file); }
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.rule_source_export_saved') });
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.rule_source_report_failed') });
+    } finally {
+      this.isExporting = false;
+    }
   }
 
   build() {
@@ -150,9 +262,16 @@ export struct RuleSourceEditPage {
         Column() {
           // 顶部标题栏
           Row() {
-            SymbolGlyph($r('sys.symbol.chevron_left'))
-              .fontSize(24)
-              .fontColor([$r('sys.color.font_primary')])
+            Button({ type: ButtonType.Circle }) {
+              SymbolGlyph($r('sys.symbol.chevron_left'))
+                .fontSize(24)
+                .fontColor([$r('sys.color.font_primary')])
+            }
+              .width(44)
+              .height(44)
+              .backgroundColor(Color.Transparent)
+              .accessibilityText($r('app.string.common_back'))
+              .enabled(!this.isSaving)
               .onClick(() => this.requestBack())
 
             Text(this.isNewSource ? '新建书源' : '编辑书源')
@@ -160,21 +279,31 @@ export struct RuleSourceEditPage {
               .fontWeight(FontWeight.Bold)
               .fontColor($r('sys.color.font_primary'))
               .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
               .margin({ left: AppSpace.Xs })
 
             if (!this.isLoading) {
-              Text('保存')
+              Button($r('app.string.rule_source_export'), { type: ButtonType.Normal })
+                .fontSize(AppFont.Body).fontColor(AppColor.Brand).height(44)
+                .backgroundColor(Color.Transparent).padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+                .enabled(!this.isSaving && !this.isExporting).onClick(() => this.exportSource())
+              Button($r('app.string.rule_source_save'), { type: ButtonType.Normal })
                 .fontSize(AppFont.Body)
                 .fontColor(this.isSaving ? $r('sys.color.font_tertiary') : AppColor.Brand)
+                .height(44)
+                .constraintSize({ minWidth: 60 })
+                .backgroundColor(Color.Transparent)
+                .borderRadius(AppRadius.Sm)
                 .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-                .enabled(!this.isSaving)
+                .enabled(!this.isSaving && !this.isExporting)
                 .onClick(() => this.saveSource())
             }
           }
           .width('100%')
-          .height(56)
+          .height(this.safeTop + 56)
           .padding({
-            top: WindowUtils.getStatusBarHeightVp(),
+            top: this.safeTop,
             left: AppSpace.Xs,
             right: AppSpace.Md
           })
@@ -196,13 +325,20 @@ export struct RuleSourceEditPage {
             .justifyContent(FlexAlign.Center)
           } else {
             // Tab栏
-            Row() {
+            Scroll() {
+              Row() {
               this.TabButton('基本', 0)
               this.TabButton('搜索', 1)
               this.TabButton('详情', 2)
               this.TabButton('目录', 3)
               this.TabButton('正文', 4)
+              this.TabButton($r('app.string.rule_source_explore'), 5)
+              this.TabButton($r('app.string.rule_source_login_tab'), 6)
+              this.TabButton($r('app.string.rule_source_json_tab'), 7)
+              }
             }
+            .scrollable(ScrollDirection.Horizontal)
+            .scrollBar(BarState.Off)
             .width('100%')
             .height(44)
             .backgroundColor($r('sys.color.background_primary'))
@@ -210,7 +346,7 @@ export struct RuleSourceEditPage {
             .borderColor($r('sys.color.comp_divider'))
 
             // 内容区域
-            Scroll() {
+            Scroll(this.formScroller) {
               Column({ space: AppSpace.Md }) {
                 if (this.currentTab === 0) {
                   this.BasicTab()
@@ -222,6 +358,12 @@ export struct RuleSourceEditPage {
                   this.TocTab()
                 } else if (this.currentTab === 4) {
                   this.ContentTab()
+                } else if (this.currentTab === 5) {
+                  this.ExploreTab()
+                } else if (this.currentTab === 6) {
+                  this.LoginTab()
+                } else if (this.currentTab === 7) {
+                  this.JsonTab()
                 }
               }
               .width('100%')
@@ -229,11 +371,14 @@ export struct RuleSourceEditPage {
                 left: AppSpace.Md,
                 right: AppSpace.Md,
                 top: AppSpace.Md,
-                bottom: AppSpace.Md + WindowUtils.getSafeAreaInsets().bottom
+                bottom: AppSpace.Lg + this.safeBottom
               })
             }
+            .width('100%')
             .layoutWeight(1)
-            .scrollBar(BarState.Off)
+            .align(Alignment.TopStart)
+            .enabled(!this.isSaving)
+            .scrollBar(BarState.Auto)
             .edgeEffect(EdgeEffect.Spring)
           }
         }
@@ -241,36 +386,54 @@ export struct RuleSourceEditPage {
         .height('100%')
         .backgroundColor($r('sys.color.background_secondary'))
 
-        if (this.showUnsavedDialog) {
-          this.UnsavedDialog()
-        }
       }
       .width('100%')
       .height('100%')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .hideTitleBar(true)
+    .backgroundColor($r('sys.color.background_secondary'))
+    .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     .onBackPressed(() => this.requestBack())
   }
 
   @Builder
-  TabButton(label: string, index: number) {
+  TabButton(label: ResourceStr, index: number) {
     Text(label)
       .fontSize(AppFont.Caption)
       .fontColor(this.currentTab === index ? AppColor.Brand : $r('sys.color.font_secondary'))
       .fontWeight(this.currentTab === index ? FontWeight.Medium : FontWeight.Normal)
-      .layoutWeight(1)
+      .width(64)
       .textAlign(TextAlign.Center)
+      .maxLines(1)
       .height('100%')
       .borderWidth({ bottom: this.currentTab === index ? 2 : 0 })
       .borderColor(AppColor.Brand)
       .onClick(() => {
-        this.currentTab = index;
+        this.selectTab(index);
       })
   }
 
   @Builder
   BasicTab() {
     Column({ space: AppSpace.Md }) {
+      Row() {
+        Text($r('app.string.rule_source_cookie_jar')).layoutWeight(1).fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary'))
+        Toggle({ type: ToggleType.Switch, isOn: this.source.enabledCookieJar })
+          .selectedColor(AppColor.Brand).onChange((value: boolean) => {
+            this.source.enabledCookieJar = value;
+            this.markChanged();
+          })
+      }.width('100%')
+      FormFieldBuilder({ label: $r('app.string.rule_source_timeout'), value: String(this.source.respondTime),
+        onChange: (value: string) => {
+          const parsed = Number(value);
+          if (Number.isFinite(parsed) && parsed > 0) this.source.respondTime = parsed;
+          this.markChanged();
+        } })
+      FormFieldBuilder({ label: $r('app.string.rule_source_rate'), value: this.source.concurrentRate,
+        onChange: (value: string) => { this.source.concurrentRate = value; this.markChanged(); } })
       FormFieldBuilder({
         label: '书源名称',
         value: this.source.bookSourceName,
@@ -391,13 +554,18 @@ export struct RuleSourceEditPage {
   TypeButton(label: string, type: number) {
     Text(label)
       .fontSize(AppFont.Caption)
-      .fontColor(this.source.bookSourceType === type ? AppColor.Brand : $r('sys.color.font_secondary'))
-      .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+      .fontColor(this.sourceType === type ? AppColor.Brand : $r('sys.color.font_secondary'))
+      .layoutWeight(1)
+      .height(44)
+      .maxLines(1)
+      .textAlign(TextAlign.Center)
+      .padding({ left: AppSpace.Xs, right: AppSpace.Xs })
       .borderRadius(AppRadius.Sm)
-      .backgroundColor(this.source.bookSourceType === type ? AppColor.BrandSoft :
+      .backgroundColor(this.sourceType === type ? AppColor.BrandSoft :
         $r('sys.color.comp_background_secondary'))
       .onClick(() => {
         this.source.bookSourceType = type;
+        this.sourceType = type;
         this.markChanged();
       })
   }
@@ -685,7 +853,7 @@ export struct RuleSourceEditPage {
         }
       })
 
-      if (this.source.bookSourceType === 1) {
+      if (this.sourceType === 1) {
         FormFieldBuilder({
           label: '音频时长规则',
           value: this.source.ruleToc?.duration || '',
@@ -703,13 +871,13 @@ export struct RuleSourceEditPage {
   @Builder
   ContentTab() {
     Column({ space: AppSpace.Md }) {
-      Text(this.source.bookSourceType === 1 ? '音频规则' : '正文规则')
+      Text(this.sourceType === 1 ? '音频规则' : '正文规则')
         .fontSize(AppFont.Body)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('sys.color.font_primary'))
         .width('100%')
 
-      if (this.source.bookSourceType === 1) {
+      if (this.sourceType === 1) {
         FormFieldBuilder({
           label: '音频地址规则',
           value: this.source.ruleContent?.audioUrl || '',
@@ -770,64 +938,74 @@ export struct RuleSourceEditPage {
   }
 
   @Builder
-  UnsavedDialog() {
-    Column() {
-      Column({ space: AppSpace.Md }) {
-        Text('保存修改？')
-          .fontSize(AppFont.Body)
-          .fontWeight(FontWeight.Bold)
+  ExploreTab() {
+    Column({ space: AppSpace.Md }) {
+      Row() {
+        Text($r('app.string.rule_source_explore_enabled')).layoutWeight(1).fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_primary'))
-          .width('100%')
-          .textAlign(TextAlign.Center)
-
-        Text('当前有未保存的修改，是否保存？')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-          .width('100%')
-          .textAlign(TextAlign.Center)
-
-        Button('保存并返回')
-          .width('100%')
-          .height(44)
-          .fontSize(AppFont.Body)
-          .backgroundColor(AppColor.Brand)
-          .onClick(() => {
-            this.showUnsavedDialog = false;
-            this.saveSource();
+        Toggle({ type: ToggleType.Switch, isOn: this.source.enabledExplore })
+          .selectedColor(AppColor.Brand).onChange((value: boolean) => {
+            this.source.enabledExplore = value; this.markChanged();
           })
-
-        Button('放弃修改')
-          .width('100%')
-          .height(44)
-          .fontSize(AppFont.Body)
-          .backgroundColor($r('sys.color.comp_background_secondary'))
-          .fontColor($r('sys.color.font_primary'))
-          .onClick(() => {
-            this.showUnsavedDialog = false;
-            this.navStack.pop();
-          })
-
-        Button('取消')
-          .width('100%')
-          .height(44)
-          .fontSize(AppFont.Body)
-          .backgroundColor($r('sys.color.comp_background_secondary'))
-          .fontColor($r('sys.color.font_primary'))
-          .onClick(() => {
-            this.showUnsavedDialog = false;
-          })
+      }.width('100%')
+      FormFieldBuilder({ label: $r('app.string.rule_source_explore_rule'), value: this.source.exploreUrl,
+        multiline: true, onChange: (value: string) => { this.source.exploreUrl = value; this.markChanged(); } })
+      FormFieldBuilder({ label: $r('app.string.rule_source_explore_fields'),
+        value: this.exploreDraft, multiline: true,
+        onChange: (value: string) => { this.exploreDraft = value; this.hasUnsavedChanges = true; } })
+      if (this.rawError) {
+        Text(this.rawError).fontSize(AppFont.Caption).fontColor(AppColor.Brand).width('100%')
       }
-      .width('85%')
-      .padding(AppSpace.Lg)
-      .backgroundColor($r('sys.color.background_primary'))
-      .borderRadius(AppRadius.Md)
+    }.width('100%')
+  }
+
+  private updateExploreRule(value: string): boolean {
+    if (value === this.exploreSnapshot) return true;
+    try {
+      const fields: Object = JSON.parse(value);
+      if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('Invalid ruleExplore');
+      const definition: Record<string, Object> = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
+      definition['ruleExplore'] = fields;
+      const parsed = LocalRuleSourceImportParser.parse(JSON.stringify(definition));
+      if (parsed.sources.length !== 1) throw new Error(parsed.message);
+      this.source.ruleExplore = parsed.sources[0].ruleExplore;
+      this.source.rawSourceJson = parsed.sources[0].rawSourceJson;
+      this.rawError = '';
+      this.markChanged();
+      return true;
+    } catch (error) {
+      this.rawError = error instanceof Error ? error.message : String(error);
+      return false;
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('rgba(0, 0, 0, 0.5)')
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      this.showUnsavedDialog = false;
-    })
+  }
+
+  @Builder
+  LoginTab() {
+    Column({ space: AppSpace.Md }) {
+      FormFieldBuilder({ label: $r('app.string.rule_source_login_ui'), value: this.source.loginUi, multiline: true,
+        onChange: (value: string) => { this.source.loginUi = value; this.markChanged(); } })
+      FormFieldBuilder({ label: $r('app.string.rule_source_login_check'), value: this.source.loginCheckJs, multiline: true,
+        onChange: (value: string) => { this.source.loginCheckJs = value; this.markChanged(); } })
+      FormFieldBuilder({ label: $r('app.string.rule_source_initial_variable'), value: this.source.variable, multiline: true,
+        onChange: (value: string) => { this.source.variable = value; this.markChanged(); } })
+    }.width('100%')
+  }
+
+  @Builder
+  JsonTab() {
+    Column({ space: AppSpace.Sm }) {
+      TextArea({ text: this.rawDraft })
+        .width('100%').height(560).fontFamily('monospace').fontSize(AppFont.Caption)
+        .fontColor($r('sys.color.font_primary')).caretColor(AppColor.Brand)
+        .selectedBackgroundColor(AppColor.BrandSoft).backgroundColor($r('sys.color.comp_background_secondary'))
+        .borderRadius(AppRadius.Xs).padding(AppSpace.Sm)
+        .onChange((value: string) => {
+          this.rawDraft = value;
+          this.hasUnsavedChanges = this.rawDraft !== this.rawSnapshot || this.sourceSnapshot() !== this.originalSnapshot;
+        })
+      if (this.rawError) {
+        Text(this.rawError).fontSize(AppFont.Caption).fontColor(AppColor.Brand).width('100%')
+      }
+    }.width('100%')
   }
 }

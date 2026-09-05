@@ -23,12 +23,14 @@ export interface HttpRequestOptions {
   charset?: string;
   /** 最大重试次数（仅对网络错误/5xx/429 重试），默认 0（不重试） */
   retry?: number;
+  autoRedirect?: boolean;
 }
 
 export interface HttpResponse {
   statusCode: number;
   headers: Record<string, string>;
   body: string;
+  url?: string;
 }
 
 // 共享会话：rcp.Session 内部维护连接池，并发请求复用底层连接。
@@ -112,6 +114,8 @@ export class HttpClient {
     const req = new rcp.Request(url, method, finalHeaders, content);
     req.configuration = {
       transfer: {
+        autoRedirect: options.autoRedirect ?? true,
+        maxAutoRedirects: 5,
         timeout: {
           connectMs: timeout,
           transferMs: timeout,
@@ -165,6 +169,7 @@ export class HttpClient {
       statusCode: response.statusCode,
       headers: respHeaders,
       body,
+      url: response.effectiveUrl?.toString() ?? url,
     };
     return result;
   }

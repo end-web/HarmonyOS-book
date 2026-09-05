@@ -1143,6 +1143,90 @@
     {
       "name": "settings_rule_source_desc",
       "value": "导入、测试并管理本地书源"
-    }
+    },
+    {
+      "name": "rule_source_save",
+      "value": "保存"
+    },
+    {
+      "name": "rule_source_unsaved_title",
+      "value": "保存修改？"
+    },
+    {
+      "name": "rule_source_unsaved_message",
+      "value": "当前有未保存的修改，是否保存？"
+    },
+    {
+      "name": "rule_source_discard_changes",
+      "value": "放弃修改"
+    },
+    {
+      "name": "rule_source_save_and_back",
+      "value": "保存并返回"
+    },
+    {
+      "name": "rule_source_export_report",
+      "value": "导出"
+    },
+    {
+      "name": "rule_source_report_saved",
+      "value": "调试报告已保存"
+    },
+    {
+      "name": "rule_source_report_failed",
+      "value": "调试报告保存失败"
+    },
+    {
+      "name": "rule_source_debug_start",
+      "value": "开始调试"
+    },
+    {
+      "name": "rule_source_debug_running",
+      "value": "运行中..."
+    },
+    {
+      "name": "rule_source_debug_audio",
+      "value": "音频"
+    },
+    {
+      "name": "rule_source_debug_content",
+      "value": "正文"
+    },
+    {
+      "name": "rule_source_debug_clear",
+      "value": "清空"
+    },
+    {
+      "name": "rule_source_explore",
+      "value": "发现"
+    },
+    {
+      "name": "rule_source_login_panel",
+      "value": "书源登录"
+    },
+    {
+      "name": "rule_source_missing",
+      "value": "书源不存在或已删除"
+    },
+    {
+      "name": "rule_source_panel_empty",
+      "value": "该书源未提供可用的分类或登录表单"
+    },
+    { "name": "rule_source_debug_stop", "value": "停止调试" },
+    { "name": "rule_source_json_single", "value": "请输入单个有效书源 JSON" },
+    { "name": "rule_source_json_identity", "value": "已有书源的标识地址不可更改，请新建书源" },
+    { "name": "rule_source_login_tab", "value": "登录" },
+    { "name": "rule_source_json_tab", "value": "JSON" },
+    { "name": "rule_source_cookie_jar", "value": "保存网站 Cookie" },
+    { "name": "rule_source_timeout", "value": "请求超时（毫秒）" },
+    { "name": "rule_source_rate", "value": "请求频率" },
+    { "name": "rule_source_explore_enabled", "value": "启用发现" },
+    { "name": "rule_source_explore_rule", "value": "发现分类规则" },
+    { "name": "rule_source_explore_fields", "value": "发现书籍提取规则（JSON）" },
+    { "name": "rule_source_login_ui", "value": "登录表单规则" },
+    { "name": "rule_source_login_check", "value": "登录检查脚本" },
+    { "name": "rule_source_initial_variable", "value": "初始书源变量" },
+    { "name": "rule_source_export", "value": "导出" },
+    { "name": "rule_source_export_saved", "value": "书源已导出" }
   ]
 }

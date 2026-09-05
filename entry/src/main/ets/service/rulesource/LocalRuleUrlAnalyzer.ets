@@ -1,5 +1,6 @@
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { CharsetCodec } from '../../utils/CharsetCodec';
+import { LocalRuleDataUrl } from './LocalRuleDataUrl';
 import { LocalRuleExecutionLimits, LocalRuleRequestPlan } from './LocalRuleRuntimeTypes';
 
 class LocalRuleUrlParts {
@@ -39,8 +40,16 @@ export class LocalRuleUrlAnalyzer {
       plan.method = 'POST';
     }
 
+    if (address.toLowerCase().startsWith('data:')) {
+      plan.inlineBody = LocalRuleDataUrl.decode(address);
+      if (String(parts.options['type'] ?? '') === 'request') {
+        address = String(parts.options['url'] ?? parts.options['requestUrl'] ?? '').trim();
+        LocalRuleUrlAnalyzer.assertHttpUrl(address);
+        plan.inlineBody = undefined;
+      }
+    }
     plan.url = LocalRuleUrlAnalyzer.resolveUrl(source.bookSourceUrl, address);
-    LocalRuleUrlAnalyzer.assertHttpUrl(plan.url);
+    if (plan.inlineBody === undefined) LocalRuleUrlAnalyzer.assertHttpUrl(plan.url);
     const headerOverride = variables['__header'];
     let headerText = LocalRuleUrlAnalyzer.expandBodyTemplate(
       headerOverride !== undefined ? headerOverride : source.header, source, variables, keyword, page);
@@ -51,7 +60,7 @@ export class LocalRuleUrlAnalyzer {
     LocalRuleUrlAnalyzer.applyOptions(plan, parts.options, source, variables, keyword, page);
     const inlineNames = Object.keys(inlineHeaders);
     for (const name of inlineNames) plan.headers[name] = inlineHeaders[name] ?? '';
-    plan.url = LocalRuleUrlAnalyzer.encodeUrlCharacters(plan.url, plan.charset, false);
+    if (plan.inlineBody === undefined) plan.url = LocalRuleUrlAnalyzer.encodeUrlCharacters(plan.url, plan.charset, false);
     if (typeof plan.body === 'string' && !plan.rawBody &&
       !LocalRuleUrlAnalyzer.looksLikeStructuredBody(plan.body)) {
       plan.body = LocalRuleUrlAnalyzer.encodeUrlCharacters(plan.body, plan.charset, true);
@@ -60,6 +69,7 @@ export class LocalRuleUrlAnalyzer {
   }
 
   static resolveUrl(baseUrl: string, value: string): string {
+    if (value.trim().toLowerCase().startsWith('data:')) return value.trim();
     const raw = LocalRuleUrlAnalyzer.decodeHtmlEntities(value.trim());
     if (!raw || raw.startsWith('#')) return '';
     const lower = raw.toLowerCase();
@@ -180,6 +190,20 @@ export class LocalRuleUrlAnalyzer {
 
   private static applyOptions(plan: LocalRuleRequestPlan, options: Record<string, Object>,
     source: LocalRuleSource, variables: Record<string, string>, keyword: string, page: number): void {
+    plan.webJs = String(options['webJs'] ?? '').trim();
+    plan.bodyJs = String(options['bodyJs'] ?? '').trim();
+    if (plan.bodyJs.length > 256 * 1024) throw new Error('bodyJs 超过 256 KiB');
+    plan.webView = String(options['webView'] ?? '').toLowerCase() === 'true' || plan.webJs.length > 0;
+    const session = options['session'];
+    if (session !== undefined && typeof session === 'object' && !Array.isArray(session)) {
+      plan.session = JSON.parse(JSON.stringify(session));
+    }
+    if (plan.webJs.length > 256 * 1024) throw new Error('webJs 超过 256 KiB');
+    const webHtml = options['webHtml'];
+    if (plan.webView && typeof webHtml === 'string') {
+      if (webHtml.length > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) throw new Error('网页内容超过预算');
+      plan.inlineBody = webHtml;
+    }
     const methodValue = options['method'];
     if (methodValue !== undefined && methodValue !== null) {
       plan.method = String(methodValue).trim().toUpperCase();
@@ -194,6 +218,7 @@ export class LocalRuleUrlAnalyzer {
       plan.charset = String(charsetValue).trim().toLowerCase() || 'utf-8';
     }
     const retryValue = options['retry'];
+    plan.followRedirects = String(options['redirect'] ?? options['followRedirects'] ?? 'true') !== 'false';
     if (retryValue !== undefined && retryValue !== null) {
       const retry = Number(retryValue);
       if (Number.isFinite(retry)) {
@@ -219,7 +244,8 @@ export class LocalRuleUrlAnalyzer {
     }
     const headerValue = options['header'];
     if (headerValue !== undefined && headerValue !== null) {
-      const optionHeaders = LocalRuleUrlAnalyzer.parseHeaders(String(headerValue));
+      const optionHeaders = LocalRuleUrlAnalyzer.parseHeaders(typeof headerValue === 'object'
+        ? JSON.stringify(headerValue) : String(headerValue));
       const headerNames = Object.keys(optionHeaders);
       for (const name of headerNames) plan.headers[name] = optionHeaders[name] ?? '';
     }
@@ -232,18 +258,35 @@ export class LocalRuleUrlAnalyzer {
     const bodyValue = options['body'];
     if (bodyValue !== undefined && bodyValue !== null) {
       if (typeof bodyValue === 'object') {
-        const bodyJson = JSON.stringify(bodyValue);
-        const expandedJson = LocalRuleUrlAnalyzer.expandBodyTemplate(
-          bodyJson, source, variables, keyword, page);
-        plan.body = JSON.parse(expandedJson) as Object;
+        plan.body = LocalRuleUrlAnalyzer.expandBodyValue(bodyValue, source, variables, keyword, page, 0);
       } else {
         const bodyTemplate = String(bodyValue);
-        plan.body = LocalRuleUrlAnalyzer.looksLikeStructuredBody(bodyTemplate) ?
-          LocalRuleUrlAnalyzer.expandBodyTemplate(bodyTemplate, source, variables, keyword, page) :
-          LocalRuleUrlAnalyzer.expandTemplate(bodyTemplate, source, variables, keyword, page);
+        if (LocalRuleUrlAnalyzer.looksLikeStructuredBody(bodyTemplate)) {
+          let structured: Object | undefined = undefined;
+          try { structured = JSON.parse(bodyTemplate); } catch (_error) { /* Some rules interpolate numeric tokens. */ }
+          plan.body = structured === undefined
+            ? LocalRuleUrlAnalyzer.expandBodyTemplate(bodyTemplate, source, variables, keyword, page)
+            : JSON.stringify(LocalRuleUrlAnalyzer.expandBodyValue(structured, source, variables, keyword, page, 0));
+        } else {
+          plan.body = LocalRuleUrlAnalyzer.expandTemplate(bodyTemplate, source, variables, keyword, page);
+        }
       }
     }
     if (plan.method === 'GET' || plan.method === 'HEAD') plan.body = undefined;
+  }
+
+  private static expandBodyValue(value: Object, source: LocalRuleSource, variables: Record<string, string>,
+    keyword: string, page: number, depth: number): Object {
+    if (depth > 32) throw new Error('请求体嵌套超过限制');
+    if (typeof value === 'string') return LocalRuleUrlAnalyzer.expandBodyTemplate(value, source, variables, keyword, page);
+    if (value === null || typeof value !== 'object') return value;
+    if (Array.isArray(value)) {
+      const items: Object[] = JSON.parse(JSON.stringify(value));
+      return items.map((item: Object): Object => LocalRuleUrlAnalyzer.expandBodyValue(item, source, variables, keyword, page, depth + 1));
+    }
+    const fields: Record<string, Object> = JSON.parse(JSON.stringify(value));
+    for (const key of Object.keys(fields)) fields[key] = LocalRuleUrlAnalyzer.expandBodyValue(fields[key], source, variables, keyword, page, depth + 1);
+    return fields;
   }
 
   private static splitOptions(value: string): LocalRuleUrlParts {
@@ -252,48 +295,23 @@ export class LocalRuleUrlAnalyzer {
     const end = value.length - 1;
     if (end < 1 || value.charAt(end) !== '}') return parts;
 
-    let depth = 0;
-    let quote = '';
-    let escaped = false;
-    let objectStart = -1;
-    for (let i = end; i >= 0; i--) {
-      const character = value.charAt(i);
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (character === '\\') {
-        escaped = true;
-        continue;
-      }
-      if (quote) {
-        if (character === quote) quote = '';
-        continue;
-      }
-      if (character === '"' || character === "'") {
-        quote = character;
-        continue;
-      }
-      if (character === '}') depth++;
-      if (character === '{') {
-        depth--;
-        if (depth === 0) {
-          objectStart = i;
-          break;
+    let commaIndex = value.indexOf(',');
+    if (value.toLowerCase().startsWith('data:')) commaIndex = value.indexOf(',', commaIndex + 1);
+    while (commaIndex >= 0) {
+      const candidate = value.substring(commaIndex + 1).trim();
+      if (candidate.startsWith('{')) {
+        try {
+          const parsed = LocalRuleUrlAnalyzer.parseLooseObject(candidate);
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            parts.address = value.substring(0, commaIndex).trim();
+            parts.options = JSON.parse(JSON.stringify(parsed));
+            return parts;
+          }
+        } catch (_error) {
+          // A comma can belong to the URL; only a fully parsed suffix is request metadata.
         }
       }
-    }
-    if (objectStart <= 0) return parts;
-    let commaIndex = objectStart - 1;
-    while (commaIndex >= 0 && new RegExp('\\s').test(value.charAt(commaIndex))) commaIndex--;
-    if (commaIndex < 0 || value.charAt(commaIndex) !== ',') return parts;
-    try {
-      const parsed = LocalRuleUrlAnalyzer.parseLooseObject(value.substring(objectStart));
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return parts;
-      parts.address = value.substring(0, commaIndex).trim();
-      parts.options = parsed as Record<string, Object>;
-    } catch (_error) {
-      // P0 只接受标准 JSON 选项，解析失败时保留原 URL，随后协议校验会给出明确错误。
+      commaIndex = value.indexOf(',', commaIndex + 1);
     }
     return parts;
   }
@@ -313,12 +331,8 @@ export class LocalRuleUrlAnalyzer {
     if (!authority || authority.includes('@')) throw new Error('请求地址主机无效或包含凭据');
   }
 
-  private static origin(value: string): string {
-    const schemeEnd = value.indexOf('://');
-    if (schemeEnd <= 0) return '';
-    const authorityStart = schemeEnd + 3;
-    const slash = value.indexOf('/', authorityStart);
-    return slash >= 0 ? value.substring(0, slash) : value;
+  static origin(value: string): string {
+    return new RegExp('^https?://[^/?#]+', 'i').exec(value)?.[0].toLowerCase() ?? '';
   }
 
   private static stripUrlSuffix(value: string): string {

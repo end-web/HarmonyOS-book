@@ -28,6 +28,12 @@ export class LocalRuleRequestPlan {
   charset: string = 'utf-8';
   timeoutMs: number = 18000;
   retry: number = 0;
+  followRedirects: boolean = true;
+  inlineBody: string | undefined = undefined;
+  webView: boolean = false;
+  webJs: string = '';
+  bodyJs: string = '';
+  session: Record<string, Object> = {};
 }
 
 /** HttpClient 外层的安全结果；网络与协议错误不会以异常越过 Dispatcher。 */
@@ -38,6 +44,8 @@ export class LocalRuleFetchResult {
   headers: Record<string, string> = {};
   body: string = '';
   errorMessage: string = '';
+  browserState: string = '';
+  resourceUrls: string[] = [];
 
   static failed(url: string, message: string, statusCode: number = 0): LocalRuleFetchResult {
     const result = new LocalRuleFetchResult();

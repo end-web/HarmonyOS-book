@@ -102,6 +102,8 @@ export class LocalRuleSourceImportParser {
     const compactRuleNames: string[] = [];
     source.ruleSearch = LocalRuleSourceImportParser.parseSearchRule(
       LocalRuleSourceImportParser.ruleRecord(record, 'ruleSearch', 'searchRule', compactRuleNames));
+    source.ruleExplore = LocalRuleSourceImportParser.parseSearchRule(
+      LocalRuleSourceImportParser.ruleRecord(record, 'ruleExplore', 'exploreRule', compactRuleNames));
     source.ruleBookInfo = LocalRuleSourceImportParser.parseBookInfoRule(
       LocalRuleSourceImportParser.ruleRecord(record, 'ruleBookInfo', 'bookInfoRule', compactRuleNames));
     source.ruleToc = LocalRuleSourceImportParser.parseTocRule(
@@ -127,6 +129,7 @@ export class LocalRuleSourceImportParser {
     rule.lastChapter = LocalRuleSourceImportParser.readString(record, 'lastChapter');
     rule.wordCount = LocalRuleSourceImportParser.readString(record, 'wordCount');
     rule.updateTime = LocalRuleSourceImportParser.readString(record, 'updateTime');
+    rule.nextPageUrl = LocalRuleSourceImportParser.readString(record, 'nextPageUrl');
     return rule;
   }
 

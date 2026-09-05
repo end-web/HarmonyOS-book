@@ -1,6 +1,7 @@
 import { BookInfo, SearchResult, TocItem } from '../../model/BookSource';
 import {
   LocalRuleSource,
+  LocalRuleSearchRule,
   LocalRuleSourceHealth,
   LocalRuleSourceStatus
 } from '../../model/LocalRuleSource';
@@ -14,11 +15,18 @@ import {
 } from './LocalRuleRuntimeTypes';
 import { LocalRuleStageExtractor } from './LocalRuleStageExtractor';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
+import { LocalRuleChapterRequest } from './LocalRuleChapterRequest';
 import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
 import { TingYouSourceAdapter } from './tingyou/TingYouSourceAdapter';
 import { CoverPrefetcher } from '../CoverPrefetcher';
+import { LocalRuleExploreResult } from '../../model/LocalRulePanel';
+import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
+import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
+import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
+import { buffer } from '@kit.ArkTS';
 
 class LocalRuleSearchResult implements SearchResult {
+  contentType: 'audio' | 'text' = 'text';
   name: string = '';
   author: string = '';
   coverUrl: string = '';
@@ -59,6 +67,32 @@ class LocalRuleTocItem implements TocItem {
 
 /** 本地规则源旁路 Dispatcher；它从不调用或修改 BuiltInDispatcher。 */
 export class LocalRuleDispatcher {
+  static async explore(source: LocalRuleSource, address: string, page: number = 1,
+    variables: Record<string, string> = {}): Promise<LocalRuleExploreResult> {
+    if (!source.enabledExplore || !source.canExecute()) throw new Error('书源未启用发现');
+    await LocalRuleDispatcher.prepareVariables(source, variables, address, '', page);
+    const resolved = await LocalRuleScriptRuntime.resolveAddress(address, source, variables, '', page);
+    const fetch = await LocalRuleHttpClient.fetch(source, resolved, variables, '', page);
+    LocalRuleDispatcher.assertFetch(fetch, '发现');
+    const document = LocalRuleStageExtractor.createDocument(fetch.body, fetch.requestUrl);
+    const rule = source.ruleExplore.bookList && source.ruleExplore.name && source.ruleExplore.bookUrl
+      ? source.ruleExplore : source.ruleSearch;
+    const elements = await LocalRuleStageExtractor.selectList(document, rule.bookList, source, variables);
+    const result = new LocalRuleExploreResult();
+    const seen = new Set<string>();
+    for (const element of elements.slice(0, LocalRuleExecutionLimits.MAX_SEARCH_RESULTS)) {
+      const item = await LocalRuleDispatcher.extractSearchResult(element, source,
+        LocalRuleDispatcher.copyVariables(variables), rule);
+      if (!item.name || !item.bookUrl || seen.has(item.bookUrl)) continue;
+      seen.add(item.bookUrl);
+      result.books.push(item);
+    }
+    result.nextUrl = await LocalRuleStageExtractor.extract(document, rule.nextPageUrl, source, variables, true);
+    if (!result.nextUrl && result.books.length > 0 &&
+      (address.includes('{{page') || address.includes('pageIndex'))) result.nextUrl = address;
+    return result;
+  }
+
   static async search(source: LocalRuleSource, keyword: string,
     page: number = 1): Promise<SearchResult[]> {
     if (!source.isSearchEnabled()) return [];
@@ -72,8 +106,8 @@ export class LocalRuleDispatcher {
 
   /** 健康检查需要绕过启用开关，并保留网络或规则异常供上层判定。 */
   static async searchForHealthCheck(source: LocalRuleSource, keyword: string,
-    page: number = 1): Promise<SearchResult[]> {
-    return LocalRuleDispatcher.searchStrict(source, keyword, page);
+    page: number = 1, variables: Record<string, string> = {}): Promise<SearchResult[]> {
+    return LocalRuleDispatcher.searchStrict(source, keyword, page, variables);
   }
 
   static async testSearch(source: LocalRuleSource, keyword: string = '测试'): Promise<LocalRuleSourceHealth> {
@@ -139,8 +173,10 @@ export class LocalRuleDispatcher {
       const info = new LocalRuleBookInfo();
       info.name = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extractFirst(fieldDocument,
         source.ruleBookInfo.name, source, variables), 120);
+      if (info.name) variables['name'] = info.name;
       info.author = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(fieldDocument,
         source.ruleBookInfo.author, source, variables), 120);
+      if (info.author) variables['author'] = info.author;
       info.coverUrl = await LocalRuleStageExtractor.extract(fieldDocument,
         source.ruleBookInfo.coverUrl, source, variables, true);
       info.coverUrl = LocalRuleDispatcher.prepareCover(
@@ -169,6 +205,7 @@ export class LocalRuleDispatcher {
       return info;
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'getBookInfo', error as Object);
+      if (variables['__traceId']) throw new Error(error instanceof Error ? error.message : String(error));
       return null;
     }
   }
@@ -196,13 +233,18 @@ export class LocalRuleDispatcher {
         const elements = await LocalRuleStageExtractor.selectList(document,
           source.ruleToc.chapterList, source, variables);
         for (const element of elements) {
+          LocalRuleDiagnostics.check(variables);
           if (output.length >= LocalRuleExecutionLimits.MAX_TOC_ITEMS) break;
           const itemVariables = LocalRuleDispatcher.copyVariables(variables);
           const item = new LocalRuleTocItem();
           item.name = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
             source.ruleToc.chapterName, source, itemVariables), 256);
-          const chapterUrl = await LocalRuleStageExtractor.extract(element,
-            source.ruleToc.chapterUrl, source, itemVariables, true);
+          itemVariables['chapterName'] = item.name;
+          itemVariables['title'] = item.name;
+          itemVariables['chapterIndex'] = String(output.length);
+          const chapterUrl = LocalRuleChapterRequest.needsDeferredRequest(source.ruleToc.chapterUrl)
+            ? LocalRuleChapterRequest.create(element, itemVariables)
+            : await LocalRuleStageExtractor.extract(element, source.ruleToc.chapterUrl, source, itemVariables, true);
           if (!chapterUrl || chapterUrls.has(chapterUrl)) continue;
           chapterUrls.add(chapterUrl);
           item.url = chapterUrl;
@@ -221,6 +263,9 @@ export class LocalRuleDispatcher {
             source.ruleToc.duration, source, itemVariables));
           item.variables = LocalRuleDispatcher.copyVariables(itemVariables);
           output.push(item);
+          if (output.length % 64 === 0) {
+            await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 0); });
+          }
         }
         const nextUrl = await LocalRuleStageExtractor.extract(document,
           source.ruleToc.nextTocUrl, source, variables, true);
@@ -232,6 +277,7 @@ export class LocalRuleDispatcher {
       return output;
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'getBookToc', error as Object);
+      if (variables['__traceId']) throw new Error(error instanceof Error ? error.message : String(error));
       return [];
     }
   }
@@ -244,6 +290,8 @@ export class LocalRuleDispatcher {
       if (TingYouSourceAdapter.canResolve(source, chapterUrl)) {
         return await TingYouSourceAdapter.resolveContent(source, chapterUrl);
       }
+      await LocalRuleDispatcher.prepareVariables(source, variables, variables['__chapterBaseUrl'] || chapterUrl);
+      chapterUrl = await LocalRuleChapterRequest.resolve(chapterUrl, source, variables);
       await LocalRuleDispatcher.prepareVariables(source, variables, chapterUrl);
       await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
       safe.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, chapterUrl, variables);
@@ -252,6 +300,7 @@ export class LocalRuleDispatcher {
       return await LocalRuleDispatcher.resolveContentStrict(source, chapterUrl, variables);
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'resolveContent', error as Object);
+      if (variables['__traceId']) throw new Error(error instanceof Error ? error.message : String(error));
       return safe;
     }
   }
@@ -306,10 +355,9 @@ export class LocalRuleDispatcher {
   }
 
   private static async searchStrict(source: LocalRuleSource, keyword: string,
-    page: number): Promise<SearchResult[]> {
+    page: number, variables: Record<string, string> = {}): Promise<SearchResult[]> {
     if (!source.canExecute()) throw new Error(source.validationMessage || '书源不可执行');
     if (!source.searchUrl.trim()) throw new Error('书源没有搜索地址');
-    const variables: Record<string, string> = {};
     await LocalRuleDispatcher.prepareVariables(source, variables, source.bookSourceUrl, keyword, page);
     const searchAddress = await LocalRuleScriptRuntime.resolveAddress(
       source.searchUrl, source, variables, keyword, page);
@@ -335,30 +383,33 @@ export class LocalRuleDispatcher {
   }
 
   private static async extractSearchResult(element: LocalRuleDocument, source: LocalRuleSource,
-    variables: Record<string, string>): Promise<LocalRuleSearchResult> {
+    variables: Record<string, string>, rule: LocalRuleSearchRule = source.ruleSearch): Promise<LocalRuleSearchResult> {
     const item = new LocalRuleSearchResult();
+    item.contentType = source.isAudio() ? 'audio' : 'text';
     item.name = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.name, source, variables), 120);
+      rule.name, source, variables), 120);
+    variables['name'] = item.name;
     item.author = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.author, source, variables), 120);
+      rule.author, source, variables), 120);
+    variables['author'] = item.author;
     item.coverUrl = await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.coverUrl, source, variables, true);
+      rule.coverUrl, source, variables, true);
     item.coverUrl = LocalRuleDispatcher.prepareCover(
       source, item.coverUrl, element.baseUrl, variables);
     item.bookUrl = await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.bookUrl, source, variables, true);
+      rule.bookUrl, source, variables, true);
     item.intro = LocalRuleDispatcher.sanitizeIntro(LocalRuleStageExtractor.limit(
       await LocalRuleStageExtractor.extract(element,
-        source.ruleSearch.intro, source, variables), LocalRuleExecutionLimits.MAX_INTRO_CHARS));
+        rule.intro, source, variables), LocalRuleExecutionLimits.MAX_INTRO_CHARS));
     item.kind = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.kind, source, variables), 256);
+      rule.kind, source, variables), 256);
     const status = await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.status, source, variables);
+      rule.status, source, variables);
     if (status.trim()) item.completed = LocalRuleDispatcher.isCompleted(status);
     item.lastChapter = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.lastChapter, source, variables), 256);
+      rule.lastChapter, source, variables), 256);
     item.wordCount = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
-      source.ruleSearch.wordCount, source, variables), 80);
+      rule.wordCount, source, variables), 80);
     item.sourceName = source.bookSourceName;
     item.sourceUrl = source.bookSourceUrl;
     item.variables = LocalRuleDispatcher.copyVariables(variables);
@@ -390,8 +441,8 @@ export class LocalRuleDispatcher {
           source.ruleContent.title, source, variables), 256);
       }
       if (!result.audioUrl) {
-        result.audioUrl = await LocalRuleStageExtractor.extract(document,
-          source.ruleContent.audioUrl, source, variables, true);
+        result.audioUrl = LocalRuleDispatcher.firstResolvedUrl(await LocalRuleStageExtractor.extract(document,
+          source.ruleContent.audioUrl, source, variables), fetch.requestUrl);
       }
       const extractedContent = await LocalRuleStageExtractor.extract(document,
         source.ruleContent.content, source, variables);
@@ -416,6 +467,24 @@ export class LocalRuleDispatcher {
         result.audioUrl = LocalRuleDispatcher.matchAudioUrl(fetch.body,
           source.ruleContent.sourceRegex, fetch.requestUrl);
       }
+      if (!result.audioUrl && source.isAudio()) {
+        for (const candidate of fetch.resourceUrls) {
+          let matched = '';
+          try {
+            const matches = source.ruleContent.sourceRegex.trim()
+              ? new RegExp(source.ruleContent.sourceRegex, 'i').test(candidate)
+              : LocalRuleDispatcher.looksLikeDirectAudioPath(candidate);
+            if (matches) matched = candidate;
+          } catch (_error) { /* Invalid source regex is reported by the empty content result. */ }
+          if (matched) {
+            result.audioUrl = LocalRuleDispatcher.resolveAudioCandidate(fetch.requestUrl, matched);
+            if (result.audioUrl) break;
+          }
+        }
+      }
+      if (source.isAudio() && !result.audioUrl && extractedContent.trim()) {
+        LocalRuleDiagnostics.record(variables, 'error', '正文规则未返回有效音频地址', extractedContent.substring(0, 512));
+      }
       if (source.isAudio() && result.audioUrl) break;
       const nextUrl = await LocalRuleStageExtractor.extract(document,
         source.ruleContent.nextContentUrl, source, variables, true);
@@ -426,6 +495,15 @@ export class LocalRuleDispatcher {
     result.content = contents.join('\n\n').trim();
     result.requestHeaders = LocalRuleDispatcher.getAudioHeaders(
       source, result.audioUrl || chapterUrl, variables);
+    if (result.audioUrl) {
+      const scoped = LocalRuleDispatcher.copyVariables(variables);
+      scoped['__header'] = JSON.stringify(result.requestHeaders);
+      scoped['__sourceLoginHeader'] = '';
+      const mediaPlan = LocalRuleHttpClient.prepareRequest(source, result.audioUrl, scoped);
+      if (mediaPlan.method !== 'GET' || mediaPlan.webView) throw new Error('音频规则需返回可直接播放的 GET 地址');
+      result.audioUrl = mediaPlan.url;
+      result.requestHeaders = mediaPlan.headers;
+    }
     console.info(`[LocalRuleDispatcher] content ${source.bookSourceName}: ` +
       `responseChars=${responseCharacters}, pages=${pageCount}, contentChars=${result.content.length}, ` +
       `audio=${result.audioUrl.length > 0}`);
@@ -438,7 +516,7 @@ export class LocalRuleDispatcher {
       const match = new RegExp(pattern, 'i').exec(body);
       if (match === null) return '';
       const value = match.length > 1 ? match[1] : match[0];
-      return LocalRuleUrlAnalyzer.resolveUrl(baseUrl, value ?? '');
+      return LocalRuleDispatcher.resolveAudioCandidate(baseUrl, value ?? '');
     } catch (_error) {
       return '';
     }
@@ -450,13 +528,13 @@ export class LocalRuleDispatcher {
     try {
       const parsed = JSON.parse(trimmed) as Object;
       if (typeof parsed === 'string') {
-        const resolved = LocalRuleUrlAnalyzer.resolveUrl(baseUrl, parsed);
+        const resolved = LocalRuleDispatcher.resolveAudioCandidate(baseUrl, parsed);
         if (resolved) return resolved;
       } else if (Array.isArray(parsed)) {
         const values = parsed as Object[];
         for (const item of values) {
           if (item === undefined || item === null || typeof item === 'object') continue;
-          const resolved = LocalRuleUrlAnalyzer.resolveUrl(baseUrl, String(item));
+          const resolved = LocalRuleDispatcher.resolveAudioCandidate(baseUrl, String(item));
           if (resolved) return resolved;
         }
       }
@@ -465,10 +543,22 @@ export class LocalRuleDispatcher {
     }
     const lines = trimmed.split(new RegExp('\\r?\\n', 'g'));
     for (const line of lines) {
-      const resolved = LocalRuleUrlAnalyzer.resolveUrl(baseUrl, line.trim());
+      const resolved = LocalRuleDispatcher.resolveAudioCandidate(baseUrl, line.trim());
       if (resolved) return resolved;
     }
     return '';
+  }
+
+  private static resolveAudioCandidate(baseUrl: string, value: string): string {
+    let clean = value.trim();
+    if (clean.length > LocalRuleExecutionLimits.MAX_FIELD_CHARS) return '';
+    if (new RegExp('^[A-Za-z0-9+/]{24,}={0,2}$').test(clean)) {
+      const decoded = buffer.from(clean, 'base64').toString('utf-8');
+      if (new RegExp('^https?://', 'i').test(decoded)) clean = decoded;
+    }
+    if (!new RegExp('^(https?://|//|/|\\./|\\.\\./)', 'i').test(clean) &&
+      !new RegExp('^[^\\s<>]+\\.(mp3|m4a|aac|ogg|opus|wav|flac|m3u8)([?,#]|$)', 'i').test(clean)) return '';
+    return LocalRuleUrlAnalyzer.resolveUrl(baseUrl, clean);
   }
 
   private static looksLikeDirectAudioPath(url: string): boolean {
@@ -563,6 +653,10 @@ export class LocalRuleDispatcher {
   private static async prepareVariables(source: LocalRuleSource,
     variables: Record<string, string>, baseUrl: string,
     keyword: string = '', page: number = 1): Promise<void> {
+    if (LocalRuleSourceRepository.isInitialized()) {
+      const state = LocalRuleScriptState.parse(await LocalRuleSourceRepository.readScriptState(source.bookSourceUrl));
+      variables['__sourceLoginHeader'] = state.loginHeader;
+    }
     variables['key'] = variables['key'] ?? keyword;
     variables['searchKey'] = variables['searchKey'] ?? keyword;
     variables['keyword'] = variables['keyword'] ?? keyword;
@@ -590,7 +684,10 @@ export class LocalRuleDispatcher {
   private static copyVariables(input: Record<string, string>): Record<string, string> {
     const output: Record<string, string> = {};
     const keys = Object.keys(input);
-    for (const key of keys) output[key] = input[key] ?? '';
+    for (const key of keys) {
+      if (key === '__sourceLoginHeader' || key === '__useActionLoginHeader' || key.startsWith('__cookie')) continue;
+      output[key] = input[key] ?? '';
+    }
     return output;
   }
 

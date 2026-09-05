@@ -196,7 +196,8 @@ export default function localRuleRuntimeTest() {
       const source = LocalRuleSourceImportParser.parse(JSON_SOURCE).sources[0];
       const variables: Record<string, string> = {};
       const value = await LocalRuleScriptRuntime.evaluate(
-        '', 'local-rule', 'typeof Packages === "undefined" ? "sandboxed" : Packages',
+        '', 'local-rule', 'typeof Packages.java.io === "undefined" && typeof Packages.java.lang.Runtime === "undefined" ' +
+        '&& typeof fetch === "undefined" && typeof XMLHttpRequest === "undefined" ? "sandboxed" : "exposed"',
         source, variables);
       expect(value).assertEqual('sandboxed');
     });

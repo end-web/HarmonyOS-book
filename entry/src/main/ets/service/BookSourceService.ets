@@ -491,6 +491,10 @@ export class BookSourceService {
       };
       return result;
     }
+    if (localSource !== undefined) {
+      const result = await LocalRuleDispatcher.explore(localSource, categoryUrl, _page);
+      return { books: result.books, nextUrl: result.nextUrl, nextPage: _page + 1 };
+    }
     return { books: [], nextUrl: '' };
   }
 

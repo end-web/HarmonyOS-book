@@ -3,6 +3,12 @@ import { HttpClient, HttpRequestOptions, HttpResponse } from '../http/HttpClient
 import { LocalRuleExecutionLimits, LocalRuleFetchResult, LocalRuleRequestPlan } from './LocalRuleRuntimeTypes';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
+import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
+import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
+import { LocalRuleRequestLimiter } from './LocalRuleRequestLimiter';
+import { LocalRuleBrowserRuntime } from './LocalRuleBrowserRuntime';
+import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
+import { LocalRuleRequestSession } from './LocalRuleRequestSession';
 
 /** 在共享 HttpClient 外增加本地规则源专属的协议、状态码和响应预算。 */
 export class LocalRuleHttpClient {
@@ -13,36 +19,147 @@ export class LocalRuleHttpClient {
     variables: Record<string, string> = {}, keyword: string = '', page: number = 1): Promise<LocalRuleFetchResult> {
     let plan: LocalRuleRequestPlan;
     try {
+      LocalRuleDiagnostics.check(variables);
+      if (variables['__useActionLoginHeader'] !== 'true' && LocalRuleSourceRepository.isInitialized()) {
+        const state = LocalRuleScriptState.parse(await LocalRuleSourceRepository.readScriptState(source.bookSourceUrl));
+        variables['__sourceLoginHeader'] = state.loginHeader;
+      }
       if (source.enabledCookieJar) {
         await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
       }
       plan = LocalRuleHttpClient.prepareRequest(source, rawAddress, variables, keyword, page);
     } catch (error) {
+      LocalRuleDiagnostics.record(variables, 'error', '请求准备失败', LocalRuleHttpClient.errorMessage(error));
       return LocalRuleFetchResult.failed('', LocalRuleHttpClient.errorMessage(error));
     }
-    const result = await LocalRuleHttpClient.execute(plan);
-    if (source.enabledCookieJar && result.ok) {
-      try {
-        await LocalRuleHttpClient.captureCookies(source, plan.url, result.headers);
-      } catch (_error) {
-        // Cookie 持久化失败不能覆盖已经成功的内容请求。
+    let result: LocalRuleFetchResult;
+    try {
+      const sessionCookies = LocalRuleRequestSession.apply(plan);
+      LocalRuleHttpClient.validateHeaders(plan.headers);
+      if (sessionCookies && source.enabledCookieJar) {
+        try { await LocalRuleHttpClient.saveWebCookies(source.bookSourceUrl, plan.url, sessionCookies); }
+        catch (_error) { LocalRuleDiagnostics.record(variables, 'warn', '请求会话未能持久化'); }
       }
+      result = await LocalRuleHttpClient.executeSourceRequest(source, plan, variables);
+      if (result.ok && plan.webView) {
+        if (!new RegExp('^https?://', 'i').test(result.requestUrl)) throw new Error('网页渲染仅支持 HTTP(S) 地址');
+        result = await LocalRuleBrowserRuntime.instance.render(source, plan, result, variables);
+        if (plan.webJs) {
+          const scripted = await LocalRuleScriptRuntime.evaluateBrowserSnapshot(source, result, plan.webJs, variables);
+          result.body = scripted;
+        }
+      }
+      if (result.ok && plan.bodyJs) {
+        result.body = await LocalRuleScriptRuntime.transformResponse(source, result, plan.bodyJs, variables);
+      }
+    } catch (error) {
+      result = LocalRuleFetchResult.failed(plan.url, LocalRuleHttpClient.errorMessage(error));
     }
+    LocalRuleDiagnostics.check(variables);
+    LocalRuleDiagnostics.record(variables, result.ok ? 'info' : 'error',
+      `${plan.method} HTTP ${result.statusCode} (${result.body.length} 字符)`,
+      `${plan.url}${result.errorMessage ? '\n' + result.errorMessage : ''}`);
     return result;
+  }
+
+  private static async executeSourceRequest(source: LocalRuleSource, plan: LocalRuleRequestPlan,
+    variables: Record<string, string>): Promise<LocalRuleFetchResult> {
+    if (plan.inlineBody !== undefined) return LocalRuleHttpClient.execute(plan);
+    const deadline = Date.now() + plan.timeoutMs;
+    const visited = new Set<string>();
+    let redirects = 0;
+    let retry = 0;
+    let response: LocalRuleFetchResult = LocalRuleFetchResult.failed(plan.url, '请求未完成');
+    while (Date.now() < deadline) {
+      LocalRuleDiagnostics.check(variables);
+      plan.timeoutMs = Math.max(1, deadline - Date.now());
+      const permit = await LocalRuleRequestLimiter.acquire(
+        source.bookSourceUrl, source.concurrentRate, plan.timeoutMs, variables);
+      try {
+        LocalRuleDiagnostics.check(variables);
+        plan.timeoutMs = Math.max(1, deadline - Date.now());
+        response = await LocalRuleHttpClient.execute(plan);
+      } finally {
+        permit.release();
+      }
+      if (source.enabledCookieJar && response.statusCode > 0) {
+        try {
+          await LocalRuleHttpClient.captureCookies(source, plan.url, response.headers);
+        } catch (_error) {
+          LocalRuleDiagnostics.record(variables, 'warn', '请求已完成，Cookie 未能持久化');
+        }
+      }
+      const redirect = [301, 302, 303, 307, 308].includes(response.statusCode);
+      const location = LocalRuleHttpClient.responseHeader(response.headers, 'location');
+      if (plan.followRedirects && redirect && location) {
+        const next = LocalRuleUrlAnalyzer.resolveUrl(plan.url, location);
+        if (!next || redirects >= 5 || visited.has(next)) {
+          return LocalRuleFetchResult.failed(plan.url, '重定向地址无效或次数超过限制', response.statusCode);
+        }
+        visited.add(plan.url);
+        redirects++;
+        retry = 0;
+        const crossOrigin = LocalRuleUrlAnalyzer.origin(next) !== LocalRuleUrlAnalyzer.origin(plan.url);
+        const headers: Record<string, string> = {};
+        for (const name of Object.keys(plan.headers)) {
+          const lower = name.toLowerCase();
+          if (crossOrigin && ['cookie', 'authorization', 'proxy-authorization', 'host'].includes(lower)) continue;
+          headers[name] = plan.headers[name];
+        }
+        plan.headers = headers;
+        plan.url = next;
+        if (response.statusCode === 303 || ([301, 302].includes(response.statusCode) && plan.method === 'POST')) {
+          plan.method = 'GET';
+          plan.body = undefined;
+        }
+        if (source.enabledCookieJar) LocalRuleHttpClient.applyCookies(source, plan);
+        LocalRuleHttpClient.applyVariableCookies(variables, plan);
+        continue;
+      }
+      if (retry < plan.retry && (response.statusCode === 0 || response.statusCode === 429 || response.statusCode >= 500)) {
+        retry++;
+        const delay = Math.min(250 * Math.pow(2, retry), Math.max(0, deadline - Date.now()));
+        await new Promise<void>((resolve: () => void) => { setTimeout(resolve, delay); });
+        continue;
+      }
+      return response;
+    }
+    return LocalRuleFetchResult.failed(plan.url, '书源请求超时', response.statusCode);
+  }
+
+  private static responseHeader(headers: Record<string, string>, name: string): string {
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === name) return headers[key];
+    }
+    return '';
   }
 
   /** 生成与 fetch 完全一致的最终请求，但不建立网络连接。 */
   static prepareRequest(source: LocalRuleSource, rawAddress: string,
     variables: Record<string, string> = {}, keyword: string = '', page: number = 1): LocalRuleRequestPlan {
-    const plan = LocalRuleUrlAnalyzer.analyze(source, rawAddress, variables, keyword, page);
+    const scoped: Record<string, string> = {};
+    for (const key of Object.keys(variables)) scoped[key] = variables[key];
+    const headers = LocalRuleUrlAnalyzer.parseHeaders(variables['__header'] ?? source.header);
+    const loginHeaders = LocalRuleUrlAnalyzer.parseHeaders(variables['__sourceLoginHeader'] ?? '');
+    for (const name of Object.keys(loginHeaders)) headers[name] = loginHeaders[name];
+    scoped['__header'] = JSON.stringify(headers);
+    const plan = LocalRuleUrlAnalyzer.analyze(source, rawAddress, scoped, keyword, page);
     if (source.enabledCookieJar) LocalRuleHttpClient.applyCookies(source, plan);
-    if (source.enabledCookieJar) LocalRuleHttpClient.applyVariableCookies(variables, plan);
+    LocalRuleHttpClient.applyVariableCookies(variables, plan);
     LocalRuleHttpClient.validateHeaders(plan.headers);
     return plan;
   }
 
   static async execute(plan: LocalRuleRequestPlan): Promise<LocalRuleFetchResult> {
     try {
+      if (plan.inlineBody !== undefined) {
+        const inline = new LocalRuleFetchResult();
+        inline.ok = true;
+        inline.statusCode = 200;
+        inline.requestUrl = plan.url;
+        inline.body = plan.inlineBody;
+        return inline;
+      }
       LocalRuleHttpClient.validateHeaders(plan.headers);
       const requestOptions: HttpRequestOptions = {
         method: plan.method,
@@ -50,20 +167,19 @@ export class LocalRuleHttpClient {
         body: plan.body,
         timeout: plan.timeoutMs,
         charset: plan.charset,
-        retry: plan.retry
+        retry: 0,
+        autoRedirect: false
       };
       const response: HttpResponse = await HttpClient.request(plan.url, requestOptions);
-      if (response.statusCode < 200 || response.statusCode >= 400) {
-        return LocalRuleFetchResult.failed(plan.url, `HTTP ${response.statusCode}`, response.statusCode);
-      }
       if (response.body.length > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) {
         return LocalRuleFetchResult.failed(plan.url,
           `响应超过 ${LocalRuleExecutionLimits.MAX_RESPONSE_CHARS} 字符`, response.statusCode);
       }
       const result = new LocalRuleFetchResult();
-      result.ok = true;
+      result.ok = response.statusCode >= 200 && response.statusCode < 400;
+      result.errorMessage = result.ok ? '' : `HTTP ${response.statusCode}`;
       result.statusCode = response.statusCode;
-      result.requestUrl = plan.url;
+      result.requestUrl = response.url ?? plan.url;
       result.headers = response.headers;
       result.body = response.body;
       return result;
@@ -101,6 +217,16 @@ export class LocalRuleHttpClient {
     return jar === undefined ? '' : LocalRuleHttpClient.serializeJar(jar);
   }
 
+  static async getCookieSnapshot(sourceUrl: string): Promise<Record<string, string>> {
+    await LocalRuleHttpClient.hydrateCookies(sourceUrl);
+    const result: Record<string, string> = {};
+    const prefix = `${sourceUrl}\n`;
+    LocalRuleHttpClient.cookieJars.forEach((jar: Record<string, string>, key: string): void => {
+      if (key.startsWith(prefix)) result[key.substring(prefix.length)] = LocalRuleHttpClient.serializeJar(jar);
+    });
+    return result;
+  }
+
   /** 接收内嵌登录页抓取到的完整 Cookie Header，并立即供规则请求使用。 */
   static async saveWebCookies(sourceUrl: string, requestUrl: string,
     cookieHeader: string): Promise<void> {
@@ -114,13 +240,13 @@ export class LocalRuleHttpClient {
     const key = LocalRuleHttpClient.cookieKey(normalizedUrl, origin);
     if (Object.keys(jar).length === 0) {
       LocalRuleHttpClient.cookieJars.delete(key);
-      await LocalRuleSourceRepository.clearCookie(normalizedUrl, origin);
+      if (LocalRuleSourceRepository.isInitialized()) await LocalRuleSourceRepository.clearCookie(normalizedUrl, origin);
       return;
     }
     LocalRuleHttpClient.cookieJars.set(key, jar);
     const cookie = LocalRuleSourceCookie.of(
       normalizedUrl, origin, LocalRuleHttpClient.serializeJar(jar));
-    await LocalRuleSourceRepository.saveCookie(cookie);
+    if (LocalRuleSourceRepository.isInitialized()) await LocalRuleSourceRepository.saveCookie(cookie);
     LocalRuleHttpClient.hydratedSources.add(normalizedUrl);
   }
 
@@ -150,6 +276,8 @@ export class LocalRuleHttpClient {
     const plan = new LocalRuleRequestPlan();
     plan.url = requestUrl;
     plan.headers = LocalRuleUrlAnalyzer.parseHeaders(variables['__header'] ?? source.header);
+    const loginHeaders = LocalRuleUrlAnalyzer.parseHeaders(variables['__sourceLoginHeader'] ?? '');
+    for (const name of Object.keys(loginHeaders)) plan.headers[name] = loginHeaders[name];
     if (source.enabledCookieJar) LocalRuleHttpClient.applyCookies(source, plan);
     if (source.enabledCookieJar) LocalRuleHttpClient.applyVariableCookies(variables, plan);
     return plan.headers;
@@ -175,12 +303,13 @@ export class LocalRuleHttpClient {
   }
 
   private static applyVariableCookies(variables: Record<string, string>, plan: LocalRuleRequestPlan): void {
-    const scriptCookie = variables['__cookie'] ?? '';
-    if (scriptCookie.trim().length === 0) return;
+    const overrides: Record<string, string> = JSON.parse(variables['__cookieOverrides'] || '{}');
+    const scriptCookie = overrides[LocalRuleHttpClient.requestOrigin(plan.url)];
+    if (scriptCookie === undefined) return;
     const names = Object.keys(plan.headers);
     for (const name of names) {
       if (name.toLowerCase() !== 'cookie') continue;
-      plan.headers[name] = LocalRuleHttpClient.mergeCookieHeaders(plan.headers[name] ?? '', scriptCookie);
+      plan.headers[name] = scriptCookie;
       return;
     }
     plan.headers['Cookie'] = scriptCookie;

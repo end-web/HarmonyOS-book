@@ -6,6 +6,11 @@ import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepositor
 export class SourceDataService {
   private static localSourceUrls: Set<string> = new Set();
   private static localSourcesByUrl: Map<string, LocalRuleSource> = new Map<string, LocalRuleSource>();
+  private static invalidationCounter: number = 0;
+
+  static getInvalidationCounter(): number {
+    return SourceDataService.invalidationCounter;
+  }
 
   static async getSources(): Promise<BookSource[]> {
     try {
@@ -52,6 +57,7 @@ export class SourceDataService {
 
   /** 书源导入、更新、启停或删除后调用；下次读取会回到数据库最新定义。 */
   static invalidateLocalSources(sourceUrl: string = ''): void {
+    SourceDataService.invalidationCounter++;
     if (sourceUrl.length > 0) {
       SourceDataService.localSourcesByUrl.delete(sourceUrl);
       SourceDataService.localSourceUrls.delete(sourceUrl);

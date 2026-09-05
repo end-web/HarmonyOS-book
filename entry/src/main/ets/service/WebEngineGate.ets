@@ -23,4 +23,5 @@ export class WebEngineGate {
 
   /** 本地规则执行到 CSS/XPath 时才挂载 DOM 解析宿主。 */
   @Trace needRuleParser: boolean = false;
+  @Trace needRuleBrowser: boolean = false;
 }

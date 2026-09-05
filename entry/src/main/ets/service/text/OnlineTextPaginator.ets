@@ -2,6 +2,7 @@ import { text as graphicsText } from '@kit.ArkGraphics2D';
 
 export class OnlineTextPage {
   text: string = '';
+  // Offsets refer to normalized source text, excluding display-only indentation.
   startOffset: number = 0;
   endOffset: number = 0;
 
@@ -11,6 +12,75 @@ export class OnlineTextPage {
     page.endOffset = Math.max(page.startOffset, Math.min(endOffset, content.length));
     page.text = content.substring(page.startOffset, page.endOffset);
     return page;
+  }
+}
+
+class OnlineTextIndent {
+  sourceStart: number;
+  contentStart: number;
+  displayStart: number;
+
+  constructor(sourceStart: number, contentStart: number, displayStart: number) {
+    this.sourceStart = sourceStart;
+    this.contentStart = contentStart;
+    this.displayStart = displayStart;
+  }
+}
+
+/** Display indentation is mapped back to existing character-based reading positions. */
+export class OnlineTextIndentedContent {
+  text: string = '';
+  private sourceLength: number = 0;
+  private indents: OnlineTextIndent[] = [];
+  private static readonly INDENT: string = '\u3000\u3000';
+
+  static fromNormalized(content: string): OnlineTextIndentedContent {
+    const result = new OnlineTextIndentedContent();
+    result.sourceLength = content.length;
+    const paragraphs = content.split('\n');
+    const displayed: string[] = [];
+    let sourceStart = 0;
+    let displayStart = 0;
+    for (let index = 0; index < paragraphs.length; index++) {
+      const paragraph = paragraphs[index];
+      const body = paragraph.replace(new RegExp('^[ \\t\\u00A0\\u3000]+'), '');
+      let displayText = paragraph;
+      if (body.length > 0) {
+        result.indents.push(new OnlineTextIndent(
+          sourceStart, sourceStart + paragraph.length - body.length, displayStart));
+        displayText = OnlineTextIndentedContent.INDENT + body;
+      }
+      displayed.push(displayText);
+      sourceStart += paragraph.length + 1;
+      displayStart += displayText.length + 1;
+    }
+    result.text = displayed.join('\n');
+    return result;
+  }
+
+  sourceOffsetForDisplay(displayOffset: number): number {
+    const offset = Math.max(0, Math.min(displayOffset, this.text.length));
+    let low = 0;
+    let high = this.indents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (this.indents[middle].displayStart <= offset) low = middle + 1;
+      else high = middle;
+    }
+    if (low === 0) return Math.min(offset, this.sourceLength);
+    const indent = this.indents[low - 1];
+    const relativeOffset = offset - indent.displayStart;
+    if (relativeOffset < OnlineTextIndentedContent.INDENT.length) return indent.sourceStart;
+    return Math.min(this.sourceLength,
+      indent.contentStart + relativeOffset - OnlineTextIndentedContent.INDENT.length);
+  }
+
+  restoreSourceOffsets(pages: OnlineTextPage[]): OnlineTextPage[] {
+    for (const page of pages) {
+      page.startOffset = this.sourceOffsetForDisplay(page.startOffset);
+      page.endOffset = this.sourceOffsetForDisplay(page.endOffset);
+    }
+    return pages;
   }
 }
 
@@ -98,6 +168,7 @@ export class OnlineTextPaginator {
     fontSizePx: number, lineHeight: number): OnlineTextPage[] {
     const normalized = OnlineTextPaginator.normalizeContent(content);
     if (normalized.length === 0) return [OnlineTextPage.of('', 0, 0)];
+    const displayed = OnlineTextIndentedContent.fromNormalized(normalized);
 
     const safeWidth = Math.max(1, widthPx);
     const safeFontSize = Math.max(1, fontSizePx);
@@ -118,7 +189,7 @@ export class OnlineTextPaginator {
     const builder = new graphicsText.ParagraphBuilder(
       paragraphStyle, graphicsText.FontCollection.getGlobalInstance());
     builder.pushStyle(textStyle);
-    builder.addText(normalized);
+    builder.addText(displayed.text);
     builder.popStyle();
     const paragraph = builder.build();
     paragraph.layoutSync(safeWidth);
@@ -127,7 +198,8 @@ export class OnlineTextPaginator {
     for (let i = 0; i < metrics.length; i++) {
       lines.push(OnlineTextMeasuredLine.of(metrics[i].startIndex, metrics[i].height));
     }
-    return OnlineTextPaginator.paginateMeasuredLines(normalized, lines, heightPx);
+    return displayed.restoreSourceOffsets(
+      OnlineTextPaginator.paginateMeasuredLines(displayed.text, lines, heightPx));
   }
 
   static paginateMeasuredLines(content: string, lines: OnlineTextMeasuredLine[],

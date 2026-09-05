@@ -61,6 +61,7 @@ export class LocalRuleSearchRule {
   lastChapter: string = '';
   wordCount: string = '';
   updateTime: string = '';
+  nextPageUrl: string = '';
 }
 
 export class LocalRuleBookInfoRule {
@@ -123,6 +124,7 @@ export class LocalRuleSource implements BookSource {
   @Trace validationStatus: number = LocalRuleSourceStatus.UNCHECKED;
   @Trace validationMessage: string = '';
   ruleSearch: LocalRuleSearchRule = new LocalRuleSearchRule();
+  ruleExplore: LocalRuleSearchRule = new LocalRuleSearchRule();
   ruleBookInfo: LocalRuleBookInfoRule = new LocalRuleBookInfoRule();
   ruleToc: LocalRuleTocRule = new LocalRuleTocRule();
   ruleContent: LocalRuleContentRule = new LocalRuleContentRule();

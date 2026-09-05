@@ -1,4 +1,5 @@
 import { fileIo, picker } from '@kit.CoreFileKit';
+import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { LocalRuleSource, LocalRuleSourceStatus, LocalRuleSourceType } from '../model/LocalRuleSource';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { BookSourceService } from '../service/BookSourceService';
@@ -21,6 +22,7 @@ import { SourceDataService } from '../service/SourceDataService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { CharsetCodec } from '../utils/CharsetCodec';
 import { WindowUtils } from '../utils/WindowUtils';
+import { promptAction } from '@kit.ArkUI';
 
 interface RuleSourceEditParams {
   sourceUrl: string;
@@ -94,9 +96,38 @@ export struct RuleSourcePage {
   private dataSource: RuleSourceDataSource = new RuleSourceDataSource();
   private allSources: LocalRuleSource[] = [];
   private filteredSources: LocalRuleSource[] = [];
+  private lastInvalidationCounter: number = 0;
+  private refreshCheckTimer: number = -1;
 
   aboutToAppear(): void {
+    this.lastInvalidationCounter = SourceDataService.getInvalidationCounter();
     this.loadSources();
+    this.startRefreshCheck();
+  }
+
+  aboutToDisappear(): void {
+    this.stopRefreshCheck();
+  }
+
+  private startRefreshCheck(): void {
+    this.refreshCheckTimer = setInterval(() => {
+      const currentCounter = SourceDataService.getInvalidationCounter();
+      if (currentCounter !== this.lastInvalidationCounter) {
+        this.lastInvalidationCounter = currentCounter;
+        this.refresh();
+      }
+    }, 1000);
+  }
+
+  private stopRefreshCheck(): void {
+    if (this.refreshCheckTimer >= 0) {
+      clearInterval(this.refreshCheckTimer);
+      this.refreshCheckTimer = -1;
+    }
+  }
+
+  refresh(): void {
+    this.loadSources(false);
   }
 
   private async loadSources(showLoading: boolean = true): Promise<void> {
@@ -322,6 +353,49 @@ export struct RuleSourcePage {
       if (imported) this.showImportPanel = false;
     } catch (_error) {
       this.showToast($r('app.string.rule_source_operation_failed'));
+    } finally {
+      this.isImporting = false;
+    }
+  }
+
+  private async scanQRCode(): Promise<void> {
+    if (this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0) return;
+    this.isImporting = true;
+    try {
+      const context = this.getUIContext().getHostContext();
+      if (context === undefined) {
+        this.showToast('无法获取上下文');
+        return;
+      }
+
+      const options: scanBarcode.ScanOptions = {
+        scanTypes: [scanCore.ScanType.ALL],
+        enableMultiMode: false,
+        enableAlbum: true
+      };
+
+      const result = await scanBarcode.startScanForResult(context, options);
+
+      if (result && result.originalValue && result.originalValue.length > 0) {
+        const scannedText = result.originalValue;
+
+        // 判断是 URL 还是 JSON 内容
+        if (this.isRemoteImport(scannedText)) {
+          // 是 URL，自动下载
+          const content = await this.resolveImportContent(scannedText);
+          const imported = await this.persistImportContent(content);
+          if (imported) this.showImportPanel = false;
+        } else {
+          // 是 JSON 内容，直接导入
+          const imported = await this.persistImportContent(scannedText);
+          if (imported) this.showImportPanel = false;
+        }
+      } else {
+        // 用户取消扫描，不提示错误
+      }
+    } catch (error) {
+      console.error('[RuleSourcePage] QR scan failed', error);
+      this.showToast('扫描二维码失败');
     } finally {
       this.isImporting = false;
     }
@@ -981,6 +1055,26 @@ export struct RuleSourcePage {
       .opacity(this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0 ? 0.55 : 1)
       .onClick(() => this.importLocalFile())
 
+      Button() {
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.qrcode'))
+            .fontSize(18)
+            .fontColor([AppColor.Brand])
+          Text('扫描二维码导入')
+            .fontSize(AppFont.Body)
+            .fontColor(AppColor.Brand)
+            .fontWeight(FontWeight.Medium)
+        }
+        .justifyContent(FlexAlign.Center)
+      }
+      .width('100%')
+      .height(44)
+      .backgroundColor(AppColor.BrandSoft)
+      .borderRadius(AppRadius.Sm)
+      .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+      .opacity(this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0 ? 0.55 : 1)
+      .onClick(() => this.scanQRCode())
+
       TextArea({
         placeholder: $r('app.string.rule_source_import_placeholder'),
         text: this.importJson
@@ -1240,6 +1334,24 @@ export struct RuleSourcePage {
       .alignItems(VerticalAlign.Center)
 
       if (!this.isEditMode) {
+        if (source.exploreUrl.length > 0 || source.loginUi.length > 0) {
+          Row({ space: AppSpace.Xs }) {
+            if (source.exploreUrl.length > 0) {
+              Button($r('app.string.rule_source_explore'), { type: ButtonType.Normal })
+                .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
+                .backgroundColor(AppColor.BrandSoft).fontColor(AppColor.Brand)
+                .enabled(source.enabledExplore && !this.isBulkTesting && !this.isImporting)
+                .onClick(() => this.navStack.pushPathByName('ruleSourceExplore', source.bookSourceUrl))
+            }
+            if (source.loginUi.length > 0) {
+              Button($r('app.string.rule_source_login_panel'), { type: ButtonType.Normal })
+                .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
+                .backgroundColor($r('sys.color.comp_background_secondary')).fontColor(AppColor.Brand)
+                .enabled(!this.isBulkTesting && !this.isImporting)
+                .onClick(() => this.navStack.pushPathByName('ruleSourceLoginPanel', source.bookSourceUrl))
+            }
+          }.width('100%')
+        }
         Divider()
           .strokeWidth(0.5)
           .color($r('sys.color.comp_divider'))

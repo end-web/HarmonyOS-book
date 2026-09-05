@@ -2,6 +2,8 @@ import { webview } from '@kit.ArkWeb';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleHttpClient } from '../service/rulesource/LocalRuleHttpClient';
+import { LocalRuleWebSession } from '../service/rulesource/LocalRuleWebSession';
+import { LocalRulePanelService } from '../service/rulesource/LocalRulePanelService';
 import { RuleSourceAccountService } from '../service/rulesource/RuleSourceAccountService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -28,6 +30,8 @@ export struct RuleSourceLoginPage {
   private controller: webview.WebviewController = new webview.WebviewController();
   private visitedUrls: string[] = [];
   private leaving: boolean = false;
+  private pageAlive: boolean = true;
+  private webSessionLease: number = 0;
 
   aboutToAppear(): void {
     WindowUtils.setStatusBarLight(false);
@@ -35,10 +39,13 @@ export struct RuleSourceLoginPage {
   }
 
   aboutToDisappear(): void {
+    this.pageAlive = false;
     WindowUtils.setStatusBarLight(false);
     if (!this.leaving) {
       const snapshots = this.snapshotCookies();
       this.releaseWebCookies();
+      LocalRuleWebSession.release(this.webSessionLease);
+      this.webSessionLease = 0;
       this.persistOnDisappear(snapshots);
     }
   }
@@ -52,6 +59,12 @@ export struct RuleSourceLoginPage {
     try {
       const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
       if (source === undefined) throw new Error('Rule source not found');
+      this.webSessionLease = await LocalRuleWebSession.acquire(60000);
+      if (!this.pageAlive) {
+        LocalRuleWebSession.release(this.webSessionLease);
+        this.webSessionLease = 0;
+        return;
+      }
       this.releaseWebCookies();
       const loginUrls = this.loginUrls();
       for (const loginUrl of loginUrls) {
@@ -115,6 +128,7 @@ export struct RuleSourceLoginPage {
 
   private snapshotCookies(): RuleSourceWebCookieSnapshot[] {
     const snapshots: RuleSourceWebCookieSnapshot[] = [];
+    if (this.webSessionLease === 0) return snapshots;
     for (const url of this.visitedUrls) {
       const snapshot = new RuleSourceWebCookieSnapshot();
       snapshot.url = url;
@@ -160,6 +174,7 @@ export struct RuleSourceLoginPage {
   }
 
   private releaseWebCookies(): void {
+    if (this.webSessionLease === 0) return;
     try {
       webview.WebCookieManager.clearAllCookiesSync(true);
     } catch (_error) {
@@ -179,6 +194,12 @@ export struct RuleSourceLoginPage {
         if (!saved) {
           this.showToast($r('app.string.rule_source_account_web_required'));
           return;
+        }
+      } else {
+        const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
+        if (source !== undefined && source.loginCheckJs.trim()) {
+          const content = await this.controller.runJavaScript('document.documentElement ? document.documentElement.outerHTML : ""');
+          await LocalRulePanelService.checkLogin(source, content, {}, this.currentUrl);
         }
       }
       this.leaving = true;
@@ -220,6 +241,8 @@ export struct RuleSourceLoginPage {
       // 页面已经停止时直接清理隔离 Cookie。
     }
     this.releaseWebCookies();
+    LocalRuleWebSession.release(this.webSessionLease);
+    this.webSessionLease = 0;
   }
 
   private confirmClearLogin(): void {

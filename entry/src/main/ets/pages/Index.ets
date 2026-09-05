@@ -22,6 +22,7 @@ import { RuleSourceChildrenPage } from './RuleSourceChildrenPage';
 import { RuleSourceLoginPage } from './RuleSourceLoginPage';
 import { RuleSourceEditPage } from './RuleSourceEditPage';
 import { RuleSourceDebugPage } from './RuleSourceDebugPage';
+import { RuleSourcePanelPage } from './RuleSourcePanelPage';
 import { TextReaderRouteParams } from '../model/TextReading';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { emitter } from '@kit.BasicServicesKit';
@@ -332,25 +333,17 @@ struct Index {
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'RuleSourceEditPage') {
-      NavDestination() {
-        RuleSourceEditPage({
-          navStack: this.navStack,
-          sourceUrl: param ? String((param as Record<string, string>).sourceUrl) : undefined
-        })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_secondary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+      RuleSourceEditPage({
+        navStack: this.navStack,
+        sourceUrl: param ? String((param as Record<string, string>).sourceUrl) : ''
+      })
     } else if (name === 'RuleSourceDebugPage') {
-      NavDestination() {
-        RuleSourceDebugPage({
-          navStack: this.navStack,
-          sourceUrl: param ? String((param as Record<string, string>).sourceUrl) : ''
-        })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_secondary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+      RuleSourceDebugPage({
+        navStack: this.navStack,
+        sourceUrl: param ? String((param as Record<string, string>).sourceUrl) : ''
+      })
+    } else if (name === 'ruleSourceExplore' || name === 'ruleSourceLoginPanel') {
+      RuleSourcePanelPage({ navStack: this.navStack, sourceUrl: String(param), login: name === 'ruleSourceLoginPanel' })
     } else if (name === 'downloads') {
       NavDestination() {
         DownloadManagerPage({ navStack: this.navStack })
@@ -766,7 +759,8 @@ struct BlockMorePageWrapper {
       sourceUrl: this.str('sourceUrl'),
       sourceName: this.str('sourceName'),
       title: this.str('title'),
-      moreUrl: this.str('moreUrl')
+      moreUrl: this.str('moreUrl'),
+      keyword: this.str('keyword')
     })
   }
 }

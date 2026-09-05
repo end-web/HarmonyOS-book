@@ -26,6 +26,7 @@ import { WebEngineGate } from '../service/WebEngineGate';
 import { UpdateService } from '../service/UpdateService';
 import { HomeTheme } from '../theme/Theme';
 import { LocalRuleWebRuntimeHost } from '../service/rulesource/LocalRuleWebRuntime';
+import { LocalRuleBrowserRuntimeHost } from '../service/rulesource/LocalRuleBrowserRuntime';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -378,6 +379,9 @@ export struct MainPage {
       }
       if (this.gate.needRuleParser) {
         LocalRuleWebRuntimeHost()
+      }
+      if (this.gate.needRuleBrowser) {
+        LocalRuleBrowserRuntimeHost()
       }
     }
     .width('100%')

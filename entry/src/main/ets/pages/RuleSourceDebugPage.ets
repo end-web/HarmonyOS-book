@@ -1,31 +1,19 @@
 import { LocalRuleSource } from '../model/LocalRuleSource';
-import { BookSourceService } from '../service/BookSourceService';
+import { LocalRuleDebugResult, LocalRuleDebugService } from '../service/rulesource/LocalRuleDebugService';
+import { LocalRuleDiagnostics } from '../service/rulesource/LocalRuleDiagnostics';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { promptAction } from '@kit.ArkUI';
+import { fileIo, picker } from '@kit.CoreFileKit';
 
-interface DebugLog {
-  timestamp: number;
-  level: 'info' | 'success' | 'warning' | 'error';
-  stage: string;
-  message: string;
-  detail: string;
-}
-
-interface DebugResult {
-  success: boolean;
-  data?: Record<string, Object>;
-  error?: string;
-  logs: DebugLog[];
-}
-
-interface SearchResultPreview {
-  name: string;
-  author: string;
-  bookUrl: string;
-  coverUrl: string;
-  intro: string;
+class DebugLog {
+  id: number = 0;
+  timestamp: number = 0;
+  level: string = 'info';
+  stage: string = '';
+  message: string = '';
+  detail: string = '';
 }
 
 interface DebugReport {
@@ -35,43 +23,8 @@ interface DebugReport {
   keyword: string;
   testUrl: string;
   logs: DebugLog[];
-  result: DebugResult | null;
+  result: LocalRuleDebugResult | null;
   exportedAt: string;
-}
-
-interface BookInfoPreview {
-  name: string;
-  author: string;
-  coverUrl: string;
-  intro: string;
-  tocUrl: string;
-}
-
-interface ChapterPreview {
-  name: string;
-  url: string;
-  duration: string;
-}
-
-interface ContentPreview {
-  content: string;
-  audioUrl: string;
-}
-
-interface AudioInfoData extends Record<string, Object> {
-  audioInfo: object;
-}
-
-interface AudioUrlData extends Record<string, Object> {
-  audioUrl: string;
-}
-
-interface TextContentData extends Record<string, Object> {
-  content: string;
-}
-
-interface SearchPreviewsData extends Record<string, Object> {
-  previews: Object[];
 }
 
 @ComponentV2
@@ -85,12 +38,25 @@ export struct RuleSourceDebugPage {
   @Local keyword: string = '我的';
   @Local testUrl: string = '';
   @Local debugLogs: DebugLog[] = [];
-  @Local debugResult: DebugResult | null = null;
-  @Local showExportDialog: boolean = false;
-  private scroller: Scroller = new Scroller();
+  @Local debugResult: LocalRuleDebugResult | null = null;
+  @Local isExporting: boolean = false;
+  @Local safeTop: number = WindowUtils.getStatusBarHeightVp();
+  @Local safeBottom: number = WindowUtils.getBottomSafeVp();
+  private nextLogId: number = 0;
+  private debugVariables: Record<string, string> = {};
+  private safeAreaListener: (top: number, bottom: number) => void = (top, bottom) => {
+    this.safeTop = top;
+    this.safeBottom = bottom;
+  };
 
   aboutToAppear(): void {
+    WindowUtils.addSafeAreaListener(this.safeAreaListener);
     this.loadSource();
+  }
+
+  aboutToDisappear(): void {
+    LocalRuleDiagnostics.cancel(this.debugVariables);
+    WindowUtils.removeSafeAreaListener(this.safeAreaListener);
   }
 
   private async loadSource(): Promise<void> {
@@ -111,18 +77,14 @@ export struct RuleSourceDebugPage {
   }
 
   private addLog(level: string, stage: string, message: string, detail: string = ''): void {
-    const logLevel = level as 'info' | 'success' | 'warning' | 'error';
-    this.debugLogs.push({
-      timestamp: Date.now(),
-      level: logLevel,
-      stage,
-      message,
-      detail
-    });
-    // 自动滚动到底部
-    setTimeout(() => {
-      this.scroller.scrollEdge(Edge.Bottom);
-    }, 100);
+    const log = new DebugLog();
+    log.id = this.nextLogId++;
+    log.timestamp = Date.now();
+    log.level = level;
+    log.stage = stage;
+    log.message = message;
+    log.detail = LocalRuleDiagnostics.redact(detail);
+    this.debugLogs = this.debugLogs.concat([log]).slice(-160);
   }
 
   private clearLogs(): void {
@@ -131,206 +93,46 @@ export struct RuleSourceDebugPage {
   }
 
   private async runDebug(): Promise<void> {
-    if (!this.source) return;
-    if (this.isRunning) return;
-
+    const source = this.source;
+    if (!source || this.isRunning) return;
     this.clearLogs();
     this.isRunning = true;
-
+    this.debugVariables = LocalRuleDiagnostics.open(event => {
+      this.addLog(event.level, event.stage, event.message, event.detail);
+    });
     try {
-      if (this.currentStage === 'search') {
-        await this.debugSearch();
-      } else if (this.currentStage === 'detail') {
-        await this.debugDetail();
-      } else if (this.currentStage === 'toc') {
-        await this.debugToc();
-      } else if (this.currentStage === 'content') {
-        await this.debugContent();
-      } else if (this.currentStage === 'full') {
-        await this.debugFullChain();
-      }
-    } catch (error) {
-      this.addLog('error', this.currentStage, '调试失败', `${error}`);
+      this.debugResult = await LocalRuleDebugService.run(source, this.currentStage,
+        this.keyword, this.testUrl, this.debugVariables);
     } finally {
+      LocalRuleDiagnostics.close(this.debugVariables);
       this.isRunning = false;
     }
   }
 
-  private async debugSearch(): Promise<void> {
-    this.addLog('info', 'search', '开始搜索调试', `关键词: ${this.keyword}`);
-
-    if (!this.source?.searchUrl) {
-      this.addLog('error', 'search', '缺少搜索地址配置');
-      return;
-    }
-
+  private async exportReport(): Promise<void> {
+    if (this.isExporting || this.isRunning || this.debugLogs.length === 0) return;
+    const context = this.getUIContext().getHostContext();
+    if (context === undefined) return;
+    this.isExporting = true;
     try {
-      const results = await BookSourceService.searchBooks(this.source, this.keyword);
-
-      if (results.length > 0) {
-        this.addLog('success', 'search', `搜索成功，找到 ${results.length} 本书`);
-        const previews: SearchResultPreview[] = results.slice(0, 10).map(r => {
-          const preview: SearchResultPreview = {
-            name: r.name,
-            author: r.author,
-            bookUrl: r.bookUrl,
-            coverUrl: r.coverUrl,
-            intro: r.intro
-          };
-          return preview;
-        });
-        const data: SearchPreviewsData = { previews: previews as Object[] };
-        this.debugResult = {
-          success: true,
-          data: data,
-          logs: this.debugLogs
-        };
-      } else {
-        this.addLog('warning', 'search', '搜索无结果');
+      const reportText = this.generateDebugReport();
+      const options = new picker.DocumentSaveOptions();
+      options.newFileNames = [`source-debug-${Date.now()}.json`];
+      const uris = await new picker.DocumentViewPicker(context).save(options);
+      if (uris.length === 0) return;
+      const file = await fileIo.open(uris[0], fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE |
+        fileIo.OpenMode.TRUNC);
+      try {
+        await fileIo.write(file.fd, reportText);
+      } finally {
+        await fileIo.close(file);
       }
-    } catch (error) {
-      this.addLog('error', 'search', '搜索失败', `${error}`);
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.rule_source_report_saved') });
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.rule_source_report_failed') });
+    } finally {
+      this.isExporting = false;
     }
-  }
-
-  private async debugDetail(): Promise<void> {
-    if (!this.testUrl) {
-      this.addLog('error', 'detail', '请输入详情页URL');
-      return;
-    }
-
-    this.addLog('info', 'detail', '开始详情页调试', `URL: ${this.testUrl}`);
-
-    try {
-      // 这里需要使用实际的详情页解析方法
-      this.addLog('warning', 'detail', '详情页调试功能开发中');
-      this.debugResult = {
-        success: false,
-        error: '详情页解析功能暂未完全实现',
-        logs: this.debugLogs
-      };
-    } catch (error) {
-      this.addLog('error', 'detail', '详情页解析失败', `${error}`);
-    }
-  }
-
-  private async debugToc(): Promise<void> {
-    if (!this.testUrl) {
-      this.addLog('error', 'toc', '请输入书籍URL');
-      return;
-    }
-
-    this.addLog('info', 'toc', '开始目录调试', `URL: ${this.testUrl}`);
-
-    try {
-      // 这里需要使用实际的目录解析方法
-      this.addLog('warning', 'toc', '目录调试功能开发中');
-      this.debugResult = {
-        success: false,
-        error: '目录解析功能暂未完全实现',
-        logs: this.debugLogs
-      };
-    } catch (error) {
-      this.addLog('error', 'toc', '目录解析失败', `${error}`);
-    }
-  }
-
-  private async debugContent(): Promise<void> {
-    if (!this.testUrl) {
-      this.addLog('error', 'content', '请输入章节URL');
-      return;
-    }
-
-    this.addLog('info', 'content', '开始正文/音频调试', `URL: ${this.testUrl}`);
-
-    try {
-      if (this.source!.bookSourceType === 1) {
-        // 音频
-        const audioInfo = await BookSourceService.getAudioUrl(this.source!, this.testUrl, undefined);
-        if (audioInfo && typeof audioInfo === 'object') {
-          this.addLog('success', 'content', '音频地址解析成功');
-          const data: AudioInfoData = { audioInfo: audioInfo };
-          this.debugResult = {
-            success: true,
-            data: data,
-            logs: this.debugLogs
-          };
-        } else if (typeof audioInfo === 'string' && audioInfo.length > 0) {
-          this.addLog('success', 'content', '音频地址解析成功');
-          const data: AudioUrlData = { audioUrl: audioInfo };
-          this.debugResult = {
-            success: true,
-            data: data,
-            logs: this.debugLogs
-          };
-        } else {
-          this.addLog('error', 'content', '音频地址解析失败');
-        }
-      } else {
-        // 正文
-        this.addLog('warning', 'content', '正文调试功能开发中');
-        const data: TextContentData = { content: '正文解析功能暂未完全实现' };
-        this.debugResult = {
-          success: false,
-          error: '正文解析功能暂未完全实现',
-          logs: this.debugLogs
-        };
-      }
-    } catch (error) {
-      this.addLog('error', 'content', '解析失败', `${error}`);
-    }
-  }
-
-  private async debugFullChain(): Promise<void> {
-    this.addLog('info', 'full', '开始全链路调试', `关键词: ${this.keyword}`);
-
-    // 1. 搜索
-    await this.debugSearch();
-    if (this.debugLogs.some(log => log.stage === 'search' && log.level === 'error')) {
-      this.addLog('error', 'full', '全链路调试终止：搜索失败');
-      return;
-    }
-
-    // 等待一下
-    await new Promise<void>((resolve: (value: void) => void) => {
-      setTimeout(() => resolve(), 1000);
-    });
-
-    // 2. 尝试获取搜索结果的第一本书URL
-    try {
-      const results = await BookSourceService.searchBooks(this.source!, this.keyword);
-      if (results.length > 0) {
-        this.testUrl = results[0].bookUrl;
-        this.addLog('info', 'full', '使用第一本书继续测试', `书名: ${results[0].name}`);
-      } else {
-        this.addLog('error', 'full', '全链路调试终止：无搜索结果');
-        return;
-      }
-    } catch (_) {
-      this.addLog('error', 'full', '全链路调试终止：无法获取书籍');
-      return;
-    }
-
-    this.addLog('success', 'full', '全链路调试完成（详情和目录功能开发中）');
-  }
-
-  private exportReport(): void {
-    const report: DebugReport = {
-      sourceUrl: this.source?.bookSourceUrl ?? '',
-      sourceName: this.source?.bookSourceName ?? '',
-      stage: this.currentStage,
-      keyword: this.keyword,
-      testUrl: this.testUrl,
-      logs: this.debugLogs,
-      result: this.debugResult,
-      exportedAt: new Date().toISOString()
-    };
-
-    const reportText = JSON.stringify(report, null, 2);
-
-    // 这里可以添加文件导出逻辑
-    promptAction.showToast({ message: '调试报告已生成（控制台输出）' });
-    console.log('[Debug Report]', reportText);
   }
 
   private generateDebugReport(): string {
@@ -344,7 +146,7 @@ export struct RuleSourceDebugPage {
       result: this.debugResult,
       exportedAt: new Date().toISOString()
     };
-    return JSON.stringify(report, null, 2);
+    return LocalRuleDiagnostics.redact(JSON.stringify(report, null, 2));
   }
 
   build() {
@@ -352,9 +154,15 @@ export struct RuleSourceDebugPage {
       Column() {
         // 顶部标题栏
         Row() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(24)
-            .fontColor([$r('sys.color.font_primary')])
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.chevron_left'))
+              .fontSize(24)
+              .fontColor([$r('sys.color.font_primary')])
+          }
+            .width(44)
+            .height(44)
+            .backgroundColor(Color.Transparent)
+            .accessibilityText($r('app.string.common_back'))
             .onClick(() => this.navStack.pop())
 
           Text('书源调试')
@@ -362,19 +170,25 @@ export struct RuleSourceDebugPage {
             .fontWeight(FontWeight.Bold)
             .fontColor($r('sys.color.font_primary'))
             .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .margin({ left: AppSpace.Xs })
 
-          Text('导出')
+          Button($r('app.string.rule_source_export_report'), { type: ButtonType.Normal })
             .fontSize(AppFont.Body)
             .fontColor(this.debugLogs.length > 0 ? AppColor.Brand : $r('sys.color.font_tertiary'))
             .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-            .enabled(this.debugLogs.length > 0)
+            .height(44)
+            .constraintSize({ minWidth: 60 })
+            .borderRadius(AppRadius.Sm)
+            .backgroundColor(Color.Transparent)
+            .enabled(this.debugLogs.length > 0 && !this.isRunning && !this.isExporting)
             .onClick(() => this.exportReport())
         }
         .width('100%')
-        .height(56)
+        .height(this.safeTop + 56)
         .padding({
-          top: WindowUtils.getStatusBarHeightVp(),
+          top: this.safeTop,
           left: AppSpace.Xs,
           right: AppSpace.Md
         })
@@ -407,13 +221,30 @@ export struct RuleSourceDebugPage {
               this.InputCard()
 
               // 执行按钮
-              Button(this.isRunning ? '运行中...' : '开始调试')
+              Button({ type: ButtonType.Normal }) {
+                Row({ space: AppSpace.Xs }) {
+                  if (this.isRunning) {
+                    LoadingProgress()
+                      .width(20)
+                      .height(20)
+                      .color(AppColor.Brand)
+                  }
+                  Text(this.isRunning ? $r('app.string.rule_source_debug_stop') :
+                    $r('app.string.rule_source_debug_start'))
+                    .fontSize(AppFont.BodyL)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(this.isRunning ? AppColor.Brand : AppColor.OnBrand)
+                }
+              }
                 .width('100%')
-                .height(44)
-                .fontSize(AppFont.Body)
-                .backgroundColor(this.isRunning ? $r('sys.color.comp_background_tertiary') : AppColor.Brand)
-                .enabled(!this.isRunning)
-                .onClick(() => this.runDebug())
+                .height(48)
+                .borderRadius(AppRadius.Sm)
+                .backgroundColor(this.isRunning ? AppColor.BrandSoft : AppColor.Brand)
+                .enabled(!this.isExporting && this.source !== null)
+                .onClick(() => {
+                  if (this.isRunning) LocalRuleDiagnostics.cancel(this.debugVariables);
+                  else this.runDebug();
+                })
 
               // 调试日志
               if (this.debugLogs.length > 0) {
@@ -430,9 +261,10 @@ export struct RuleSourceDebugPage {
               left: AppSpace.Md,
               right: AppSpace.Md,
               top: AppSpace.Md,
-              bottom: AppSpace.Md + WindowUtils.getSafeAreaInsets().bottom
+              bottom: AppSpace.Lg + this.safeBottom
             })
           }
+          .width('100%')
           .layoutWeight(1)
           .scrollBar(BarState.Auto)
           .edgeEffect(EdgeEffect.Spring)
@@ -443,18 +275,23 @@ export struct RuleSourceDebugPage {
       .width('100%')
       .height('100%')
       .backgroundColor($r('sys.color.background_secondary'))
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .hideTitleBar(true)
+    .backgroundColor($r('sys.color.background_secondary'))
+    .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
   }
 
   @Builder
   SourceInfoCard() {
     Column({ space: 6 }) {
       Text(this.source?.bookSourceName || '未知书源')
-        .fontSize(AppFont.Body)
+        .fontSize(AppFont.BodyL)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('sys.color.font_primary'))
         .width('100%')
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
 
       Text(this.source?.bookSourceUrl || '')
         .fontSize(AppFont.Caption)
@@ -469,9 +306,9 @@ export struct RuleSourceDebugPage {
         .width('100%')
     }
     .width('100%')
-    .padding(AppSpace.Md)
-    .backgroundColor($r('sys.color.background_primary'))
-    .borderRadius(AppRadius.Md)
+    .padding({ bottom: AppSpace.Sm })
+    .borderWidth({ bottom: 0.5 })
+    .borderColor($r('sys.color.comp_divider'))
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -483,30 +320,38 @@ export struct RuleSourceDebugPage {
         .fontColor($r('sys.color.font_secondary'))
         .width('100%')
 
-      Row({ space: AppSpace.Xs }) {
+      Row() {
         this.StageButton('搜索', 'search')
+        this.StageButton($r('app.string.rule_source_explore'), 'explore')
         this.StageButton('详情', 'detail')
         this.StageButton('目录', 'toc')
-        this.StageButton('正文', 'content')
+        this.StageButton(this.source?.bookSourceType === 1 ?
+          $r('app.string.rule_source_debug_audio') : $r('app.string.rule_source_debug_content'), 'content')
         this.StageButton('全链路', 'full')
       }
       .width('100%')
+      .padding(4)
+      .backgroundColor($r('sys.color.comp_background_secondary'))
+      .borderRadius(AppRadius.Sm)
     }
     .width('100%')
-    .padding(AppSpace.Md)
-    .backgroundColor($r('sys.color.background_primary'))
-    .borderRadius(AppRadius.Md)
   }
 
   @Builder
-  StageButton(label: string, stage: string) {
+  StageButton(label: ResourceStr, stage: string) {
     Text(label)
       .fontSize(AppFont.Caption)
       .fontColor(this.currentStage === stage ? AppColor.Brand : $r('sys.color.font_secondary'))
-      .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: AppSpace.Xs, bottom: AppSpace.Xs })
-      .borderRadius(AppRadius.Sm)
+      .layoutWeight(1)
+      .height(44)
+      .maxLines(1)
+      .minFontScale(1)
+      .maxFontScale(1.3)
+      .textAlign(TextAlign.Center)
+      .borderRadius(AppRadius.Xs)
       .backgroundColor(this.currentStage === stage ? AppColor.BrandSoft :
-        $r('sys.color.comp_background_secondary'))
+        Color.Transparent)
+      .enabled(!this.isRunning && !this.isExporting)
       .onClick(() => {
         if (!this.isRunning) {
           this.currentStage = stage;
@@ -525,13 +370,17 @@ export struct RuleSourceDebugPage {
             .fontColor($r('sys.color.font_secondary'))
             .width('100%')
 
-          TextInput({ text: $$this.keyword, placeholder: '请输入搜索关键词' })
+          TextInput({ text: this.keyword, placeholder: '请输入搜索关键词' })
             .width('100%')
-            .height(44)
+            .height(48)
             .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_primary'))
+            .caretColor(AppColor.Brand)
+            .selectedBackgroundColor(AppColor.BrandSoft)
             .backgroundColor($r('sys.color.comp_background_secondary'))
             .borderRadius(AppRadius.Xs)
-            .enabled(!this.isRunning)
+            .enabled(!this.isRunning && !this.isExporting)
+            .onChange((value: string) => { this.keyword = value; })
         }
       }
 
@@ -543,20 +392,21 @@ export struct RuleSourceDebugPage {
             .fontColor($r('sys.color.font_secondary'))
             .width('100%')
 
-          TextInput({ text: $$this.testUrl, placeholder: '请输入URL' })
+          TextInput({ text: this.testUrl, placeholder: '请输入URL' })
             .width('100%')
-            .height(44)
+            .height(48)
             .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_primary'))
+            .caretColor(AppColor.Brand)
+            .selectedBackgroundColor(AppColor.BrandSoft)
             .backgroundColor($r('sys.color.comp_background_secondary'))
             .borderRadius(AppRadius.Xs)
-            .enabled(!this.isRunning)
+            .enabled(!this.isRunning && !this.isExporting)
+            .onChange((value: string) => { this.testUrl = value; })
         }
       }
     }
     .width('100%')
-    .padding(AppSpace.Md)
-    .backgroundColor($r('sys.color.background_primary'))
-    .borderRadius(AppRadius.Md)
   }
 
   @Builder
@@ -569,60 +419,61 @@ export struct RuleSourceDebugPage {
           .fontColor($r('sys.color.font_primary'))
           .layoutWeight(1)
 
-        Text('清空')
+        Button($r('app.string.rule_source_debug_clear'), { type: ButtonType.Normal })
           .fontSize(AppFont.Caption)
           .fontColor(AppColor.Brand)
+          .height(44)
+          .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+          .backgroundColor(Color.Transparent)
+          .enabled(!this.isRunning && !this.isExporting)
           .onClick(() => this.clearLogs())
       }
       .width('100%')
-      .padding(AppSpace.Md)
 
       Divider()
         .color($r('sys.color.comp_divider'))
 
-      Scroll(this.scroller) {
         Column({ space: 0 }) {
           ForEach(this.debugLogs, (log: DebugLog, index: number) => {
             Column({ space: 4 }) {
               Row({ space: AppSpace.Xs }) {
                 Text(this.formatTime(log.timestamp))
-                  .fontSize(10)
+                  .fontSize(AppFont.Caption)
                   .fontColor($r('sys.color.font_tertiary'))
 
                 Text(`[${log.stage}]`)
-                  .fontSize(10)
+                  .fontSize(AppFont.Caption)
                   .fontColor(this.getLogLevelColor(log.level))
                   .fontWeight(FontWeight.Medium)
               }
 
               Text(log.message)
-                .fontSize(AppFont.Caption)
+                .fontSize(AppFont.Body)
                 .fontColor(this.getLogLevelColor(log.level))
                 .width('100%')
+                .copyOption(CopyOptions.LocalDevice)
+                .wordBreak(WordBreak.BREAK_ALL)
 
               if (log.detail) {
                 Text(log.detail)
-                  .fontSize(10)
-                  .fontColor($r('sys.color.font_tertiary'))
+                  .fontSize(AppFont.Caption)
+                  .fontColor($r('sys.color.font_secondary'))
                   .width('100%')
-                  .maxLines(3)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .fontFamily('monospace')
+                  .lineHeight(20)
+                  .wordBreak(WordBreak.BREAK_ALL)
+                  .copyOption(CopyOptions.LocalDevice)
               }
             }
             .width('100%')
             .padding(AppSpace.Sm)
             .alignItems(HorizontalAlign.Start)
             .backgroundColor(index % 2 === 0 ? Color.Transparent : $r('sys.color.comp_background_secondary'))
-          }, (log: DebugLog) => `${log.timestamp}-${log.stage}-${log.message}`)
+          }, (log: DebugLog) => `${log.id}`)
         }
         .width('100%')
-      }
-      .height(300)
-      .scrollBar(BarState.Auto)
     }
     .width('100%')
-    .backgroundColor($r('sys.color.background_primary'))
-    .borderRadius(AppRadius.Md)
   }
 
   @Builder
@@ -634,24 +485,20 @@ export struct RuleSourceDebugPage {
         .fontColor($r('sys.color.font_primary'))
         .width('100%')
 
-      Scroll() {
-        Text(this.debugResult ? JSON.stringify(this.debugResult, null, 2) : '')
-          .fontSize(10)
-          .fontColor($r('sys.color.font_secondary'))
-          .fontFamily('monospace')
-          .width('100%')
-          .lineHeight(16)
-      }
-      .height(200)
-      .scrollBar(BarState.Auto)
-      .backgroundColor($r('sys.color.comp_background_secondary'))
-      .borderRadius(AppRadius.Xs)
-      .padding(AppSpace.Sm)
+      Text(this.debugResult?.success ? this.debugResult.data :
+        this.debugResult?.error ?? '')
+        .fontSize(AppFont.Caption)
+        .fontColor($r('sys.color.font_secondary'))
+        .fontFamily('monospace')
+        .width('100%')
+        .lineHeight(20)
+        .wordBreak(WordBreak.BREAK_ALL)
+        .copyOption(CopyOptions.LocalDevice)
+        .backgroundColor($r('sys.color.comp_background_secondary'))
+        .borderRadius(AppRadius.Xs)
+        .padding(AppSpace.Sm)
     }
     .width('100%')
-    .padding(AppSpace.Md)
-    .backgroundColor($r('sys.color.background_primary'))
-    .borderRadius(AppRadius.Md)
   }
 
   private formatTime(timestamp: number): string {
@@ -659,7 +506,7 @@ export struct RuleSourceDebugPage {
     return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
   }
 
-  private getLogLevelColor(level: 'info' | 'success' | 'warning' | 'error'): ResourceStr {
+  private getLogLevelColor(level: string): ResourceStr {
     switch (level) {
       case 'success':
         return '#168A5B';
