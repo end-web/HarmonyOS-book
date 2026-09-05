@@ -1,6 +1,6 @@
 # 简·欢音频源服务
 
-服务端集中运行阅读音频书源，将搜索、书籍、章节和播放地址清洗成简·欢 App 使用的稳定接口。本服务是可选的独立聚合工程，App 不依赖其运行。
+可选的独立音频聚合服务，将来源的搜索、书籍、章节和播放地址统一为 HTTP API，并提供 Vue 运维后台。当前手机 App 在设备端处理用户导入的书源，没有接入本服务或配置其地址。
 
 ## 组成
 
@@ -24,7 +24,7 @@
 
 | 页面或流程 | 标准接口 | 主要数据表 |
 | --- | --- | --- |
-| App 聚合搜索、后台链路调试 | `GET /api/v1/audio-books/search` | `sources`、`books`、`cache_entries` |
+| API 调用方聚合搜索 | `GET /api/v1/audio-books/search` | `sources`、`books`、`cache_entries` |
 | 书籍详情 | `GET /api/v1/audio-books/:id` | `books` |
 | 章节目录 | `GET /api/v1/audio-books/:id/chapters` | `books`、`chapters` |
 | 播放和下载前解析 | `POST /api/v1/audio-chapters/:id/resolve` | `chapters`、`sources` |
@@ -32,8 +32,8 @@
 | 操作记录 | `GET /api/admin/logs` | `audit_logs` |
 
 标准书籍字段为 `id/title/author/narrator/cover/intro/category/chapterCount/totalDuration`；章节字段为
-`id/bookId/title/index/duration`；播放解析返回 `url/headers/format/expiresAt`。App 不接收阅读规则 JSON，
-也不执行服务器规则。
+`id/bookId/title/index/duration`；播放解析返回 `url/headers/format/expiresAt`。公共 API 输出解析结果，
+规则由服务端 Provider 和 Reader 引擎处理；手机 App 的本地规则导入与执行是独立流程。
 
 ## 本地开发
 
@@ -65,13 +65,14 @@ docker compose -f compose.yml ps
 公网入口和 HTTPS 证书由部署环境配置，Caddy 负责自动续期。Reader
 和 API 均只在 Docker 内网暴露，公网仅开放 80/443。不要把 Reader 原始 `/reader3` 接口映射到公网。
 
-## App 接口
+## 公共 API
 
 - `GET /api/v1/audio-books/search?q=Alice&page=1`
 - `GET /api/v1/audio-books/:id`
 - `GET /api/v1/audio-books/:id/chapters`
 - `POST /api/v1/audio-chapters/:id/resolve`
 - `GET /api/v1/health`
+- `GET /api/v1/sources`
 
 所有响应使用 `{ code, data, requestId, serverTime }` 包络。聚合搜索按来源独立超时，单个来源失败时返回
 其他来源结果，并通过 `partial` 标记部分失败。
@@ -88,5 +89,5 @@ docker compose -f compose.yml ps
 - 目录文件下载默认允许 120 秒，适配 AOAOSTAR 的大合集；可通过 `SOURCE_SYNC_FETCH_TIMEOUT_MS` 调整。
 - 播放地址按需解析，不代理或持久化音频文件。
 - `deploy/backup.sh` 使用 SQLite 在线快照备份数据库和 Reader 配置，默认保留 14 天。
-- 生产服务器每天 03:17 执行一次备份，日志写入 `/var/log/jianhu-backup.log`。
+- 备份定时任务需在部署环境自行配置；仓库不保证生产服务器已安装定时任务。
 - 升级 Reader 前固定镜像摘要并在测试来源上执行搜索、目录和播放解析，不使用无人值守自动更新。

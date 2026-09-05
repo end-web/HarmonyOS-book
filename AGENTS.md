@@ -42,22 +42,28 @@ Pages hold `@Local` state + Service singletons. No V1 viewmodel layer exists.
 - **Loading indicators**: always set `.color(AppColor.Brand)` — never rely on HarmonyOS default brand blue
 - **Long lists**: `LazyForEach` + stable keys (e.g. `bookUrl`). Never use index as key
 - **UI copy**: change resource strings only; do not rename `.ets` files to match label text
-- **New stable native sources**: implement `IBuiltInSource` → register in `registerBuiltInSources()` (in `service/builtin/index.ets`)
-- **User rule sources**: extend only `service/rulesource/`; never reintroduce the old `service/js` / `service/rule` engine or bypass the bounded QuickJS facade
+- **Content sources**: extend `service/rulesource/` and the existing imported-source dispatchers; native protocol adapters must remain tied to user-imported source definitions
+- **Rule execution**: use the bounded QuickJS facade; do not expose unrestricted platform or network capabilities
 
 ## Content Architecture (read this first)
 
-The App keeps registered built-in sources as the primary path and adds user-imported Legado/Reader sources through an isolated local-rule side path:
+The App obtains online content from user-imported sources stored in encrypted `rule_sources.db`:
 
-| Source kind | ID / storage | How it works |
+| Source kind | Entry | How it works |
 |---|---|---|
-| Built-in | `huan_fm` | App uses its built-in encrypted protocol to access the content service directly |
-| Existing text | `KkBiqugeTextSource` | Independent search task that reuses the existing detail and ReaderKit path |
-| Local rules | encrypted `rule_sources.db` | Imported from My → Sources; supports declarative extraction, compact rule groups and a bounded QuickJS compatibility subset |
+| General imported rules | `LocalRuleDispatcher` | Declarative extraction, compact rule groups and a bounded QuickJS compatibility subset |
+| GuangYu / ShuShan imported sources | `NativeRuleSourceDispatcher` | Native protocol adapters and separate main-account sessions |
+| TingYou imported source | `LocalRuleDispatcher` / `TingYouSourceAdapter` | Native protocol adapter, including Home recommendations and categories |
 
-Search is multi-source parallel; built-ins and the existing text source start immediately, while local rules run in batches of six. Results are deduplicated by `sourceUrl + bookUrl`. `BookSourceService` checks `BuiltInSourceRegistry` first, so local database/runtime failures must not change built-in detail, chapter, playback, download, or favorite behavior. Home recommendations, categories, and discovery remain built-in only.
+`SourceDataService` lists imported sources only and excludes `builtin://` addresses. Database failures return empty source lists or unresolved lookups. Search runs enabled sources with required search rules in batches of six and deduplicates by `sourceUrl + bookUrl`; one source failure must not stop other sources. Home recommendations and categories require an enabled imported TingYou source.
 
-Local rule scripts must run through `LocalRuleScriptRuntime` → `LocalRuleQuickJsRuntime` in a taskpool, with independent contexts, native interrupt timeout, heap/stack/pending-job/input/output budgets, and guaranteed release. Do not expose unrestricted QuickJS APIs, direct `fetch`/XHR/WebSocket, platform objects, files, or databases. Hidden ArkWeb remains only the CSS/XPath DOM parser host for already-downloaded HTML. The routed source login page is the sole remote ArkWeb exception: HTTPS only, incognito mode, no platform bridge, and cookies must be copied into the encrypted source+origin store before the Web session is cleared.
+`BookSourceService` dispatches to imported-source adapters and rules. Startup does not call `registerBuiltInSources()`, and Search does not run a separate `KkBiqugeTextSource` task. Related files still exist, and some `service/builtin/` utilities remain referenced; file presence alone does not make a source active.
+
+Import capability messages and test status are diagnostic, not a blanket enablement gate. Batch tests check search availability with up to six concurrent tasks, retain failures, and preserve enabled state. Single-source tests also validate content when results exist. Disabling search preserves installed definitions for existing favorites; deleting a source removes its sessions and cookies.
+
+Local rule scripts must run through `LocalRuleScriptRuntime` → `LocalRuleQuickJsRuntime` in a taskpool, with independent contexts, native interrupt timeout, heap/stack/pending-job/input/output budgets, and guaranteed release. Do not expose unrestricted QuickJS APIs, direct `fetch`/XHR/WebSocket, platform objects, files, or databases. The local-rule ArkWeb host parses already-downloaded HTML. Source website login uses the routed HTTPS-only incognito page with no platform bridge; cookies must be copied into the encrypted source+origin store before the Web session is cleared.
+
+Online novels use `OnlineTextPaginator` and local reading preferences. ReaderKit handles the existing EPUB-path branch; `ImportPage` currently imports audio files and audio ZIPs, not a complete local EPUB library workflow.
 
 The optional `server/` project is not registered or configurable as an App content source. Do not reintroduce an App API-base setting without an explicit product decision.
 
@@ -67,10 +73,11 @@ Single HarmonyOS module (`entry/`) + optional Node server (`server/`):
 
 - `entry/src/main/ets/pages/` — routed screens
 - `entry/src/main/ets/service/` — business services (singular `service/`, not `services/`)
-- `entry/src/main/ets/service/builtin/` — built-in audio source system (registry, dispatcher, source implementations)
-- `entry/src/main/ets/service/rulesource/` — local rule import, persistence, HTTP, extraction, QuickJS compatibility and dispatch
+- `entry/src/main/ets/service/builtin/` — protocol/Web utilities and registry implementations; not the active source-list entry
+- `entry/src/main/ets/service/rulesource/` — imported-source persistence, testing, accounts, native adapters, HTTP, extraction and QuickJS dispatch
+- `entry/src/main/ets/service/text/` — online text pagination, reading progress/settings and parser utilities
 - `entry/libs/quickjs.har` — locally built arm64-v8a/x86_64 bounded QuickJS dependency
-- `entry/src/main/ets/model/` — domain types (`Book`, `BookSource`, `LocalRuleSource`, `PlayerState`)
+- `entry/src/main/ets/model/` — domain types (`Book`, `BookSource`, `LocalRuleSource`, `PlayerState`, `TextReading`, `ReaderTheme`)
 - `entry/src/main/ets/components/` — reusable widgets
 - `entry/src/main/ets/theme/` — theme tokens (`AppColor`, `AppMaterial`)
 - `entry/src/main/ets/widget/` — desktop form widget
@@ -81,11 +88,12 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 
 ## Testing
 
-- **App unit tests**: `entry/src/test/*.test.ets` (Hypium framework) — covers `DownloadPolicy`, `TingYouRequestPolicy`, `BuiltInAudioCapability`, `AsyncSingleFlight`
+- **App unit tests**: `entry/src/test/*.test.ets` (Hypium framework) — local rules, native adapters, bulk testing, search history/cache, pagination/themes, playback progress and download policies
 - **App device tests**: `entry/src/ohosTest/ets/test/*.test.ets`
 - **Server tests**: `cd server && npm test` (Vitest) — 7 test files covering catalog, providers, auth, DB, sync
-- After changing playback/builtin sources/download: smoke-test search → detail → chapter → play on device
-- After changing local rule import/runtime/dispatch: verify no-local-source built-in behavior, then import → test → search → detail → read/play; disabled sources must leave existing favorites resolvable and one failed rule must not stop other sources
+- After changing playback/source adapters/download: smoke-test search → detail → chapter → play on device, then verify resume, download and export
+- After changing local rule import/runtime/dispatch: verify no-source empty states, then import → single/bulk test → search → detail → read/play; disabled sources must leave existing favorites resolvable and one failed rule must not stop other sources
+- After changing reading: verify chapter/character-position restore, pagination after font or window changes, settings persistence and safe-area handling
 - After changing Home/Record UI: verify skeleton loading, pull-to-refresh, double-tap-to-top, edit/long-press selection
 
 ## Security & Config
@@ -101,6 +109,7 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 - **`CLAUDE.md`** — product/architecture source of truth (content model, services, page flow, SDK baseline)
 - **`docs/APP_UI.md`** — current UI interaction baseline and regression checklist
 - **`server/README.md`** — server deployment and operations guide
+- Keep these documents aligned with active code paths. Remove superseded one-off plans and fix notes; Git retains their history.
 
 ## Language
 

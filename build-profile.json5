@@ -5,26 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.cer",
+          "certpath": "C:\\Users\\ylwang112\\.ohos\\config\\default_HSDA_wKrpqHOiqxSFrdpFtdLnPhuCDPpJWArbhjg3TxNZxiM=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BE7C31BD92363BA3D9A25C33E9EB80F08EC130A60E7132D0D3236E5D4F857E1A96A3BA3CD5F7635",
-          "profile": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p7b",
+          "keyPassword": "0000001AAE2FA302CDCDCC8498C6A29AA17191000C07FF3B57FB7AB58C82B056765F731D64C69B02D695",
+          "profile": "C:\\Users\\ylwang112\\.ohos\\config\\default_HSDA_wKrpqHOiqxSFrdpFtdLnPhuCDPpJWArbhjg3TxNZxiM=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\ylwang112\\.ohos\\config\\default_ListenBook_zPIp-hcbDhKBeUgwJA6PNDdQUvIQ_ktw_kla6CF6Fok=.p12",
-          "storePassword": "0000001BADAF21FA449271F764FA0802D9B5C20D4F0A120DC893107011ABB60105400A0C284DCDC28451C4"
-        }
-      },
-      {
-        "name": "release",
-        "type": "HarmonyOS",
-        "material": {
-          "storeFile": "C:/Users/ylwang112/.ohos/config/release_ListenBook.p12",
-          "storePassword": "0000001FD452BCDB4BB050B9BAC9C18A6251FD7B82AA2EFBC707483E0A273887432189CE50C3393FC9140568A568E4",
-          "keyAlias": "releaseKey",
-          "keyPassword": "0000001F8ED5A9D2DE802E91EEA412009B89C029BE1F2523591D11D934A2CCB4CD970B0ED2A293BF3DFFE2ABD885C8",
-          "signAlg": "SHA256withECDSA",
-          "profile": "C:/Users/ylwang112/.ohos/config/release_ListenBook.p7b",
-          "certpath": "C:/Users/ylwang112/.ohos/config/release_ListenBook.cer"
+          "storeFile": "C:\\Users\\ylwang112\\.ohos\\config\\default_HSDA_wKrpqHOiqxSFrdpFtdLnPhuCDPpJWArbhjg3TxNZxiM=.p12",
+          "storePassword": "0000001A6E9BDACCEE601729D1ADFD5B17EB6D3B1AA3228CDCA445F85045F7DC4802F1DFE11463389865"
         }
       }
     ],
@@ -32,7 +19,7 @@
       {
         "name": "default",
         "signingConfig": "default",
-        "bundleName": "com.ylwang.listenbook.tingyou",
+        "bundleName": "com.huan.listenbook",
         "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "26.0.0",
         "runtimeOS": "HarmonyOS",
@@ -46,7 +33,7 @@
       {
         "name": "release",
         "signingConfig": "default",
-        "bundleName": "com.ylwang.listenbook.tingyou",
+        "bundleName": "com.huan.listenbook",
         "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "26.0.0",
         "runtimeOS": "HarmonyOS",
