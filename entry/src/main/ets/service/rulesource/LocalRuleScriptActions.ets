@@ -1,10 +1,16 @@
-import { buffer, util } from '@kit.ArkTS';
+import { buffer, util, uri, url } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { i18n } from '@kit.LocalizationKit';
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleStageExtractor } from './LocalRuleStageExtractor';
-import { LocalRuleExecutionLimits } from './LocalRuleRuntimeTypes';
+import { LocalRuleExecutionLimits, LocalRuleFetchResult } from './LocalRuleRuntimeTypes';
 import { CharsetCodec } from '../../utils/CharsetCodec';
+import { LocalRuleBinaryActions } from './LocalRuleBinaryActions';
+import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
+import { LocalRuleBrowserLoginCoordinator } from './LocalRuleBrowserLoginCoordinator';
+import { LocalRuleBrowserRuntime } from './LocalRuleBrowserRuntime';
+import { LocalRuleHttpClient } from './LocalRuleHttpClient';
+import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
 
 /** Typed, bounded operations requested by QuickJS. No platform object crosses the bridge. */
 export class LocalRuleScriptActions {
@@ -17,7 +23,41 @@ export class LocalRuleScriptActions {
       const args: Record<string, Object> = JSON.parse(address.substring(LocalRuleScriptActions.PREFIX.length));
       const operation = String(args['operation'] ?? '');
       let value: Object = '';
-      if (operation === 'extract') {
+      if (operation === 'browserLogin' || operation === 'showBrowser') {
+        const target = String(args['url'] ?? '');
+        if (!new RegExp('^https://', 'i').test(target) || target.length > LocalRuleExecutionLimits.MAX_URL_CHARS) {
+          throw new Error('网页登录仅允许有效的 HTTPS 地址');
+        }
+        let snapshot = '';
+        let currentUrl = target;
+        if (operation === 'showBrowser') {
+          const html = String(args['html'] ?? '');
+          const script = String(args['script'] ?? '');
+          if (html.length > 512 * 1024 || script.length > 512 * 1024) throw new Error('书源浏览页面内容超过 512 KiB');
+          let rendered: LocalRuleFetchResult;
+          if (html.length > 0) {
+            const plan = LocalRuleUrlAnalyzer.analyze(source, target, variables);
+            plan.webView = true;
+            plan.webJs = script;
+            const response = new LocalRuleFetchResult();
+            response.ok = true;
+            response.statusCode = 200;
+            response.requestUrl = plan.url;
+            response.body = html;
+            response.headers = { 'Content-Type': 'text/html; charset=utf-8',
+              'Content-Security-Policy': LocalRuleExecutionLimits.INLINE_HTML_CSP };
+            rendered = await LocalRuleBrowserRuntime.instance.render(source, plan, response, variables);
+          } else {
+            const options: Record<string, Object> = { 'webView': true, 'webJs': script };
+            rendered = await LocalRuleHttpClient.fetch(source, `${target},${JSON.stringify(options)}`, variables);
+            if (!rendered.ok) throw new Error(rendered.errorMessage || '书源浏览页面加载失败');
+          }
+          snapshot = rendered.renderedHtml || rendered.body;
+          currentUrl = rendered.requestUrl;
+          if (!snapshot) throw new Error('书源浏览页面没有可显示的内容');
+        }
+        value = await LocalRuleBrowserLoginCoordinator.request(source.bookSourceUrl, source.bookSourceName, currentUrl, snapshot);
+      } else if (operation === 'extract') {
         const rule = String(args['rule'] ?? '');
         if (new RegExp('@js:|<js>|\\{\\{|@put:', 'i').test(rule)) throw new Error('脚本内提取仅接受声明式规则');
         const document = LocalRuleStageExtractor.createDocument(String(args['content'] ?? ''), baseUrl);
@@ -47,6 +87,30 @@ export class LocalRuleScriptActions {
         }
       } else if (operation === 'cipher') {
         value = await LocalRuleScriptActions.cipher(args);
+      } else if (operation === 'compress') {
+        value = await LocalRuleBinaryActions.compress(args);
+      } else if (operation === 'rsa') {
+        value = await LocalRuleBinaryActions.rsa(args);
+      } else if (operation === 'uri') {
+        const text = String(args['text'] ?? '');
+        if (text.length > 65536) throw new Error('URI 超过预算');
+        const base = String(args['base'] ?? '');
+        const resolved = base ? new url.URL(text, base).href : text;
+        const parsed = new uri.URI(resolved).normalize();
+        const fields: Record<string, Object> = { 'text': parsed.toString(), 'scheme': parsed.scheme,
+          'host': parsed.host, 'port': parsed.port, 'path': parsed.path, 'query': parsed.query,
+          'fragment': parsed.fragment, 'authority': parsed.authority, 'userInfo': parsed.encodedUserInfo,
+          'rawPath': parsed.encodedPath, 'rawQuery': parsed.encodedQuery, 'rawFragment': parsed.encodedFragment };
+        value = fields;
+      } else if (operation === 'sleep') {
+        const duration = Number(args['duration']);
+        if (!Number.isInteger(duration) || duration < 0 || duration > 10000) throw new Error('脚本等待超过 10 秒预算');
+        const deadline = Date.now() + duration;
+        while (Date.now() < deadline) {
+          LocalRuleDiagnostics.check(variables);
+          await new Promise<void>((resolve: () => void) => { setTimeout(resolve, Math.min(50, deadline - Date.now())); });
+        }
+        value = true;
       } else if (operation === 'chinese') {
         const direction = String(args['direction'] ?? '');
         if (!['Traditional-Simplified', 'Simplified-Traditional'].includes(direction)) throw new Error('文字转换方向无效');

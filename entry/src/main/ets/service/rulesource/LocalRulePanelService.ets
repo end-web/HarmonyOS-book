@@ -3,6 +3,8 @@ import { LocalRuleControl, LocalRulePanel, LocalRulePanelAction } from '../../mo
 import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
+import { LocalRuleJsonLiteral } from './LocalRuleJsonLiteral';
+import { LocalRuleTemplate } from './LocalRuleTemplate';
 
 export class LocalRulePanelService {
   static async load(source: LocalRuleSource, login: boolean,
@@ -38,11 +40,15 @@ export class LocalRulePanelService {
         entry.url = line.substring(split + 2).trim();
         entry.type = 'category';
         entry.id = `${entry.title}:${entry.url}`;
-        panel.entries.push(entry);
+        LocalRulePanelService.normalizeUrlAction(entry);
+        if (entry.type === 'button') panel.controls.push(entry);
+        else panel.entries.push(entry);
       }
       return panel;
     }
-    const items: Object[] = JSON.parse(clean);
+    const valueItems = LocalRuleJsonLiteral.parse(clean);
+    if (!Array.isArray(valueItems)) throw new Error('书源面板必须为数组');
+    const items: Object[] = JSON.parse(JSON.stringify(valueItems));
     const seen = new Set<string>();
     LocalRulePanelService.appendItems(items, panel, seen, '', 0);
     return panel;
@@ -97,6 +103,7 @@ export class LocalRulePanelService {
       control.id = `${group}:${control.type}:${control.title}:${control.url}`;
       if (seen.has(control.id)) continue;
       seen.add(control.id);
+      LocalRulePanelService.normalizeUrlAction(control);
       if (control.url || control.type === 'group') panel.entries.push(control);
       else panel.controls.push(control);
       if (Array.isArray(children)) {
@@ -112,15 +119,36 @@ export class LocalRulePanelService {
     for (const input of controls) values[input.title] = input.value;
     const variables: Record<string, string> = { 'infoMap': JSON.stringify(values) };
     const code = LocalRuleScriptRuntime.standaloneCode(control.action) || control.action;
+    const inputs: string[] = [];
+    for (const input of controls) {
+      if (input !== control && input.action && ['text', 'input', 'password', 'number', 'email'].includes(input.type)) {
+        inputs.push(LocalRuleScriptRuntime.standaloneCode(input.action) || input.action);
+      }
+    }
     const response = await LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl,
-      `${login ? LocalRulePanelService.loginLibrary(source) + 'source.putLoginInfo(infoMap);\n' : ''}${code}`, source, variables);
+      `${login ? LocalRulePanelService.loginLibrary(source) + 'source.putLoginInfo(infoMap);\n' : ''}` +
+      `${inputs.join('\n;')}\n;${code}`, source, variables);
     if (login && !variables['__openBrowser']) await LocalRulePanelService.checkLogin(source, response, variables);
     const result = new LocalRulePanelAction();
     result.message = variables['__toast'] ?? '';
     result.searchKeyword = variables['__searchBook'] ?? '';
     result.refresh = login || variables['__refreshExplore'] === 'true';
     result.browserUrl = variables['__openBrowser'] ?? '';
+    if (!result.browserUrl && !result.searchKeyword &&
+      new RegExp('^(https?://|data:|/)', 'i').test(response.trim())) result.browseUrl = response.trim();
     return result;
+  }
+
+  private static normalizeUrlAction(control: LocalRuleControl): void {
+    const value = control.url.trim();
+    let code = LocalRuleScriptRuntime.standaloneCode(value);
+    if (!code && value.startsWith('{{') && LocalRuleTemplate.end(value, 2) === value.length - 2) {
+      code = value.substring(2, value.length - 2).trim();
+    }
+    if (!code || control.action) return;
+    control.action = code;
+    control.url = '';
+    control.type = 'button';
   }
 
   static async checkLogin(source: LocalRuleSource, content: string,

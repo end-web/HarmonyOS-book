@@ -1025,12 +1025,9 @@ static napi_value EvaluateBounded(napi_env env, napi_callback_info info) {
     bool success = !JS_IsException(evaluated);
     std::string value;
     std::string error;
-    if (success) {
-        value = QuickJsValueToString(ctx, evaluated);
-    } else {
+    if (!success) {
         error = TakeQuickJsException(ctx);
     }
-    JS_FreeValue(ctx, evaluated);
 
     int pendingJobs = 0;
     while (success && !state.timedOut && pendingJobs < maxPendingJobs) {
@@ -1044,6 +1041,26 @@ static napi_value EvaluateBounded(napi_env env, napi_callback_info info) {
         }
         pendingJobs++;
     }
+    // Resolve returned promises within the same interrupt and pending-job budgets.
+    if (success && !state.timedOut) {
+        const int promiseState = JS_PromiseState(ctx, evaluated);
+        if (promiseState == JS_PROMISE_PENDING) {
+            success = false;
+            error = "Script promise did not settle within the pending-job budget";
+        } else if (promiseState == JS_PROMISE_REJECTED) {
+            JSValue reason = JS_PromiseResult(ctx, evaluated);
+            error = QuickJsValueToString(ctx, reason);
+            JS_FreeValue(ctx, reason);
+            success = false;
+        } else if (promiseState == JS_PROMISE_FULFILLED) {
+            JSValue result = JS_PromiseResult(ctx, evaluated);
+            value = QuickJsValueToString(ctx, result);
+            JS_FreeValue(ctx, result);
+        } else {
+            value = QuickJsValueToString(ctx, evaluated);
+        }
+    }
+    JS_FreeValue(ctx, evaluated);
     JS_SetInterruptHandler(runtime, nullptr, nullptr);
     if (state.timedOut) {
         success = false;

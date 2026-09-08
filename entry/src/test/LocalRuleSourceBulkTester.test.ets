@@ -13,6 +13,8 @@ import {
 } from '../main/ets/service/rulesource/LocalRuleSourceBulkTester';
 import { SearchResult } from '../main/ets/model/BookSource';
 import { NativeRuleSourceHealthPolicy } from '../main/ets/service/BookSourceService';
+import { RuleSourceLoginRouteParams } from '../main/ets/model/RuleSourceLogin';
+import { LocalRuleBrowserLoginCoordinator } from '../main/ets/service/rulesource/LocalRuleBrowserLoginCoordinator';
 
 class TestHealthSearchResult implements SearchResult {
   name: string = 'test';
@@ -112,8 +114,120 @@ function sourceOf(sourceUrl: string): LocalRuleSource {
   return LocalRuleSource.descriptor(sourceUrl, sourceUrl);
 }
 
+class BrowserLoginBulkExecutor implements LocalRuleSourceBulkTestExecutor {
+  async test(source: LocalRuleSource, _keyword: string): Promise<LocalRuleSourceHealth> {
+    await LocalRuleBrowserLoginCoordinator.request(source.bookSourceUrl, source.bookSourceName, 'https://example.test/login');
+    const health = new LocalRuleSourceHealth();
+    health.status = LocalRuleSourceStatus.READY;
+    return health;
+  }
+}
+
+class DelayedBrowserLoginBulkExecutor extends BrowserLoginBulkExecutor {
+  private gate: Promise<void>;
+  private releaseGate: () => void = (): void => {};
+
+  constructor() {
+    super();
+    this.gate = new Promise<void>((resolve: () => void) => { this.releaseGate = resolve; });
+  }
+
+  async test(source: LocalRuleSource, keyword: string): Promise<LocalRuleSourceHealth> {
+    await this.gate;
+    return super.test(source, keyword);
+  }
+
+  release(): void { this.releaseGate(); }
+}
+
 export default function localRuleSourceBulkTesterTest() {
   describe('LocalRuleSourceBulkTester', () => {
+    it('rejects late browser entry after cancellation and releases the scope for a new task', 0, async () => {
+      let opened = new RuleSourceLoginRouteParams();
+      let openedCount = 0;
+      let timer = -1;
+      const opener = (route: RuleSourceLoginRouteParams): void => { opened = route; openedCount++; };
+      LocalRuleBrowserLoginCoordinator.bindNavigation(opener);
+      const executor = new DelayedBrowserLoginBulkExecutor();
+      const tester = new LocalRuleSourceBulkTester(executor, new TestBulkStore());
+      try {
+        const running = tester.run([sourceOf('late-browser')], 'test');
+        tester.cancel();
+        executor.release();
+        const guard = new Promise<LocalRuleSourceBulkTestReport>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Late browser entry escaped cancellation')), 1000);
+        });
+        const report = await Promise.race<LocalRuleSourceBulkTestReport>([running, guard]);
+        expect(report.cancelled).assertTrue();
+        expect(report.completed).assertEqual(0);
+        expect(openedCount).assertEqual(0);
+        const next = LocalRuleBrowserLoginCoordinator.request('late-browser', 'New task', 'https://example.test/login');
+        expect(openedCount).assertEqual(1);
+        LocalRuleBrowserLoginCoordinator.resolve(opened.requestId, 'signed in');
+        expect(await next).assertEqual('signed in');
+      } finally {
+        clearTimeout(timer);
+        executor.release();
+        tester.cancel();
+        LocalRuleBrowserLoginCoordinator.unbindNavigation(opener);
+      }
+    });
+
+    it('cancels an active browser wait immediately without replacing source health', 0, async () => {
+      let opened = new RuleSourceLoginRouteParams();
+      let closed = false;
+      let timer = -1;
+      const opener = (route: RuleSourceLoginRouteParams): void => { opened = route; };
+      LocalRuleBrowserLoginCoordinator.bindNavigation(opener);
+      const store = new TestBulkStore();
+      const tester = new LocalRuleSourceBulkTester(new BrowserLoginBulkExecutor(), store);
+      try {
+        const source = sourceOf('awaiting-login');
+        source.validationStatus = LocalRuleSourceStatus.READY;
+        source.validationMessage = 'previous result';
+        const running = tester.run([source], 'test');
+        LocalRuleBrowserLoginCoordinator.attach(opened.requestId,
+          async (_reason: string): Promise<void> => { closed = true; });
+        tester.cancel();
+        const guard = new Promise<LocalRuleSourceBulkTestReport>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Cancelled browser wait did not finish')), 1000);
+        });
+        const report = await Promise.race<LocalRuleSourceBulkTestReport>([running, guard]);
+        expect(report.cancelled).assertTrue();
+        expect(report.completed).assertEqual(0);
+        expect(closed).assertTrue();
+        expect(store.saveCalls).assertEqual(0);
+        expect(source.validationStatus).assertEqual(LocalRuleSourceStatus.READY);
+        expect(source.validationMessage).assertEqual('previous result');
+      } finally {
+        clearTimeout(timer);
+        tester.cancel();
+        LocalRuleBrowserLoginCoordinator.unbindNavigation(opener);
+      }
+    });
+
+    it('does not cancel browser waits owned by sources outside the active batch', 0, async () => {
+      let opened = new RuleSourceLoginRouteParams();
+      const opener = (route: RuleSourceLoginRouteParams): void => { opened = route; };
+      LocalRuleBrowserLoginCoordinator.bindNavigation(opener);
+      const executor = new SlowFirstBulkExecutor();
+      const tester = new LocalRuleSourceBulkTester(executor, new TestBulkStore());
+      try {
+        const unrelated = LocalRuleBrowserLoginCoordinator.request('unrelated', 'Other', 'https://example.test/login');
+        const running = tester.run([sourceOf('slow')], 'test');
+        tester.cancel();
+        expect(LocalRuleBrowserLoginCoordinator.isPending(opened.requestId)).assertTrue();
+        executor.releaseFirst();
+        expect((await running).cancelled).assertTrue();
+        LocalRuleBrowserLoginCoordinator.resolve(opened.requestId, 'other login');
+        expect(await unrelated).assertEqual('other login');
+      } finally {
+        executor.releaseFirst();
+        tester.cancel();
+        LocalRuleBrowserLoginCoordinator.unbindNavigation(opener);
+      }
+    });
+
     it('rejects native health coverage when audio search failed after novel success', 0, () => {
       let thrown = false;
       let message = '';
@@ -163,6 +277,7 @@ export default function localRuleSourceBulkTesterTest() {
       expect(report.completed).assertEqual(3);
       expect(report.passed).assertEqual(2);
       expect(report.failed).assertEqual(1);
+      expect(report.failedSources[0].bookSourceUrl).assertEqual('failed');
       expect(report.retained).assertEqual(1);
       expect(executor.calls).assertEqual(3);
       expect(store.savedSources.length).assertEqual(3);
@@ -259,6 +374,31 @@ export default function localRuleSourceBulkTesterTest() {
       expect(store.savedBatchSizes[0]).assertEqual(6);
       expect(store.savedBatchSizes[1]).assertEqual(6);
       expect(store.savedBatchSizes[2]).assertEqual(1);
+    });
+
+    it('cancels queued tests without overwriting in-flight source status', 0, async () => {
+      const executor = new SlowFirstBulkExecutor();
+      const store = new TestBulkStore();
+      const slow = sourceOf('slow');
+      slow.validationMessage = 'previous result';
+      const sources: LocalRuleSource[] = [slow];
+      for (let index = 1; index < 12; index++) sources.push(sourceOf(`source-${index}`));
+      const tester = new LocalRuleSourceBulkTester(executor, store);
+      const running = tester.run(sources, 'test', (progress: LocalRuleSourceBulkTestProgress): void => {
+        if (progress.completed > 0) tester.cancel();
+      });
+      for (let index = 0; index < 12; index++) await Promise.resolve<void>(undefined);
+      executor.releaseFirst();
+      const report = await running;
+      expect(report.cancelled).assertTrue();
+      expect(executor.calls).assertEqual(6);
+      expect(slow.validationMessage).assertEqual('previous result');
+      expect(store.savedSources.some((source: LocalRuleSource): boolean => source.bookSourceUrl === 'slow')).assertFalse();
+    });
+
+    it('allows an empty keyword for discovery validation and fails missing discovery rules', 0, async () => {
+      const report = await LocalRuleSourceBulkTester.createDefault('exploreReading').run([], '');
+      expect(report.total).assertEqual(0);
     });
 
     it('starts the next source without waiting for the slowest active source', 0, async () => {

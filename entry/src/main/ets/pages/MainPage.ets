@@ -306,7 +306,7 @@ export struct MainPage {
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(1, scroller); }
           })
         }
-        .tabBar(this.buildTabBar($r('sys.symbol.books_vertical_fill'), '书架'))
+        .tabBar(this.buildTabBar($r('sys.symbol.bookshelf'), '书架'))
 
         TabContent() {
           ReadingStatsPage({

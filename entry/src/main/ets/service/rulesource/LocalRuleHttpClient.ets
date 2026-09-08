@@ -43,11 +43,10 @@ export class LocalRuleHttpClient {
       result = await LocalRuleHttpClient.executeSourceRequest(source, plan, variables);
       if (result.ok && plan.webView) {
         if (!new RegExp('^https?://', 'i').test(result.requestUrl)) throw new Error('网页渲染仅支持 HTTP(S) 地址');
-        result = await LocalRuleBrowserRuntime.instance.render(source, plan, result, variables);
-        if (plan.webJs) {
-          const scripted = await LocalRuleScriptRuntime.evaluateBrowserSnapshot(source, result, plan.webJs, variables);
-          result.body = scripted;
+        if (plan.inlineBody !== undefined) {
+          result.headers['Content-Security-Policy'] = LocalRuleExecutionLimits.INLINE_HTML_CSP;
         }
+        result = await LocalRuleBrowserRuntime.instance.render(source, plan, result, variables);
       }
       if (result.ok && plan.bodyJs) {
         result.body = await LocalRuleScriptRuntime.transformResponse(source, result, plan.bodyJs, variables);

@@ -11,6 +11,8 @@ import { NativeRuleSourceDispatcher } from './rulesource/NativeRuleSourceDispatc
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
 import { TingYouSourceAdapter } from './rulesource/tingyou/TingYouSourceAdapter';
 import { TingYouSourceIdentity } from './rulesource/tingyou/TingYouSourceIdentity';
+import { LocalRulePanelService } from './rulesource/LocalRulePanelService';
+import { LocalRuleDiagnostics } from './rulesource/LocalRuleDiagnostics';
 
 export interface ExploreFetchResult {
   books: SearchResult[];
@@ -114,7 +116,7 @@ export class BookSourceService {
     return health;
   }
 
-  /** 批量测试只探测搜索链路；单源测试仍使用 testLocalSource 做全链路校验。 */
+  /** 搜索校验允许无匹配结果；发现/阅读校验必须取得实际内容。 */
   static async testLocalSourceAvailability(source: LocalRuleSource,
     keyword: string): Promise<LocalRuleSourceHealth> {
     const health = new LocalRuleSourceHealth();
@@ -162,6 +164,66 @@ export class BookSourceService {
     return source.isAudio()
       ? `搜索、详情、目录与音频解析正常：${bookName}`
       : `搜索、详情、目录与正文解析正常：${bookName}`;
+  }
+
+  static async testLocalSourceExploreReading(source: LocalRuleSource,
+    isCancelled: () => boolean = (): boolean => false): Promise<LocalRuleSourceHealth> {
+    const health = new LocalRuleSourceHealth();
+    health.sourceUrl = source.bookSourceUrl;
+    health.checkedAt = Date.now();
+    const variables = LocalRuleDiagnostics.open((): void => {});
+    try {
+      if (!source.enabledExplore || !source.exploreUrl.trim()) throw new Error('缺少发现地址或发现未启用');
+      if (!source.canExecute()) throw new Error(source.validationMessage || '书源不可执行');
+      BookSourceService.checkHealthCancellation(isCancelled);
+      const panel = await LocalRulePanelService.load(source, false, variables);
+      const entries = panel.entries.filter((entry): boolean => entry.url.trim().length > 0).slice(0, 8);
+      if (entries.length === 0) throw new Error('没有解析出发现分类');
+      const candidates: SearchResult[] = [];
+      const seen = new Set<string>();
+      let lastError = '';
+      for (const entry of entries) {
+        BookSourceService.checkHealthCancellation(isCancelled);
+        try {
+          const result = await LocalRuleDispatcher.explore(source, entry.url, 1, variables);
+          for (const book of result.books) {
+            if (seen.has(book.bookUrl)) continue;
+            seen.add(book.bookUrl);
+            candidates.push(book);
+            if (candidates.length >= 4) break;
+          }
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+        }
+        if (candidates.length >= 4) break;
+      }
+      if (candidates.length === 0) throw new Error(lastError || '发现分类未返回可验证的书籍');
+      for (const candidate of candidates) {
+        BookSourceService.checkHealthCancellation(isCancelled);
+        try {
+          await BookSourceService.validateCandidate(source, candidate,
+            source.isAudio() ? 'audio' : 'text', isCancelled, true);
+          BookSourceService.checkHealthCancellation(isCancelled);
+          health.status = LocalRuleSourceStatus.READY;
+          health.message = `发现、详情、目录与${source.isAudio() ? '音频' : '正文'}解析正常：${candidate.name}`;
+          return health;
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      throw new Error(lastError || '发现/阅读链路未取得有效内容');
+    } catch (error) {
+      health.status = LocalRuleSourceStatus.FAILED;
+      health.message = error instanceof Error ? error.message : String(error);
+      return health;
+    } finally {
+      health.responseTimeMs = Date.now() - health.checkedAt;
+      LocalRuleDiagnostics.close(variables);
+    }
+  }
+
+  private static checkHealthCancellation(isCancelled: () => boolean): void {
+    if (isCancelled()) throw new Error('书源校验已取消');
   }
 
   private static async testNativeRuleSource(source: LocalRuleSource, keyword: string): Promise<string> {
@@ -252,24 +314,33 @@ export class BookSourceService {
   }
 
   private static async validateCandidate(source: LocalRuleSource, result: SearchResult,
-    contentType: 'audio' | 'text'): Promise<void> {
+    contentType: 'audio' | 'text', isCancelled: () => boolean = (): boolean => false,
+    publicOnly: boolean = false): Promise<void> {
+    BookSourceService.checkHealthCancellation(isCancelled);
     const searchVariables = BookSourceService.copyVariables(result.variables);
     const info = await BookSourceService.getBookInfo(source, result.bookUrl, searchVariables);
+    BookSourceService.checkHealthCancellation(isCancelled);
     if (info === null) throw new Error(`详情解析失败：${result.name}`);
 
     const variables = BookSourceService.mergeVariables(searchVariables, info.variables);
     const tocUrl = info.tocUrl.trim().length > 0 ? info.tocUrl : result.bookUrl;
     const toc = await BookSourceService.getBookToc(source, tocUrl, variables, result.name);
+    BookSourceService.checkHealthCancellation(isCancelled);
     if (toc.length === 0) throw new Error(`目录解析失败：${result.name}`);
-    await BookSourceService.validateChapterCandidates(source, toc, variables, contentType);
+    const chapters = publicOnly ? toc.filter((chapter: TocItem): boolean =>
+      !chapter.isVolume && !chapter.isVip && !chapter.isPay) : toc;
+    if (chapters.length === 0) throw new Error('目录正常，但没有可校验的免费章节');
+    await BookSourceService.validateChapterCandidates(source, chapters, variables, contentType, isCancelled);
   }
 
   private static async validateChapterCandidates(source: LocalRuleSource, toc: TocItem[],
-    variables: Record<string, string>, contentType: 'audio' | 'text'): Promise<void> {
+    variables: Record<string, string>, contentType: 'audio' | 'text',
+    isCancelled: () => boolean = (): boolean => false): Promise<void> {
     const candidates = BookSourceService.preferredChapterCandidates(toc);
     let attempted = 0;
     let lastError = '';
     for (const chapter of candidates) {
+      BookSourceService.checkHealthCancellation(isCancelled);
       if (attempted >= HEALTH_MAX_CHAPTER_CANDIDATES) break;
       attempted++;
       try {

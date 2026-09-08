@@ -111,6 +111,11 @@ export struct RuleSourceEditPage {
     try {
       const loaded = await LocalRuleSourceRepository.findByUrl(this.sourceUrl!);
       if (loaded) {
+        if (loaded.isLocked) {
+          this.getUIContext().getPromptAction().showToast({ message: $r('app.string.source_manage_locked_message') });
+          this.navStack.pop();
+          return;
+        }
         this.source = loaded;
         this.sourceType = loaded.bookSourceType;
         this.markSaved();
@@ -141,6 +146,10 @@ export struct RuleSourceEditPage {
 
   private async saveSource(): Promise<void> {
     if (this.isSaving || this.isLoading) return;
+    if (this.source.isLocked) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.source_manage_locked_message') });
+      return;
+    }
     if (this.currentTab === 7 && !this.applyRawDraft()) return;
     if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
     if (!this.source.bookSourceUrl || this.source.bookSourceUrl.trim().length === 0) {
@@ -184,6 +193,9 @@ export struct RuleSourceEditPage {
         .getStringSync($r('app.string.rule_source_json_identity').id) || 'Source identity cannot change';
       return false;
     }
+    parsed.isLocked = this.source.isLocked;
+    parsed.isPinned = this.source.isPinned;
+    parsed.customOrder = this.source.customOrder;
     this.source = parsed;
     this.sourceType = parsed.bookSourceType;
     this.rawError = '';

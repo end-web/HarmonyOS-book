@@ -7,6 +7,7 @@
 - 可配置 QuickJS heap 与 stack 上限；
 - 使用 `JS_SetInterruptHandler` 的 `evaluateBounded`；
 - pending-job 数量预算；
+- 在同一超时与 pending-job 预算内取得返回 Promise 的完成值，未完成或拒绝的 Promise 返回失败；
 - `arm64-v8a` 与 `x86_64` 双 ABI 构建。
 
 使用 API 26 DevEco Studio 工具链重建并同步本地依赖：

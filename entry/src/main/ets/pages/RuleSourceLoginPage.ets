@@ -2,6 +2,9 @@ import { webview } from '@kit.ArkWeb';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleHttpClient } from '../service/rulesource/LocalRuleHttpClient';
+import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
+import { LocalRuleBrowserLoginCoordinator } from '../service/rulesource/LocalRuleBrowserLoginCoordinator';
+import { LocalRuleExecutionLimits } from '../service/rulesource/LocalRuleRuntimeTypes';
 import { LocalRuleWebSession } from '../service/rulesource/LocalRuleWebSession';
 import { LocalRulePanelService } from '../service/rulesource/LocalRulePanelService';
 import { RuleSourceAccountService } from '../service/rulesource/RuleSourceAccountService';
@@ -18,6 +21,10 @@ class RuleSourceWebCookieSnapshot {
   cookieHeader: string = '';
 }
 
+class RuleSourceLoginHtmlSnapshot {
+  html: string = '';
+}
+
 @ComponentV2
 export struct RuleSourceLoginPage {
   @Param navStack: NavPathStack = new NavPathStack();
@@ -32,9 +39,20 @@ export struct RuleSourceLoginPage {
   private leaving: boolean = false;
   private pageAlive: boolean = true;
   private webSessionLease: number = 0;
+  private completionTask: Promise<void> | undefined = undefined;
+  private cancellationTask: Promise<void> | undefined = undefined;
+  private requestCancelled: boolean = false;
+  private initialDocumentServed: boolean = false;
 
   aboutToAppear(): void {
+    this.pageAlive = true;
     WindowUtils.setStatusBarLight(false);
+    if (this.route.requestId.length > 0 && !LocalRuleBrowserLoginCoordinator.attach(this.route.requestId,
+      (reason: string): Promise<void> => this.cancelAwaitingLogin(reason))) {
+      this.leaving = true;
+      this.navStack.pop();
+      return;
+    }
     this.prepareLogin();
   }
 
@@ -42,6 +60,10 @@ export struct RuleSourceLoginPage {
     this.pageAlive = false;
     WindowUtils.setStatusBarLight(false);
     if (!this.leaving) {
+      if (this.route.requestId.length > 0) {
+        this.cancelAwaitingLogin('网页登录已取消');
+        return;
+      }
       const snapshots = this.snapshotCookies();
       this.releaseWebCookies();
       LocalRuleWebSession.release(this.webSessionLease);
@@ -51,16 +73,18 @@ export struct RuleSourceLoginPage {
   }
 
   private async prepareLogin(): Promise<void> {
-    if (!this.route.isValid()) {
+    if (!this.route.isValid() || this.route.initialHtml.length > LocalRuleBrowserLoginCoordinator.MAX_HTML_LENGTH) {
       this.showToast($r('app.string.rule_source_login_invalid'));
+      LocalRuleBrowserLoginCoordinator.reject(this.route.requestId, '网页登录地址无效');
       this.navStack.pop();
       return;
     }
     try {
       const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
       if (source === undefined) throw new Error('Rule source not found');
+      if (!this.pageAlive || this.requestCancelled || this.leaving) return;
       this.webSessionLease = await LocalRuleWebSession.acquire(60000);
-      if (!this.pageAlive) {
+      if (!this.pageAlive || this.requestCancelled || this.leaving) {
         LocalRuleWebSession.release(this.webSessionLease);
         this.webSessionLease = 0;
         return;
@@ -70,6 +94,7 @@ export struct RuleSourceLoginPage {
       for (const loginUrl of loginUrls) {
         const cookieHeader = await LocalRuleHttpClient.getStoredCookieHeader(
           this.route.sourceUrl, loginUrl);
+        if (!this.pageAlive || this.requestCancelled || this.leaving || this.webSessionLease === 0) return;
         this.injectCookies(loginUrl, cookieHeader);
         this.rememberUrl(loginUrl);
       }
@@ -78,7 +103,9 @@ export struct RuleSourceLoginPage {
       this.ready = true;
       this.loading = true;
     } catch (_error) {
+      if (!this.pageAlive || this.leaving) return;
       this.showToast($r('app.string.rule_source_login_prepare_failed'));
+      LocalRuleBrowserLoginCoordinator.reject(this.route.requestId, '网页登录准备失败');
       this.navStack.pop();
     }
   }
@@ -153,6 +180,12 @@ export struct RuleSourceLoginPage {
     }
   }
 
+  private async persistSnapshotsStrict(snapshots: RuleSourceWebCookieSnapshot[]): Promise<void> {
+    for (const snapshot of snapshots) {
+      await LocalRuleHttpClient.saveWebCookies(this.route.sourceUrl, snapshot.url, snapshot.cookieHeader);
+    }
+  }
+
   private async persistOnDisappear(snapshots: RuleSourceWebCookieSnapshot[]): Promise<void> {
     await this.persistSnapshots(snapshots);
     if (this.route.isMainAccount) {
@@ -183,11 +216,26 @@ export struct RuleSourceLoginPage {
   }
 
   private async finishLogin(): Promise<void> {
-    if (this.saving) return;
+    if (this.saving || !this.ready || this.leaving || this.requestCancelled) return;
+    const completion = this.completeLogin();
+    this.completionTask = completion;
+    try { await completion; }
+    finally { if (this.completionTask === completion) this.completionTask = undefined; }
+  }
+
+  private async completeLogin(): Promise<void> {
     this.saving = true;
     const snapshots = this.snapshotCookies();
     try {
-      await this.persistSnapshots(snapshots);
+      const awaitingScript = this.route.requestId.length > 0;
+      if (awaitingScript) await this.persistSnapshotsStrict(snapshots);
+      else await this.persistSnapshots(snapshots);
+      let awaitedHtml = '';
+      if (awaitingScript) {
+        if (this.requestCancelled || !LocalRuleBrowserLoginCoordinator.isPending(this.route.requestId)) return;
+        awaitedHtml = await this.readBoundedPageHtml();
+        if (this.requestCancelled || !LocalRuleBrowserLoginCoordinator.isPending(this.route.requestId)) return;
+      }
       if (this.route.isMainAccount) {
         const saved = await RuleSourceAccountService.saveWebLogin(
           this.route.sourceUrl, this.cookieHeaders(snapshots));
@@ -195,7 +243,7 @@ export struct RuleSourceLoginPage {
           this.showToast($r('app.string.rule_source_account_web_required'));
           return;
         }
-      } else {
+      } else if (!awaitingScript) {
         const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
         if (source !== undefined && source.loginCheckJs.trim()) {
           const content = await this.controller.runJavaScript('document.documentElement ? document.documentElement.outerHTML : ""');
@@ -208,14 +256,76 @@ export struct RuleSourceLoginPage {
         ? $r('app.string.rule_source_account_login_success')
         : $r('app.string.rule_source_login_saved'));
       this.navStack.pop();
-    } catch (_error) {
+      if (awaitingScript) LocalRuleBrowserLoginCoordinator.resolve(this.route.requestId, awaitedHtml);
+    } catch (error) {
       this.showToast($r('app.string.rule_source_operation_failed'));
+      if (this.route.requestId.length > 0 && !this.requestCancelled) {
+        this.leaving = true;
+        this.stopAndRelease();
+        if (this.pageAlive) this.navStack.pop();
+        LocalRuleBrowserLoginCoordinator.reject(this.route.requestId,
+          error instanceof Error ? error.message : '网页登录保存失败');
+      }
     } finally {
       this.saving = false;
     }
   }
 
+  private readBoundedPageHtml(): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('网页登录内容读取超时')), 3000);
+      // Only this fixed snapshot expression runs in ArkWeb; source scripts stay in QuickJS.
+      this.controller.runJavaScript('JSON.stringify({html:document.documentElement ? ' +
+        'document.documentElement.outerHTML.slice(0,524288) : ""})').then((raw: string): void => {
+        clearTimeout(timer);
+        try {
+          if (raw.length > LocalRuleBrowserLoginCoordinator.MAX_HTML_LENGTH * 8 + 1024) {
+            reject(new Error('网页登录内容超过返回大小限制'));
+            return;
+          }
+          let payload = raw;
+          if (payload.startsWith('"')) {
+            const decoded: string = JSON.parse(payload);
+            if (typeof decoded !== 'string') throw new Error('Invalid browser snapshot');
+            payload = decoded;
+          }
+          const snapshot: RuleSourceLoginHtmlSnapshot = JSON.parse(payload);
+          if (snapshot === null || typeof snapshot !== 'object' || typeof snapshot.html !== 'string' ||
+            snapshot.html.length > LocalRuleBrowserLoginCoordinator.MAX_HTML_LENGTH) {
+            reject(new Error('网页登录内容格式无效'));
+          } else { resolve(snapshot.html); }
+        } catch (_error) { reject(new Error('网页登录内容格式无效')); }
+      }).catch((error: Error): void => { clearTimeout(timer); reject(error); });
+    });
+  }
+
+  private cancelAwaitingLogin(reason: string): Promise<void> {
+    this.requestCancelled = true;
+    if (this.cancellationTask === undefined) this.cancellationTask = this.cleanupAwaitingLogin(reason);
+    return this.cancellationTask;
+  }
+
+  private async cleanupAwaitingLogin(reason: string): Promise<void> {
+    const completion = this.completionTask;
+    if (completion !== undefined) await completion;
+    if (!this.leaving) {
+      this.saving = true;
+      const snapshots = this.snapshotCookies();
+      try { await this.persistSnapshotsStrict(snapshots); }
+      catch (_error) { /* A failed login is rejected even when cookie persistence is unavailable. */ }
+      this.leaving = true;
+      this.stopAndRelease();
+      if (this.pageAlive) this.navStack.pop();
+      this.saving = false;
+    }
+    LocalRuleBrowserLoginCoordinator.reject(this.route.requestId, reason);
+  }
+
   private async leaveLogin(): Promise<void> {
+    if (this.route.requestId.length > 0) {
+      await this.cancelAwaitingLogin('网页登录已取消');
+      return;
+    }
     if (this.saving) return;
     this.saving = true;
     const snapshots = this.snapshotCookies();
@@ -302,7 +412,7 @@ export struct RuleSourceLoginPage {
 
   private allowNavigation(url: string): boolean {
     if (url === 'about:blank') return true;
-    if (!url.toLowerCase().startsWith('https://')) {
+    if (!RuleSourceLoginRouteParams.of(this.route.sourceUrl, this.route.displayName, url).isValid()) {
       this.showToast($r('app.string.rule_source_login_https_only'));
       return false;
     }
@@ -314,6 +424,26 @@ export struct RuleSourceLoginPage {
     }
     this.showToast($r('app.string.rule_source_login_domain_blocked'));
     return false;
+  }
+
+  private interceptInitialDocument(request: WebResourceRequest): WebResourceResponse | null {
+    if (this.initialDocumentServed || this.route.initialHtml.length === 0 || !request.isMainFrame()) return null;
+    // An imported snapshot belongs only to this first document, never to a redirect or another origin.
+    this.initialDocumentServed = true;
+    if (request.getRequestUrl() !== this.route.documentUrl()) return null;
+    const response = new WebResourceResponse();
+    const headers: Header[] = [
+      { headerKey: 'Content-Type', headerValue: 'text/html; charset=UTF-8' },
+      { headerKey: 'Cache-Control', headerValue: 'no-store' },
+      { headerKey: 'Content-Security-Policy', headerValue: LocalRuleExecutionLimits.INLINE_HTML_CSP }
+    ];
+    response.setResponseCode(200);
+    response.setReasonMessage('OK');
+    response.setResponseMimeType('text/html');
+    response.setResponseEncoding('UTF-8');
+    response.setResponseHeader(headers);
+    response.setResponseData(this.route.initialHtml);
+    return response;
   }
 
   private showToast(message: ResourceStr): void {
@@ -345,6 +475,7 @@ export struct RuleSourceLoginPage {
             .height('100%')
             .onControllerAttached((): void => {
               try {
+                this.controller.clearSslCache();
                 this.controller.setCustomUserAgent(RULE_LOGIN_USER_AGENT);
               } catch (_error) {
                 // 使用 ArkWeb 默认 UA 继续加载。
@@ -358,7 +489,21 @@ export struct RuleSourceLoginPage {
             .imageAccess(true)
             .onlineImageAccess(true)
             .mixedMode(MixedMode.None)
+            .onSslErrorEvent((event: SslErrorEvent): void => {
+              if (!event.isFatalError && LocalRuleTlsTrustStore.isTrustedUrlSync(event.url)) {
+                event.handler.handleConfirm();
+              } else {
+                event.handler.handleCancel();
+                this.loading = false;
+                this.getUIContext().getPromptAction().showToast({
+                  message: LocalRuleTlsTrustStore.describeFailure('证书校验失败', event.url)
+                });
+              }
+            })
             .multiWindowAccess(false)
+            .onInterceptRequest((event): WebResourceResponse | null => {
+              return event === undefined ? null : this.interceptInitialDocument(event.request);
+            })
             .onOverrideUrlLoading((request: WebResourceRequest): boolean => {
               return !this.allowNavigation(request.getRequestUrl());
             })
@@ -460,6 +605,7 @@ export struct RuleSourceLoginPage {
         .fontWeight(FontWeight.Medium)
         .height(44)
         .padding({ left: AppSpace.Xs, right: AppSpace.Xs })
+        .enabled(this.ready && !this.saving && !this.loading && !this.requestCancelled)
         .onClick(() => this.finishLogin())
     }
     .width('100%')

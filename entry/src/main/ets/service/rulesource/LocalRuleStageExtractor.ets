@@ -16,6 +16,7 @@ class LocalRuleRegexProcessor {
   pattern: string = '';
   replacement: string = '';
   enabled: boolean = false;
+  firstMatchOnly: boolean = false;
 }
 
 class LocalRuleSelectorSpec {
@@ -54,6 +55,18 @@ export class LocalRuleStageExtractor {
     source: LocalRuleSource, variables: Record<string, string> = {}): Promise<LocalRuleDocument[]> {
     const cleanRule = await LocalRuleStageExtractor.prepareContextRule(document, rule, source, variables);
     if (!cleanRule) return [];
+    if (cleanRule.startsWith('-') && cleanRule.length > 1) {
+      const selected = await LocalRuleStageExtractor.selectList(document, cleanRule.substring(1), source, variables);
+      return selected.reverse();
+    }
+    const listScript = LocalRuleStageExtractor.scriptChain(cleanRule);
+    if (listScript !== undefined) {
+      return LocalRuleStageExtractor.executeListScriptChain(document, listScript, source, variables);
+    }
+    if (LocalRuleScriptRuntime.standaloneCode(cleanRule).length > 0) {
+      const values = await LocalRuleStageExtractor.extractValues(document, cleanRule, source, variables);
+      return LocalRuleStageExtractor.documentsFromScriptValues(values, document.baseUrl);
+    }
     const alternatives = LocalRuleStageExtractor.splitTopLevel(cleanRule, '||');
     if (alternatives.length > 1) {
       for (const alternative of alternatives) {
@@ -168,7 +181,7 @@ export class LocalRuleStageExtractor {
     const standaloneCode = LocalRuleScriptRuntime.standaloneCode(cleanRule);
     if (standaloneCode.length > 0) {
       const value = await LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl,
-        standaloneCode, source, variables, '');
+        standaloneCode, source, variables, '', document.kind === LocalRuleDocumentKind.JSON);
       return LocalRuleStageExtractor.expandScriptValue(value);
     }
     const scriptChain = LocalRuleStageExtractor.scriptChain(cleanRule);
@@ -177,7 +190,7 @@ export class LocalRuleStageExtractor {
     }
     const regex = LocalRuleStageExtractor.regexProcessor(cleanRule);
     let values = await LocalRuleStageExtractor.extractBaseValues(document, regex.baseRule, source, variables);
-    if (regex.enabled) values = LocalRuleStageExtractor.applyRegex(values, regex.pattern, regex.replacement);
+    if (regex.enabled) values = LocalRuleStageExtractor.applyRegex(values, regex.pattern, regex.replacement, regex.firstMatchOnly);
     return values;
   }
 
@@ -663,6 +676,15 @@ export class LocalRuleStageExtractor {
       const chain = new LocalRuleScriptChain();
       chain.baseRule = rule.substring(0, postIndex).trim();
       chain.code = rule.substring(postIndex + 4).trim();
+      const precedingReplacement = LocalRuleStageExtractor.findTopLevelMarker(chain.baseRule, '##');
+      const followingReplacement = LocalRuleStageExtractor.findTopLevelMarker(chain.code, '##');
+      if (followingReplacement >= 0) {
+        chain.trailingRule = chain.code.substring(followingReplacement);
+        chain.code = chain.code.substring(0, followingReplacement).trim();
+      } else if (precedingReplacement >= 0) {
+        chain.trailingRule = chain.baseRule.substring(precedingReplacement);
+      }
+      if (precedingReplacement >= 0) chain.baseRule = chain.baseRule.substring(0, precedingReplacement).trim();
       return chain;
     }
     return undefined;
@@ -676,7 +698,8 @@ export class LocalRuleStageExtractor {
     const output: string[] = [];
     for (const baseValue of baseValues) {
       const scripted = await LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl,
-        chain.code, source, variables, baseValue);
+        chain.code, source, variables, baseValue,
+        chain.baseRule.length === 0 && document.kind === LocalRuleDocumentKind.JSON);
       if (chain.trailingRule.length > 0) {
         const scriptedDocument = LocalRuleStageExtractor.createDocument(scripted, document.baseUrl);
         const values = await LocalRuleStageExtractor.extractValues(
@@ -687,6 +710,39 @@ export class LocalRuleStageExtractor {
       }
     }
     return output;
+  }
+
+  private static async executeListScriptChain(document: LocalRuleDocument, chain: LocalRuleScriptChain,
+    source: LocalRuleSource, variables: Record<string, string>): Promise<LocalRuleDocument[]> {
+    let scripted = '';
+    if (chain.baseRule.length > 0) {
+      const selected = await LocalRuleStageExtractor.selectList(document, chain.baseRule, source, variables);
+      const values: Object[] = [];
+      for (const item of selected) {
+        if (item.kind === LocalRuleDocumentKind.JSON) {
+          const value: Object = JSON.parse(item.payload);
+          values.push(value);
+        } else {
+          values.push(item.payload);
+        }
+      }
+      scripted = await LocalRuleScriptRuntime.evaluateList(document.payload, document.baseUrl,
+        chain.code, source, variables, values);
+    } else {
+      scripted = await LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl,
+        chain.code, source, variables, document.payload);
+    }
+    if (chain.trailingRule.length > 0) {
+      if (chain.trailingRule.startsWith('##')) {
+        const values = await LocalRuleStageExtractor.extractValues(
+          LocalRuleStageExtractor.createDocument(scripted, document.baseUrl), chain.trailingRule, source, variables);
+        return LocalRuleStageExtractor.documentsFromScriptValues(values, document.baseUrl);
+      }
+      return LocalRuleStageExtractor.selectList(LocalRuleStageExtractor.createDocument(scripted, document.baseUrl),
+        chain.trailingRule, source, variables);
+    }
+    return LocalRuleStageExtractor.documentsFromScriptValues(
+      LocalRuleStageExtractor.expandScriptValue(scripted), document.baseUrl);
   }
 
   private static expandScriptValue(value: string): string[] {
@@ -828,6 +884,7 @@ export class LocalRuleStageExtractor {
     result.baseRule = parts[0];
     result.pattern = parts[1];
     result.replacement = parts.length >= 3 ? parts[2] : '';
+    result.firstMatchOnly = parts.length > 3;
     return result;
   }
 
@@ -855,16 +912,21 @@ export class LocalRuleStageExtractor {
     return output;
   }
 
-  private static applyRegex(values: string[], pattern: string, replacement: string): string[] {
+  private static applyRegex(values: string[], pattern: string, replacement: string, firstMatchOnly: boolean = false): string[] {
     if (!pattern) return values;
     let regex: RegExp;
     try {
-      regex = new RegExp(pattern, 'g');
+      regex = new RegExp(pattern, firstMatchOnly ? '' : 'g');
     } catch (_error) {
       throw new Error('字段正则无效');
     }
     const output: string[] = [];
-    for (const value of values) output.push(value.replace(regex, replacement));
+    for (const value of values) {
+      if (firstMatchOnly) {
+        const match = regex.exec(value);
+        output.push(match === null ? '' : match[0].replace(regex, replacement));
+      } else output.push(value.replace(regex, replacement));
+    }
     return output;
   }
 

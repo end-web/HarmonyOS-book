@@ -86,13 +86,24 @@ export struct RuleSourcePanelPage {
       if (result.message) this.getUIContext().getPromptAction().showToast({ message: result.message });
       if (result.browserUrl) {
         const route = RuleSourceLoginRouteParams.of(source.bookSourceUrl, source.bookSourceName, result.browserUrl);
-        if (route.isValid()) this.navStack.pushPathByName('ruleSourceLogin', route);
+        if (!route.isValid()) {
+          throw new Error(this.getUIContext().getHostContext()?.resourceManager
+            .getStringSync($r('app.string.rule_source_login_https_only').id) ?? 'Invalid HTTPS URL');
+        }
+        this.navStack.pushPathByName('ruleSourceLogin', route);
       } else if (result.searchKeyword) {
         const route = new LocalRuleBrowseRoute();
         route.sourceUrl = source.bookSourceUrl;
         route.sourceName = source.bookSourceName;
         route.title = result.searchKeyword;
         route.keyword = result.searchKeyword;
+        this.navStack.pushPathByName('blockMore', route);
+      } else if (result.browseUrl) {
+        const route = new LocalRuleBrowseRoute();
+        route.sourceUrl = source.bookSourceUrl;
+        route.sourceName = source.bookSourceName;
+        route.title = control.title;
+        route.moreUrl = result.browseUrl;
         this.navStack.pushPathByName('blockMore', route);
       } else if (result.refresh) {
         await this.load();

@@ -16,6 +16,7 @@ const TABLE_NAME = 'rule_sources';
 const SESSION_TABLE_NAME = 'rule_source_sessions';
 const COOKIE_TABLE_NAME = 'rule_source_cookies';
 const STATE_TABLE_NAME = 'rule_source_script_state';
+const GROUP_TABLE_NAME = 'rule_source_groups';
 const MAX_SOURCE_JSON_BYTES = 512 * 1024;
 const MAX_SESSION_TOKEN_LENGTH = 4096;
 const MAX_SESSION_DEVICE_ID_LENGTH = 256;
@@ -29,6 +30,10 @@ const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ${TABLE_NAME} (
   source_group TEXT NOT NULL DEFAULT '',
   source_json TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
+  enabled_explore INTEGER NOT NULL DEFAULT 0,
+  is_locked INTEGER NOT NULL DEFAULT 0,
+  is_pinned INTEGER NOT NULL DEFAULT 0,
+  custom_order INTEGER NOT NULL DEFAULT 0,
   validation_status INTEGER NOT NULL DEFAULT 0,
   validation_message TEXT NOT NULL DEFAULT '',
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -54,9 +59,9 @@ const CREATE_COOKIE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS ${COOKIE_TABLE_NAME}
 )`;
 
 const SELECT_COLUMNS = 'source_url, source_name, source_type, source_group, source_json, ' +
-  'enabled, validation_status, validation_message';
+  'enabled, validation_status, validation_message, enabled_explore, is_locked, is_pinned, custom_order, created_at';
 const LIST_SQL = `SELECT ${SELECT_COLUMNS} FROM ${TABLE_NAME} ` +
-  'ORDER BY sort_order DESC, source_name COLLATE NOCASE ASC';
+  'ORDER BY is_pinned DESC, custom_order ASC, sort_order DESC, source_name COLLATE NOCASE ASC';
 const GET_SQL = `SELECT ${SELECT_COLUMNS} FROM ${TABLE_NAME} WHERE source_url = ? LIMIT 1`;
 const SESSION_SELECT_COLUMNS = 'source_url, token, device_id, account_label, updated_at';
 const GET_SESSION_SQL = `SELECT ${SESSION_SELECT_COLUMNS} FROM ${SESSION_TABLE_NAME} ` +
@@ -315,30 +320,40 @@ export class LocalRuleSourceRepository {
     await LocalRuleSourceRepository.upsertBatch(sources);
   }
 
-  /** 更新已导入书源时沿用用户当前的启用状态。 */
+  /** 重导保留本机管理状态，并跳过锁定书源。 */
   static async upsertImportedBatch(sources: LocalRuleSource[]): Promise<number> {
-    const existing = await LocalRuleSourceRepository.list();
-    LocalRuleSourceRepository.preserveEnabledStates(sources, existing);
-    return LocalRuleSourceRepository.upsertBatch(sources);
+    return LocalRuleSourceRepository.writeBatch(sources, true);
   }
 
   static preserveEnabledStates(incoming: LocalRuleSource[], existing: LocalRuleSource[]): void {
-    const enabledByUrl = new Map<string, boolean>();
+    const existingByUrl = new Map<string, LocalRuleSource>();
     for (const source of existing) {
-      enabledByUrl.set(source.bookSourceUrl.trim(), source.enabled);
+      existingByUrl.set(source.bookSourceUrl.trim(), source);
     }
     for (const source of incoming) {
       const sourceUrl = source.bookSourceUrl.trim();
       if (!source.canExecute()) {
         source.enabled = false;
-      } else if (enabledByUrl.has(sourceUrl)) {
-        source.enabled = enabledByUrl.get(sourceUrl) ?? false;
+      } else {
+        const previous = existingByUrl.get(sourceUrl);
+        if (previous !== undefined) {
+          source.enabled = previous.enabled;
+          source.enabledExplore = previous.enabledExplore;
+          source.bookSourceGroup = previous.bookSourceGroup;
+          source.isLocked = previous.isLocked;
+          source.isPinned = previous.isPinned;
+          source.customOrder = previous.customOrder;
+        }
       }
     }
   }
 
   /** 全批次预校验后再写入，任意一条失败都会回滚整个批次。 */
   static async upsertBatch(sources: LocalRuleSource[]): Promise<number> {
+    return LocalRuleSourceRepository.writeBatch(sources, false);
+  }
+
+  private static async writeBatch(sources: LocalRuleSource[], importing: boolean): Promise<number> {
     if (sources.length === 0) return 0;
 
     const prepared: PreparedRuleSource[] = [];
@@ -349,18 +364,52 @@ export class LocalRuleSourceRepository {
     const store = await LocalRuleSourceRepository.ensureStore();
     const transaction = await store.createTransaction();
     const now = Date.now();
+    let writtenCount = 0;
     try {
+      const orderRows = await transaction.querySql(`SELECT MAX(custom_order) FROM ${TABLE_NAME}`);
+      let nextOrder = 0;
+      try {
+        if (orderRows.goToFirstRow()) nextOrder = orderRows.getLong(0) + 1;
+      } finally {
+        orderRows.close();
+      }
       for (let index = 0; index < prepared.length; index++) {
-        const item = prepared[index];
-        const values = LocalRuleSourceRepository.toValues(item, now - index, now);
+        let item = prepared[index];
+        const args: relationalStore.ValueType[] = [item.source.bookSourceUrl.trim()];
+        const rows = await transaction.querySql(GET_SQL, args);
+        let previous: LocalRuleSource | undefined = undefined;
+        let createdAt = now;
+        try {
+          if (rows.goToFirstRow()) {
+            previous = LocalRuleSourceRepository.readSource(rows);
+            createdAt = rows.getLong(12);
+          }
+        } finally {
+          rows.close();
+        }
+        if (previous !== undefined) {
+          if (previous.isLocked) {
+            if (importing) continue;
+            throw new Error(`书源已锁定，请先解锁：${previous.bookSourceName}`);
+          }
+          if (importing) LocalRuleSourceRepository.preserveEnabledStates([item.source], [previous]);
+          item.source.isLocked = previous.isLocked;
+          item.source.isPinned = previous.isPinned;
+          item.source.customOrder = previous.customOrder;
+        } else if (item.source.customOrder === 0) {
+          item.source.customOrder = nextOrder++;
+        }
+        item = LocalRuleSourceRepository.prepare(item.source);
+        const values = LocalRuleSourceRepository.toValues(item, now - index, now, createdAt);
         const rowId = await transaction.insert(TABLE_NAME, values,
           relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
         if (rowId < 0) {
           throw new Error(`书源写入失败：${item.source.bookSourceName}`);
         }
+        writtenCount++;
       }
       await transaction.commit();
-      return prepared.length;
+      return writtenCount;
     } catch (error) {
       try {
         await transaction.rollback();
@@ -404,51 +453,160 @@ export class LocalRuleSourceRepository {
 
   static async setEnabled(sourceUrl: string, enabled: boolean): Promise<void> {
     const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
-    const updated = await LocalRuleSourceRepository.updateEnabled(normalizedUrl, enabled);
-    if (!updated) throw new Error(`书源不存在：${normalizedUrl}`);
+    const updated = await LocalRuleSourceRepository.setEnabledBatch([normalizedUrl], enabled);
+    if (updated === 0) throw new Error('书源已锁定，请先解锁');
   }
 
   /** 在同一事务中启用或禁用多条书源，任一书源不存在则整批回滚。 */
   static async setEnabledBatch(sourceUrls: string[], enabled: boolean): Promise<number> {
-    if (sourceUrls.length === 0) return 0;
-    const normalizedUrls: string[] = [];
-    const seen = new Set<string>();
-    for (const sourceUrl of sourceUrls) {
-      const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
-      if (seen.has(normalizedUrl)) continue;
-      seen.add(normalizedUrl);
-      normalizedUrls.push(normalizedUrl);
-    }
-
-    const store = await LocalRuleSourceRepository.ensureStore();
-    const transaction = await store.createTransaction();
     const values: relationalStore.ValuesBucket = {
       'enabled': enabled ? 1 : 0,
       'updated_at': Date.now()
     };
-    let updatedCount = 0;
+    return LocalRuleSourceRepository.updateManagedBatch(sourceUrls, values, false);
+  }
+
+  static async setExploreEnabledBatch(sourceUrls: string[], enabled: boolean): Promise<number> {
+    const values: relationalStore.ValuesBucket = {
+      'enabled_explore': enabled ? 1 : 0,
+      'updated_at': Date.now()
+    };
+    return LocalRuleSourceRepository.updateManagedBatch(sourceUrls, values, false);
+  }
+
+  static async setLockedBatch(sourceUrls: string[], locked: boolean): Promise<number> {
+    const values: relationalStore.ValuesBucket = {
+      'is_locked': locked ? 1 : 0,
+      'updated_at': Date.now()
+    };
+    return LocalRuleSourceRepository.updateManagedBatch(sourceUrls, values, true);
+  }
+
+  static async setGroupBatch(sourceUrls: string[], group: string): Promise<number> {
+    const normalized = LocalRuleSourceRepository.groupNames(group)
+      .map((name: string): string => LocalRuleSourceRepository.normalizeGroup(name, false)).join(',');
+    const values: relationalStore.ValuesBucket = {
+      'source_group': normalized,
+      'updated_at': Date.now()
+    };
+    return LocalRuleSourceRepository.updateManagedBatch(sourceUrls, values, false);
+  }
+
+  static async setPinned(sourceUrl: string, pinned: boolean): Promise<void> {
+    const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const transaction = await store.createTransaction();
     try {
-      for (let start = 0; start < normalizedUrls.length; start += BATCH_PREDICATE_LIMIT) {
-        const end = Math.min(normalizedUrls.length, start + BATCH_PREDICATE_LIMIT);
-        const batchValues: relationalStore.ValueType[] = [];
-        for (let index = start; index < end; index++) batchValues.push(normalizedUrls[index]);
-        const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
-        predicates.in('source_url', batchValues);
-        const updated = await transaction.update(values, predicates);
-        if (updated !== batchValues.length) throw new Error('部分书源不存在，批量启停已取消');
-        updatedCount += updated;
-      }
-      await transaction.commit();
-      return updatedCount;
-    } catch (error) {
+      await LocalRuleSourceRepository.selectManagedUrls(transaction, [normalizedUrl], true);
+      const rows = await transaction.querySql(`SELECT MIN(custom_order) FROM ${TABLE_NAME}`);
+      let firstOrder = 0;
       try {
-        await transaction.rollback();
-      } catch (_rollbackError) {
-        // 事务可能已关闭，保留原始更新错误。
+        if (rows.goToFirstRow()) firstOrder = rows.getLong(0) - 1;
+      } finally {
+        rows.close();
       }
+      const values: relationalStore.ValuesBucket = {
+        'is_pinned': pinned ? 1 : 0, 'custom_order': firstOrder, 'updated_at': Date.now()
+      };
+      const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+      predicates.equalTo('source_url', normalizedUrl);
+      await transaction.update(values, predicates);
+      await transaction.commit();
+    } catch (error) {
+      await LocalRuleSourceRepository.rollback(transaction);
       if (error instanceof Error) throw error;
       throw new Error(String(error));
     }
+  }
+
+  /** 可传入筛选后的列表；其余书源保留原位置，置顶分区始终优先。 */
+  static async saveOrder(orderedUrls: string[]): Promise<void> {
+    if (orderedUrls.length === 0) return;
+    const requested = LocalRuleSourceRepository.normalizeUrls(orderedUrls);
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const transaction = await store.createTransaction();
+    try {
+      await LocalRuleSourceRepository.selectManagedUrls(transaction, requested, true);
+      const rows = await transaction.querySql(LIST_SQL);
+      const current: string[] = [];
+      const pinned = new Set<string>();
+      try {
+        while (rows.goToNextRow()) {
+          current.push(rows.getString(0));
+          if (rows.getLong(10) !== 0) pinned.add(rows.getString(0));
+        }
+      } finally {
+        rows.close();
+      }
+      const selected = new Set<string>(requested);
+      let nextIndex = 0;
+      const merged = current.map((url: string): string => selected.has(url) ? requested[nextIndex++] : url);
+      const ordered = merged.filter((url: string): boolean => pinned.has(url))
+        .concat(merged.filter((url: string): boolean => !pinned.has(url)));
+      for (let index = 0; index < ordered.length; index++) {
+        const values: relationalStore.ValuesBucket = { 'custom_order': index, 'updated_at': Date.now() };
+        const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+        predicates.equalTo('source_url', ordered[index]);
+        await transaction.update(values, predicates);
+      }
+      await transaction.commit();
+    } catch (error) {
+      await LocalRuleSourceRepository.rollback(transaction);
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
+  static groupNames(sourceGroup: string): string[] {
+    const names: string[] = [];
+    for (const value of sourceGroup.split(/[,，·|]+/)) {
+      const name = value.trim();
+      if (name.length > 0 && name.toLowerCase() !== '[object object]' && !names.includes(name)) names.push(name);
+    }
+    return names;
+  }
+
+  static async listGroups(): Promise<string[]> {
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const rows = await store.querySql(`SELECT group_name FROM ${GROUP_TABLE_NAME} UNION ` +
+      `SELECT TRIM(source_group) AS group_name FROM ${TABLE_NAME} WHERE TRIM(source_group) <> '' ` +
+      'ORDER BY group_name COLLATE NOCASE ASC');
+    const groups = new Set<string>();
+    try {
+      while (rows.goToNextRow()) {
+        for (const name of LocalRuleSourceRepository.groupNames(rows.getString(0))) groups.add(name);
+      }
+    } finally {
+      rows.close();
+    }
+    return Array.from(groups).sort((left: string, right: string): number => left.localeCompare(right));
+  }
+
+  static async createGroup(name: string): Promise<void> {
+    const group = LocalRuleSourceRepository.normalizeGroup(name, false);
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const transaction = await store.createTransaction();
+    try {
+      if (await LocalRuleSourceRepository.groupExists(transaction, group)) throw new Error('分组名称已存在');
+      const values: relationalStore.ValuesBucket = { 'group_name': group, 'created_at': Date.now() };
+      await transaction.insert(GROUP_TABLE_NAME, values);
+      await transaction.commit();
+    } catch (error) {
+      await LocalRuleSourceRepository.rollback(transaction);
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
+  static async renameGroup(oldName: string, newName: string): Promise<number> {
+    const oldGroup = LocalRuleSourceRepository.normalizeGroup(oldName, false);
+    const newGroup = LocalRuleSourceRepository.normalizeGroup(newName, false);
+    if (oldGroup === newGroup) return 0;
+    return LocalRuleSourceRepository.changeGroup(oldGroup, newGroup);
+  }
+
+  static async deleteGroup(name: string): Promise<number> {
+    return LocalRuleSourceRepository.changeGroup(LocalRuleSourceRepository.normalizeGroup(name, false), '');
   }
 
   static async toggle(sourceUrl: string): Promise<boolean> {
@@ -464,50 +622,27 @@ export class LocalRuleSourceRepository {
 
   static async delete(sourceUrl: string): Promise<boolean> {
     const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
-    const store = await LocalRuleSourceRepository.ensureStore();
-    const transaction = await store.createTransaction();
-    const sessionPredicates = new relationalStore.RdbPredicates(SESSION_TABLE_NAME);
-    sessionPredicates.equalTo('source_url', normalizedUrl);
-    const cookiePredicates = new relationalStore.RdbPredicates(COOKIE_TABLE_NAME);
-    cookiePredicates.equalTo('source_url', normalizedUrl);
-    const sourcePredicates = new relationalStore.RdbPredicates(TABLE_NAME);
-    sourcePredicates.equalTo('source_url', normalizedUrl);
-    try {
-      await transaction.delete(sessionPredicates);
-      await transaction.delete(cookiePredicates);
-      const statePredicates = new relationalStore.RdbPredicates(STATE_TABLE_NAME);
-      statePredicates.equalTo('source_url', normalizedUrl);
-      await transaction.delete(statePredicates);
-      const deleted = await transaction.delete(sourcePredicates);
-      await transaction.commit();
-      return deleted > 0;
-    } catch (error) {
-      try {
-        await transaction.rollback();
-      } catch (_rollbackError) {
-        // 事务可能已关闭，保留原始删除错误。
-      }
-      if (error instanceof Error) throw error;
-      throw new Error(String(error));
-    }
+    return (await LocalRuleSourceRepository.deleteSources([normalizedUrl], true)) > 0;
   }
 
   /** 在同一事务中分块删除多条书源、登录会话和 Cookie，避免大批量逐行调用。 */
   static async deleteBatch(sourceUrls: string[]): Promise<number> {
+    return LocalRuleSourceRepository.deleteSources(sourceUrls, false);
+  }
+
+  private static async deleteSources(sourceUrls: string[], single: boolean): Promise<number> {
     if (sourceUrls.length === 0) return 0;
-    const normalizedUrls: string[] = [];
-    const seen = new Set<string>();
-    for (const sourceUrl of sourceUrls) {
-      const normalizedUrl = LocalRuleSourceRepository.requireSourceUrl(sourceUrl);
-      if (seen.has(normalizedUrl)) continue;
-      seen.add(normalizedUrl);
-      normalizedUrls.push(normalizedUrl);
-    }
+    const requested = LocalRuleSourceRepository.normalizeUrls(sourceUrls);
 
     const store = await LocalRuleSourceRepository.ensureStore();
     const transaction = await store.createTransaction();
     let deletedCount = 0;
     try {
+      const normalizedUrls = await LocalRuleSourceRepository.selectManagedUrls(transaction, requested, false, single);
+      if (single && normalizedUrls.length === 0) {
+        const existing = await LocalRuleSourceRepository.selectManagedUrls(transaction, requested, true, true);
+        if (existing.length > 0) throw new Error('书源已锁定，请先解锁');
+      }
       for (let start = 0; start < normalizedUrls.length; start += BATCH_PREDICATE_LIMIT) {
         const end = Math.min(normalizedUrls.length, start + BATCH_PREDICATE_LIMIT);
         const batchValues: relationalStore.ValueType[] = [];
@@ -556,6 +691,9 @@ export class LocalRuleSourceRepository {
     await store.execute(CREATE_COOKIE_TABLE_SQL);
     await store.execute(`CREATE TABLE IF NOT EXISTS ${STATE_TABLE_NAME} (` +
       'source_url TEXT PRIMARY KEY NOT NULL, state_json TEXT NOT NULL)');
+    await store.execute(`CREATE TABLE IF NOT EXISTS ${GROUP_TABLE_NAME} (` +
+      'group_name TEXT PRIMARY KEY NOT NULL, created_at INTEGER NOT NULL)');
+    await LocalRuleSourceRepository.migrateManagementFields(store);
     LocalRuleSourceRepository.store = store;
   }
 
@@ -569,15 +707,220 @@ export class LocalRuleSourceRepository {
     return LocalRuleSourceRepository.store;
   }
 
-  private static async updateEnabled(sourceUrl: string, enabled: boolean): Promise<boolean> {
+  private static async migrateManagementFields(store: relationalStore.RdbStore): Promise<void> {
+    const transaction = await store.createTransaction();
+    try {
+      const columns = new Set<string>();
+      const schema = await transaction.querySql(`PRAGMA table_info(${TABLE_NAME})`);
+      try {
+        while (schema.goToNextRow()) columns.add(schema.getString(1));
+      } finally {
+        schema.close();
+      }
+      const fields: string[] = ['enabled_explore', 'is_locked', 'is_pinned', 'custom_order'];
+      const missing = fields.filter((field: string): boolean => !columns.has(field));
+      for (const field of missing) {
+        await transaction.execute(`ALTER TABLE ${TABLE_NAME} ADD COLUMN ${field} INTEGER NOT NULL DEFAULT 0`);
+      }
+      if (missing.length > 0) {
+        const rows = await transaction.querySql(`SELECT source_url, source_json FROM ${TABLE_NAME} ` +
+          'ORDER BY sort_order DESC, source_name COLLATE NOCASE ASC');
+        const urls: string[] = [];
+        const definitions: string[] = [];
+        try {
+          while (rows.goToNextRow()) {
+            urls.push(rows.getString(0));
+            definitions.push(rows.getString(1));
+          }
+        } finally {
+          rows.close();
+        }
+        for (let index = 0; index < urls.length; index++) {
+          const parsed = LocalRuleSourceImportParser.parse(definitions[index]).sources;
+          const source = parsed.length > 0 ? parsed[0] : new LocalRuleSource();
+          const values: relationalStore.ValuesBucket = {};
+          if (missing.includes('enabled_explore')) values['enabled_explore'] = source.enabledExplore ? 1 : 0;
+          if (missing.includes('is_locked')) values['is_locked'] = source.isLocked ? 1 : 0;
+          if (missing.includes('is_pinned')) values['is_pinned'] = source.isPinned ? 1 : 0;
+          if (missing.includes('custom_order')) values['custom_order'] = index;
+          const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+          predicates.equalTo('source_url', urls[index]);
+          await transaction.update(values, predicates);
+        }
+      }
+      await transaction.commit();
+    } catch (error) {
+      await LocalRuleSourceRepository.rollback(transaction);
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
+  private static async updateManagedBatch(sourceUrls: string[], values: relationalStore.ValuesBucket,
+    allowLocked: boolean): Promise<number> {
+    if (sourceUrls.length === 0) return 0;
     const store = await LocalRuleSourceRepository.ensureStore();
-    const values: relationalStore.ValuesBucket = {
-      'enabled': enabled ? 1 : 0,
-      'updated_at': Date.now()
-    };
-    const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
-    predicates.equalTo('source_url', sourceUrl);
-    return (await store.update(values, predicates)) > 0;
+    const transaction = await store.createTransaction();
+    try {
+      const urls = await LocalRuleSourceRepository.selectManagedUrls(transaction,
+        LocalRuleSourceRepository.normalizeUrls(sourceUrls), allowLocked);
+      let updatedCount = 0;
+      for (let start = 0; start < urls.length; start += BATCH_PREDICATE_LIMIT) {
+        const args: relationalStore.ValueType[] = urls.slice(start, start + BATCH_PREDICATE_LIMIT);
+        const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+        predicates.in('source_url', args);
+        updatedCount += await transaction.update(values, predicates);
+      }
+      const group = values['source_group'];
+      if (updatedCount > 0 && typeof group === 'string' && group.length > 0) {
+        for (const name of LocalRuleSourceRepository.groupNames(group)) {
+          const groupValues: relationalStore.ValuesBucket = { 'group_name': name, 'created_at': Date.now() };
+          await transaction.insert(GROUP_TABLE_NAME, groupValues,
+            relationalStore.ConflictResolution.ON_CONFLICT_IGNORE);
+        }
+      }
+      await transaction.commit();
+      return updatedCount;
+    } catch (error) {
+      await LocalRuleSourceRepository.rollback(transaction);
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
+  private static async selectManagedUrls(transaction: relationalStore.Transaction, urls: string[],
+    allowLocked: boolean, allowMissing: boolean = false): Promise<string[]> {
+    const eligible: string[] = [];
+    for (let start = 0; start < urls.length; start += BATCH_PREDICATE_LIMIT) {
+      const batch = urls.slice(start, start + BATCH_PREDICATE_LIMIT);
+      const args: relationalStore.ValueType[] = batch;
+      const placeholders = batch.map((_url: string): string => '?').join(',');
+      const rows = await transaction.querySql(`SELECT source_url, is_locked FROM ${TABLE_NAME} ` +
+        `WHERE source_url IN (${placeholders})`, args);
+      let found = 0;
+      try {
+        while (rows.goToNextRow()) {
+          found++;
+          if (allowLocked || rows.getLong(1) === 0) eligible.push(rows.getString(0));
+        }
+      } finally {
+        rows.close();
+      }
+      if (!allowMissing && found !== batch.length) throw new Error('部分书源不存在，操作已取消');
+    }
+    return eligible;
+  }
+
+  private static normalizeUrls(sourceUrls: string[]): string[] {
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    for (const value of sourceUrls) {
+      const url = LocalRuleSourceRepository.requireSourceUrl(value);
+      if (!seen.has(url)) urls.push(url);
+      seen.add(url);
+    }
+    return urls;
+  }
+
+  private static normalizeGroup(value: string, allowEmpty: boolean): string {
+    const group = value.trim();
+    if (!allowEmpty && group.length === 0) throw new Error('分组名称不能为空');
+    if (group.length > 100) throw new Error('分组名称不能超过 100 个字符');
+    if (/[\r\n\x00-\x1f]/.test(group)) throw new Error('分组名称包含非法字符');
+    if (/[,，·|]/.test(group)) throw new Error('分组名称不能包含分隔符');
+    return group;
+  }
+
+  private static async groupExists(transaction: relationalStore.Transaction, group: string): Promise<boolean> {
+    const rows = await transaction.querySql(`SELECT group_name FROM ${GROUP_TABLE_NAME} ` +
+      `UNION SELECT source_group FROM ${TABLE_NAME} WHERE TRIM(source_group) <> ''`);
+    try {
+      while (rows.goToNextRow()) {
+        if (LocalRuleSourceRepository.groupNames(rows.getString(0)).includes(group)) return true;
+      }
+      return false;
+    } finally {
+      rows.close();
+    }
+  }
+
+  private static async changeGroup(oldGroup: string, newGroup: string): Promise<number> {
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const transaction = await store.createTransaction();
+    try {
+      if (!await LocalRuleSourceRepository.groupExists(transaction, oldGroup)) throw new Error('分组不存在');
+      if (newGroup.length > 0 && await LocalRuleSourceRepository.groupExists(transaction, newGroup)) {
+        throw new Error('分组名称已存在');
+      }
+      const sourceRows = await transaction.querySql(`SELECT source_url, source_group FROM ${TABLE_NAME} ` +
+        "WHERE is_locked = 0 AND TRIM(source_group) <> ''");
+      const sourceUrls: string[] = [];
+      const sourceGroups: string[] = [];
+      try {
+        while (sourceRows.goToNextRow()) {
+          const names = LocalRuleSourceRepository.groupNames(sourceRows.getString(1));
+          if (!names.includes(oldGroup)) continue;
+          sourceUrls.push(sourceRows.getString(0));
+          sourceGroups.push(LocalRuleSourceRepository.replaceGroupName(names, oldGroup, newGroup).join(','));
+        }
+      } finally {
+        sourceRows.close();
+      }
+      for (let index = 0; index < sourceUrls.length; index++) {
+        const values: relationalStore.ValuesBucket = {
+          'source_group': sourceGroups[index], 'updated_at': Date.now()
+        };
+        const predicates = new relationalStore.RdbPredicates(TABLE_NAME);
+        predicates.equalTo('source_url', sourceUrls[index]);
+        await transaction.update(values, predicates);
+      }
+      const groupRows = await transaction.querySql(`SELECT group_name FROM ${GROUP_TABLE_NAME}`);
+      const storedGroups: string[] = [];
+      try {
+        while (groupRows.goToNextRow()) storedGroups.push(groupRows.getString(0));
+      } finally {
+        groupRows.close();
+      }
+      // 兼容旧版本曾把 A,B 作为一个持久分组保存的情况。
+      for (const stored of storedGroups) {
+        const names = LocalRuleSourceRepository.groupNames(stored);
+        if (!names.includes(oldGroup)) continue;
+        const predicates = new relationalStore.RdbPredicates(GROUP_TABLE_NAME);
+        predicates.equalTo('group_name', stored);
+        await transaction.delete(predicates);
+        for (const name of LocalRuleSourceRepository.replaceGroupName(names, oldGroup, newGroup)) {
+          const values: relationalStore.ValuesBucket = { 'group_name': name, 'created_at': Date.now() };
+          await transaction.insert(GROUP_TABLE_NAME, values, relationalStore.ConflictResolution.ON_CONFLICT_IGNORE);
+        }
+      }
+      if (newGroup.length > 0) {
+        const values: relationalStore.ValuesBucket = { 'group_name': newGroup, 'created_at': Date.now() };
+        await transaction.insert(GROUP_TABLE_NAME, values, relationalStore.ConflictResolution.ON_CONFLICT_IGNORE);
+      }
+      await transaction.commit();
+      return sourceUrls.length;
+    } catch (error) {
+      await LocalRuleSourceRepository.rollback(transaction);
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
+  private static replaceGroupName(names: string[], oldName: string, newName: string): string[] {
+    const updated: string[] = [];
+    for (const name of names) {
+      const next = name === oldName ? newName : name;
+      if (next.length > 0 && !updated.includes(next)) updated.push(next);
+    }
+    return updated;
+  }
+
+  private static async rollback(transaction: relationalStore.Transaction): Promise<void> {
+    try {
+      await transaction.rollback();
+    } catch (_error) {
+      // 保留最初的数据库错误。
+    }
   }
 
   private static prepare(source: LocalRuleSource): PreparedRuleSource {
@@ -608,7 +951,7 @@ export class LocalRuleSourceRepository {
   }
 
   private static toValues(item: PreparedRuleSource, sortOrder: number,
-    now: number): relationalStore.ValuesBucket {
+    now: number, createdAt: number): relationalStore.ValuesBucket {
     const source = item.source;
     const values: relationalStore.ValuesBucket = {
       'source_url': source.bookSourceUrl.trim(),
@@ -617,10 +960,14 @@ export class LocalRuleSourceRepository {
       'source_group': source.bookSourceGroup,
       'source_json': item.sourceJson,
       'enabled': source.enabled ? 1 : 0,
+      'enabled_explore': source.enabledExplore ? 1 : 0,
+      'is_locked': source.isLocked ? 1 : 0,
+      'is_pinned': source.isPinned ? 1 : 0,
+      'custom_order': source.customOrder,
       'validation_status': source.validationStatus,
       'validation_message': source.validationMessage,
       'sort_order': sortOrder,
-      'created_at': now,
+      'created_at': createdAt,
       'updated_at': now
     };
     return values;
@@ -665,6 +1012,10 @@ export class LocalRuleSourceRepository {
     source.bookSourceName = sourceName;
     source.bookSourceType = sourceType;
     source.bookSourceGroup = sourceGroup;
+    source.enabledExplore = resultSet.getLong(8) !== 0;
+    source.isLocked = resultSet.getLong(9) !== 0;
+    source.isPinned = resultSet.getLong(10) !== 0;
+    source.customOrder = resultSet.getLong(11);
     source.rawSourceJson = sourceJson;
     return source;
   }

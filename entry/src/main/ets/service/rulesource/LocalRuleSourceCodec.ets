@@ -3,6 +3,15 @@ import { LocalRuleSourceImportParser } from './LocalRuleSourceImportParser';
 
 /** Merge editable fields into the original definition so extension fields survive a round trip. */
 export class LocalRuleSourceCodec {
+  static exportBatch(sources: LocalRuleSource[]): string {
+    const definitions: Record<string, Object>[] = [];
+    for (const source of sources) {
+      const definition: Record<string, Object> = JSON.parse(LocalRuleSourceCodec.stringify(source));
+      definitions.push(definition);
+    }
+    return JSON.stringify(definitions, null, 2);
+  }
+
   static stringify(source: LocalRuleSource): string {
     const original: Record<string, Object> = source.rawSourceJson.trim().length > 0
       ? JSON.parse(source.rawSourceJson) : {};
@@ -10,7 +19,9 @@ export class LocalRuleSourceCodec {
     const originals = LocalRuleSourceImportParser.parse(source.rawSourceJson).sources;
     const baseline: Record<string, Object> = originals.length === 1 ? JSON.parse(JSON.stringify(originals[0])) : {};
     const result: Record<string, Object> = {};
-    const omitted: string[] = ['rawSourceJson', 'validationStatus', 'validationMessage'];
+    const omitted: string[] = ['rawSourceJson', 'validationStatus', 'validationMessage', 'locked',
+      'loginHeader', 'loginInfo', 'loginResult', 'cookie', 'cookies', 'cookieHeader',
+      'token', 'accessToken', 'refreshToken', 'deviceId', 'accountLabel', 'session', 'scriptState'];
     for (const key of Object.keys(original)) {
       if (!omitted.includes(key)) result[key] = original[key];
     }

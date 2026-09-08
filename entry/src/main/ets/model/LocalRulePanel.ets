@@ -24,6 +24,7 @@ export class LocalRulePanelAction {
   searchKeyword: string = '';
   refresh: boolean = false;
   browserUrl: string = '';
+  browseUrl: string = '';
 }
 
 export class LocalRuleExploreResult {

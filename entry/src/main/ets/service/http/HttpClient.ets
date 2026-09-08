@@ -10,6 +10,8 @@
 import { rcp } from '@kit.RemoteCommunicationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CharsetCodec } from '../../utils/CharsetCodec';
+import { LocalRuleTlsTrustStore } from '../rulesource/LocalRuleTlsTrustStore';
+import { url as arkUrl } from '@kit.ArkTS';
 
 const DEFAULT_UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
 const DEFAULT_TIMEOUT = 30000;
@@ -72,8 +74,63 @@ export class HttpClient {
   }
 
   static async request(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
-    const session = getSession();
+    let address = url;
+    let current = options;
+    const deadline = Date.now() + (options.timeout || DEFAULT_TIMEOUT);
+    const visited = new Set<string>();
+    for (let redirects = 0; redirects <= 5; redirects++) {
+      if (visited.has(address)) throw new Error('HTTP redirect loop');
+      visited.add(address);
+      const trusted = await LocalRuleTlsTrustStore.isTrustedUrl(address);
+      const response = await HttpClient.requestOnce(address, current, trusted);
+      if (options.autoRedirect === false || ![301, 302, 303, 307, 308].includes(response.statusCode)) return response;
+      let location = '';
+      for (const name of Object.keys(response.headers)) {
+        if (name.toLowerCase() === 'location') location = response.headers[name];
+      }
+      if (!location) return response;
+      if (redirects === 5) throw new Error('HTTP redirects exceeded');
+      const before = new arkUrl.URL(address);
+      const after = new arkUrl.URL(location, before);
+      if (after.protocol !== 'https:' && after.protocol !== 'http:') throw new Error('Unsupported redirect protocol');
+      const headers: Record<string, string> = {};
+      let method = (current.method || 'GET').toUpperCase();
+      const dropBody = (response.statusCode === 303 && method !== 'HEAD') ||
+        ([301, 302].includes(response.statusCode) && method === 'POST');
+      if (dropBody) method = 'GET';
+      const previousHeaders: Record<string, string> = current.headers ?? {};
+      for (const name of Object.keys(previousHeaders)) {
+        const lower = name.toLowerCase();
+        if (before.origin !== after.origin &&
+          ['authorization', 'cookie', 'proxy-authorization', 'host'].includes(lower)) continue;
+        if (dropBody && ['content-type', 'content-length', 'transfer-encoding'].includes(lower)) continue;
+        headers[name] = previousHeaders[name];
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('HTTP redirect timeout');
+      current = { method: method, headers: headers, body: dropBody ? undefined : current.body,
+        timeout: remaining, charset: current.charset, retry: current.retry, autoRedirect: false };
+      address = after.href;
+    }
+    throw new Error('HTTP redirects exceeded');
+  }
 
+  private static async requestOnce(url: string, options: HttpRequestOptions,
+    trusted: boolean): Promise<HttpResponse> {
+    // Exception connections cannot enter the shared pool or outlive a revocation.
+    const session = trusted ? rcp.createSession() : getSession();
+    try {
+      return await HttpClient.performRequest(session, url, options, trusted);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(LocalRuleTlsTrustStore.describeFailure(message, url));
+    } finally {
+      if (trusted) session.close();
+    }
+  }
+
+  private static async performRequest(session: rcp.Session, url: string,
+    options: HttpRequestOptions, trusted: boolean): Promise<HttpResponse> {
     // 用大小写不敏感的累积器收集 header（最终发送时再转成 Record）
     const accum: Map<string, string> = new Map();
     if (options.headers) {
@@ -114,13 +171,14 @@ export class HttpClient {
     const req = new rcp.Request(url, method, finalHeaders, content);
     req.configuration = {
       transfer: {
-        autoRedirect: options.autoRedirect ?? true,
+        autoRedirect: false,
         maxAutoRedirects: 5,
         timeout: {
           connectMs: timeout,
           transferMs: timeout,
         },
       },
+      security: { remoteValidation: trusted ? 'skip' : 'system' },
     };
 
     const maxRetry = options.retry ?? 0;

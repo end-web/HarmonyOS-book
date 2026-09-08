@@ -1,6 +1,7 @@
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { CharsetCodec } from '../../utils/CharsetCodec';
 import { LocalRuleDataUrl } from './LocalRuleDataUrl';
+import { LocalRuleJsonLiteral } from './LocalRuleJsonLiteral';
 import { LocalRuleExecutionLimits, LocalRuleRequestPlan } from './LocalRuleRuntimeTypes';
 
 class LocalRuleUrlParts {
@@ -41,8 +42,9 @@ export class LocalRuleUrlAnalyzer {
     }
 
     if (address.toLowerCase().startsWith('data:')) {
-      plan.inlineBody = LocalRuleDataUrl.decode(address);
-      if (String(parts.options['type'] ?? '') === 'request') {
+      const dataType = String(parts.options['type'] ?? '').trim();
+      plan.inlineBody = LocalRuleDataUrl.decode(address, dataType.length > 0 && dataType !== 'request');
+      if (dataType === 'request') {
         address = String(parts.options['url'] ?? parts.options['requestUrl'] ?? '').trim();
         LocalRuleUrlAnalyzer.assertHttpUrl(address);
         plan.inlineBody = undefined;
@@ -104,7 +106,7 @@ export class LocalRuleUrlAnalyzer {
     const text = headerText.trim();
     if (!text) return headers;
     try {
-      const value = JSON.parse(text) as Object;
+      const value: Object | null = LocalRuleJsonLiteral.parse(text);
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
         const record = value as Record<string, Object>;
         const keys = Object.keys(record);
@@ -388,18 +390,8 @@ export class LocalRuleUrlAnalyzer {
       .replace(new RegExp('&#39;|&apos;', 'gi'), "'");
   }
 
-  private static parseLooseObject(value: string): Object {
-    try {
-      return JSON.parse(value) as Object;
-    } catch (_strictError) {
-      let normalized = value.trim();
-      normalized = normalized.replace(
-        new RegExp('([,{]\\s*)([A-Za-z_$][A-Za-z0-9_$-]*)(\\s*:)', 'g'), '$1"$2"$3');
-      normalized = normalized.replace(new RegExp("'([^'\\\\]*(?:\\\\.[^'\\\\]*)*)'", 'g'),
-        (_match: string, body: string): string => `"${body.replace(new RegExp('"', 'g'), '\\"')}"`);
-      normalized = normalized.replace(new RegExp(',\\s*([}\\]])', 'g'), '$1');
-      return JSON.parse(normalized) as Object;
-    }
+  private static parseLooseObject(value: string): Object | null {
+    return LocalRuleJsonLiteral.parse(value);
   }
 
   private static encodeUrlCharacters(value: string, charset: string, form: boolean): string {

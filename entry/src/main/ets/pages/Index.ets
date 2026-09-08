@@ -25,6 +25,7 @@ import { RuleSourceDebugPage } from './RuleSourceDebugPage';
 import { RuleSourcePanelPage } from './RuleSourcePanelPage';
 import { TextReaderRouteParams } from '../model/TextReading';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
+import { LocalRuleBrowserLoginCoordinator } from '../service/rulesource/LocalRuleBrowserLoginCoordinator';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
 import { HdsNavDestination, hdsMaterial } from '@kit.UIDesignKit';
@@ -56,10 +57,14 @@ struct Index {
   private widgetSubscribed: boolean = false;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
+  private browserLoginOpener: (route: RuleSourceLoginRouteParams) => void = (route: RuleSourceLoginRouteParams): void => {
+    this.navStack.pushPathByName('ruleSourceLogin', route);
+  };
 
   aboutToAppear(): void {
     // 先 push home 作为栈底,再消费 widget 路由,保证栈不空
     this.navStack.pushPathByName('home', null, false);
+    LocalRuleBrowserLoginCoordinator.bindNavigation(this.browserLoginOpener);
 
     this.consumePendingWidgetRoute();
     if (!this.widgetSubscribed) {
@@ -78,6 +83,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    LocalRuleBrowserLoginCoordinator.unbindNavigation(this.browserLoginOpener);
     if (this.widgetSubscribed) {
       try {
         emitter.off(EVT_WIDGET_ROUTE);

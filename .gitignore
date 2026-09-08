@@ -22,7 +22,9 @@ obfuscation-cache.json
 # 本地 UI 验证截图与层级 dump
 /artifacts/*.png
 /artifacts/*.hap
-/ui-dump-current/
+/artifacts/*.hap.sha256
+/*.hap
+/ui-dump*/
 
 # Build logs
 *.log
@@ -46,7 +48,7 @@ simple_dump_*.txt
 .verify/
 reader_shot.png
 
-# 书源导出/抓取的临时文本 dump(run-book-source skill 产物)
+# 书源导出/抓取的临时文本 dump
 /*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_*.txt
 /猫眼.txt
 /*api-import.json

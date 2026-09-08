@@ -1,7 +1,11 @@
+import { LocalRuleBrowserCompat } from './LocalRuleBrowserCompat';
+import { LocalRuleJavaCompat } from './LocalRuleJavaCompat';
+import { LocalRuleLegacyCrypto } from './LocalRuleLegacyCrypto';
+
 /** This code runs only inside the bounded QuickJS context, never in ArkWeb or the ArkTS VM. */
 export class LocalRuleScriptCompat {
   static code(): string {
-    return `
+    return LocalRuleLegacyCrypto.code() + `
 const action=function(operation,args){
   const spec='local-rule-action:'+JSON.stringify(Object.assign({operation:operation},args));
   const response=request(spec);if(!response)return null;
@@ -47,6 +51,7 @@ const digestHex=function(algorithm,value){return String(action('digest',{algorit
 java.base64Encode=function(v,flags){return encodeBase64(v,(Number(flags)&8)!==0);};
 java.base64EncodeToString=java.base64Encode;
 java.base64Decode=function(v){return decodeBase64(v);};
+java.base64DecodeToByteArray=java.base64Decode;
 java.base64DecodeToString=function(v,charset){return fromBytes(decodeBase64(v),charset);};
 java.base64UrlEncode=function(v){return encodeBase64(v,true);};
 java.base64UrlDecode=java.base64DecodeToString;
@@ -59,17 +64,46 @@ java.digestHex=digestHex;
 java.hmac=function(algorithm,value,key){return String(action('hmac',{algorithm:String(algorithm).replace(/^Hmac/i,''),data:bytesHex(toBytes(value)),key:bytesHex(toBytes(key))})||'');};
 java.hmacSha256=function(value,key){return java.hmac('SHA256',value,key);};
 const createSymmetricCrypto=function(algorithm,key,iv){
-  const run=function(data,encrypt){return fromHex(action('cipher',{algorithm:String(algorithm||'AES/CBC/PKCS5Padding'),
-    key:bytesHex(toBytes(key)),iv:bytesHex(toBytes(iv||[])),data:bytesHex(toBytes(data)),encrypt:encrypt})||'');};
-  return {encrypt:function(v){return run(v,true);},decrypt:function(v){return run(v,false);},
+  const spec=String(algorithm||'AES/CBC/PKCS5Padding'),parts=spec.toUpperCase().split('/');
+  const run=function(data,encrypt){const input=toBytes(data),keyBytes=toBytes(key),ivBytes=toBytes(iv||[]);
+    if(/^(DES|DESEDE|3DES|TRIPLEDES)$/.test(parts[0])){
+      const triple=parts[0]!=='DES',mode=parts[1]||'ECB',padding=parts[2]||'PKCS5PADDING';
+      if(!['CBC','ECB'].includes(mode)||!['NOPADDING','PKCS5PADDING','PKCS7PADDING'].includes(padding))throw new Error('Unsupported legacy cipher parameters');
+      if(triple?![16,24].includes(keyBytes.length):keyBytes.length!==8)throw new Error('Invalid legacy cipher key length');
+      if(mode==='CBC'&&ivBytes.length!==8)throw new Error('Invalid legacy cipher IV length');
+      if(input.length>1048576||(!encrypt||padding==='NOPADDING')&&input.length%8!==0)throw new Error('Invalid legacy cipher input length');
+      const words=legacyCrypto.enc.Hex.parse(bytesHex(input)),keyWords=legacyCrypto.enc.Hex.parse(bytesHex(keyBytes));
+      const options={mode:legacyCrypto.mode[mode],padding:encrypt&&padding!=='NOPADDING'?legacyCrypto.pad.Pkcs7:legacyCrypto.pad.NoPadding,
+        iv:legacyCrypto.enc.Hex.parse(bytesHex(ivBytes))};const engine=triple?legacyCrypto.TripleDES:legacyCrypto.DES;
+      const output=encrypt?engine.encrypt(words,keyWords,options).ciphertext:engine.decrypt({ciphertext:words},keyWords,options);
+      const result=fromHex(output.toString(legacyCrypto.enc.Hex));
+      if(!encrypt&&padding!=='NOPADDING'){const count=result[result.length-1];if(!count||count>8||count>result.length||result.slice(-count).some(v=>v!==count))throw new Error('Invalid legacy cipher padding');result.length-=count;}
+      return result;
+    }
+    return fromHex(action('cipher',{algorithm:parts.length===1?spec+'/ECB/PKCS5Padding':spec,
+      key:bytesHex(keyBytes),iv:bytesHex(ivBytes),data:bytesHex(input),encrypt:encrypt})||'');};
+  const encryptedBytes=function(value){if(typeof value!=='string')return value;const text=value.trim();
+    if(text.length&&text.length%2===0&&/^[0-9a-f]+$/i.test(text))return fromHex(text);
+    try{return decodeBase64(text);}catch(_error){return toBytes(text);}};
+  return {encrypt:function(v){return run(v,true);},decrypt:function(v){return run(encryptedBytes(v),false);},
+    encryptStr:function(v,charset){return fromBytes(run(v,true),charset);},
     encryptBase64:function(v){return encodeBase64(run(v,true));},decryptBase64:function(v){return run(decodeBase64(v),false);},
     encryptHex:function(v){return bytesHex(run(v,true));},decryptHex:function(v){return run(fromHex(v),false);},
-    decryptStr:function(v,charset){return fromBytes(run(typeof v==='string'?decodeBase64(v):v,false),charset);},
+    decryptStr:function(v,charset){return fromBytes(run(encryptedBytes(v),false),charset);},
     decryptBase64ToString:function(v,charset){return fromBytes(run(decodeBase64(v),false),charset);}};
 };
 java.createSymmetricCrypto=createSymmetricCrypto;
 java.aesDecodeToString=function(data,key,iv,algorithm){return createSymmetricCrypto(algorithm||'AES/CBC/PKCS5Padding',key,iv).decryptBase64ToString(data);};
 java.aesEncodeToString=function(data,key,iv,algorithm){return createSymmetricCrypto(algorithm||'AES/CBC/PKCS5Padding',key,iv).encryptBase64(data);};
+const legacyHelper=function(data,key,algorithm,iv,encrypt,family){const keyBytes=toBytes(key),spec=String(algorithm||family+'/CBC/PKCS5Padding');
+  const triple=/^(DESEDE|3DES|TRIPLEDES)/i.test(spec),length=triple?24:family==='DES'?8:keyBytes.length>=32?32:keyBytes.length>=24?24:16;
+  const fixed=function(bytes,size){return Array.from({length:size},function(_v,i){return bytes[i]||0;});};
+  const crypto=createSymmetricCrypto(spec,fixed(keyBytes,length),fixed(toBytes(iv||[]),family==='DES'?8:16));
+  return encrypt?crypto.encryptBase64(data):crypto.decryptBase64ToString(data);};
+java.aesBase64DecodeToString=function(data,key,algorithm,iv){return legacyHelper(data,key,algorithm,iv,false,'AES');};
+java.aesEncodeToBase64String=function(data,key,algorithm,iv){return legacyHelper(data,key,algorithm,iv,true,'AES');};
+java.desBase64DecodeToString=function(data,key,algorithm,iv){return legacyHelper(data,key,algorithm,iv,false,'DES');};
+java.desEncodeToBase64String=function(data,key,algorithm,iv){return legacyHelper(data,key,algorithm,iv,true,'DES');};
 const formatTime=function(value,pattern,zone){const timestamp=Number(value),d=new Date(Number.isFinite(timestamp)?timestamp:fixedNow);
   const utc=zone!==undefined;if(utc)d.setTime(d.getTime()+Number(zone||0)*3600000);
   const get=function(name){return d[(utc?'getUTC':'get')+name]();};
@@ -84,6 +118,7 @@ java.urlEncode=function(value,charset){return toBytes(value,charset).map(functio
 java.urlDecode=function(value,charset){const text=String(value??'').replace(/\\+/g,' '),bytes=[];
   for(let i=0;i<text.length;i++){if(text[i]==='%'&&/^[0-9a-f]{2}$/i.test(text.slice(i+1,i+3))){bytes.push(parseInt(text.slice(i+1,i+3),16));i+=2;}else bytes.push(...utf8Bytes(text[i]));}
   return fromBytes(bytes,charset);};
+java.encodeURI=function(value){return encodeURIComponent(String(value??''));};
 let ruleContent=src;
 const extractValues=function(rule,elements,content){
   const payload=content===undefined?ruleContent:String(content),path=String(rule||'');
@@ -93,7 +128,7 @@ const extractValues=function(rule,elements,content){
 };
 const listMethods=function(list){Object.defineProperties(list,{size:{value:function(){return this.length;}},get:{value:function(i){return this[Number(i)];}},
   isEmpty:{value:function(){return this.length===0;}},toArray:{value:function(){return Array.from(this);}}});return list;};
-const elementObject=function(html){return {toString:function(){return html;},outerHtml:function(){return html;},
+const elementObject=function(html){return {toString:function(){return html;},toJSON:function(){return html;},outerHtml:function(){return html;},
   text:function(){return extractValues('@text',false,html).join(' ');},html:function(){return extractValues('@html',false,html).join('');},
   attr:function(name){return extractValues('@'+name,false,html)[0]||'';},
   select:function(rule){return listMethods(extractValues(rule,true,html).map(elementObject));}};};
@@ -160,13 +195,71 @@ globalThis.importClass=function(type){if(typeof type==='function'&&type.name)glo
 globalThis.importPackage=function(pkg){if(!Object.values(Packages).includes(pkg)&&pkg!==java.util&&pkg!==java.lang)throw new Error('Unsupported Java package');Object.assign(globalThis,pkg);};
 java.androidId=function(){let id=source.get('__androidId');if(!id){id=java.randomUUID().replace(/-/g,'').slice(0,16);source.put('__androidId',id);}return id;};
 java.startBrowser=function(url){const target=String(url||'');if(!/^https:\\/\\//i.test(target))throw new Error('Login requires HTTPS');
-  V.__openBrowser=target;return '';};
-java.startBrowserAwait=java.startBrowser;
+  V.__openBrowser=target;return {body:function(){return '';},url:function(){return target;},toString:function(){return '';}};};
+java.startBrowserAwait=function(url){const target=String(url||'');if(!/^https:\\/\\//i.test(target))throw new Error('Login requires HTTPS');
+  const html=String(action('browserLogin',{url:target})??'');return {body:function(){return html;},url:function(){return target;},toString:function(){return html;}};};
+java.showBrowser=function(url,html,script){const target=String(url||baseUrl),content=String(html??''),code=String(script??'');
+  if(!content&&!code)return java.startBrowser(target);if(!/^https:\\/\\//i.test(target))throw new Error('Browser requires HTTPS');
+  const rendered=String(action('showBrowser',{url:target,html:content,script:code})??'');
+  return {body:function(){return rendered;},url:function(){return target;},toString:function(){return rendered;}};};
 source.removeLoginInfo=function(){S.loginInfo='';};source.removeLoginHeader=function(){S.loginHeader='';};
-source.getLoginHeaderMap=function(){return parseValue(S.loginHeader||'{}');};
+const mapView=function(value){const map=value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+  const methods={get:function(k){return Object.prototype.hasOwnProperty.call(this,String(k))?this[String(k)]:null;},
+    put:function(k,v){const old=this.get(k);Object.defineProperty(this,String(k),{value:v,writable:true,enumerable:true,configurable:true});return old;},
+    remove:function(k){const old=this.get(k);delete this[String(k)];return old;},
+    putAll:function(v){if(v&&typeof v.toJSON==='function')v=v.toJSON();Object.keys(v||{}).forEach(k=>this.put(k,v[k]));return this;},
+    size:function(){return Object.keys(this).length;},isEmpty:function(){return this.size()===0;}};
+  Object.keys(methods).forEach(function(k){if(!Object.prototype.hasOwnProperty.call(map,k))Object.defineProperty(map,k,{value:methods[k],configurable:true});});return map;};
+source.getLoginHeaderMap=function(){if(!S.loginHeader)return null;const value=parseValue(S.loginHeader);
+  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length===0)return null;
+  for(const key of Object.keys(value)){const match=/^Bearer\\s+[A-Za-z0-9_-]+\\.([A-Za-z0-9_-]+)\\./i.exec(String(value[key]));
+    if(match){try{const token=JSON.parse(java.base64DecodeToString(match[1]));if(Number(token.exp)>0&&Number(token.exp)*1000<=fixedNow+30000)return null;}catch(_error){}}}
+  return mapView(value);};
+source.getHeaderMap=function(){return mapView(parseValue(S.header||'{}'));};
+const loginMap=mapView(infoMap);
+source.getLoginInfoMap=function(){return loginMap;};
+source.getLoginInfo=function(key){return arguments.length?loginMap.get(key)??'':JSON.stringify(loginMap);};
+source.putLoginInfo=function(value,item){if(arguments.length>1){loginMap.put(value,item);S.loginInfo=JSON.stringify(loginMap);return item;}
+  const parsed=parseValue(value);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Login data must be an object');
+  if(parsed!==loginMap){const copy=Object.assign({},parsed);Object.keys(loginMap).forEach(k=>delete loginMap[k]);loginMap.putAll(copy);}
+  S.loginInfo=JSON.stringify(loginMap);return value;};
+source.removeLoginInfo=function(){Object.keys(loginMap).forEach(k=>delete loginMap[k]);S.loginInfo='';return '';};
+const sourceValues=Object.create(null),cacheValues=Object.create(null),javaValues=Object.create(null);
+const decodeStored=function(value,type){if(type==='number')return Number(value);if(type==='boolean')return value==='true';
+  if(type==='object'){try{return JSON.parse(value);}catch(_error){return null;}}return value;};
+const sourceGet=source.get;source.get=function(key){key=String(key);if(Object.prototype.hasOwnProperty.call(sourceValues,key))return sourceValues[key];
+  const value=sourceGet(key);if(!Object.prototype.hasOwnProperty.call(SV,'__sourceType:'+key))return value;
+  sourceValues[key]=decodeStored(value,SV['__sourceType:'+key]);return sourceValues[key];};
+source.put=function(key,value){key=String(key);sourceValues[key]=value;SV[key]=stringify(value);SV['__sourceType:'+key]=typeof value;return value;};
+const setSourceVariable=source.setVariable;source.setVariable=function(key,value){return arguments.length>1?source.put(key,String(value??'')):setSourceVariable(key);};
+const cacheGet=cache.get,cachePut=cache.put,cacheDelete=cache.delete;
+cache.get=function(key){key=String(key);const value=cacheGet(key);if(value===null)return null;
+  if(Object.prototype.hasOwnProperty.call(cacheValues,key))return cacheValues[key];
+  cacheValues[key]=decodeStored(value,SV['cache.'+key+'.type']);return cacheValues[key];};
+cache.put=function(key,value,seconds){key=String(key);cacheValues[key]=value;SV['cache.'+key+'.type']=typeof value;cachePut(key,value,seconds);return value;};
+cache.delete=function(key){key=String(key);delete cacheValues[key];delete SV['cache.'+key+'.type'];cacheDelete(key);return true;};
+const javaGet=java.get;java.get=function(key,headers){if(arguments.length>1||isAddress(key))return arguments.length>1?javaGet(key,headers):javaGet(key);
+  return Object.prototype.hasOwnProperty.call(javaValues,String(key))?javaValues[String(key)]:javaGet(key);};
+java.put=function(key,value){key=String(key);javaValues[key]=value;V[key]=stringify(value);return value;};
+const syncCompatState=function(){Object.keys(sourceValues).forEach(k=>SV[k]=stringify(sourceValues[k]));
+  Object.keys(cacheValues).forEach(k=>SV['cache.'+k]=stringify(cacheValues[k]));Object.keys(javaValues).forEach(k=>V[k]=stringify(javaValues[k]));
+  if(S.loginInfo||Object.keys(loginMap).length)S.loginInfo=JSON.stringify(loginMap);};
+source.refreshExplore=java.refreshExplore;
+cache.getFromMemory=cache.get;cache.getMemory=cache.get;cache.putMemory=cache.put;
+java.getAppVariant=function(){return 'harmony';};
+java.getWebViewUA=function(){return 'Mozilla/5.0 (Linux; HarmonyOS) AppleWebKit/537.36 Mobile Safari/537.36';};
+java.startBrowserDp=java.startBrowser;java.showReadingBrowser=java.startBrowser;java.open=java.startBrowser;
+java.openUrl=java.startBrowser;
+java.upLoginData=function(value){const parsed=parseValue(value);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Login data must be an object');
+  Object.keys(parsed).forEach(function(k){infoMap[k]=String(parsed[k]??'');});source.putLoginInfo(infoMap);return true;};
+java.reLoginView=function(){V.__refreshExplore='true';return true;};
+java.evalJS=function(code){return (0,eval)(String(code??''));};
+java.deviceID=java.androidId;
+Packages.io={legato:{kazusa:{utils:{TimeoutCancellationException:Error}}}};
+` + LocalRuleJavaCompat.code() + `
 java.webView=function(html,url,script){const target=String(url||baseUrl),options={webView:true,webJs:String(script||'')};
   if(html!==null&&html!==undefined&&String(html))options.webHtml=String(html);return request(target+','+JSON.stringify(options));};
-if(V.__browserSnapshot==='true'){
+if(V.__browserSnapshot==='true'&&V.__browserInteractive!=='true'){
   const domNode=function(html){const element=elementObject(html),node={};
     const read=function(rule){return extractValues(rule,false,html).join('');};
     Object.defineProperties(node,{
@@ -191,6 +284,6 @@ if(V.__browserSnapshot==='true'){
   Object.keys(window).forEach(function(k){if(!(k in globalThis))globalThis[k]=window[k];});
   globalThis.window=window;globalThis.document=document;globalThis.location=window.location;
 }
-`;
+` + LocalRuleBrowserCompat.code();
   }
 }

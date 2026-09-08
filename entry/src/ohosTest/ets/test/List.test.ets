@@ -7,6 +7,11 @@ import localRuleRuntimeTest from '../../../test/LocalRuleRuntime.test';
 import localRulePersistenceTest from './LocalRulePersistence.test';
 import localRuleBrowserIntegrationTest from './LocalRuleBrowserIntegration.test';
 import sourcePlaybackSmokeTest from './SourcePlaybackSmoke.test';
+import localRuleSourceBulkTesterTest from '../../../test/LocalRuleSourceBulkTester.test';
+import localRuleSourceRepositoryTest from '../../../test/LocalRuleSourceRepository.test';
+import localRuleTlsTrustTest from '../../../test/LocalRuleTlsTrust.test';
+import localRuleManagementIntegrationTest from './LocalRuleManagementIntegration.test';
+import localRuleBrowserLoginCoordinatorTests from '../../../test/LocalRuleBrowserLoginCoordinator.test';
 
 export default function testsuite() {
   abilityTest();
@@ -18,4 +23,9 @@ export default function testsuite() {
   localRulePersistenceTest();
   localRuleBrowserIntegrationTest();
   sourcePlaybackSmokeTest();
+  localRuleSourceBulkTesterTest();
+  localRuleSourceRepositoryTest();
+  localRuleTlsTrustTest();
+  localRuleManagementIntegrationTest();
+  localRuleBrowserLoginCoordinatorTests();
 }

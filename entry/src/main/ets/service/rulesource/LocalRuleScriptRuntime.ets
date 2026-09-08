@@ -5,6 +5,7 @@ import { LocalRuleHttpClient } from './LocalRuleHttpClient';
 import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
 import { LocalRuleScriptCompat } from './LocalRuleScriptCompat';
 import { LocalRuleScriptActions } from './LocalRuleScriptActions';
+import { LocalRuleBrowserActions } from './LocalRuleBrowserActions';
 import { LocalRuleTemplate } from './LocalRuleTemplate';
 import { LocalRuleScriptLibrary } from './LocalRuleScriptLibrary';
 import {
@@ -106,7 +107,8 @@ export class LocalRuleScriptRuntime {
   }
 
   static async evaluate(content: string, baseUrl: string, code: string,
-    source: LocalRuleSource, variables: Record<string, string>, initialResult: string = ''): Promise<string> {
+    source: LocalRuleSource, variables: Record<string, string>, initialResult: string = '',
+    jsonResult: boolean = false): Promise<string> {
     const sourceKey = source.bookSourceUrl;
     const previous = LocalRuleScriptRuntime.pendingBySource.get(sourceKey);
     let release: () => void = () => {};
@@ -116,6 +118,13 @@ export class LocalRuleScriptRuntime {
     if (previous !== undefined) await previous;
     try {
       LocalRuleDiagnostics.check(variables);
+      if (jsonResult) {
+        const scoped = LocalRuleScriptRuntime.copyVariables(variables);
+        scoped['__jsonResult'] = 'true';
+        const value = await LocalRuleScriptRuntime.evaluateLocked(content, baseUrl, code, source, scoped, initialResult);
+        LocalRuleScriptRuntime.replaceVariables(variables, scoped);
+        return value;
+      }
       return await LocalRuleScriptRuntime.evaluateLocked(content, baseUrl, code, source, variables, initialResult);
     } finally {
       release();
@@ -126,11 +135,24 @@ export class LocalRuleScriptRuntime {
   }
 
   static async evaluateBrowserSnapshot(source: LocalRuleSource, response: LocalRuleFetchResult,
-    code: string, variables: Record<string, string>): Promise<string> {
+    code: string, variables: Record<string, string>,
+    browserAction: ((address: string) => Promise<string>) | undefined = undefined): Promise<string> {
     const scoped = LocalRuleScriptRuntime.copyVariables(variables);
     scoped['__browserSnapshot'] = 'true';
     scoped['__browserState'] = response.browserState || '{}';
-    return LocalRuleScriptRuntime.evaluateLocked(response.body, response.requestUrl, code, source, scoped, response.body, true);
+    scoped['__browserInteractive'] = browserAction === undefined ? 'false' : 'true';
+    const library = await LocalRuleScriptLibrary.load(source, variables);
+    return LocalRuleScriptRuntime.evaluateLocked(response.body, response.requestUrl, code, source, scoped, response.body, true, library, browserAction);
+  }
+
+  static async evaluateList(content: string, baseUrl: string, code: string,
+    source: LocalRuleSource, variables: Record<string, string>, values: Object[]): Promise<string> {
+    const scoped = LocalRuleScriptRuntime.copyVariables(variables);
+    scoped['__listResult'] = 'true';
+    const result = await LocalRuleScriptRuntime.evaluate(content, baseUrl, code, source, scoped, JSON.stringify(values));
+    scoped['__listResult'] = '';
+    LocalRuleScriptRuntime.replaceVariables(variables, scoped);
+    return result;
   }
 
   static async transformResponse(source: LocalRuleSource, response: LocalRuleFetchResult,
@@ -143,7 +165,8 @@ export class LocalRuleScriptRuntime {
 
   private static async evaluateLocked(content: string, baseUrl: string, code: string,
     source: LocalRuleSource, variables: Record<string, string>, initialResult: string,
-    readOnly: boolean = false, readOnlyLibrary: string = ''): Promise<string> {
+    readOnly: boolean = false, readOnlyLibrary: string = '',
+    browserAction: ((address: string) => Promise<string>) | undefined = undefined): Promise<string> {
     const library = readOnly ? readOnlyLibrary : await LocalRuleScriptLibrary.load(source, variables);
     LocalRuleScriptRuntime.validate(code, library);
     const persisted = LocalRuleSourceRepository.isInitialized()
@@ -153,6 +176,7 @@ export class LocalRuleScriptRuntime {
     const originalState = JSON.stringify(sourceState);
     const responses: Record<string, string> = {};
     const initialVariables = LocalRuleScriptRuntime.copyVariables(variables);
+    initialVariables['__scriptLogs'] = '';
     initialVariables['__cookieSnapshot'] = JSON.stringify(await LocalRuleHttpClient.getCookieSnapshot(source.bookSourceUrl));
     if ((initialVariables['__scriptNow'] ?? '').length === 0) {
       initialVariables['__scriptNow'] = String(Date.now());
@@ -162,6 +186,7 @@ export class LocalRuleScriptRuntime {
     }
     let responseCharacters = 0;
     let networkActions = 0;
+    let waitedMs = 0;
     if (baseUrl.toLowerCase().startsWith('http://') || baseUrl.toLowerCase().startsWith('https://')) {
       await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
       initialVariables['__cookie'] = LocalRuleHttpClient.getCookieHeader(source, baseUrl);
@@ -173,6 +198,7 @@ export class LocalRuleScriptRuntime {
       const request = new LocalRuleQuickJsRequest();
       request.script = script;
       request.sourceUrl = source.bookSourceUrl;
+      request.maxPendingJobs = 32;
       const execution: LocalRuleQuickJsResult = await LocalRuleQuickJsRuntime.execute(request);
       if (!execution.success) {
         const detail = execution.timedOut ? '执行超时' : (execution.errorMessage || '未知错误');
@@ -184,8 +210,27 @@ export class LocalRuleScriptRuntime {
         if (stepIndex >= LocalRuleScriptRuntime.MAX_REPLAY_STEPS) {
           throw new Error(`书源脚本动作超过 ${LocalRuleScriptRuntime.MAX_REPLAY_STEPS} 步`);
         }
+        if (step.pendingAddress.startsWith(LocalRuleBrowserActions.PREFIX)) {
+          if (browserAction === undefined) throw new Error('当前脚本没有活动网页交互会话');
+          const actionResult = await browserAction(step.pendingAddress);
+          responseCharacters += actionResult.length;
+          if (responseCharacters > LocalRuleScriptRuntime.MAX_ACTION_RESPONSE_CHARS) throw new Error('网页交互响应超过 4 MiB 预算');
+          responses[step.pendingAddress] = actionResult;
+          continue;
+        }
         if (step.pendingAddress.startsWith(LocalRuleScriptActions.PREFIX)) {
+          const actionArgs: Record<string, Object> = JSON.parse(step.pendingAddress.substring(LocalRuleScriptActions.PREFIX.length));
+          if (readOnly && (actionArgs['operation'] === 'browserLogin' || actionArgs['operation'] === 'showBrowser')) {
+            throw new Error('当前网页或响应转换不能打开另一个网页登录');
+          }
+          if (actionArgs['operation'] === 'sleep') {
+            waitedMs += Number(actionArgs['duration']);
+            if (!Number.isFinite(waitedMs) || waitedMs > 10000) throw new Error('脚本累计等待超过 10 秒预算');
+          }
           const actionResult = await LocalRuleScriptActions.execute(step.pendingAddress, source, initialVariables, baseUrl);
+          if (actionArgs['operation'] === 'browserLogin' || actionArgs['operation'] === 'showBrowser') {
+            await LocalRuleScriptRuntime.refreshCookies(source, initialVariables, baseUrl);
+          }
           responseCharacters += actionResult.length;
           if (responseCharacters > LocalRuleScriptRuntime.MAX_ACTION_RESPONSE_CHARS) throw new Error('书源脚本动作响应超过 4 MiB 预算');
           responses[step.pendingAddress] = actionResult;
@@ -211,10 +256,15 @@ export class LocalRuleScriptRuntime {
           throw new Error('书源脚本网络动作响应超过 4 MiB 预算');
         }
         responses[step.pendingAddress] = LocalRuleScriptRuntime.encodeResponse(response);
+        await LocalRuleScriptRuntime.refreshCookies(source, initialVariables, baseUrl);
         continue;
       }
       if (step.errorMessage.length > 0) throw new Error(`书源脚本执行失败：${step.errorMessage}`);
       LocalRuleDiagnostics.check(variables);
+      if (step.variables['__scriptLogs']) {
+        const logs: string[] = JSON.parse(step.variables['__scriptLogs']);
+        for (const log of logs.slice(0, 64)) LocalRuleDiagnostics.record(variables, 'info', '脚本日志', log);
+      }
       if (readOnly) return step.value;
       if (step.sourceState.length > 0 && step.sourceState !== originalState) {
         const finalState = LocalRuleScriptState.parse(step.sourceState);
@@ -247,6 +297,12 @@ export class LocalRuleScriptRuntime {
     }
   }
 
+  private static async refreshCookies(source: LocalRuleSource, variables: Record<string, string>, baseUrl: string): Promise<void> {
+    await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
+    variables['__cookieSnapshot'] = JSON.stringify(await LocalRuleHttpClient.getCookieSnapshot(source.bookSourceUrl));
+    if (new RegExp('^https?://', 'i').test(baseUrl)) variables['__cookie'] = LocalRuleHttpClient.getCookieHeader(source, baseUrl);
+  }
+
   private static buildScript(content: string, baseUrl: string, code: string,
     source: LocalRuleSource, variables: Record<string, string>, initialResult: string,
     responses: Record<string, string>, sourceState: LocalRuleScriptState, library: string): string {
@@ -255,6 +311,9 @@ export class LocalRuleScriptRuntime {
     sourceRecord['bookSourceName'] = source.bookSourceName;
     sourceRecord['bookSourceGroup'] = source.bookSourceGroup;
     sourceRecord['bookSourceComment'] = source.bookSourceComment;
+    sourceRecord['header'] = variables['__header'] ?? source.header;
+    sourceRecord['loginUrl'] = source.loginUrl;
+    sourceRecord['jsLib'] = library;
     sourceRecord['variable'] = sourceState.variable;
     sourceRecord['definitionVariable'] = sourceState.definitionVariable;
     sourceRecord['values'] = JSON.stringify(sourceState.values);
@@ -274,16 +333,16 @@ export class LocalRuleScriptRuntime {
     const maxOutput = LocalRuleExecutionLimits.MAX_CONTENT_CHARS;
 
     return `(function(){try{` +
-      `const I=${encoded};const V=Object.assign({},I.variables||{});const R=I.responses||{};` +
+      `const String=globalThis.String;const I=${encoded};const V=Object.assign({},I.variables||{});const R=I.responses||{};` +
       `let pending='';const parseValue=function(v){if(typeof v!=='string')return v;` +
       `const t=v.trim();if((t[0]==='{'&&t[t.length-1]==='}')||(t[0]==='['&&t[t.length-1]===']')){` +
       `try{return JSON.parse(t);}catch(_e){}}return v;};` +
       `const src=String(I.content||''),root=parseValue(src);let result=I.initialResult!==''?I.initialResult:src;const $=root;` +
-      `const fixedNow=Number(V.__scriptNow||Date.now()),initialSeed=Number(V.__scriptSeed||1)>>>0;let randomSeed=initialSeed||1;` +
-      `Date.now=function(){return fixedNow;};Math.random=function(){randomSeed=(randomSeed*1664525+1013904223)>>>0;` +
+      `const fixedNow=Number(V.__scriptNow||Date.now()),initialSeed=Number(V.__scriptSeed||1)>>>0;let randomSeed=initialSeed||1,scriptElapsed=0;` +
+      `Date.now=function(){return fixedNow+scriptElapsed;};Math.random=function(){randomSeed=(randomSeed*1664525+1013904223)>>>0;` +
       `return randomSeed/4294967296;};` +
-      `const RealDate=Date;const StableDate=function(...a){if(!new.target)return new RealDate(fixedNow).toString();` +
-      `return a.length?new RealDate(...a):new RealDate(fixedNow);};StableDate.now=function(){return fixedNow;};` +
+      `const RealDate=Date;const StableDate=function(...a){if(!new.target)return new RealDate(fixedNow+scriptElapsed).toString();` +
+      `return a.length?new RealDate(...a):new RealDate(fixedNow+scriptElapsed);};StableDate.now=function(){return fixedNow+scriptElapsed;};` +
       `StableDate.parse=RealDate.parse;StableDate.UTC=RealDate.UTC;StableDate.prototype=RealDate.prototype;` +
       `const readPath=function(value,path){let p=String(path||'').trim().replace(/^@json:/i,'');` +
       `if(p[0]==='@')p='$'+p.substring(1);if(p[0]!=='$')p='$.'+p;` +
@@ -306,7 +365,11 @@ export class LocalRuleScriptRuntime {
       `code:function(){return Number(data.statusCode||0);},isSuccessful:function(){const c=Number(data.statusCode||0);return c>=200&&c<400;},` +
       `headers:function(name){const h=Object.assign({},data.headers||{});Object.keys(h).forEach(function(k){h[k.toLowerCase()]=h[k];});if(name===undefined)return h;const expected=String(name).toLowerCase();` +
       `const keys=Object.keys(h);for(let i=0;i<keys.length;i++)if(keys[i].toLowerCase()===expected)return [String(h[keys[i]]??'')];` +
-      `return [];},url:function(){return String(data.requestUrl||'');},toString:function(){return String(data.body??'');}};};` +
+      `return [];},cookies:function(){const h=data.headers||{},name=Object.keys(h).find(k=>k.toLowerCase()==='set-cookie');` +
+      `const raw=name===undefined?cookieRead(data.requestUrl):String(h[name]);const values=[];` +
+      `const chunks=name===undefined?raw.split(';'):raw.split(/,(?=\\s*[^;,=]+=[^;,]*)/);` +
+      `chunks.forEach(function(v){const first=v.split(';')[0].trim();if(first.includes('='))values.push(first);});` +
+      `return listMethods(values);},url:function(){return String(data.requestUrl||'');},toString:function(){return String(data.body??'');}};};` +
       `const requestSpec=function(method,u,b,h){const o={method:String(method||'GET').toUpperCase(),redirect:false};` +
       `if(b!==undefined&&b!==null)o.body=typeof b==='string'?b:JSON.stringify(b);` +
       `if(typeof h==='string'){try{h=JSON.parse(h);}catch(_e){h={};}}if(h&&typeof h.toJSON==='function')h=h.toJSON();` +
@@ -387,14 +450,17 @@ export class LocalRuleScriptRuntime {
       `const r=Math.random()*16|0;return(c==='x'?r:(r&3|8)).toString(16);});},` +
       `lang:function(){return 'zh';},log:function(){},toast:function(){},longToast:function(){}};` +
       `const S=Object.assign({},I.source||{}),SV=JSON.parse(S.values||'{}');const source={bookSourceUrl:S.bookSourceUrl||'',` +
-      `bookSourceName:S.bookSourceName||'',bookSourceGroup:S.bookSourceGroup||'',variable:S.variable||'',` +
+      `bookSourceName:S.bookSourceName||'',bookSourceGroup:S.bookSourceGroup||'',bookSourceComment:S.bookSourceComment||'',` +
+      `header:S.header||'',loginUrl:S.loginUrl||'',jsLib:S.jsLib||'',variable:S.variable||'',` +
       `key:S.bookSourceUrl||'',tag:S.bookSourceName||'',` +
       `getKey:function(){return S.bookSourceUrl||'';},getTag:function(){return S.bookSourceName||'';},` +
-      `getSource:function(){return source;},getVariable:function(){return S.variable||'';},` +
-      `setVariable:function(v){S.variable=String(v??'');source.variable=S.variable;return S.variable;},` +
+      `getSource:function(){return source;},getVariable:function(k){return arguments.length?SV[String(k)]??'':S.variable||'';},` +
+      `setVariable:function(k,v){if(arguments.length>1){SV[String(k)]=stringify(v);return v;}` +
+      `S.variable=String(k??'');source.variable=S.variable;return S.variable;},` +
       `get:function(k){const key=String(k||'');return Object.prototype.hasOwnProperty.call(SV,key)?SV[key]:(S[key]??V[key]??'');},` +
       `put:function(k,v){const key=String(k||'');SV[key]=stringify(v);return v;},` +
-      `getLoginInfo:function(){return S.loginInfo||'';},getLoginInfoMap:function(){try{return JSON.parse(S.loginInfo||'{}');}catch(_e){return {}; }},` +
+      `getLoginInfo:function(k){if(arguments.length){const info=this.getLoginInfoMap();return info[String(k)]??'';}return S.loginInfo||'';},` +
+      `getLoginInfoMap:function(){try{return JSON.parse(S.loginInfo||'{}');}catch(_e){return {}; }},` +
       `putLoginInfo:function(v){S.loginInfo=stringify(v);return v;},getLoginHeader:function(){return S.loginHeader||'';},` +
       `putLoginHeader:function(v){S.loginHeader=stringify(v);return v;}};` +
       `const cache={get:function(k){const key='cache.'+String(k),expiry=Number(SV[key+'.expires']||0);` +
@@ -402,7 +468,7 @@ export class LocalRuleScriptRuntime {
       `put:function(k,v,seconds){const key='cache.'+String(k);SV[key]=stringify(v);` +
       `SV[key+'.expires']=String(Number(seconds)>0?fixedNow+Number(seconds)*1000:0);return v;},` +
       `delete:function(k){delete SV['cache.'+String(k)];delete SV['cache.'+String(k)+'.expires'];}};` +
-      `const infoMap=parseValue(V.infoMap||S.loginInfo||'{}');` +
+      `const parsedInfoMap=parseValue(V.infoMap||S.loginInfo||'{}');const infoMap=parsedInfoMap&&typeof parsedInfoMap==='object'&&!Array.isArray(parsedInfoMap)?parsedInfoMap:{};` +
       `if(infoMap&&typeof infoMap==='object'){Object.defineProperties(infoMap,{` +
       `get:{value:function(k){return this[String(k)]??null;}},` +
       `put:{value:function(k,v){this[String(k)]=v;return v;}},` +
@@ -410,6 +476,8 @@ export class LocalRuleScriptRuntime {
       `java.refreshExplore=function(){V.__refreshExplore='true';};` +
       `java.searchBook=function(k){V.__searchBook=String(k||'');};` +
       `java.toast=function(v){V.__toast=String(v||'').substring(0,512);};java.longToast=java.toast;` +
+      `const scriptLogs=[];java.log=function(...values){const message=values.map(stringify).join(' ').substring(0,2048);` +
+      `if(scriptLogs.length<64){scriptLogs.push(message);V.__scriptLogs=JSON.stringify(scriptLogs);}return values.length?values[0]:'';};java.logType=java.log;` +
       `const book=Object.assign({},V);book.getVariable=function(k){return V[String(k??'')]??'';};` +
       `book.putVariable=function(k,v){V[String(k??'')]=stringify(v);return v;};book.setVariable=book.putVariable;` +
       `const chapter=Object.assign({},V);chapter.name=V.chapterName||V.title||'';chapter.title=chapter.name;` +
@@ -418,17 +486,30 @@ export class LocalRuleScriptRuntime {
       `const baseUrl=String(I.baseUrl||''),url=baseUrl,key=String(V.key??V.searchKey??''),` +
       `searchKey=String(V.searchKey??key),page=Number(V.page||1),pageIndex=Number(V.pageIndex||page),title=String(V.title??'');` +
       LocalRuleScriptCompat.code() +
-      `const args=['result','$','java','source','cookie','baseUrl','book','chapter','src','url','key','searchKey',` +
-      `'page','pageIndex','title','cache','infoMap','Date','__code'];let runner=new Function(...args,String(I.jsLib||'')+'\\nreturn eval(__code);');` +
-      `let value='';try{value=runner(result,$,java,source,cookie,baseUrl,book,chapter,src,url,key,searchKey,page,pageIndex,title,cache,infoMap,StableDate,String(I.code||''));}` +
-      `catch(e){if(!pending&&e instanceof SyntaxError){runner=new Function(...args,String(I.jsLib||'')+'\\n'+String(I.code||'')+` +
-      `'\\n;return typeof result===\\'undefined\\'?\\'\\':result;');value=runner(result,$,java,source,cookie,baseUrl,book,chapter,` +
-      `src,url,key,searchKey,page,pageIndex,title,cache,infoMap,StableDate,String(I.code||''));}else if(!pending)throw e;}` +
-      `if(value===undefined)value=result;value=stringify(value);` +
+      `if(V.__listResult==='true')result=listMethods(parseValue(result).map(function(item){` +
+      `return typeof item==='string'&&/^\\s*</.test(item)?elementObject(item):item;}));` +
+      `if(V.__jsonResult==='true'){result=parseValue(result);if(result&&typeof result==='object'&&!Object.prototype.hasOwnProperty.call(result,'toString'))` +
+      `Object.defineProperty(result,'toString',{value:function(){return JSON.stringify(this);},configurable:true});}` +
+      `Object.assign(globalThis,{result:result,$:$,java:java,source:source,cookie:cookie,cache:cache,book:book,chapter:chapter,` +
+      `baseUrl:baseUrl,src:src,url:url,key:key,searchKey:searchKey,page:page,pageIndex:pageIndex,title:title,infoMap:infoMap,Date:StableDate});` +
+      `Object.keys(V).forEach(function(k){if(/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k)&&!k.startsWith('__')&&!(k in globalThis))globalThis[k]=V[k];});` +
+      `globalThis.keyword=String(V.keyword??key);globalThis.searchKeyRaw=String(V.searchKeyRaw??key);` +
+      // Library declarations must share the isolated global scope used by this.helper() calls.
+      `const evaluateGlobal=(0,eval),library=String(I.jsLib||''),code=String(I.code||'');` +
+      `let value='';try{value=evaluateGlobal(library+'\\n;eval('+JSON.stringify(code)+')');}` +
+      `catch(e){if(!pending&&e instanceof SyntaxError){value=evaluateGlobal(library+` +
+      `'\\n;(function(){'+code+'\\n;return typeof result===\\'undefined\\'?\\'\\':result;}).call(globalThis)');}else if(!pending)throw e;}` +
+      `const finish=function(value){try{if(!pending&&typeof globalThis.__drainBrowserTimers==='function')globalThis.__drainBrowserTimers();}catch(e){if(!pending)throw e;}` +
+      `syncCompatState();` +
+      `if(value===undefined)value=globalThis.result;value=stringify(value);` +
       `if(value.length>${maxOutput})throw new Error('脚本输出超过预算');` +
       `return JSON.stringify({value:value,pendingAddress:pending,variables:V,errorMessage:'',` +
       `sourceState:JSON.stringify({variable:S.variable||'',definitionVariable:S.definitionVariable||'',` +
-      `values:SV,loginInfo:S.loginInfo||'',loginHeader:S.loginHeader||''})});` +
+      `values:SV,loginInfo:S.loginInfo||'',loginHeader:S.loginHeader||''})});};` +
+      `if(value&&typeof value.then==='function'){let settled=false,answer,failure;value.then(function(v){settled=true;answer=v;},function(e){settled=true;failure=e;});` +
+      `const pump=function(count){try{if(!pending&&typeof globalThis.__drainBrowserTimers==='function')globalThis.__drainBrowserTimers();}catch(e){if(!pending)throw e;}` +
+      `if(pending)return finish('');if(settled){if(failure)throw failure;return finish(answer);}if(count>=16)throw new Error('Promise job budget exceeded');` +
+      `return Promise.resolve().then(function(){return pump(count+1);});};return pump(0);}return finish(value);` +
       `}catch(e){return JSON.stringify({value:'',pendingAddress:'',variables:{},` +
       `errorMessage:String(e&&e.message?e.message:e)});}})()`;
   }

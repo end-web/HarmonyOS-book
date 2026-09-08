@@ -15,6 +15,7 @@ import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
 import { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
+import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -104,6 +105,9 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, 'initServicesCore: start');
 
     await PreferenceService.init(this.context);
+    await LocalRuleTlsTrustStore.init(this.context).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'TLS trust store unavailable: %{public}s', error.message);
+    });
     hilog.info(DOMAIN, TAG, 'initServicesCore: PreferenceService ready, elapsed=%{public}dms', Date.now() - startTime);
 
     // 本地规则是旁路能力：后台预热，但不阻塞下载和播放器状态恢复。

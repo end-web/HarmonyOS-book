@@ -127,7 +127,10 @@ export class AppBackupService {
       if (localSources.length > 0) {
         try {
           await LocalRuleSourceRepository.init(context);
-          await LocalRuleSourceRepository.upsertMany(localSources);
+          const restoredCount = await LocalRuleSourceRepository.upsertImportedBatch(localSources);
+          if (restoredCount < localSources.length) {
+            console.info(`[AppBackupService] skipped ${localSources.length - restoredCount} locked sources`);
+          }
           SourceDataService.invalidateLocalSources();
         } catch (error) {
           console.warn(`[AppBackupService] skip local rule restore: ${AppBackupService.errorMessage(error)}`);

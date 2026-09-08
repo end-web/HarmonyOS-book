@@ -6,6 +6,9 @@ import { LocalRuleHttpClient } from './LocalRuleHttpClient';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
 import { WebEngineGate } from '../WebEngineGate';
+import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
+import { LocalRuleBrowserActions } from './LocalRuleBrowserActions';
+import { LocalRuleTlsTrustStore } from './LocalRuleTlsTrustStore';
 
 class LocalRuleBrowserTask {
   initial: LocalRuleFetchResult = new LocalRuleFetchResult();
@@ -17,6 +20,7 @@ class LocalRuleBrowserTask {
   lastHtml: string = '';
   stable: number = 0;
   documentServed: boolean = false;
+  ready: boolean = false;
   variables: Record<string, string> = {};
   origins: Set<string> = new Set<string>();
   urls: Set<string> = new Set<string>();
@@ -24,7 +28,7 @@ class LocalRuleBrowserTask {
   reject: (error: Error) => void = (_error: Error): void => {};
 }
 
-/** Explicit page rendering has no JS-to-platform bridge. Rule webJs runs separately in QuickJS. */
+/** The page stays leased while bounded QuickJS requests explicit DOM operations. */
 export class LocalRuleBrowserRuntime {
   static readonly instance: LocalRuleBrowserRuntime = new LocalRuleBrowserRuntime();
   private controller: webview.WebviewController | undefined = undefined;
@@ -36,6 +40,10 @@ export class LocalRuleBrowserRuntime {
     if (this.controller !== controller) return;
     this.fail(new Error('网页渲染宿主已关闭'));
     this.controller = undefined;
+  }
+
+  certificateFailed(address: string): void {
+    this.fail(new Error(LocalRuleTlsTrustStore.describeFailure('SSL peer certificate validation failed', address)));
   }
 
   async render(source: LocalRuleSource, plan: LocalRuleRequestPlan, initial: LocalRuleFetchResult,
@@ -55,6 +63,7 @@ export class LocalRuleBrowserRuntime {
       const controller = this.controller;
       if (controller === undefined) throw new Error('网页渲染宿主挂载超时');
       if (Date.now() >= deadline) throw new Error('网页渲染超时');
+      controller.clearSslCache();
       webview.WebCookieManager.clearAllCookiesSync(true);
       const cookieHeaders: Record<string, string> = source.enabledCookieJar
         ? await LocalRuleHttpClient.getCookieSnapshot(source.bookSourceUrl) : {};
@@ -81,6 +90,20 @@ export class LocalRuleBrowserRuntime {
         controller.loadUrl(initial.requestUrl);
         this.schedule(current);
       });
+      if (plan.webJs) {
+        const session = '__localRuleDom_' + Date.now().toString(36) + Math.random().toString(36).substring(2);
+        result.body = await LocalRuleScriptRuntime.evaluateBrowserSnapshot(source, result, plan.webJs, variables,
+          (address: string): Promise<string> => LocalRuleBrowserActions.execute(controller, address, session,
+            deadline, variables, (): boolean => this.active === current));
+        if (this.active !== current || Date.now() >= deadline) throw new Error('网页交互超时');
+        result.resourceUrls = Array.from(current.urls);
+        const finalSnapshot = await this.snapshot(controller, deadline);
+        result.renderedHtml = String(finalSnapshot['html'] ?? '');
+        result.requestUrl = String(finalSnapshot['url'] ?? result.requestUrl);
+        result.browserState = String(finalSnapshot['state'] ?? '{}');
+        const media: string[] = JSON.parse(JSON.stringify(finalSnapshot['media'] ?? []));
+        result.resourceUrls.push(...media);
+      }
       return result;
     } finally {
       if (task !== undefined && this.active === task) this.fail(new Error('网页渲染已结束'));
@@ -167,7 +190,7 @@ export class LocalRuleBrowserRuntime {
   }
 
   private schedule(task: LocalRuleBrowserTask): void {
-    if (this.active !== task) return;
+    if (this.active !== task || task.ready) return;
     task.probe = setTimeout(() => { this.inspect(task); }, 300);
   }
 
@@ -177,7 +200,35 @@ export class LocalRuleBrowserRuntime {
     try {
       LocalRuleDiagnostics.check(task.variables);
       if (!task.documentServed) { this.schedule(task); return; }
-      const raw = await controller.runJavaScript(`(function(){
+      const snapshot = await this.snapshot(controller, task.deadline);
+      if (this.active !== task) return;
+      const html = String(snapshot['html'] ?? '');
+      const currentUrl = String(snapshot['url'] ?? '');
+      if (!new RegExp('^https?://', 'i').test(currentUrl)) { this.schedule(task); return; }
+      task.stable = html === task.lastHtml ? task.stable + 1 : 0;
+      task.lastHtml = html;
+      if (String(snapshot['ready']) !== 'complete' || task.stable < 2) { this.schedule(task); return; }
+      const response = new LocalRuleFetchResult();
+      response.ok = true;
+      response.statusCode = task.initial.statusCode;
+      response.headers = task.initial.headers;
+      response.body = html;
+      response.renderedHtml = html;
+      response.requestUrl = currentUrl;
+      response.browserState = String(snapshot['state'] ?? '{}');
+      response.resourceUrls = Array.from(task.urls);
+      const media: string[] = JSON.parse(JSON.stringify(snapshot['media'] ?? []));
+      response.resourceUrls.push(...media);
+      task.ready = true;
+      clearTimeout(task.probe);
+      task.resolve(response);
+    } catch (error) {
+      if (this.active === task) this.fail(new Error(error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  private async snapshot(controller: webview.WebviewController, deadline: number): Promise<Record<string, Object>> {
+      const raw = await LocalRuleBrowserActions.run(controller, `(function(){
         var html=document.documentElement?document.documentElement.outerHTML:'';
         if(html.length>${LocalRuleExecutionLimits.MAX_RESPONSE_CHARS})return JSON.stringify({error:'网页内容超过预算'});
         var nodes=0,chars=0;
@@ -190,41 +241,17 @@ export class LocalRuleBrowserRuntime {
           Object.keys(value).slice(0,1000).forEach(function(k){var d=Object.getOwnPropertyDescriptor(value,k);if(d&&'value' in d){var v=copy(d.value,depth+1);if(v!==undefined)out[k]=v;}});return out;
         };
         var state={};Object.keys(window).slice(0,1000).forEach(function(k){
-          if(k==='window'||k==='document'||k==='localStorage'||k==='sessionStorage')return;
+          if(k==='window'||k==='document'||k==='localStorage'||k==='sessionStorage'||k.indexOf('__localRuleDom_')===0)return;
           var d=Object.getOwnPropertyDescriptor(window,k);if(d&&'value' in d){var v=copy(d.value,0);if(v!==undefined)state[k]=v;}
         });
         var media=[];document.querySelectorAll('audio,video,source').forEach(function(n){var u=n.currentSrc||n.src;if(u)media.push(String(u));});
         return JSON.stringify({html:html,url:String(location.href),ready:document.readyState,state:JSON.stringify(state),media:media});
-      })()`);
-      if (this.active !== task) return;
+      })()`, deadline);
       let parsed: Object = JSON.parse(raw);
       if (typeof parsed === 'string') parsed = JSON.parse(parsed);
       const snapshot: Record<string, Object> = JSON.parse(JSON.stringify(parsed));
       if (snapshot['error']) throw new Error(String(snapshot['error']));
-      const html = String(snapshot['html'] ?? '');
-      const currentUrl = String(snapshot['url'] ?? '');
-      if (!new RegExp('^https?://', 'i').test(currentUrl)) { this.schedule(task); return; }
-      task.stable = html === task.lastHtml ? task.stable + 1 : 0;
-      task.lastHtml = html;
-      if (String(snapshot['ready']) !== 'complete' || task.stable < 2) { this.schedule(task); return; }
-      const response = new LocalRuleFetchResult();
-      response.ok = true;
-      response.statusCode = task.initial.statusCode;
-      response.headers = task.initial.headers;
-      response.body = html;
-      response.requestUrl = new RegExp('^https?://', 'i').test(currentUrl) ? currentUrl : task.initial.requestUrl;
-      console.info(`[LocalRuleBrowser] rendered ${html.length} characters`);
-      response.browserState = String(snapshot['state'] ?? '{}');
-      response.resourceUrls = Array.from(task.urls);
-      const media: string[] = JSON.parse(JSON.stringify(snapshot['media'] ?? []));
-      response.resourceUrls.push(...media);
-      this.active = undefined;
-      clearTimeout(task.timer);
-      clearTimeout(task.probe);
-      task.resolve(response);
-    } catch (error) {
-      if (this.active === task) this.fail(new Error(error instanceof Error ? error.message : String(error)));
-    }
+      return snapshot;
   }
 
   private fail(error: Error): void {
@@ -248,6 +275,14 @@ export struct LocalRuleBrowserRuntimeHost {
       .width(1).height(1).opacity(0.01)
       .javaScriptAccess(true).domStorageAccess(false).fileAccess(false)
       .imageAccess(false).onlineImageAccess(false)
+      .onSslErrorEvent((event: SslErrorEvent): void => {
+        if (!event.isFatalError && LocalRuleTlsTrustStore.isTrustedUrlSync(event.url)) {
+          event.handler.handleConfirm();
+        } else {
+          event.handler.handleCancel();
+          LocalRuleBrowserRuntime.instance.certificateFailed(event.url);
+        }
+      })
       .onPageEnd(() => LocalRuleBrowserRuntime.instance.attach(this.controller))
       .onLoadFinished(() => LocalRuleBrowserRuntime.instance.attach(this.controller))
       .onOverrideUrlLoading((request: WebResourceRequest): boolean => LocalRuleBrowserRuntime.instance.navigate(request.getRequestUrl()))

@@ -14,6 +14,8 @@ import localRuleCompatibilityTest from './LocalRuleCompatibility.test';
 import guangYuSourceAdapterTest from './GuangYuSourceAdapter.test';
 import onlineTextPaginatorTest from './OnlineTextPaginator.test';
 import localRuleSourceBulkTesterTest from './LocalRuleSourceBulkTester.test';
+import localRuleTlsTrustTest from './LocalRuleTlsTrust.test';
+import localRuleBrowserLoginCoordinatorTests from './LocalRuleBrowserLoginCoordinator.test';
 import localRuleSourceRepositoryTest from './LocalRuleSourceRepository.test';
 import shuShanSourceIdentityTest from './ShuShanSourceIdentity.test';
 import shuShanSourceAdapterTest from './ShuShanSourceAdapter.test';
@@ -39,6 +41,8 @@ export default function testsuite() {
   guangYuSourceAdapterTest();
   onlineTextPaginatorTest();
   localRuleSourceBulkTesterTest();
+  localRuleTlsTrustTest();
+  localRuleBrowserLoginCoordinatorTests();
   localRuleSourceRepositoryTest();
   shuShanSourceIdentityTest();
   shuShanSourceAdapterTest();

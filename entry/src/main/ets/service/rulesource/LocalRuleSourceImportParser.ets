@@ -85,6 +85,10 @@ export class LocalRuleSourceImportParser {
     source.bookSourceComment = LocalRuleSourceImportParser.readString(record, 'bookSourceComment');
     source.enabled = LocalRuleSourceImportParser.readBoolean(record, 'enabled', true);
     source.enabledExplore = LocalRuleSourceImportParser.readBoolean(record, 'enabledExplore', false);
+    source.isLocked = LocalRuleSourceImportParser.readBoolean(record, 'isLocked',
+      LocalRuleSourceImportParser.readBoolean(record, 'locked', false));
+    source.isPinned = LocalRuleSourceImportParser.readBoolean(record, 'isPinned', false);
+    source.customOrder = Math.floor(LocalRuleSourceImportParser.readNumber(record, 'customOrder', 0));
     source.enabledCookieJar = LocalRuleSourceImportParser.readBoolean(record, 'enabledCookieJar', true);
     source.searchUrl = LocalRuleSourceImportParser.readString(record, 'searchUrl');
     source.exploreUrl = LocalRuleSourceImportParser.readString(record, 'exploreUrl');

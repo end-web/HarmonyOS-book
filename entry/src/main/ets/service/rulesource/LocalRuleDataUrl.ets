@@ -3,7 +3,7 @@ import { LocalRuleExecutionLimits } from './LocalRuleRuntimeTypes';
 
 /** Inline source payloads are data, never an implicit request or executable code. */
 export class LocalRuleDataUrl {
-  static decode(address: string): string {
+  static decode(address: string, hexOutput: boolean = false): string {
     const comma = address.indexOf(',');
     if (!address.toLowerCase().startsWith('data:') || comma < 0) throw new Error('data 地址格式无效');
     if (address.length > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS * 3) throw new Error('data 地址超过预算');
@@ -35,6 +35,10 @@ export class LocalRuleDataUrl {
       }
     }
     if (bytes.length > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) throw new Error('data 内容超过预算');
+    if (hexOutput) {
+      if (bytes.length * 2 > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) throw new Error('data 内容超过预算');
+      return buffer.from(new Uint8Array(bytes)).toString('hex');
+    }
     return util.TextDecoder.create(charset.toLowerCase() === 'gb2312' ? 'gbk' : charset)
       .decodeToString(new Uint8Array(bytes));
   }

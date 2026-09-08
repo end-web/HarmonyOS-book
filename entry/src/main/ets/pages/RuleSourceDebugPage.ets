@@ -2,6 +2,7 @@ import { LocalRuleSource } from '../model/LocalRuleSource';
 import { LocalRuleDebugResult, LocalRuleDebugService } from '../service/rulesource/LocalRuleDebugService';
 import { LocalRuleDiagnostics } from '../service/rulesource/LocalRuleDiagnostics';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
+import { LocalRuleBrowserLoginCoordinator } from '../service/rulesource/LocalRuleBrowserLoginCoordinator';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { promptAction } from '@kit.ArkUI';
@@ -44,6 +45,7 @@ export struct RuleSourceDebugPage {
   @Local safeBottom: number = WindowUtils.getBottomSafeVp();
   private nextLogId: number = 0;
   private debugVariables: Record<string, string> = {};
+  private browserLoginScope: number = 0;
   private safeAreaListener: (top: number, bottom: number) => void = (top, bottom) => {
     this.safeTop = top;
     this.safeBottom = bottom;
@@ -55,7 +57,7 @@ export struct RuleSourceDebugPage {
   }
 
   aboutToDisappear(): void {
-    LocalRuleDiagnostics.cancel(this.debugVariables);
+    this.cancelDebug();
     WindowUtils.removeSafeAreaListener(this.safeAreaListener);
   }
 
@@ -101,12 +103,20 @@ export struct RuleSourceDebugPage {
       this.addLog(event.level, event.stage, event.message, event.detail);
     });
     try {
+      this.browserLoginScope = LocalRuleBrowserLoginCoordinator.openScope(source.bookSourceUrl);
       this.debugResult = await LocalRuleDebugService.run(source, this.currentStage,
         this.keyword, this.testUrl, this.debugVariables);
     } finally {
+      LocalRuleBrowserLoginCoordinator.closeScope(this.browserLoginScope);
+      this.browserLoginScope = 0;
       LocalRuleDiagnostics.close(this.debugVariables);
       this.isRunning = false;
     }
+  }
+
+  private cancelDebug(): void {
+    LocalRuleDiagnostics.cancel(this.debugVariables);
+    LocalRuleBrowserLoginCoordinator.cancelScope(this.browserLoginScope, '书源调试已取消');
   }
 
   private async exportReport(): Promise<void> {
@@ -163,7 +173,7 @@ export struct RuleSourceDebugPage {
             .height(44)
             .backgroundColor(Color.Transparent)
             .accessibilityText($r('app.string.common_back'))
-            .onClick(() => this.navStack.pop())
+            .onClick(() => { this.cancelDebug(); this.navStack.pop(); })
 
           Text('书源调试')
             .fontSize(AppFont.TitleL)
@@ -242,7 +252,7 @@ export struct RuleSourceDebugPage {
                 .backgroundColor(this.isRunning ? AppColor.BrandSoft : AppColor.Brand)
                 .enabled(!this.isExporting && this.source !== null)
                 .onClick(() => {
-                  if (this.isRunning) LocalRuleDiagnostics.cancel(this.debugVariables);
+                  if (this.isRunning) this.cancelDebug();
                   else this.runDebug();
                 })
 

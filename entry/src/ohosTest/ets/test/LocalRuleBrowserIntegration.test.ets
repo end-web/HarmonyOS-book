@@ -68,6 +68,64 @@ export default function localRuleBrowserIntegrationTest() {
       LocalRuleWebSession.release(next);
     });
 
+    it('interacts with the live DOM and replays each click exactly once', 0, async () => {
+      const options: Record<string, Object> = { 'webView': true, 'webJs':
+        'var input=document.getElementById("query");input.value="book";' +
+        'input.dispatchEvent(new Event("input",{bubbles:true}));' +
+        'var button=document.querySelector("#go");button.click();button.click();java.sleep(250);' +
+        'document.querySelector("#result").textContent+"|"+document.querySelector("#events").textContent+' +
+        '"|"+document.querySelector("#clicks").textContent+"|"+window.pageState.count' };
+      const response = await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options));
+      abilityDelegatorRegistry.getAbilityDelegator().printSync(`Interactive: ${response.errorMessage} ${response.body}\n`);
+      expect(response.ok).assertTrue();
+      expect(response.body).assertEqual('loaded:book|1|2|2');
+    });
+
+    it('runs delayed callbacks and supports form navigation without stale elements', 0, async () => {
+      const options: Record<string, Object> = { 'webView': true, 'webJs':
+        'var old=document.querySelector("#result");document.querySelector("#form").submit();java.sleep(500);' +
+        'var stale=false;try{old.textContent;}catch(e){stale=true;}' +
+        'document.body.querySelector("#result").innerText+"|"+stale+"|"+location.href.includes("/navigated")' };
+      const response = await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options));
+      abilityDelegatorRegistry.getAbilityDelegator().printSync(`Navigation: ${response.errorMessage} ${response.body}\n`);
+      expect(response.body).assertEqual('navigation complete|true|true');
+      options['webJs'] = 'setTimeout(function(){document.querySelector("#query").value="timer";document.querySelector("#go").click();},50);"scheduled"';
+      const timed = await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options));
+      expect(timed.ok).assertTrue();
+      expect(timed.body).assertEqual('scheduled');
+      options['webJs'] = '(async function(){await new Promise(r=>setTimeout(r,50));' +
+        'document.querySelector("#query").value="async";document.querySelector("#go").click();' +
+        'await new Promise(r=>setTimeout(r,200));return document.querySelector("#result").textContent;})()';
+      const asynchronous = await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options));
+      expect(asynchronous.body).assertEqual('loaded:async');
+    });
+
+    it('rejects executable DOM writes and releases the browser after failures', 0, async () => {
+      const options: Record<string, Object> = { 'webView': true,
+        'webJs': 'document.querySelector("#go").setAttribute("onclick","while(true){}");"bad"' };
+      const rejected = await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options));
+      expect(rejected.ok).assertFalse();
+      expect(rejected.errorMessage).assertContain('Unsupported DOM attribute');
+      options['webJs'] = 'java.sleep(10001)';
+      expect((await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options))).ok).assertFalse();
+      options['webJs'] = 'document.querySelector("#result").textContent';
+      expect((await LocalRuleHttpClient.fetch(source, base + '/interactive,' + JSON.stringify(options))).body).assertEqual('waiting');
+    });
+
+    it('keeps supplied HTML scripts inert while allowing bounded DOM actions', 0, async () => {
+      const options: Record<string, Object> = {
+        'webView': true,
+        'webHtml': '<!doctype html><html><body><p id="value">safe</p>' +
+          '<script>document.querySelector("#value").textContent="unsafe";</script></body></html>',
+        'webJs': 'var before=document.querySelector("#value").textContent;' +
+          'document.querySelector("#value").textContent="updated";before'
+      };
+      const response = await LocalRuleHttpClient.fetch(source, base + '/supplied,' + JSON.stringify(options));
+      expect(response.ok).assertTrue();
+      expect(response.body).assertEqual('safe');
+      expect(response.renderedHtml).assertContain('updated');
+    });
+
     it('persists generated session cookies per source and destination', 0, async () => {
       const response = await LocalRuleHttpClient.fetch(source, base + '/echo?reader=fixture-token,' +
         '{"session":{"queryCookies":{"readerToken":"reader"},"generatedCookies":{"device":"@uuid"},"referer":"origin"}}');

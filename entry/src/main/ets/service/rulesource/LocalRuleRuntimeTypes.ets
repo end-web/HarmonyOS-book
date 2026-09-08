@@ -38,6 +38,7 @@ export class LocalRuleRequestPlan {
 
 /** HttpClient 外层的安全结果；网络与协议错误不会以异常越过 Dispatcher。 */
 export class LocalRuleFetchResult {
+  renderedHtml: string = '';
   ok: boolean = false;
   statusCode: number = 0;
   requestUrl: string = '';
@@ -65,6 +66,7 @@ export class LocalRuleContentResult {
 }
 
 export class LocalRuleExecutionLimits {
+  static readonly INLINE_HTML_CSP: string = "script-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action https:";
   static readonly MAX_URL_CHARS: number = 2048;
   static readonly MAX_RESPONSE_CHARS: number = 4 * 1024 * 1024;
   static readonly MAX_STAGE_RESPONSE_CHARS: number = 16 * 1024 * 1024;

@@ -107,7 +107,10 @@ export class LocalRuleSource implements BookSource {
   bookSourceGroup: string = '';
   bookSourceComment: string = '';
   @Trace enabled: boolean = true;
-  enabledExplore: boolean = false;
+  @Trace enabledExplore: boolean = false;
+  @Trace isLocked: boolean = false;
+  @Trace isPinned: boolean = false;
+  customOrder: number = 0;
   enabledCookieJar: boolean = true;
   searchUrl: string = '';
   exploreUrl: string = '';
