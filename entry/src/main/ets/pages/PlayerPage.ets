@@ -4,7 +4,6 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius, AppMaterial } from '../theme/Theme';
-import { GlassSheetSurface } from '../components/GlassSurface';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
@@ -807,18 +806,6 @@ export struct PlayerPage {
         right: this.playerHorizontalPadding()
       })
 
-      if (this.showChapterList && this.book) {
-        this.buildChapterOverlay()
-      }
-      if (this.showSleepSheet) {
-        this.buildSleepOverlay()
-      }
-      if (this.showSkipSheet) {
-        this.buildSkipOverlay()
-      }
-      if (this.showSpeedSheet) {
-        this.buildSpeedOverlay()
-      }
     }
     .width('100%')
     .height('100%')
@@ -1120,6 +1107,16 @@ export struct PlayerPage {
         .fontSize(22)
         .fontColor(['#FFFFFF'])
         .onClick(() => this.openChapterList())
+        .bindSheet($$this.showChapterList, this.buildChapterSheet(), {
+          height: '55%',
+          preferType: SheetType.BOTTOM,
+          showClose: false,
+          dragBar: true,
+          backgroundColor: Color.Transparent,
+          systemMaterial: AppMaterial.PlayerSheet,
+          onAppear: () => this.scrollToCurrentChapter(),
+          onDisappear: () => { this.showChapterList = false; }
+        })
     }
     .width('100%')
     .justifyContent(FlexAlign.Center)
@@ -1145,6 +1142,15 @@ export struct PlayerPage {
         this.speedValue = this.playerState.speed;
         this.showSpeedSheet = true;
       })
+      .bindSheet($$this.showSpeedSheet, this.buildSpeedSheet(), {
+        height: SheetSize.FIT_CONTENT,
+        preferType: SheetType.BOTTOM,
+        showClose: false,
+        dragBar: true,
+        backgroundColor: Color.Transparent,
+        systemMaterial: AppMaterial.PlayerSheet,
+        onDisappear: () => { this.showSpeedSheet = false; }
+      })
       .gesture(
         LongPressGesture({ repeat: false, duration: 500 })
           .onAction(() => this.resetSpeed())
@@ -1160,6 +1166,15 @@ export struct PlayerPage {
       }
       .layoutWeight(1)
       .onClick(() => { this.showSleepSheet = true; })
+      .bindSheet($$this.showSleepSheet, this.buildSleepSheet(), {
+        height: SheetSize.FIT_CONTENT,
+        preferType: SheetType.BOTTOM,
+        showClose: false,
+        dragBar: true,
+        backgroundColor: Color.Transparent,
+        systemMaterial: AppMaterial.PlayerSheet,
+        onDisappear: () => { this.showSleepSheet = false; }
+      })
       .gesture(LongPressGesture().onAction(() => {
         if (this.playerState.sleepMinutes > 0) {
           this.hapticTick();
@@ -1181,6 +1196,15 @@ export struct PlayerPage {
         this.skipOutroValue = this.book?.skipOutro ?? 0;
         this.showSkipSheet = true;
       })
+      .bindSheet($$this.showSkipSheet, this.buildSkipSheet(), {
+        height: SheetSize.FIT_CONTENT,
+        preferType: SheetType.BOTTOM,
+        showClose: false,
+        dragBar: true,
+        backgroundColor: Color.Transparent,
+        systemMaterial: AppMaterial.PlayerSheet,
+        onDisappear: () => { this.showSkipSheet = false; }
+      })
       .gesture(LongPressGesture().onAction(() => {
         if (this.hasSkipConfig()) {
           this.hapticTick();
@@ -1196,70 +1220,59 @@ export struct PlayerPage {
   }
 
   @Builder
-  buildChapterOverlay() {
-    Column() {
-      Blank()
-        .layoutWeight(1)
-        .onClick(() => { this.showChapterList = false; })
+  buildChapterSheet() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      Column({ space: AppSpace.Sm }) {
+      Row() {
+        Text('章节列表')
+          .fontSize(AppFont.Title)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Bold)
+        Blank()
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(20)
+          .fontColor([$r('sys.color.font_secondary')])
+          .onClick(() => { this.showChapterList = false; })
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
 
-      GlassSheetSurface() {
-        Stack({ alignContent: Alignment.BottomEnd }) {
-          Column({ space: AppSpace.Sm }) {
-          Row() {
-            Text('章节列表')
-              .fontSize(AppFont.Title)
-              .fontColor(AppColor.GlassTextPrimary)
-              .fontWeight(FontWeight.Bold)
-            Blank()
-            SymbolGlyph($r('sys.symbol.xmark'))
-              .fontSize(20)
-              .fontColor([AppColor.GlassTextSecondary])
-              .onClick(() => { this.showChapterList = false; })
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+      // 章节搜索框（原生 Search,与首页一致）
+      Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
+        .onChange((value: string) => this.applyChapterFilter(value))
+        .fontColor($r('sys.color.font_primary'))
+        .placeholderColor($r('sys.color.font_tertiary'))
+        .searchIcon({ size: 18, color: $r('sys.color.font_secondary') })
+        .height(40)
+        .borderRadius(AppRadius.Lg)
+        .backgroundColor($r('sys.color.comp_background_tertiary'))
+        .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
-          // 章节搜索框（原生 Search,与首页一致）
-          Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
-            .onChange((value: string) => this.applyChapterFilter(value))
-            .fontColor(AppColor.GlassTextPrimary)
-            .placeholderColor(AppColor.GlassTextTertiary)
-            .searchIcon({ size: 18, color: AppColor.GlassTextSecondary })
-            .height(40)
-            .borderRadius(AppRadius.Lg)
-            .backgroundColor(AppColor.GlassSheetControlTint)
-            .border({ width: 0.5, color: AppColor.GlassSheetStroke })
-            .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
+      this.buildChapterItems()
+      }
+      .width('100%')
+      .height('100%')
 
-          this.buildChapterItems()
-          }
-          .width('100%')
-          .height('100%')
-
-          // "回到当前章节"浮动按钮:列表滚远时显示
-          if (this.shouldShowJumpButton()) {
-            Row({ space: AppSpace.Xs }) {
-              SymbolGlyph($r('sys.symbol.scope'))
-                .fontSize(16)
-                .fontColor(['#FFFFFF'])
-              Text('回到当前章节')
-                .fontSize(AppFont.Caption)
-                .fontColor('#FFFFFF')
-                .fontWeight(FontWeight.Medium)
-            }
-            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-            .borderRadius(22)
-            .backgroundColor(AppColor.Brand)
-            .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-            .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
-            .onClick(() => this.jumpToCurrentChapter())
-            .transition(TransitionEffect.OPACITY
-              .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
-              .animation({ curve: curves.springMotion(0.4, 0.9) }))
-          }
+      // "回到当前章节"浮动按钮:列表滚远时显示
+      if (this.shouldShowJumpButton()) {
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.scope'))
+            .fontSize(16)
+            .fontColor(['#FFFFFF'])
+          Text('回到当前章节')
+            .fontSize(AppFont.Caption)
+            .fontColor('#FFFFFF')
+            .fontWeight(FontWeight.Medium)
         }
-        .width('100%')
-        .height('55%')
+        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .borderRadius(22)
+        .backgroundColor(AppColor.Brand)
+        .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+        .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
+        .onClick(() => this.jumpToCurrentChapter())
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
+          .animation({ curve: curves.springMotion(0.4, 0.9) }))
       }
     }
     .width('100%')
@@ -1275,12 +1288,12 @@ export struct PlayerPage {
             Column({ space: 2 }) {
               Text(ch.title)
                 .fontSize(AppFont.BodyL)
-                .fontColor(this.isCurrentChapter(ch) ? AppColor.Brand : AppColor.GlassTextPrimary)
+                .fontColor(this.isCurrentChapter(ch) ? AppColor.Brand : $r('sys.color.font_primary'))
                 .fontWeight(this.isCurrentChapter(ch) ? FontWeight.Medium : FontWeight.Normal)
               if (this.chapterDurationSec(ch) > 0) {
                 Text(this.formatDuration(this.chapterDurationSec(ch)))
                   .fontSize(AppFont.Caption)
-                  .fontColor(AppColor.GlassTextSecondary)
+                  .fontColor($r('sys.color.font_secondary'))
               }
             }
             .alignItems(HorizontalAlign.Start)
@@ -1327,257 +1340,227 @@ export struct PlayerPage {
   }
 
   @Builder
-  buildSleepOverlay() {
-    Column() {
+  buildSleepSheet() {
+    Column({ space: AppSpace.Md }) {
+      Row() {
+      Text('定时关闭')
+        .fontSize(AppFont.Title)
+        .fontColor($r('sys.color.font_primary'))
+        .fontWeight(FontWeight.Bold)
       Blank()
-        .layoutWeight(1)
+      SymbolGlyph($r('sys.symbol.xmark'))
+        .fontSize(20)
+        .fontColor([$r('sys.color.font_secondary')])
         .onClick(() => { this.showSleepSheet = false; })
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
 
-      GlassSheetSurface() {
-        Column({ space: AppSpace.Md }) {
-          Row() {
-          Text('定时关闭')
-            .fontSize(AppFont.Title)
-            .fontColor(AppColor.GlassTextPrimary)
-            .fontWeight(FontWeight.Bold)
-          Blank()
-          SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(20)
-            .fontColor([AppColor.GlassTextSecondary])
-            .onClick(() => { this.showSleepSheet = false; })
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+    // 预设时间选项
+      ForEach([15, 30, 45, 60], (min: number) => {
+      Row() {
+        Text(min + ' 分钟')
+          .fontSize(AppFont.BodyL)
+          .fontColor(this.playerState.sleepMinutes === min ? AppColor.Brand : $r('sys.color.font_primary'))
+          .layoutWeight(1)
+        if (this.playerState.sleepMinutes === min) {
+          SymbolGlyph($r('sys.symbol.checkmark'))
+            .fontSize(18)
+            .fontColor([AppColor.Brand])
+        }
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+      .onClick(() => this.setSleep(min))
+      }, (min: number) => min.toString())
 
-        // 预设时间选项
-          ForEach([15, 30, 45, 60], (min: number) => {
-          Row() {
-            Text(min + ' 分钟')
-              .fontSize(AppFont.BodyL)
-              .fontColor(this.playerState.sleepMinutes === min ? AppColor.Brand : AppColor.GlassTextPrimary)
-              .layoutWeight(1)
-            if (this.playerState.sleepMinutes === min) {
-              SymbolGlyph($r('sys.symbol.checkmark'))
-                .fontSize(18)
-                .fontColor([AppColor.Brand])
-            }
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-          .onClick(() => this.setSleep(min))
-          }, (min: number) => min.toString())
+    // 分隔线
+      Divider()
+      .color($r('sys.color.comp_divider'))
+      .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
-        // 分隔线
-          Divider()
-          .color(AppColor.GlassDivider)
+    // 增强选项：章节结束后停止（始终显示）
+      Row() {
+      Column({ space: 2 }) {
+        Text('章节结束后停止')
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+        Text('定时到后播完当前章节再暂停')
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      Toggle({ type: ToggleType.Switch, isOn: this.playerState.sleepSmartStop })
+        .selectedColor(AppColor.Brand)
+        .onChange((isOn: boolean) => {
+          this.toggleSleepSmartStop(isOn);
+        })
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
+
+    // 取消定时按钮
+      if (this.playerState.sleepMinutes > 0) {
+        Divider()
+          .color($r('sys.color.comp_divider'))
           .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
-        // 增强选项：章节结束后停止（始终显示）
-          Row() {
-          Column({ space: 2 }) {
-            Text('章节结束后停止')
-              .fontSize(AppFont.BodyL)
-              .fontColor(AppColor.GlassTextPrimary)
-            Text('定时到后播完当前章节再暂停')
-              .fontSize(AppFont.Caption)
-              .fontColor(AppColor.GlassTextSecondary)
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.playerState.sleepSmartStop })
-            .selectedColor(AppColor.Brand)
-            .onChange((isOn: boolean) => {
-              this.toggleSleepSmartStop(isOn);
-            })
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
-
-        // 取消定时按钮
-          if (this.playerState.sleepMinutes > 0) {
-            Divider()
-              .color(AppColor.GlassDivider)
-              .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
-
-            Row() {
-              Text('取消定时')
-                .fontSize(AppFont.BodyL)
-                .fontColor('#FF6B6B')
-                .layoutWeight(1)
-            }
-            .width('100%')
-            .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-            .onClick(() => this.setSleep(0))
-          }
+        Row() {
+          Text('取消定时')
+            .fontSize(AppFont.BodyL)
+            .fontColor('#FF6B6B')
+            .layoutWeight(1)
         }
         .width('100%')
-        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+        .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+        .onClick(() => this.setSleep(0))
       }
     }
     .width('100%')
-    .height('100%')
+    .padding({ bottom: AppSpace.Lg })
   }
 
   @Builder
-  buildSkipOverlay() {
-    Column() {
+  buildSkipSheet() {
+    Column({ space: AppSpace.Md }) {
+    Row() {
+      Text('跳过片头片尾')
+        .fontSize(AppFont.Title)
+        .fontColor($r('sys.color.font_primary'))
+        .fontWeight(FontWeight.Bold)
       Blank()
-        .layoutWeight(1)
+      SymbolGlyph($r('sys.symbol.xmark'))
+        .fontSize(20)
+        .fontColor([$r('sys.color.font_secondary')])
         .onClick(() => { this.showSkipSheet = false; })
-
-      GlassSheetSurface() {
-        Column({ space: AppSpace.Md }) {
-        Row() {
-          Text('跳过片头片尾')
-            .fontSize(AppFont.Title)
-            .fontColor(AppColor.GlassTextPrimary)
-            .fontWeight(FontWeight.Bold)
-          Blank()
-          SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(20)
-            .fontColor([AppColor.GlassTextSecondary])
-            .onClick(() => { this.showSkipSheet = false; })
-        }
-        .width('100%')
-        .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
-
-        Column({ space: AppSpace.Xs }) {
-          Row() {
-            Text('片头')
-              .fontSize(AppFont.BodyL)
-              .fontColor(AppColor.GlassTextPrimary)
-            Blank()
-            Text(`${this.skipIntroValue} 秒`)
-              .fontSize(AppFont.BodyL)
-              .fontColor(AppColor.Brand)
-              .fontWeight(FontWeight.Medium)
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-          Slider({ value: this.skipIntroValue, min: 0, max: 120, step: 1 })
-            .blockColor(AppColor.Brand)
-            .trackColor(AppColor.GlassDivider)
-            .selectedColor(AppColor.Brand)
-            .onChange((value: number) => { this.skipIntroValue = Math.round(value); })
-            .onTouch((event: TouchEvent) => {
-              if (event.type === TouchType.Up) {
-                this.setSkipValue('intro', this.skipIntroValue);
-              }
-            })
-            .padding({ left: AppSpace.Md, right: AppSpace.Md })
-        }
-        .width('100%')
-        .padding({ top: AppSpace.Sm })
-
-        Column({ space: AppSpace.Xs }) {
-          Row() {
-            Text('片尾')
-              .fontSize(AppFont.BodyL)
-              .fontColor(AppColor.GlassTextPrimary)
-            Blank()
-            Text(`${this.skipOutroValue} 秒`)
-              .fontSize(AppFont.BodyL)
-              .fontColor(AppColor.Brand)
-              .fontWeight(FontWeight.Medium)
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-          Slider({ value: this.skipOutroValue, min: 0, max: 120, step: 1 })
-            .blockColor(AppColor.Brand)
-            .trackColor(AppColor.GlassDivider)
-            .selectedColor(AppColor.Brand)
-            .onChange((value: number) => { this.skipOutroValue = Math.round(value); })
-            .onTouch((event: TouchEvent) => {
-              if (event.type === TouchType.Up) {
-                this.setSkipValue('outro', this.skipOutroValue);
-              }
-            })
-            .padding({ left: AppSpace.Md, right: AppSpace.Md })
-        }
-        .width('100%')
-        .padding({ top: AppSpace.Sm })
-        }
-        .width('100%')
-        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      }
     }
     .width('100%')
-    .height('100%')
+    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+
+    Column({ space: AppSpace.Xs }) {
+      Row() {
+        Text('片头')
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+        Blank()
+        Text(`${this.skipIntroValue} 秒`)
+          .fontSize(AppFont.BodyL)
+          .fontColor(AppColor.Brand)
+          .fontWeight(FontWeight.Medium)
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+      Slider({ value: this.skipIntroValue, min: 0, max: 120, step: 1 })
+        .blockColor(AppColor.Brand)
+        .trackColor($r('sys.color.comp_divider'))
+        .selectedColor(AppColor.Brand)
+        .onChange((value: number) => { this.skipIntroValue = Math.round(value); })
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Up) {
+            this.setSkipValue('intro', this.skipIntroValue);
+          }
+        })
+        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+    }
+    .width('100%')
+    .padding({ top: AppSpace.Sm })
+
+    Column({ space: AppSpace.Xs }) {
+      Row() {
+        Text('片尾')
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+        Blank()
+        Text(`${this.skipOutroValue} 秒`)
+          .fontSize(AppFont.BodyL)
+          .fontColor(AppColor.Brand)
+          .fontWeight(FontWeight.Medium)
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+      Slider({ value: this.skipOutroValue, min: 0, max: 120, step: 1 })
+        .blockColor(AppColor.Brand)
+        .trackColor($r('sys.color.comp_divider'))
+        .selectedColor(AppColor.Brand)
+        .onChange((value: number) => { this.skipOutroValue = Math.round(value); })
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Up) {
+            this.setSkipValue('outro', this.skipOutroValue);
+          }
+        })
+        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+    }
+    .width('100%')
+    .padding({ top: AppSpace.Sm })
+    }
+    .width('100%')
+    .padding({ bottom: AppSpace.Lg })
   }
 
   @Builder
-  buildSpeedOverlay() {
-    Column() {
+  buildSpeedSheet() {
+    Column({ space: AppSpace.Md }) {
+    Row() {
+      Text('播放速度')
+        .fontSize(AppFont.Title)
+        .fontColor($r('sys.color.font_primary'))
+        .fontWeight(FontWeight.Bold)
       Blank()
-        .layoutWeight(1)
+      SymbolGlyph($r('sys.symbol.xmark'))
+        .fontSize(20)
+        .fontColor([$r('sys.color.font_secondary')])
         .onClick(() => { this.showSpeedSheet = false; })
-
-      GlassSheetSurface() {
-        Column({ space: AppSpace.Md }) {
-        Row() {
-          Text('播放速度')
-            .fontSize(AppFont.Title)
-            .fontColor(AppColor.GlassTextPrimary)
-            .fontWeight(FontWeight.Bold)
-          Blank()
-          SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(20)
-            .fontColor([AppColor.GlassTextSecondary])
-            .onClick(() => { this.showSpeedSheet = false; })
-        }
-        .width('100%')
-        .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
-
-        Column({ space: AppSpace.Xs }) {
-          Row() {
-            Text('倍速')
-              .fontSize(AppFont.BodyL)
-              .fontColor(AppColor.GlassTextPrimary)
-            Blank()
-            Text(this.fmtSpeed(this.speedValue) + 'x')
-              .fontSize(AppFont.TitleL)
-              .fontColor(AppColor.Brand)
-              .fontWeight(FontWeight.Bold)
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-          Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
-            .blockColor(AppColor.Brand)
-            .trackColor(AppColor.GlassDivider)
-            .selectedColor(AppColor.Brand)
-            .onChange((value: number) => { this.speedValue = Math.round(value * 20) / 20; })
-            .onTouch((event: TouchEvent) => {
-              if (event.type === TouchType.Up) {
-                AudioService.getInstance().setSpeed(this.speedValue);
-              }
-            })
-            .padding({ left: AppSpace.Md, right: AppSpace.Md })
-
-          Row() {
-            Text('0.5x')
-              .fontSize(AppFont.Caption)
-              .fontColor(AppColor.GlassTextTertiary)
-            Blank()
-            Text('3.0x')
-              .fontSize(AppFont.Caption)
-              .fontColor(AppColor.GlassTextTertiary)
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-        }
-        .width('100%')
-        .padding({ top: AppSpace.Sm })
-        }
-        .width('100%')
-        .padding({ bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
-      }
     }
     .width('100%')
-    .height('100%')
+    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+
+    Column({ space: AppSpace.Xs }) {
+      Row() {
+        Text('倍速')
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+        Blank()
+        Text(this.fmtSpeed(this.speedValue) + 'x')
+          .fontSize(AppFont.TitleL)
+          .fontColor(AppColor.Brand)
+          .fontWeight(FontWeight.Bold)
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+      Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
+        .blockColor(AppColor.Brand)
+        .trackColor($r('sys.color.comp_divider'))
+        .selectedColor(AppColor.Brand)
+        .onChange((value: number) => { this.speedValue = Math.round(value * 20) / 20; })
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Up) {
+            AudioService.getInstance().setSpeed(this.speedValue);
+          }
+        })
+        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+
+      Row() {
+        Text('0.5x')
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+        Blank()
+        Text('3.0x')
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+    }
+    .width('100%')
+    .padding({ top: AppSpace.Sm })
+    }
+    .width('100%')
+    .padding({ bottom: AppSpace.Lg })
   }
 
   private hasSkipConfig(): boolean {

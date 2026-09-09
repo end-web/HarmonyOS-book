@@ -58,6 +58,17 @@ export class TingYouSourceIdentity {
     return Number.isSafeInteger(albumId) && albumId > 0 ? albumId : undefined;
   }
 
+  static parseCategoryPath(address: string): string {
+    let path = address.trim();
+    if (new RegExp('^https?://', 'i').test(path)) {
+      if (!TingYouSourceIdentity.isSourceUrl(path)) return '';
+      path = TingYouSourceIdentity.httpPath(path);
+    }
+    path = path.replace(new RegExp('^/+|/+$', 'g'), '');
+    return path === 'homepage/recommends' || new RegExp('^types/[0-9]+/[A-Za-z_-]+/p[0-9]+$').test(path)
+      ? path : '';
+  }
+
   static toPlayUrl(address: TingYouChapterAddress): string {
     return `tingyou://play/${address.albumId}/${address.chapterIndex}`;
   }

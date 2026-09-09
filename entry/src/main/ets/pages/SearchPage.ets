@@ -1,3 +1,5 @@
+import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
+import { HdsNavDestination, HdsNavDestinationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
@@ -25,11 +27,11 @@ const SEARCH_COVER_ASPECT_RATIO: number = 0.75;
 const SEARCH_HEADER_HEIGHT: number = 56;
 const SEARCH_TITLE_CONTROL_HEIGHT: number = 44;
 const RESULT_TOOLBAR_HEIGHT: number = 48;
+const HISTORY_HEADING_HEIGHT: number = 52;
 const SEARCH_FOCUS_DELAY_MS: number = 320;
 const SEARCH_RECOMMENDATION_COUNT: number = 5;
 const SEARCH_RECOMMENDATION_SOURCE_LIMIT: number = 6;
 const SEARCH_RECOMMENDATION_BATCH_SIZE: number = 3;
-const SEARCH_HISTORY_DELETE_COLOR: string = '#D03050';
 const SEARCH_RECOMMENDATION_KEYWORDS: string[] = [
   '斗破苍穹', '三体', '凡人修仙传', '诡秘之主', '红楼梦', '盗墓笔记', '西游记', '庆余年'
 ];
@@ -49,6 +51,8 @@ export struct SearchPage {
   @Local textCount: number = 0;
   @Local visibleResultCount: number = 0;
   @Local searchHistory: string[] = [];
+  @Local historyTagsHeight: number = 84;
+  @Local historyCollapseOffset: number = 0;
   @Local recommendationBooks: Book[] = [];
   @Local recommendationsLoading: boolean = false;
   @Local pageRenderGroup: boolean = false;
@@ -62,6 +66,20 @@ export struct SearchPage {
   private recommendationGen: number = 0;
   private focusTimerId: number = -1;
   private initialFocusRequested: boolean = false;
+
+  @Computed
+  get historyPanelHeight(): number {
+    if (this.searchHistory.length === 0) return 0;
+    return this.historyTagsHeight + HISTORY_HEADING_HEIGHT - this.historyCollapseOffset + AppSpace.Xs;
+  }
+
+  private syncHistoryCollapse(): void {
+    const offset: number = Math.max(0, Math.min(HISTORY_HEADING_HEIGHT,
+      this.recommendationScroller.currentOffset().yOffset));
+    if (Math.abs(offset - this.historyCollapseOffset) > 0.5) {
+      this.historyCollapseOffset = offset;
+    }
+  }
 
   aboutToAppear(): void {
     WindowUtils.setStatusBarLight(false);
@@ -124,15 +142,6 @@ export struct SearchPage {
   private submitHistoryKeyword(keyword: string): void {
     this.keyword = keyword;
     this.doSearch();
-  }
-
-  private async removeHistoryItem(keyword: string): Promise<void> {
-    try {
-      await PreferenceService.removeSearchHistory(keyword);
-      this.searchHistory = await PreferenceService.getSearchHistory();
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'remove search history failed: %{public}s', String(e));
-    }
   }
 
   private async clearAllHistory(): Promise<void> {
@@ -538,41 +547,18 @@ export struct SearchPage {
 
   @Builder
   buildHistoryItem(keyword: string) {
-    Row({ space: AppSpace.Xxs }) {
-      Text(keyword)
-        .fontSize(13)
-        .fontColor($r('sys.color.font_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .constraintSize({ maxWidth: 144 })
-        .height(32)
-        .padding({ left: AppSpace.Sm })
-        .onClick(() => this.submitHistoryKeyword(keyword))
-
-      Row() {
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(12)
-          .fontColor([SEARCH_HISTORY_DELETE_COLOR])
-      }
-      .width(28)
-      .height(28)
-      .justifyContent(FlexAlign.Center)
-      .borderRadius(AppRadius.Pill)
-      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
-      .onClick(() => this.removeHistoryItem(keyword))
-    }
-    .height(32)
-    .padding({ right: 2 })
-    .borderRadius(AppRadius.Pill)
-    .backgroundColor(AppColor.GlassControlTint)
-    .border({ width: 0.5, color: AppColor.GlassStroke })
+    ImmersiveTabComponent({
+      label: keyword,
+      fitContent: true,
+      onTap: (): void => this.submitHistoryKeyword(keyword)
+    })
     .margin({ right: AppSpace.Xs, bottom: AppSpace.Xs })
   }
 
   @Builder
   buildSearchHistory() {
     if (this.searchHistory.length > 0) {
-      Column({ space: AppSpace.Sm }) {
+      Column() {
         Row() {
           Text($r('app.string.search_history'))
             .fontSize(AppFont.Title)
@@ -589,6 +575,9 @@ export struct SearchPage {
             .onClick(() => this.clearAllHistory())
         }
         .width('100%')
+        .height(HISTORY_HEADING_HEIGHT - this.historyCollapseOffset)
+        .opacity(1 - this.historyCollapseOffset / HISTORY_HEADING_HEIGHT)
+        .clip(true)
 
         Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
           ForEach(this.searchHistory, (keyword: string) => {
@@ -596,62 +585,77 @@ export struct SearchPage {
           }, (keyword: string) => keyword)
         }
         .width('100%')
+        .height(LayoutPolicy.wrapContent)
+        .onSizeChange((_oldSize: SizeOptions, newSize: SizeOptions): void => {
+          const nextHeight: number = Number(newSize.height);
+          if (nextHeight > 0 && Math.abs(nextHeight - this.historyTagsHeight) > 0.5) {
+            this.historyTagsHeight = nextHeight;
+          }
+        })
       }
       .width('100%')
-      .margin({ bottom: AppSpace.Md })
+      .padding({ bottom: AppSpace.Xs })
     }
   }
 
   @Builder
   buildRecommendations() {
-    Scroll(this.recommendationScroller) {
-      Column({ space: AppSpace.Md }) {
-        this.buildSearchHistory()
-
-        Text($r('app.string.search_recommendations'))
-          .fontSize(AppFont.Title)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('sys.color.font_primary'))
+    List({ scroller: this.recommendationScroller }) {
+      // 完整展开高度作为可滚动首项；吸顶时只收起浮层标题，不改变列表占位。
+      ListItem() {
+        Column()
           .width('100%')
+          .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+            (this.searchHistory.length > 0 ? this.historyTagsHeight + HISTORY_HEADING_HEIGHT + AppSpace.Xs : 0))
+      }
+      ListItem() {
+        Column({ space: AppSpace.Md }) {
+          Text($r('app.string.search_recommendations'))
+            .fontSize(AppFont.Title)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('sys.color.font_primary'))
+            .width('100%')
 
-        if (this.recommendationsLoading && this.recommendationBooks.length === 0) {
-          Row({ space: AppSpace.Xs }) {
-            LoadingProgress()
-              .width(20)
-              .height(20)
-              .color(AppColor.Brand)
-            Text($r('app.string.search_recommend_loading'))
+          if (this.recommendationsLoading && this.recommendationBooks.length === 0) {
+            Row({ space: AppSpace.Xs }) {
+              LoadingProgress()
+                .width(20)
+                .height(20)
+                .color(AppColor.Brand)
+              Text($r('app.string.search_recommend_loading'))
+                .fontSize(AppFont.Caption)
+                .fontColor($r('sys.color.font_tertiary'))
+            }
+            .width('100%')
+            .height(72)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.recommendationBooks.length === 0) {
+            Text($r('app.string.search_recommend_empty'))
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
-          }
-          .width('100%')
-          .height(72)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.recommendationBooks.length === 0) {
-          Text($r('app.string.search_recommend_empty'))
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
+              .width('100%')
+              .height(56)
+              .textAlign(TextAlign.Center)
+          } else {
+            Column() {
+              ForEach(this.recommendationBooks, (book: Book) => {
+                this.buildListItem(book)
+              }, (book: Book) => book.id)
+            }
             .width('100%')
-            .height(56)
-            .textAlign(TextAlign.Center)
-        } else {
-          Column() {
-            ForEach(this.recommendationBooks, (book: Book) => {
-              this.buildListItem(book)
-            }, (book: Book) => book.id)
           }
-          .width('100%')
         }
+        .width('100%')
+        .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Md })
       }
-      .width('100%')
-      .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Md })
     }
     .layoutWeight(1)
     .width('100%')
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .align(Alignment.Top)
-    .padding({ top: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT })
+    .onDidScroll(() => this.syncHistoryCollapse())
+    .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
   }
 
   @Builder
@@ -789,10 +793,11 @@ export struct SearchPage {
     .edgeEffect(EdgeEffect.Spring)
     .padding({
       left: AppSpace.Md,
-      right: AppSpace.Md,
-      top: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT + RESULT_TOOLBAR_HEIGHT + AppSpace.Sm,
-      bottom: WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg
+      right: AppSpace.Md
     })
+    .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+      RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)
+    .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
   }
 
   @Builder
@@ -864,13 +869,6 @@ export struct SearchPage {
   @Builder
   buildListResults() {
     List({ scroller: this.resultScroller, space: AppSpace.Xs }) {
-      // 与首页列表一致：顶部避让区作为可滚动首项，滚动后结果可自然进入浮层下方。
-      ListItem() {
-        Column()
-          .width('100%')
-          .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
-            RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)
-      }
       LazyForEach(this.resultDataSource, (book: Book) => {
         ListItem() {
           this.buildListItem(book)
@@ -883,7 +881,9 @@ export struct SearchPage {
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
     .cachedCount(6)
-    .clip(false)
+    .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+      RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)
+    .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
     .padding({
       left: AppSpace.Md,
       right: AppSpace.Md
@@ -933,23 +933,18 @@ export struct SearchPage {
   }
 
   @Builder
-  buildSearchNavigationTitle() {
-    Column() {
-      Column()
-        .width('100%')
-        .height(WindowUtils.getStatusBarHeightVp())
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
-
-      this.buildSearchTitleBar()
-
-      if (this.hasSearched) {
-        this.buildResultToolbar()
+  buildSearchNavigationBottom() {
+    if (this.hasSearched) {
+      this.buildResultToolbar()
+    } else if (this.searchHistory.length > 0) {
+      // 通用沉浸材质置于导航自定义区域，与首页分类标签使用同一渲染范围。
+      Column() {
+        this.buildSearchHistory()
       }
+      .width('100%')
+      .height(LayoutPolicy.wrapContent)
+      .padding({ left: AppSpace.Md, right: AppSpace.Md })
     }
-    .width('100%')
-    .height(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
-      (this.hasSearched ? RESULT_TOOLBAR_HEIGHT : 0))
-    .backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -970,7 +965,7 @@ export struct SearchPage {
   }
 
   build() {
-    NavDestination() {
+    HdsNavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
         Column()
           .width('100%')
@@ -990,16 +985,38 @@ export struct SearchPage {
       .height('100%')
       .backgroundColor(HomeTheme.BgNeutral)
     }
-    .title({
-      builder: (): void => this.buildSearchNavigationTitle(),
-      height: WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
-        (this.hasSearched ? RESULT_TOOLBAR_HEIGHT : 0)
-    }, {
-      backgroundColor: Color.Transparent,
-      barStyle: BarStyle.STACK
+    .titleBar({
+      avoidLayoutSafeArea: true,
+      content: {
+        title: { mainTitle: '' },
+        stackBuilder: (): void => this.buildSearchTitleBar(),
+        bottomBuilder: {
+          builder: (): void => this.buildSearchNavigationBottom(),
+          height: this.hasSearched ? RESULT_TOOLBAR_HEIGHT :
+            (this.searchHistory.length > 0 ? this.historyPanelHeight : 0)
+        }
+      },
+      // 与首页一致：透明初态，内容上滑后由系统绘制沉浸渐变模糊。
+      style: {
+        scrollEffectOpts: {
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+        },
+        originalStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
+        thermoCtrl: true
+      }
     })
+    .titleMode(HdsNavDestinationTitleMode.MINI)
     .hideBackButton(true)
-    .systemBarStyle({ statusBarContentColor: WindowUtils.getSystemBarContentColor() })
+    .bindToScrollable(this.hasSearched ? [this.resultScroller] : [this.recommendationScroller])
+    .systemBarStyle(
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() },
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() }
+    )
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(HomeTheme.BgNeutral)
     .systemTransition(NavigationSystemTransitionType.NONE)

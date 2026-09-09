@@ -181,6 +181,18 @@
       "value": "人物传记"
     },
     {
+      "name": "shelf_filter_all_count",
+      "value": "全部 %d"
+    },
+    {
+      "name": "shelf_filter_audio_count",
+      "value": "有声书 %d"
+    },
+    {
+      "name": "shelf_filter_text_count",
+      "value": "电子书 %d"
+    },
+    {
       "name": "search_type_all",
       "value": "全部"
     },
@@ -1227,6 +1239,26 @@
     { "name": "rule_source_login_check", "value": "登录检查脚本" },
     { "name": "rule_source_initial_variable", "value": "初始书源变量" },
     { "name": "rule_source_export", "value": "导出" },
-    { "name": "rule_source_export_saved", "value": "书源已导出" }
+    { "name": "rule_source_export_saved", "value": "书源已导出" },
+    {"name": "appearance_material", "value": "材质效果"},
+    {"name": "appearance_accent", "value": "主题色"},
+    {"name": "appearance_material_default", "value": "默认"},
+    {"name": "appearance_material_ultra_thin", "value": "超薄 · 通透"},
+    {"name": "appearance_material_thin", "value": "轻薄 · 磨砂"},
+    {"name": "appearance_material_regular", "value": "标准"},
+    {"name": "appearance_material_thick", "value": "厚磨砂"},
+    {"name": "appearance_material_ultra_thick", "value": "超厚磨砂"},
+    {"name": "appearance_material_hint", "value": "调整浮动控件与弹窗的通透程度，选择后立即生效。默认使用各控件的推荐材质。"},
+    {"name": "appearance_accent_hint", "value": "用于按钮、选中状态与光感颜色，不改变电子书的纸张配色。"},
+    {"name": "appearance_accent_default", "value": "默认橙"},
+    {"name": "appearance_accent_rose", "value": "玫瑰红"},
+    {"name": "appearance_accent_purple", "value": "鸢尾紫"},
+    {"name": "appearance_accent_blue", "value": "晴空蓝"},
+    {"name": "appearance_accent_teal", "value": "青绿色"},
+    {"name": "appearance_accent_green", "value": "苔藓绿"},
+    {"name": "appearance_accent_hex_hint", "value": "自定义色值，如 #8E55B8"},
+    {"name": "appearance_apply", "value": "应用"},
+    {"name": "appearance_accent_invalid", "value": "请输入 # 加六位十六进制色值"},
+    {"name": "appearance_save_failed", "value": "外观设置保存失败，请重试"}
   ]
 }

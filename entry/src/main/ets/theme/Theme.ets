@@ -1,13 +1,35 @@
 import { curves, uiMaterial } from '@kit.ArkUI';
+import { AppAppearance } from '../model/AppAppearance';
 
 export class AppColor {
-  static readonly Brand: Resource = $r('app.color.app_brand');
-  static readonly BrandHover: Resource = $r('app.color.app_brand_hover');
-  static readonly BrandPressed: Resource = $r('app.color.app_brand_pressed');
-  static readonly BrandDisabled: Resource = $r('app.color.app_brand_disabled');
-  static readonly BrandSoft: Resource = $r('app.color.app_brand_soft');
-  static readonly BrandDark: Resource = $r('app.color.app_brand_dark');
-  static readonly OnBrand: Resource = $r('app.color.app_on_brand');
+  static get Brand(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? accent : $r('app.color.app_brand');
+  }
+  static get BrandHover(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? AppAppearance.shade(accent, 0.92) : $r('app.color.app_brand_hover');
+  }
+  static get BrandPressed(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? AppAppearance.shade(accent, 0.82) : $r('app.color.app_brand_pressed');
+  }
+  static get BrandDisabled(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? '#66' + accent.substring(1) : $r('app.color.app_brand_disabled');
+  }
+  static get BrandSoft(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? '#22' + accent.substring(1) : $r('app.color.app_brand_soft');
+  }
+  static get BrandDark(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? AppAppearance.shade(accent, 0.78) : $r('app.color.app_brand_dark');
+  }
+  static get OnBrand(): ResourceStr {
+    const accent: string = AppAppearance.current.accent;
+    return accent.length > 0 ? AppAppearance.foreground(accent) : $r('app.color.app_on_brand');
+  }
   static readonly Divider: Resource = $r('app.color.app_divider');
   static readonly Shadow: Resource = $r('app.color.app_shadow');
   static readonly GlassControlFallback: Resource = $r('app.color.glass_control_fallback');
@@ -27,54 +49,73 @@ export class AppColor {
   static readonly GlassBgDark: string = '#33000000';
 }
 
-const APP_LIGHT_EFFECT: uiMaterial.LightEffectOptions = {
-  color: AppColor.Brand
-};
-
-/** HarmonyOS 7 immersive material presets shared by floating controls and sheets. */
+/** 原生材质统一入口；每次外观变更清空缓存，避免重复创建或保留旧光感色。 */
 export class AppMaterial {
-  static readonly InteractiveThin: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.THIN,
-    applyShadow: false,
-    interactive: true
-  });
+  private static cache: Map<string, uiMaterial.Material> = new Map<string, uiMaterial.Material>();
+  private static appearanceKey: string = '';
 
-  static readonly InteractiveClean: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.THIN,
-    colorInvert: true,
-    applyShadow: false,
-    interactive: true,
-    lightEffect: APP_LIGHT_EFFECT
-  });
+  private static resolveStyle(fallback: uiMaterial.ImmersiveStyle): uiMaterial.ImmersiveStyle {
+    switch (AppAppearance.current.material) {
+      case 1: return uiMaterial.ImmersiveStyle.ULTRA_THIN;
+      case 2: return uiMaterial.ImmersiveStyle.THIN;
+      case 3: return uiMaterial.ImmersiveStyle.REGULAR;
+      case 4: return uiMaterial.ImmersiveStyle.THICK;
+      case 5: return uiMaterial.ImmersiveStyle.ULTRA_THICK;
+      default: return fallback;
+    }
+  }
 
-  static readonly SurfaceClean: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.THIN,
-    applyShadow: false
-  });
+  private static material(key: string, fallback: uiMaterial.ImmersiveStyle,
+    shadow: boolean, interactive: boolean, invert: boolean = false): uiMaterial.Material {
+    const appearanceKey: string = AppAppearance.current.material.toString() + ':' + AppAppearance.current.accent;
+    if (appearanceKey !== AppMaterial.appearanceKey) {
+      AppMaterial.cache.clear();
+      AppMaterial.appearanceKey = appearanceKey;
+    }
+    // Read the reactive brand token even on a cache hit, so mounted controls observe theme changes.
+    const lightColor: ResourceColor = AppColor.Brand;
+    const cached: uiMaterial.Material | undefined = AppMaterial.cache.get(key);
+    if (cached !== undefined) return cached;
+    const material: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+      style: AppMaterial.resolveStyle(fallback),
+      applyShadow: shadow,
+      interactive: interactive,
+      colorInvert: invert,
+      lightEffect: { color: lightColor }
+    });
+    AppMaterial.cache.set(key, material);
+    return material;
+  }
 
-  static readonly FloatingControl: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-    applyShadow: true,
-    interactive: true,
-    lightEffect: APP_LIGHT_EFFECT
-  });
-
-  static readonly DialogUltraThick: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
-    applyShadow: true,
-    lightEffect: APP_LIGHT_EFFECT
-  });
-
-  static readonly SurfaceRegular: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-    style: uiMaterial.ImmersiveStyle.REGULAR,
-    materialColor: AppColor.BrandSoft,
-    applyShadow: true
-  });
+  static get InteractiveThin(): uiMaterial.Material {
+    return AppMaterial.material('interactiveThin', uiMaterial.ImmersiveStyle.THIN, false, true);
+  }
+  static get InteractiveClean(): uiMaterial.Material {
+    return AppMaterial.material('interactiveClean', uiMaterial.ImmersiveStyle.THIN, false, true, true);
+  }
+  static get SurfaceClean(): uiMaterial.Material {
+    return AppMaterial.material('surfaceClean', uiMaterial.ImmersiveStyle.THIN, false, false);
+  }
+  static get FloatingControl(): uiMaterial.Material {
+    return AppMaterial.material('floating', uiMaterial.ImmersiveStyle.ULTRA_THIN, true, true);
+  }
+  static get Sheet(): uiMaterial.Material {
+    return AppMaterial.material('sheet', uiMaterial.ImmersiveStyle.THIN, true, false);
+  }
+  static get PlayerSheet(): uiMaterial.Material {
+    return AppMaterial.Sheet;
+  }
+  static get DialogUltraThick(): uiMaterial.Material {
+    return AppMaterial.material('dialog', uiMaterial.ImmersiveStyle.ULTRA_THICK, true, false);
+  }
+  static get SurfaceRegular(): uiMaterial.Material {
+    return AppMaterial.material('regular', uiMaterial.ImmersiveStyle.REGULAR, true, false);
+  }
 }
 
 /**
  * System blur presets used by the current frosted-glass surfaces.
- * AppMaterial stays available so immersive material can be restored when the platform re-enables it.
+ * Legacy blur options for surfaces that do not use native sheet materials.
  */
 export class AppGlass {
   static readonly ControlBlur: BlurStyle = BlurStyle.BACKGROUND_THIN;
@@ -161,8 +202,12 @@ export class HomeTheme {
   static readonly BgNeutral: Resource = $r('app.color.home_bg_neutral');
   /** 状态栏窄条：与 BgNeutral 同色半透明，配合 backdropBlur */
   static readonly StatusScrim: Resource = $r('app.color.home_status_scrim');
-  static readonly Accent: Resource = $r('app.color.home_accent');
-  static readonly AccentSoft: Resource = $r('app.color.home_accent_soft');
+  static get Accent(): ResourceStr {
+    return AppAppearance.current.accent.length > 0 ? AppColor.Brand : $r('app.color.home_accent');
+  }
+  static get AccentSoft(): ResourceStr {
+    return AppAppearance.current.accent.length > 0 ? AppColor.BrandSoft : $r('app.color.home_accent_soft');
+  }
   static readonly TopControlTint: Resource = $r('app.color.home_top_control_tint');
   static readonly CardSurface: Resource = $r('app.color.home_card_surface');
   static readonly CardShadow: Resource = $r('app.color.home_card_shadow');

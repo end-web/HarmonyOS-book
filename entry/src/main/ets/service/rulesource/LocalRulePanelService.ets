@@ -122,7 +122,8 @@ export class LocalRulePanelService {
     const inputs: string[] = [];
     for (const input of controls) {
       if (input !== control && input.action && ['text', 'input', 'password', 'number', 'email'].includes(input.type)) {
-        inputs.push(LocalRuleScriptRuntime.standaloneCode(input.action) || input.action);
+        const inputCode = LocalRuleScriptRuntime.standaloneCode(input.action) || input.action;
+        inputs.push(`(function(){${inputCode}\n}).call(this);`);
       }
     }
     const response = await LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl,

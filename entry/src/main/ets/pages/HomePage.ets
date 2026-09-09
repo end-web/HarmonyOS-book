@@ -1,3 +1,4 @@
+import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics } from '@kit.ArkUI';
 import {
@@ -6,7 +7,7 @@ import {
   HideMode,
   ScrollEffectType
 } from '@kit.UIDesignKit';
-import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppCurve, AppMaterial, HomeTheme } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
@@ -80,7 +81,6 @@ const TAG = 'HomePage';
 const SEARCH_FIELD_HEIGHT: number = 40;
 const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
-const CATEGORY_NAV_WIDTH: number = 76;
 const CATEGORY_NAV_ROW_HEIGHT: number = 48;
 const COLLAPSED_SEARCH_SIZE: number = 42;
 const FEATURED_PAGE_SIZE: number = 3;
@@ -89,54 +89,6 @@ const FEATURED_COVER_SIZE: number = 60;
 const FEATURED_NEXT_PEEK: number = 32;
 const HOME_COVER_CARD_SIZE: number = 128;
 const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
-
-@ComponentV2
-@ReusableV2
-struct CategoryLightNavItem {
-  @Param label: ResourceStr = '';
-  @Param selected: boolean = false;
-  @Event onTap: () => void = () => {};
-
-  build() {
-    Column() {
-      Row() {
-        Text(this.label)
-          .fontSize(13)
-          .fontColor(this.selected ? HomeTheme.Accent : $r('sys.color.font_secondary'))
-          .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Regular)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .textAlign(TextAlign.Center)
-          .width('100%')
-          .padding({ left: AppSpace.Xxs, right: AppSpace.Xxs })
-      }
-      .width('100%')
-      .height(30)
-      .alignItems(VerticalAlign.Center)
-
-      if (this.selected) {
-        Row()
-          .width(18)
-          .height(2)
-          .borderRadius(1)
-          .backgroundColor(HomeTheme.Accent)
-      } else {
-        Row()
-          .width(18)
-          .height(2)
-          .opacity(0)
-      }
-    }
-    .width(CATEGORY_NAV_WIDTH)
-    .height(CATEGORY_NAV_HEIGHT)
-    .borderRadius(AppRadius.Pill)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(Color.Transparent)
-    .systemMaterial(AppMaterial.InteractiveClean)
-    .animation({ duration: AppMotion.Base, curve: AppCurve.Spring })
-    .onClick(() => this.onTap())
-  }
-}
 
 @ComponentV2
 struct HomeLoadingSkeleton {
@@ -1024,7 +976,7 @@ export struct HomePage {
     Row({ space: AppSpace.Xs }) {
       List({ space: AppSpace.Xs }) {
         ListItem() {
-          CategoryLightNavItem({
+          ImmersiveTabComponent({
             label: $r('app.string.home_tingyou_source_label'),
             selected: this.selectedCategoryIndex === -1,
             onTap: () => this.switchCategory(-1)
@@ -1033,7 +985,7 @@ export struct HomePage {
 
         LazyForEach(this.categoryNavDataSource, (cat: HomeCategory) => {
           ListItem() {
-            CategoryLightNavItem({
+            ImmersiveTabComponent({
               label: cat.name,
               selected: this.isCategorySelected(cat),
               onTap: () => this.switchCategoryByUrl(cat.url)

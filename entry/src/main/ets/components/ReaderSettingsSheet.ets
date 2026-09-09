@@ -2,13 +2,12 @@
  * ReaderSettingsSheet - 阅读设置面板
  *
  * 按鸿蒙分组卡片规范重排：顶部实时预览 + 四张设置卡（字号 / 行高 / 主题 / 背景）。
- * 面板自身使用系统模糊磨砂，卡片用当前阅读配色而非系统色，
- * 这样调主题时面板本身也跟着变，用户不用关掉面板才能看效果。
+ * 面板由父页面的原生 bindSheet 提供材质，内容文字跟随系统深浅模式。
+ * 阅读纸张配色只影响正文与预览，不修改 App 的外观偏好。
  *
  * 本组件只负责呈现与回调，不落盘；持久化由 ReaderPage 统一做。
  */
 import { AppColor, AppFont, AppRadius, AppSpace, AppMotion, AppCurve } from '../theme/Theme';
-import { GlassSheetSurface } from './GlassSurface';
 import { TextReadingSettings, PageTurnMode } from '../model/TextReading';
 import {
   ReaderPalette,
@@ -20,7 +19,6 @@ import {
   hsvToHex
 } from '../model/ReaderTheme';
 import { ReaderBackground } from './ReaderBackground';
-import { WindowUtils } from '../utils/WindowUtils';
 
 /** 行高预设档位 */
 class LineHeightPreset {
@@ -85,7 +83,7 @@ struct ReaderSettingCard {
     Column({ space: AppSpace.Sm }) {
       Text(this.title)
         .fontSize(AppFont.Caption)
-        .fontColor(AppColor.GlassTextSecondary)
+        .fontColor($r('sys.color.font_secondary'))
         .fontWeight(FontWeight.Medium)
         .width('100%')
       this.content()
@@ -111,7 +109,6 @@ export struct ReaderSettingsSheet {
   @Param pageTurnMode: string = PageTurnMode.Cover;
   /** 由父页面依 themeId / customBackground 解析好的配色 */
   @Param palette: ReaderPalette = new ReaderPalette();
-  @Param bottomSafeVp: number = 0;
 
   @Event onFontSizeChange: (value: number, commit: boolean) => void = () => {};
   @Event onLineHeightChange: (value: number, commit: boolean) => void = () => {};
@@ -142,7 +139,7 @@ export struct ReaderSettingsSheet {
   chip(label: string, selected: boolean, onTap: () => void) {
     Text(label)
       .fontSize(AppFont.Caption)
-      .fontColor(selected ? AppColor.OnBrand : AppColor.GlassTextPrimary)
+      .fontColor(selected ? AppColor.OnBrand : $r('sys.color.font_primary'))
       .fontWeight(selected ? FontWeight.Medium : FontWeight.Normal)
       .textAlign(TextAlign.Center)
       .layoutWeight(1)
@@ -218,7 +215,7 @@ export struct ReaderSettingsSheet {
           .layoutWeight(1)
           .height(40)
           .blockColor(AppColor.OnBrand)
-          .trackColor(AppColor.GlassDivider)
+          .trackColor($r('sys.color.comp_divider'))
           .selectedColor(AppColor.Brand)
           .trackThickness(6)
           .onChange((value: number, mode: SliderChangeMode): void => {
@@ -247,7 +244,7 @@ export struct ReaderSettingsSheet {
     Stack({ alignContent: Alignment.Center }) {
       SymbolGlyph(icon)
         .fontSize(16)
-        .fontColor([enabled ? AppColor.GlassTextPrimary : AppColor.GlassTextTertiary])
+        .fontColor([enabled ? $r('sys.color.font_primary') : $r('sys.color.font_tertiary')])
     }
     .width(34)
     .height(34)
@@ -293,7 +290,7 @@ export struct ReaderSettingsSheet {
             .layoutWeight(1)
             .height(40)
             .blockColor(AppColor.OnBrand)
-            .trackColor(AppColor.GlassDivider)
+            .trackColor($r('sys.color.comp_divider'))
             .selectedColor(AppColor.Brand)
             .trackThickness(6)
             .onChange((value: number, mode: SliderChangeMode): void => {
@@ -365,7 +362,7 @@ export struct ReaderSettingsSheet {
 
       Text(label)
         .fontSize(10)
-        .fontColor(selected ? AppColor.Brand : AppColor.GlassTextSecondary)
+        .fontColor(selected ? AppColor.Brand : $r('sys.color.font_secondary'))
         .maxLines(1)
     }
     .alignItems(HorizontalAlign.Center)
@@ -392,7 +389,7 @@ export struct ReaderSettingsSheet {
             .border({ width: 0.5, color: AppColor.GlassSheetStroke })
           Text(this.customBackground)
             .fontSize(AppFont.Caption)
-            .fontColor(AppColor.GlassTextSecondary)
+            .fontColor($r('sys.color.font_secondary'))
           Blank()
           if (this.themeId !== ReaderThemeId.Custom) {
             Text('点击应用')
@@ -431,13 +428,13 @@ export struct ReaderSettingsSheet {
     Row({ space: AppSpace.Sm }) {
       Text(label)
         .fontSize(AppFont.Caption)
-        .fontColor(AppColor.GlassTextSecondary)
+        .fontColor($r('sys.color.font_secondary'))
         .width(30)
       Slider({ value: value, min: min, max: max, step: step, style: SliderStyle.InSet })
         .layoutWeight(1)
         .height(32)
         .blockColor(AppColor.OnBrand)
-        .trackColor(AppColor.GlassDivider)
+        .trackColor($r('sys.color.comp_divider'))
         .selectedColor(AppColor.Brand)
         .trackThickness(4)
         .onChange((v: number, mode: SliderChangeMode): void => {
@@ -468,7 +465,7 @@ export struct ReaderSettingsSheet {
           Row({ space: AppSpace.Sm }) {
             Text('蒙层')
               .fontSize(AppFont.Caption)
-              .fontColor(AppColor.GlassTextSecondary)
+              .fontColor($r('sys.color.font_secondary'))
               .width(30)
             Slider({
               value: this.overlayAlpha * 100,
@@ -480,7 +477,7 @@ export struct ReaderSettingsSheet {
               .layoutWeight(1)
               .height(32)
               .blockColor(AppColor.OnBrand)
-              .trackColor(AppColor.GlassDivider)
+              .trackColor($r('sys.color.comp_divider'))
               .selectedColor(AppColor.Brand)
               .trackThickness(4)
               .onChange((value: number, mode: SliderChangeMode): void => {
@@ -498,7 +495,7 @@ export struct ReaderSettingsSheet {
 
           Text('蒙层越浓，图片越淡，正文越清楚')
             .fontSize(10)
-            .fontColor(AppColor.GlassTextSecondary)
+            .fontColor($r('sys.color.font_secondary'))
             .width('100%')
         }
       }
@@ -512,10 +509,10 @@ export struct ReaderSettingsSheet {
     Column({ space: 2 }) {
       SymbolGlyph(option.icon)
         .fontSize(18)
-        .fontColor([this.pattern === option.id ? AppColor.OnBrand : AppColor.GlassTextPrimary])
+        .fontColor([this.pattern === option.id ? AppColor.OnBrand : $r('sys.color.font_primary')])
       Text(option.label)
         .fontSize(10)
-        .fontColor(this.pattern === option.id ? AppColor.OnBrand : AppColor.GlassTextPrimary)
+        .fontColor(this.pattern === option.id ? AppColor.OnBrand : $r('sys.color.font_primary'))
     }
     .layoutWeight(1)
     .height(50)
@@ -555,68 +552,58 @@ export struct ReaderSettingsSheet {
   }
 
   build() {
-    GlassSheetSurface({ cornerRadius: 24 }) {
-      Column() {
-        // 顶部抓手，鸿蒙弹层惯例
-        Column()
-          .width(36)
-          .height(4)
-          .borderRadius(2)
-          .backgroundColor(AppColor.GlassTextTertiary)
-          .margin({ top: AppSpace.Sm, bottom: AppSpace.Xs })
-
-        Row() {
-          Text('阅读设置')
-            .fontSize(AppFont.Title)
-            .fontColor(AppColor.GlassTextPrimary)
-            .fontWeight(FontWeight.Bold)
-          Blank()
-          Text('恢复默认')
-            .fontSize(AppFont.Caption)
-            .fontColor(AppColor.GlassTextSecondary)
-            .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 6, bottom: 6 })
-            .borderRadius(AppRadius.Pill)
-            .backgroundColor(AppColor.GlassSheetControlTint)
-            .onClick(() => this.onResetDefaults())
-          Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph($r('sys.symbol.xmark'))
-              .fontSize(18)
-              .fontColor([AppColor.GlassTextSecondary])
-          }
-          .width(36)
-          .height(36)
-          .borderRadius(18)
-          .margin({ left: AppSpace.Xs })
-          .onClick(() => this.onClose())
+    Column() {
+      Row() {
+        Text('阅读设置')
+          .fontSize(AppFont.Title)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Bold)
+        Blank()
+        Text('恢复默认')
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+          .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 6, bottom: 6 })
+          .borderRadius(AppRadius.Pill)
+          .backgroundColor(AppColor.GlassSheetControlTint)
+          .onClick(() => this.onResetDefaults())
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(18)
+            .fontColor([$r('sys.color.font_secondary')])
         }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
-        .padding({ left: AppSpace.Lg, right: AppSpace.Md, bottom: AppSpace.Sm })
-
-        Scroll() {
-          Column({ space: AppSpace.Md }) {
-            this.buildPreview()
-            this.buildFontSizeSection()
-            this.buildLineHeightSection()
-            this.buildPageTurnModeSection()
-            this.buildThemeSection()
-            this.buildCustomColorSection()
-            this.buildPatternSection()
-          }
-          .width('100%')
-          .padding({
-            left: AppSpace.Lg,
-            right: AppSpace.Lg,
-            bottom: WindowUtils.getFloatingTabBottomVp(this.bottomSafeVp) + AppSpace.Lg
-          })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
+        .width(36)
+        .height(36)
+        .borderRadius(18)
+        .margin({ left: AppSpace.Xs })
+        .onClick(() => this.onClose())
       }
       .width('100%')
-      .height('82%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: AppSpace.Lg, right: AppSpace.Md, bottom: AppSpace.Sm })
+
+      Scroll() {
+        Column({ space: AppSpace.Md }) {
+          this.buildPreview()
+          this.buildFontSizeSection()
+          this.buildLineHeightSection()
+          this.buildPageTurnModeSection()
+          this.buildThemeSection()
+          this.buildCustomColorSection()
+          this.buildPatternSection()
+        }
+        .width('100%')
+        .padding({
+          left: AppSpace.Lg,
+          right: AppSpace.Lg,
+          bottom: AppSpace.Lg
+        })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
     }
+    .width('100%')
+    .height('100%')
   }
 }

@@ -67,7 +67,7 @@ export struct MiniPlayer {
             .color(AppColor.Brand)
             .backgroundColor(HomeTheme.ProgressTrack)
             .style({
-              strokeWidth: 2.5,
+              strokeWidth: 1.5,
               enableSmoothEffect: false,
               enableScanEffect: false,
               shadow: false
@@ -76,8 +76,8 @@ export struct MiniPlayer {
           Stack() {
             this.coverImageBuilder()
           }
-          .width('86%')
-          .height('86%')
+          .width('92%')
+          .height('92%')
           .borderRadius(this.collapsed ? 999 : 22)
           .backgroundColor($r('sys.color.comp_background_tertiary'))
           .clip(true)

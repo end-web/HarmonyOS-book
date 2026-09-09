@@ -2,6 +2,7 @@ import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { Book } from '../model/Book';
+import { AppAppearance } from '../model/AppAppearance';
 
 /** 书架收藏变化事件:加入/移出书架后触发,书架页据此自动刷新 */
 export const EVT_FAVORITES_CHANGED = 'app.favorites.changed';
@@ -14,6 +15,8 @@ const KEY_FAVORITES = 'favorite_book_ids';
 const KEY_HISTORY = 'play_history';
 const KEY_LAST_PLAYED = 'last_played';
 const KEY_COLOR_MODE = 'color_mode';
+const KEY_MATERIAL_STYLE = 'material_style';
+const KEY_ACCENT_COLOR = 'accent_color';
 const KEY_IMPORTED_BOOKS = 'imported_books';
 const KEY_DEFAULT_TAB = 'default_tab';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
@@ -79,6 +82,8 @@ export class PreferenceBackupSnapshot {
   progresses: PlayProgress[] = [];
   skipConfigs: BookSkipBackup[] = [];
   colorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
+  materialStyle: number = 0;
+  accentColor: string = '';
   defaultTab: number = 0;
   audioInterruptMode: number = 0;
   audioAutoResume: boolean = true;
@@ -170,8 +175,12 @@ export class PreferenceService {
     }
     if (!PreferenceService.initPromise) {
       const options: preferences.Options = { name: STORE_NAME };
-      PreferenceService.initPromise = preferences.getPreferences(context, options).then((s) => {
+      PreferenceService.initPromise = preferences.getPreferences(context, options).then(async (s) => {
         PreferenceService.store = s;
+        const material = await s.get(KEY_MATERIAL_STYLE, 0);
+        const accent = await s.get(KEY_ACCENT_COLOR, '');
+        AppAppearance.current.material = AppAppearance.normalizeMaterial(typeof material === 'number' ? material : 0);
+        AppAppearance.current.accent = AppAppearance.normalizeAccent(typeof accent === 'string' ? accent : '');
       });
     }
     await PreferenceService.initPromise;
@@ -486,6 +495,22 @@ export class PreferenceService {
     await s.flush();
   }
 
+  static async setMaterialStyle(value: number): Promise<void> {
+    const material: number = AppAppearance.normalizeMaterial(value);
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_MATERIAL_STYLE, material);
+    await s.flush();
+    AppAppearance.current.material = material;
+  }
+
+  static async setAccentColor(value: string): Promise<void> {
+    const accent: string = AppAppearance.normalizeAccent(value);
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_ACCENT_COLOR, accent);
+    await s.flush();
+    AppAppearance.current.accent = accent;
+  }
+
   static async getImportedBooks(): Promise<string> {
     const s = await PreferenceService.ensureStore();
     return await s.get(KEY_IMPORTED_BOOKS, '[]') as string;
@@ -756,6 +781,8 @@ export class PreferenceService {
     const lastPlayed = await PreferenceService.getLastPlayed();
     snapshot.lastPlayed = lastPlayed && !lastPlayed.bookId.startsWith('import_') ? lastPlayed : null;
     snapshot.colorMode = await PreferenceService.getColorMode();
+    snapshot.materialStyle = AppAppearance.current.material;
+    snapshot.accentColor = AppAppearance.current.accent;
     snapshot.defaultTab = await PreferenceService.getDefaultTab();
     snapshot.audioInterruptMode = await PreferenceService.getAudioInterruptMode();
     snapshot.audioAutoResume = await PreferenceService.getAudioAutoResume();
@@ -832,6 +859,10 @@ export class PreferenceService {
       await s.put(KEY_SKIP_PREFIX + skip.bookId, JSON.stringify(config));
     }
 
+    const material: number = AppAppearance.normalizeMaterial(snapshot.materialStyle ?? 0);
+    const accent: string = AppAppearance.normalizeAccent(snapshot.accentColor ?? '');
+    await s.put(KEY_MATERIAL_STYLE, material);
+    await s.put(KEY_ACCENT_COLOR, accent);
     await s.put(KEY_COLOR_MODE, snapshot.colorMode);
     await s.put(KEY_DEFAULT_TAB, snapshot.defaultTab);
     await s.put(KEY_AUDIO_INTERRUPT_MODE, snapshot.audioInterruptMode);
@@ -839,6 +870,8 @@ export class PreferenceService {
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
     await s.put(KEY_PRELOAD_CHAPTERS, snapshot.preloadChapters);
     await s.flush();
+    AppAppearance.current.material = material;
+    AppAppearance.current.accent = accent;
     PreferenceService.notifyFavoriteChanged();
     PreferenceService.notifyHistoryChanged();
     emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });

@@ -555,7 +555,7 @@ export class BookSourceService {
     _page: number = 1): Promise<ExploreFetchResult> {
     const localSource = await BookSourceService.resolveLocalSource(source);
     if (localSource !== undefined && TingYouSourceIdentity.isSourceUrl(localSource.bookSourceUrl)) {
-      const category = await TingYouSourceAdapter.getCategory(localSource, categoryUrl);
+      const category = await TingYouSourceAdapter.getCategory(localSource, categoryUrl, _page);
       const result: ExploreFetchResult = {
         books: category.books,
         nextUrl: category.nextUrl

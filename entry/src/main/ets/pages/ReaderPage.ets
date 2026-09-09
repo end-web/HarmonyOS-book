@@ -22,8 +22,7 @@ import {
 } from '../service/text/OnlineTextPaginator';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 import { TextReadingSettingsService } from '../service/text/TextReadingSettingsService';
-import { AppColor, AppFont, AppSpace } from '../theme/Theme';
-import { GlassSheetSurface } from '../components/GlassSurface';
+import { AppColor, AppFont, AppSpace, AppMaterial } from '../theme/Theme';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -1017,13 +1016,6 @@ export struct ReaderPage {
                   })
               }
 
-              if (this.showChapterSheet) {
-                this.buildChapterSheet()
-              }
-
-              if (this.showSettingsSheet) {
-                this.buildSettingsSheet()
-              }
             }
             .width('100%')
             .height('100%')
@@ -1069,6 +1061,21 @@ export struct ReaderPage {
         .onTabBarClick((index: number): void => {
           this.handleReaderTabClick(index);
         })
+        .bindSheet($$this.showSettingsSheet, this.buildSettingsSheet(), {
+          height: '82%',
+          preferType: SheetType.BOTTOM,
+          showClose: false,
+          backgroundColor: Color.Transparent,
+          maskColor: Color.Transparent,
+          systemMaterial: AppMaterial.Sheet,
+          onDisappear: (): void => {
+            this.showSettingsSheet = false;
+            if (!this.leaving) {
+              this.saveReadingSettings();
+              if (!this.showChapterSheet) this.showReaderBar();
+            }
+          }
+        })
       }
 
       if (this.loading) {
@@ -1079,6 +1086,19 @@ export struct ReaderPage {
     }
     .width('100%')
     .height('100%')
+    .bindSheet($$this.showChapterSheet, this.buildChapterSheet(), {
+      height: '58%',
+      preferType: SheetType.BOTTOM,
+      showClose: false,
+      backgroundColor: Color.Transparent,
+      maskColor: Color.Transparent,
+      systemMaterial: AppMaterial.Sheet,
+      onAppear: (): void => this.scrollChapterListToCurrent(),
+      onDisappear: (): void => {
+        this.showChapterSheet = false;
+        if (!this.leaving && !this.showSettingsSheet) this.showReaderBar();
+      }
+    })
     // 背景由 ReaderBackground 铺，根节点保持透明
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onSizeChange((oldValue: SizeOptions, newValue: SizeOptions): void => {
@@ -1203,145 +1223,128 @@ export struct ReaderPage {
 
   @Builder
   buildChapterSheet(): void {
-    Stack({ alignContent: Alignment.Bottom }) {
-      // 透明点击层：不遮暗阅读内容，只负责点击关闭。
-      Column()
-        .width('100%')
-        .height('100%')
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      Column() {
+      Row() {
+        Column({ space: AppSpace.Xxs }) {
+          Text($r('app.string.reader_chapters'))
+            .fontSize(AppFont.Title)
+            .fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Bold)
+          if (this.book !== null) {
+            Text(this.book.title)
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        if (this.book !== null && this.book.chapters.length > 0) {
+          Text(`${this.currentResourceIndex + 1}/${this.book.chapters.length}`)
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_secondary'))
+            .margin({ right: AppSpace.Sm })
+        }
+
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(20)
+            .fontColor([$r('sys.color.font_secondary')])
+        }
+        .width(40)
+        .height(40)
+        .borderRadius(20)
         .onClick((): void => {
           this.closeChapterSheet();
         })
-        .transition(TransitionEffect.OPACITY
-          .animation({ curve: curves.springMotion(0.6, 0.9) }))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: AppSpace.Lg, right: AppSpace.Md, top: AppSpace.Md, bottom: AppSpace.Sm })
 
-      // 弹窗内容：从底部滑入
-      GlassSheetSurface() {
-        Stack({ alignContent: Alignment.BottomEnd }) {
-          Column() {
-          Row() {
-            Column({ space: AppSpace.Xxs }) {
-              Text($r('app.string.reader_chapters'))
-                .fontSize(AppFont.Title)
-                .fontColor(AppColor.GlassTextPrimary)
-                .fontWeight(FontWeight.Bold)
-              if (this.book !== null) {
-                Text(this.book.title)
-                  .fontSize(AppFont.Caption)
-                  .fontColor(AppColor.GlassTextSecondary)
-                  .maxLines(1)
+      Divider()
+        .color($r('sys.color.comp_divider'))
+
+      List({ space: 0, scroller: this.chapterListScroller }) {
+        LazyForEach(this.chapterDataSource, (chapter: Chapter) => {
+          ListItem() {
+            Row({ space: AppSpace.Sm }) {
+              Column()
+                .width(3)
+                .height(32)
+                .borderRadius(2)
+                .backgroundColor(this.isCurrentChapter(chapter) ? AppColor.Brand : Color.Transparent)
+
+              Column({ space: AppSpace.Xxs }) {
+                Text(chapter.title)
+                  .fontSize(AppFont.BodyL)
+                  .fontColor(this.isCurrentChapter(chapter) ? $r('sys.color.font_primary') :
+                    $r('sys.color.font_secondary'))
+                  .fontWeight(this.isCurrentChapter(chapter) ? FontWeight.Medium : FontWeight.Normal)
+                  .maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(`${this.chapterResourceIndex(chapter) + 1}`)
+                  .fontSize(AppFont.Caption)
+                  .fontColor($r('sys.color.font_tertiary'))
+              }
+              .alignItems(HorizontalAlign.Start)
+              .layoutWeight(1)
+
+              if (this.isCurrentChapter(chapter)) {
+                SymbolGlyph($r('sys.symbol.scope'))
+                  .fontSize(18)
+                  .fontColor([AppColor.Brand])
               }
             }
-            .alignItems(HorizontalAlign.Start)
-            .layoutWeight(1)
-
-            if (this.book !== null && this.book.chapters.length > 0) {
-              Text(`${this.currentResourceIndex + 1}/${this.book.chapters.length}`)
-                .fontSize(AppFont.Body)
-                .fontColor(AppColor.GlassTextSecondary)
-                .margin({ right: AppSpace.Sm })
-            }
-
-            Stack({ alignContent: Alignment.Center }) {
-              SymbolGlyph($r('sys.symbol.xmark'))
-                .fontSize(20)
-                .fontColor([AppColor.GlassTextSecondary])
-            }
-            .width(40)
-            .height(40)
-            .borderRadius(20)
+            .width('100%')
+            .constraintSize({ minHeight: READER_CHAPTER_ROW_HEIGHT })
+            .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
+            .backgroundColor(this.isCurrentChapter(chapter) ?
+              AppColor.BrandSoft : Color.Transparent)
             .onClick((): void => {
-              this.closeChapterSheet();
+              this.selectChapter(chapter);
             })
           }
-          .width('100%')
-          .alignItems(VerticalAlign.Center)
-          .padding({ left: AppSpace.Lg, right: AppSpace.Md, top: AppSpace.Md, bottom: AppSpace.Sm })
+        }, (chapter: Chapter) => this.chapterStableKey(chapter))
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({ bottom: AppSpace.Sm })
+      .scrollBar(BarState.On)
+      .cachedCount(8)
+      .onScrollIndex((firstIndex: number, lastIndex: number): void => {
+        const centerIndex = (firstIndex + lastIndex) / 2;
+        this.chapterListOffsetFromCurrent =
+          (centerIndex - this.currentResourceIndex) * READER_CHAPTER_ROW_HEIGHT;
+      })
+      }
+      .width('100%')
+      .height('100%')
 
-          Divider()
-            .color(AppColor.GlassDivider)
-
-          List({ space: 0, scroller: this.chapterListScroller }) {
-            LazyForEach(this.chapterDataSource, (chapter: Chapter) => {
-              ListItem() {
-                Row({ space: AppSpace.Sm }) {
-                  Column()
-                    .width(3)
-                    .height(32)
-                    .borderRadius(2)
-                    .backgroundColor(this.isCurrentChapter(chapter) ? AppColor.Brand : Color.Transparent)
-
-                  Column({ space: AppSpace.Xxs }) {
-                    Text(chapter.title)
-                      .fontSize(AppFont.BodyL)
-                      .fontColor(this.isCurrentChapter(chapter) ? AppColor.GlassTextPrimary :
-                        AppColor.GlassTextSecondary)
-                      .fontWeight(this.isCurrentChapter(chapter) ? FontWeight.Medium : FontWeight.Normal)
-                      .maxLines(2)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(`${this.chapterResourceIndex(chapter) + 1}`)
-                      .fontSize(AppFont.Caption)
-                      .fontColor(AppColor.GlassTextTertiary)
-                  }
-                  .alignItems(HorizontalAlign.Start)
-                  .layoutWeight(1)
-
-                  if (this.isCurrentChapter(chapter)) {
-                    SymbolGlyph($r('sys.symbol.scope'))
-                      .fontSize(18)
-                      .fontColor([AppColor.Brand])
-                  }
-                }
-                .width('100%')
-                .constraintSize({ minHeight: READER_CHAPTER_ROW_HEIGHT })
-                .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
-                .backgroundColor(this.isCurrentChapter(chapter) ?
-                  AppColor.BrandSoft : Color.Transparent)
-                .onClick((): void => {
-                  this.selectChapter(chapter);
-                })
-              }
-            }, (chapter: Chapter) => this.chapterStableKey(chapter))
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .padding({ bottom: AppSpace.Sm })
-          .scrollBar(BarState.On)
-          .cachedCount(8)
-          .onScrollIndex((firstIndex: number, lastIndex: number): void => {
-            const centerIndex = (firstIndex + lastIndex) / 2;
-            this.chapterListOffsetFromCurrent =
-              (centerIndex - this.currentResourceIndex) * READER_CHAPTER_ROW_HEIGHT;
-          })
-          }
-          .width('100%')
-          .height('100%')
-
-          if (this.shouldShowChapterJumpButton()) {
-            Row({ space: AppSpace.Xs }) {
-              SymbolGlyph($r('sys.symbol.scope'))
-                .fontSize(16)
-                .fontColor(['#FFFFFF'])
-              Text($r('app.string.reader_back_to_current_chapter'))
-                .fontSize(AppFont.Caption)
-                .fontColor('#FFFFFF')
-                .fontWeight(FontWeight.Medium)
-            }
-            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-            .borderRadius(22)
-            .backgroundColor(AppColor.Brand)
-            .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-            .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
-            .onClick((): void => {
-              this.jumpToCurrentChapter();
-            })
-            .transition(TransitionEffect.OPACITY
-              .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
-              .animation({ curve: curves.springMotion(0.4, 0.9) }))
-          }
+      if (this.shouldShowChapterJumpButton()) {
+        Row({ space: AppSpace.Xs }) {
+          SymbolGlyph($r('sys.symbol.scope'))
+            .fontSize(16)
+            .fontColor(['#FFFFFF'])
+          Text($r('app.string.reader_back_to_current_chapter'))
+            .fontSize(AppFont.Caption)
+            .fontColor('#FFFFFF')
+            .fontWeight(FontWeight.Medium)
         }
-        .width('100%')
-        .height('58%')
+        .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+        .borderRadius(22)
+        .backgroundColor(AppColor.Brand)
+        .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
+        .margin({ right: AppSpace.Lg, bottom: AppSpace.Lg })
+        .onClick((): void => {
+          this.jumpToCurrentChapter();
+        })
+        .transition(TransitionEffect.OPACITY
+          .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
+          .animation({ curve: curves.springMotion(0.4, 0.9) }))
       }
     }
     .width('100%')
@@ -1350,65 +1353,49 @@ export struct ReaderPage {
 
   @Builder
   buildSettingsSheet(): void {
-    Stack({ alignContent: Alignment.Bottom }) {
-      // 透明点击层：保持阅读背景原亮度。
-      Column()
-        .width('100%')
-        .height('100%')
-        .onClick((): void => {
-          this.closeSettingsSheet();
-        })
-        .transition(TransitionEffect.OPACITY
-          .animation({ curve: curves.springMotion(0.6, 0.9) }))
-
-      // 弹窗内容：从底部滑入
-      ReaderSettingsSheet({
-        fontSize: this.fontSize,
-        lineHeight: this.lineHeight,
-        themeId: this.themeId,
-        customBackground: this.customBackground,
-        pattern: this.backgroundPattern,
-        bgImagePath: this.bgImagePath,
-        overlayAlpha: this.overlayAlpha,
-        pageTurnMode: this.pageTurnMode,
-        palette: this.palette,
-        bottomSafeVp: this.bottomSafeVp,
-        onFontSizeChange: (value: number, commit: boolean): void => {
-          this.handleFontSizeChange(value, commit);
-        },
-        onLineHeightChange: (value: number, commit: boolean): void => {
-          this.handleLineHeightChange(value, commit);
-        },
-        onThemeChange: (themeId: string): void => {
-          this.handleThemeChange(themeId);
-        },
-        onCustomBackgroundChange: (hex: string, commit: boolean): void => {
-          this.handleCustomBackgroundChange(hex, commit);
-        },
-        onPatternChange: (pattern: string): void => {
-          this.handlePatternChange(pattern);
-        },
-        onOverlayChange: (value: number, commit: boolean): void => {
-          this.handleOverlayChange(value, commit);
-        },
-        onPageTurnModeChange: (mode: string): void => {
-          this.handlePageTurnModeChange(mode);
-        },
-        onPickImage: (): void => {
-          this.pickBackgroundImage();
-        },
-        onResetDefaults: (): void => {
-          this.handleResetDefaults();
-        },
-        onClose: (): void => {
-          this.closeSettingsSheet();
-        }
-      })
-        .transition(TransitionEffect.translate({ y: 1000 })
-          .animation({ curve: curves.springMotion(0.6, 0.9) }))
-    }
-    .width('100%')
-    .height('100%')
+    ReaderSettingsSheet({
+      fontSize: this.fontSize,
+      lineHeight: this.lineHeight,
+      themeId: this.themeId,
+      customBackground: this.customBackground,
+      pattern: this.backgroundPattern,
+      bgImagePath: this.bgImagePath,
+      overlayAlpha: this.overlayAlpha,
+      pageTurnMode: this.pageTurnMode,
+      palette: this.palette,
+      onFontSizeChange: (value: number, commit: boolean): void => {
+        this.handleFontSizeChange(value, commit);
+      },
+      onLineHeightChange: (value: number, commit: boolean): void => {
+        this.handleLineHeightChange(value, commit);
+      },
+      onThemeChange: (themeId: string): void => {
+        this.handleThemeChange(themeId);
+      },
+      onCustomBackgroundChange: (hex: string, commit: boolean): void => {
+        this.handleCustomBackgroundChange(hex, commit);
+      },
+      onPatternChange: (pattern: string): void => {
+        this.handlePatternChange(pattern);
+      },
+      onOverlayChange: (value: number, commit: boolean): void => {
+        this.handleOverlayChange(value, commit);
+      },
+      onPageTurnModeChange: (mode: string): void => {
+        this.handlePageTurnModeChange(mode);
+      },
+      onPickImage: (): void => {
+        this.pickBackgroundImage();
+      },
+      onResetDefaults: (): void => {
+        this.handleResetDefaults();
+      },
+      onClose: (): void => {
+        this.closeSettingsSheet();
+      }
+    })
+      .width('100%')
+      .height('100%')
   }
 
   @Builder

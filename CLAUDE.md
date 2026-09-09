@@ -78,7 +78,8 @@
 - `source.getVariable/setVariable`、`source.get/put`、有期限的 `cache` 和登录信息/请求头存入加密 `rule_source_script_state`。同来源脚本串行提交状态，失败脚本不提交；不同来源隔离，网络重放不会重复累加持久化状态。
 - 会话 helper 包括登录信息/请求头 Map、按键读取和更新登录信息、移除登录状态，以及保留对象/数字/布尔值的 `source`、`cache` 和任务变量读写。`getLoginHeaderMap()` 对已过期或临近过期的 Bearer JWT 返回空；设备标识和浏览器别名仍通过既有受限动作提供，不暴露新的平台对象。
 - JS 章节地址由 `LocalRuleChapterRequest` 延迟至打开章节时执行；稳定章节 URL 携带有界元素上下文，支持重新进入后的请求重建和时效签名刷新。
-- `LocalRulePanelService` 解析通用发现与登录表单、嵌套分组及选项标签/值；登录按钮可调用 `loginUrl` 中的函数，网页动作进入 HTTPS 登录路由。`ruleExplore` 通过现有导入源分发器执行，缺少必要规则时回退搜索规则。首页推荐仍使用原听友入口。
+- `LocalRulePanelService` 解析通用发现与登录表单、嵌套分组及选项标签/值；纯脚本分类入口执行动作，返回书单地址时进入列表，搜索或按钮动作先提交输入规则。登录按钮可调用 `loginUrl` 中的函数，网页动作进入 HTTPS 登录路由。`ruleExplore` 通过现有导入源分发器执行，缺少必要规则时回退搜索规则；听友分类兼容本站完整 URL、相对路径与分页模板。首页推荐仍使用原听友入口。
+- 聚合脚本的公共函数在独立 QuickJS 全局上下文中声明，支持 `this.helper()`，不同执行之间不共享函数。JSON 字段脚本提供可读取属性的 `result`，同时保留 `JSON.parse(result)` 兼容；带非空自定义 `type` 的 `data:` 返回原始字节的十六进制文本，普通 `data:` 仍返回解码文本，`type: request` 仍须显式声明网络请求。
 - `LocalRuleDebugService` 提供真实阶段及全链路调试、取消检查和脱敏诊断。`concurrentRate` 兼容空值/0（不限流）、正整数（请求间隔毫秒）、负整数（同时请求数）和次数/毫秒窗口；无法识别的可选配置仅记诊断，不阻断请求，并发名额在请求结束后释放。声明式 `session` 可将当前 URL 查询参数映射为 Cookie、生成稳定设备 Cookie 并设置 Referer，状态仍按来源和目标站点隔离。
 - 普通 DOM 宿主只解析已下载 HTML；显式 `webView` 使用独立隐私 ArkWeb 渲染网站脚本，主文档由原生响应提供，避免重复提交 POST。限制 128 个资源请求、16 个站点、5 次导航和总时限，退出清空网页会话。`webJs` 在 QuickJS 中通过有序动作读取活动 DOM、输入、点击、分发事件、提交表单、滚动及 HTTP(S) 跳转；同一次动作重放不会重复操作页面，跨页面元素句柄失效。支持有预算的定时回调和 Promise/async 返回值，单次等待最多 10 秒，网页操作和取快照均受总时限约束。`bodyJs` 仍只转换当前响应。外来脚本不会被传给 ArkWeb 执行，也没有网页到平台的 JS 桥。
 - Android/Java 数据兼容类包括集合与排序/迭代、Pattern/Matcher、精确 BigInteger/Long、JSONObject/JSONArray、字符集/Base64、内存字节流、GZIP/zlib、CRC32、URI/URL、日期格式、MessageDigest/Mac/Cipher、RSA KeyFactory/Signature 与编码密钥规格。`Java.type`、`Packages`、`importClass/importPackage` 和 `JavaImporter` 只解析显式注册的类；内存流不等于文件访问。每类按已实现的方法执行，未实现的类或操作明确报错，不通过空实现伪装成功。漫画不在当前适配范围内。

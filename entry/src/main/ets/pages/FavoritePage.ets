@@ -1,3 +1,4 @@
+import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
@@ -32,8 +33,9 @@ import { TextReadingProgressService } from '../service/text/TextReadingProgressS
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
-const SHELF_FILTER_TOP_OFFSET: number = MINI_TITLE_BAR_HEIGHT - 12;
-const SHELF_FILTER_ROW_HEIGHT: number = 48;
+const SHELF_FILTER_TOP_OFFSET: number = MINI_TITLE_BAR_HEIGHT;
+const SHELF_FILTER_ROW_HEIGHT: number = 40;
+const SHELF_CONTENT_GAP: number = 18;
 
 interface BookUpdateInfo {
   title: string;
@@ -139,6 +141,19 @@ export struct FavoritePage {
   @Computed
   get shelfTextCount(): number {
     return this.favoriteBooks.filter((book: Book): boolean => book.contentType === 'text').length;
+  }
+
+  @Computed
+  get shelfFilterItems(): SegmentButtonV2Items {
+    return new SegmentButtonV2Items([
+      { text: this.shelfFilterText($r('app.string.shelf_filter_all_count'), this.favoriteBooks.length) },
+      { text: this.shelfFilterText($r('app.string.shelf_filter_audio_count'), this.shelfAudioCount) },
+      { text: this.shelfFilterText($r('app.string.shelf_filter_text_count'), this.shelfTextCount) }
+    ]);
+  }
+
+  private shelfFilterText(label: Resource, count: number): string {
+    return this.getUIContext().getHostContext()?.resourceManager.getStringSync(label.id, count) ?? count.toString();
   }
 
   private getChapterCount(book: Book): number {
@@ -851,11 +866,11 @@ export struct FavoritePage {
             .height('100%')
             .padding({
               left: AppSpace.Md,
-              right: AppSpace.Md,
-              top: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
-                SHELF_FILTER_ROW_HEIGHT,
-              bottom: WindowUtils.getFloatingTabBottomVp()
+              right: AppSpace.Md
             })
+            .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
+              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
+            .contentEndOffset(WindowUtils.getFloatingTabBottomVp())
             .scrollBar(BarState.Off)
             .backgroundColor(Color.Transparent)
           } else {
@@ -874,11 +889,11 @@ export struct FavoritePage {
             .height('100%')
             .padding({
               left: AppSpace.Md,
-              right: AppSpace.Md,
-              top: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
-                SHELF_FILTER_ROW_HEIGHT,
-              bottom: WindowUtils.getFloatingTabBottomVp()
+              right: AppSpace.Md
             })
+            .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
+              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
+            .contentEndOffset(WindowUtils.getFloatingTabBottomVp())
             .divider({
               strokeWidth: 1,
               color: $r('sys.color.comp_divider'),
@@ -903,6 +918,10 @@ export struct FavoritePage {
         content: {
           title: {
             mainTitle: '书架'
+          },
+          bottomBuilder: {
+            builder: (): void => this.buildShelfFilter(),
+            height: SHELF_FILTER_ROW_HEIGHT
           },
           menu: {
             value: [{
@@ -959,9 +978,6 @@ export struct FavoritePage {
       .height('100%')
       .backgroundColor(Color.Transparent)
 
-      // 与首页分类标签保持一致，紧接在“书架”标题栏下方。
-      this.buildShelfFilter()
-
       // 拖动删除浮层（自己居中）
       Column() {
         this.buildTrashZone()
@@ -997,38 +1013,46 @@ export struct FavoritePage {
   @Builder
   buildShelfFilter() {
     Row() {
-      Row({ space: AppSpace.Xxs }) {
-        this.buildShelfFilterSegment('全部', 0)
-        this.buildShelfFilterSegment('有声书', 1)
-        this.buildShelfFilterSegment('电子书', 2)
+      Stack({ alignContent: Alignment.Bottom }) {
+        CapsuleSegmentButtonV2({
+          items: this.shelfFilterItems,
+          selectedIndex: this.shelfFilter,
+          $selectedIndex: (index: number): void => this.selectShelfFilter(index),
+          itemFontSize: LengthMetrics.fp(13),
+          itemSelectedFontSize: LengthMetrics.fp(13),
+          itemFontColor: ColorMetrics.resourceColor($r('sys.color.font_secondary')),
+          itemSelectedFontColor: ColorMetrics.resourceColor(HomeTheme.Accent),
+          itemSelectedBackgroundColor: ColorMetrics.resourceColor(Color.Transparent),
+          itemMinHeight: LengthMetrics.vp(34),
+          buttonMinHeight: LengthMetrics.vp(38),
+          buttonPadding: LengthMetrics.vp(2),
+          backgroundSystemMaterial: AppMaterial.FloatingControl
+        })
+        .width('100%')
+
+        Row() {
+          ForEach([0, 1, 2], (index: number) => {
+            Column() {
+              Row()
+                .width(18)
+                .height(2)
+                .borderRadius(1)
+                .backgroundColor(HomeTheme.Accent)
+                .opacity(this.shelfFilter === index ? 1 : 0)
+            }
+            .layoutWeight(1)
+          }, (index: number) => index.toString())
+        }
+        .width('100%')
+        .padding({ left: 2, right: 2, bottom: 4 })
+        .hitTestBehavior(HitTestMode.None)
       }
-      .padding({ left: 4, right: 4, top: 3, bottom: 3 })
-      .borderRadius(AppRadius.Pill)
-      .systemMaterial(AppMaterial.InteractiveThin)
+      .layoutWeight(1)
     }
     .width('100%')
     .height(SHELF_FILTER_ROW_HEIGHT)
     .padding({ left: AppSpace.Md, right: AppSpace.Md })
     .alignItems(VerticalAlign.Center)
-    .translate({ y: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET })
-  }
-
-  @Builder
-  buildShelfFilterSegment(label: string, index: number) {
-    Row({ space: 4 }) {
-      Text(label)
-        .fontSize(12)
-        .fontColor(this.shelfFilter === index ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
-        .fontWeight(this.shelfFilter === index ? FontWeight.Medium : FontWeight.Regular)
-      Text((index === 0 ? this.favoriteBooks.length :
-        (index === 1 ? this.shelfAudioCount : this.shelfTextCount)).toString())
-        .fontSize(11)
-        .fontColor(this.shelfFilter === index ? HomeTheme.Accent : $r('sys.color.font_tertiary'))
-    }
-    .padding({ left: 9, right: 9, top: 5, bottom: 5 })
-    .borderRadius(AppRadius.Pill)
-    .backgroundColor(this.shelfFilter === index ? HomeTheme.AccentSoft : Color.Transparent)
-    .onClick(() => this.selectShelfFilter(index))
   }
 
   @Builder

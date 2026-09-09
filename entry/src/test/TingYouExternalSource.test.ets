@@ -7,9 +7,23 @@ import { TingYouSourceAdapter } from
   '../main/ets/service/rulesource/tingyou/TingYouSourceAdapter';
 import { TingYouSourceIdentity } from
   '../main/ets/service/rulesource/tingyou/TingYouSourceIdentity';
+import { LocalRuleUrlAnalyzer } from '../main/ets/service/rulesource/LocalRuleUrlAnalyzer';
 
 export default function tingYouExternalSourceTest() {
   describe('TingYouExternalSource', () => {
+    it('normalizes imported discovery links and their requested page without accepting other hosts', 0, () => {
+      const source = LocalRuleSource.descriptor('https://tingyou.fm', 'TingYou');
+      const address = LocalRuleUrlAnalyzer.expandTemplate(
+        'https://tingyou.fm/types/46/popular/p{{page}}', source, {}, '', 3);
+      expect(TingYouSourceIdentity.parseCategoryPath(address)).assertEqual('types/46/popular/p3');
+      expect(TingYouSourceIdentity.parseCategoryPath('/types/46/popular/p1')).assertEqual('types/46/popular/p1');
+      expect(TingYouSourceIdentity.parseCategoryPath('https://www.tingyou.fm/types/46/popular/p2/?from=source'))
+        .assertEqual('types/46/popular/p2');
+      expect(TingYouSourceIdentity.parseCategoryPath('homepage/recommends')).assertEqual('homepage/recommends');
+      expect(TingYouSourceIdentity.parseCategoryPath('https://tingyou.fm.example.com/types/46/popular/p1')).assertEqual('');
+      expect(TingYouSourceIdentity.parseCategoryPath('https://example.com/types/46/popular/p1')).assertEqual('');
+    });
+
     it('recognizes only imported TingYou hosts and valid chapter routes', 0, () => {
       expect(TingYouSourceIdentity.isSourceUrl('https://tingyou.fm')).assertTrue();
       expect(TingYouSourceIdentity.isSourceUrl('https://www.tingyou.fm/')).assertTrue();

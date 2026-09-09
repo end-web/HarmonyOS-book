@@ -24,7 +24,7 @@ import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
 import { WebEngineGate } from '../service/WebEngineGate';
 import { UpdateService } from '../service/UpdateService';
-import { HomeTheme } from '../theme/Theme';
+import { AppColor, HomeTheme } from '../theme/Theme';
 import { LocalRuleWebRuntimeHost } from '../service/rulesource/LocalRuleWebRuntime';
 import { LocalRuleBrowserRuntimeHost } from '../service/rulesource/LocalRuleBrowserRuntime';
 
@@ -240,12 +240,12 @@ export struct MainPage {
     return new BottomTabBarStyle(
       {
         normal: new SymbolGlyphModifier(icon).fontColor([$r('sys.color.font_primary')]).fontSize(24),
-        selected: new SymbolGlyphModifier(icon).fontColor([$r('app.color.app_brand')]).fontSize(26)
+        selected: new SymbolGlyphModifier(icon).fontColor([AppColor.Brand]).fontSize(26)
       },
       label
     ).labelStyle({
       unselectedColor: $r('sys.color.font_primary'),
-      selectedColor: $r('app.color.app_brand')
+      selectedColor: AppColor.Brand
     });
   }
 
@@ -336,7 +336,7 @@ export struct MainPage {
           materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
         },
         // 沉浸光感颜色:暖黄色光晕(替代默认白色)
-        lightColor: '#66FFC15C',
+        lightColor: AppColor.Brand,
         // 智感握持:左右手自动跟手
         adaptToHandedness: true,
         // 迷你栏配置:HdsTabs 会自动管理折叠/展开

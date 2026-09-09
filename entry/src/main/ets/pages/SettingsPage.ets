@@ -13,6 +13,7 @@ import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { ReaderPage } from './ReaderPage';
+import { AppearanceSettingsComponent } from '../components/AppearanceSettingsComponent';
 
 interface ThemeOption {
   mode: number;
@@ -391,6 +392,8 @@ export struct SettingsPage {
           bottom: AppSpace.Sm
         })
         .constraintSize({ minHeight: 56 })
+
+        AppearanceSettingsComponent()
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))
@@ -556,6 +559,7 @@ export struct SettingsPage {
       .layoutWeight(1)
 
       Toggle({ type: ToggleType.Switch, isOn: isOn })
+        .selectedColor(AppColor.Brand)
         .onChange((on: boolean) => onChange(on))
     }
     .width('100%')

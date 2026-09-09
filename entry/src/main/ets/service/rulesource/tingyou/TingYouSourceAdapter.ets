@@ -4,6 +4,7 @@ import { JsonArr, JsonObj } from '../../builtin/JsonValue';
 import { LocalRuleContentResult } from '../LocalRuleRuntimeTypes';
 import { TingYouApiClient } from './TingYouApiClient';
 import { TingYouChapterAddress, TingYouSourceIdentity } from './TingYouSourceIdentity';
+import { LocalRuleUrlAnalyzer } from '../LocalRuleUrlAnalyzer';
 
 const TINGYOU_RECOMMENDS_PATH: string = 'homepage/recommends';
 const TINGYOU_THRILLER_PATH: string = 'types/14/popular/p1';
@@ -125,10 +126,11 @@ export class TingYouSourceAdapter {
     return blocks;
   }
 
-  static async getCategory(source: LocalRuleSource, rawPath: string): Promise<TingYouCategoryResult> {
+  static async getCategory(source: LocalRuleSource, rawPath: string, pageNumber: number = 1): Promise<TingYouCategoryResult> {
     TingYouSourceAdapter.requireImportedSource(source);
     const result = new TingYouCategoryResult();
-    const path = rawPath.trim().replace(new RegExp('^/+', 'g'), '');
+    const path = TingYouSourceIdentity.parseCategoryPath(
+      LocalRuleUrlAnalyzer.expandTemplate(rawPath, source, {}, '', pageNumber));
     if (path === TINGYOU_RECOMMENDS_PATH) {
       const homepage = await TingYouApiClient.getPublicData('homepage');
       if (homepage !== undefined) {
@@ -136,7 +138,7 @@ export class TingYouSourceAdapter {
       }
       return result;
     }
-    if (!new RegExp('^types/[0-9]+/[A-Za-z_-]+/p[0-9]+$').test(path)) {
+    if (!path) {
       throw new Error('听友分类地址无效');
     }
     const data = await TingYouApiClient.getPublicData(path);
