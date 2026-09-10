@@ -55,17 +55,16 @@ export struct SearchPage {
   @Local historyCollapseOffset: number = 0;
   @Local recommendationBooks: Book[] = [];
   @Local recommendationsLoading: boolean = false;
-  @Local pageRenderGroup: boolean = false;
-  @Local pageOpacity: number = 1;
-  @Local pageTranslateX: number = 0;
 
   private resultDataSource: BookDataSource = new BookDataSource();
+  private searchController: SearchController = new SearchController();
   private resultScroller: Scroller = new Scroller();
   private recommendationScroller: Scroller = new Scroller();
   private searchGen: number = 0;
   private recommendationGen: number = 0;
   private focusTimerId: number = -1;
   private initialFocusRequested: boolean = false;
+  private leavingPage: boolean = false;
 
   @Computed
   get historyPanelHeight(): number {
@@ -90,6 +89,12 @@ export struct SearchPage {
   }
 
   aboutToDisappear(): void {
+    this.stopPendingSearchUpdates();
+  }
+
+  private stopPendingSearchUpdates(): void {
+    if (this.leavingPage) return;
+    this.leavingPage = true;
     this.searchGen++;
     this.recommendationGen++;
     this.cancelSearchFocus();
@@ -97,19 +102,21 @@ export struct SearchPage {
 
   private async loadSearchHistory(): Promise<void> {
     try {
-      this.searchHistory = await PreferenceService.getSearchHistory();
+      const history = await PreferenceService.getSearchHistory();
+      if (!this.leavingPage) this.searchHistory = history;
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'load search history failed: %{public}s', String(e));
     }
   }
 
   private scheduleSearchFocus(): void {
-    if (this.initialFocusRequested) {
+    if (this.initialFocusRequested || this.leavingPage) {
       return;
     }
     this.initialFocusRequested = true;
     this.focusTimerId = setTimeout((): void => {
       this.focusTimerId = -1;
+      if (this.leavingPage) return;
       try {
         this.getUIContext().getFocusController().requestFocus('search-page-input');
       } catch (_e) {
@@ -147,7 +154,7 @@ export struct SearchPage {
   private async clearAllHistory(): Promise<void> {
     try {
       await PreferenceService.clearSearchHistory();
-      this.searchHistory = [];
+      if (!this.leavingPage) this.searchHistory = [];
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'clear search history failed: %{public}s', String(e));
     }
@@ -281,6 +288,7 @@ export struct SearchPage {
   }
 
   private async doSearch(): Promise<void> {
+    if (this.leavingPage) return;
     const keyword = this.keyword.trim();
     if (!keyword) {
       this.clearSearch();
@@ -906,7 +914,8 @@ export struct SearchPage {
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
       .onClick(() => this.navStack.pop())
 
-      Search({ value: this.keyword, placeholder: $r('app.string.search_placeholder') })
+      Search({ value: this.keyword, placeholder: $r('app.string.search_placeholder'),
+        controller: this.searchController })
         .searchButton($r('app.string.search_action'), { fontColor: HomeTheme.Accent })
         .placeholderColor($r('sys.color.font_tertiary'))
         .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
@@ -921,6 +930,7 @@ export struct SearchPage {
         .onAppear(() => this.scheduleSearchFocus())
         .onSubmit(() => this.doSearch())
         .onChange((value: string) => {
+          if (this.leavingPage) return;
           this.keyword = value;
           if (value.length === 0 && this.hasSearched) this.clearSearch();
         })
@@ -1019,45 +1029,14 @@ export struct SearchPage {
     )
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(HomeTheme.BgNeutral)
-    .systemTransition(NavigationSystemTransitionType.NONE)
-    .renderGroup(this.pageRenderGroup)
-    .opacity(this.pageOpacity)
-    .translate({ x: this.pageTranslateX })
-    .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-      if (op === NavigationOperation.PUSH && isEnter) {
-        this.pageRenderGroup = true;
-        this.pageOpacity = 0;
-        this.pageTranslateX = 24;
-        return [{
-          duration: 220,
-          curve: Curve.FastOutSlowIn,
-          event: () => {
-            this.pageOpacity = 1;
-            this.pageTranslateX = 0;
-          },
-          onTransitionEnd: () => {
-            this.pageRenderGroup = false;
-          }
-        }];
-      } else if (op === NavigationOperation.POP && !isEnter) {
-        this.pageRenderGroup = true;
-        this.pageOpacity = 1;
-        this.pageTranslateX = 0;
-        return [{
-          duration: 160,
-          curve: Curve.FastOutLinearIn,
-          event: () => {
-            this.pageOpacity = 0;
-            this.pageTranslateX = 24;
-          },
-          onTransitionEnd: () => {
-            this.pageOpacity = 1;
-            this.pageTranslateX = 0;
-            this.pageRenderGroup = false;
-          }
-        }];
-      }
-      return undefined;
+    .onWillHide(() => this.cancelSearchFocus())
+    .onWillDisappear(() => {
+      // 在退场开始前停止回写，避免推荐、搜索及键盘与返回动画争抢布局。
+      this.stopPendingSearchUpdates();
+      this.searchController.stopEditing();
     })
+    // 保持沉浸材质实时采样，双向转场均交给 HDS；customTransition 会覆盖 systemTransition。
+    .renderGroup(false)
+    .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
   }
 }

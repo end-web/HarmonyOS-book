@@ -982,7 +982,7 @@ export struct PlayerPage {
       Row() {
         Column({ space: 4 }) {
           Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : this.book!.title)
-            .fontSize(AppFont.TitleL)
+            .fontSize(20)
             .fontColor('#FFFFFF')
             .fontWeight(FontWeight.Bold)
             .maxLines(2)

@@ -798,7 +798,11 @@ export struct RuleSourcePage {
     this.navStack.pushPathByName('RuleSourceDebugPage', params);
   }
 
-  private async testSource(source: LocalRuleSource): Promise<void> {
+  private async testSource(cardSource: LocalRuleSource): Promise<void> {
+    // 相同 URL 重导后 LazyForEach 可能保留旧卡片闭包，测试必须使用本次加载的定义。
+    const source = this.allSources.find((item: LocalRuleSource) =>
+      item.bookSourceUrl === cardSource.bookSourceUrl);
+    if (source === undefined) return;
     if (this.busySourceUrl.length > 0 || this.isImporting || this.isBulkTesting || !source.canExecute()) return;
     if (!(await this.hasMainAccount(source))) {
       this.showToast($r('app.string.rule_source_account_required_for_test'));
@@ -810,6 +814,8 @@ export struct RuleSourcePage {
       const health = await BookSourceService.testLocalSource(source, RULE_SOURCE_TEST_KEYWORD);
       source.validationStatus = health.status;
       source.validationMessage = health.message;
+      cardSource.validationStatus = health.status;
+      cardSource.validationMessage = health.message;
       await LocalRuleSourceRepository.updateValidationBatch([source]);
       SourceDataService.invalidateLocalSources(source.bookSourceUrl);
       await this.loadSources(false);

@@ -2,19 +2,19 @@
 
 面向 HarmonyOS 7 手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.8`，API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.9`，API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载 v0.1.8 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.8/ListenBook-v0.1.8.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载 v0.1.9 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.9/ListenBook-v0.1.9.hap)
 
 安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件，源码仓库不再保留旧 HAP。当前采用 Release 模式构建并沿用开发签名，适用于 HarmonyOS 7 / API 26 的获授权手机开发测试，尚未上架应用市场。
 
 ```bash
-hdc install ListenBook-v0.1.8.hap
+hdc install ListenBook-v0.1.9.hap
 ```
 
-`v0.1.8` 更新：搜索历史与顶部导航采用沉浸材质，播放和阅读弹窗接入原生半模态；系统设置新增材质选择、预设主题色与自定义 HEX 色值；优化书架筛选及迷你播放器封面比例，修复听友分类链接与分页兼容。
+`v0.1.9` 更新：播放页标题调整为 20fp；优化搜索页原生转场与历史标签布局，减少返回闪烁；修复书源重导后单源测试使用旧定义的问题，并提供 13听书网导入示例。
 
 ## 当前功能
 
