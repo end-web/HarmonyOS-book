@@ -1,7 +1,6 @@
 import { HdsCompat } from '../utils/HdsCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { LengthMetrics } from '@kit.ArkUI';
 import { HdsNavigation, HdsNavigationTitleMode, HideMode } from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -10,7 +9,7 @@ import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource'
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
-import { BookDataSource } from '../utils/BookDataSource';
+import { HomeCategoryBookRow, HomeCategoryRowDataSource } from '../utils/HomeCategoryRowDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
@@ -258,7 +257,7 @@ export struct HomePage {
   @Event onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) => void = () => {};
 
   private contentScroller: Scroller = new Scroller();
-  private categoryDS: BookDataSource = new BookDataSource();
+  private categoryDS: HomeCategoryRowDataSource = new HomeCategoryRowDataSource();
   private categoryNavDataSource: HomeCategoryDataSource = new HomeCategoryDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private homeGen: number = 0;
@@ -639,21 +638,34 @@ export struct HomePage {
             .justifyContent(FlexAlign.Center)
           }
         } else if (this.categoryBooks.length > 0) {
-          LazyVGridLayout() {
-            LazyForEach(this.categoryDS, (book: Book, idx: number) => {
-              BookCard({
-                book: book,
-                indexHint: idx,
-                showSourceBadge: false,
-                onTap: () => this.openBook(book)
-              })
-            }, (book: Book) => book.id)
-          }
-          .columnsTemplate('1fr 1fr 1fr')
-          .columnsGap(LengthMetrics.vp(AppSpace.Sm))
-          .rowsGap(LengthMetrics.vp(AppSpace.Md))
-          .width('100%')
-          .padding({ left: AppSpace.Md, right: AppSpace.Md })
+          // LazyVGridLayout 嵌入 List 从 API 26 才支持；统一使用 API 20 可用的懒加载行。
+          LazyForEach(this.categoryDS, (row: HomeCategoryBookRow) => {
+            ListItem() {
+              Row({ space: AppSpace.Sm }) {
+                ForEach(row.books, (book: Book, columnIndex: number) => {
+                  Column() {
+                    BookCard({
+                      book: book,
+                      indexHint: row.startIndex + columnIndex,
+                      showSourceBadge: false,
+                      onTap: () => this.openBook(book)
+                    })
+                  }
+                  .layoutWeight(1)
+                }, (book: Book) => book.id)
+                if (row.books.length < 3) {
+                  Column().layoutWeight(1)
+                }
+                if (row.books.length < 2) {
+                  Column().layoutWeight(1)
+                }
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Top)
+              .padding({ left: AppSpace.Md, right: AppSpace.Md })
+            }
+            .margin({ bottom: AppSpace.Md })
+          }, (row: HomeCategoryBookRow) => row.key)
         }
 
         // 底部留白避开浮动 Tab + MiniPlayer
@@ -665,7 +677,7 @@ export struct HomePage {
       .height('100%')
       .listDirection(Axis.Vertical)
       .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .cachedCount(5)
     .clip(false)
     .backgroundColor(Color.Transparent)
@@ -796,7 +808,7 @@ export struct HomePage {
         }
         .scrollable(ScrollDirection.Horizontal)
         .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .width('100%')
       }
     }
@@ -993,7 +1005,7 @@ export struct HomePage {
       .height(CATEGORY_NAV_HEIGHT)
       .listDirection(Axis.Horizontal)
       .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .cachedCount(1)
 
       if (this.isSearchCollapsed) {

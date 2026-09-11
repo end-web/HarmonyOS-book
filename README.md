@@ -2,19 +2,19 @@
 
 面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.10`，最低 API 20 / 目标 API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.11`，最低 API 20 / 目标 API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载 v0.1.10 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.10/ListenBook-v0.1.10.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载 v0.1.11 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.11/ListenBook-v0.1.11.hap)
 
 安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件，源码仓库不再保留旧 HAP。当前采用 Release 模式构建并沿用开发签名，适用于 HarmonyOS 6.0 及以上的获授权手机开发测试，尚未上架应用市场。
 
 ```bash
-hdc install ListenBook-v0.1.10.hap
+hdc install ListenBook-v0.1.11.hap
 ```
 
-`v0.1.10` 更新：最低兼容 HarmonyOS 6.0；为材质、底栏、播放缓存、封面预下载和系统控制增加版本适配；定时关闭支持按时长、按章节及自定义数值。鸿蒙 6 完整真机回归仍待完成。
+`v0.1.11` 更新：修复两个导入按钮的文字对比度、“我的”页箭头尺寸及书源/本地导入返回转场；应用图标采用 1024×1024 前景、背景分层并在打包时保留原始尺寸；完善滚动边界回弹，首页分类网格改用 API 20 可用的懒加载行。最低兼容 HarmonyOS 6.0；鸿蒙 6 完整真机回归及本轮 AGC 质量复测仍待完成。
 
 ## 当前功能
 

@@ -1727,6 +1727,26 @@ export struct RuleSourcePage {
     }.width('100%').layoutWeight(1).padding(AppSpace.Md)
   }
 
+  private canImportSources(): boolean {
+    return !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0 &&
+      this.importJson.trim().length > 0;
+  }
+
+  private importColorChannel(hex: string, offset: number): number {
+    const channel: number = parseInt(hex.substring(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  }
+
+  private importActionForeground(): ResourceColor {
+    if (!this.canImportSources()) return $r('app.color.text_secondary');
+    const brand: ResourceStr = AppColor.Brand;
+    // 默认深浅两套橙色都配黑字；自定义色按 sRGB 相对亮度选择对比度更高的黑/白。
+    if (typeof brand !== 'string') return Color.Black;
+    const luminance: number = 0.2126 * this.importColorChannel(brand, 1) +
+      0.7152 * this.importColorChannel(brand, 3) + 0.0722 * this.importColorChannel(brand, 5);
+    return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? Color.Black : Color.White;
+  }
+
   @Builder
   buildImportSection() {
     Column({ space: AppSpace.Sm }) {
@@ -1799,7 +1819,18 @@ export struct RuleSourcePage {
           this.importJson = value;
         })
 
-      Button() {
+      Stack() {
+        // 禁用 Button 会淡化其整个内容子树；视觉内容独立绘制，保留真实按钮的禁用语义。
+        Button()
+          .width('100%')
+          .height('100%')
+          .backgroundColor(Color.Transparent)
+          .borderRadius(AppRadius.Sm)
+          .enabled(this.canImportSources())
+          .accessibilityText(this.isImporting ? $r('app.string.rule_source_importing') :
+            $r('app.string.rule_source_import_action'))
+          .onClick(() => this.importSources())
+
         Row({ space: AppSpace.Xs }) {
           if (this.isImporting) {
             LoadingProgress()
@@ -1809,24 +1840,22 @@ export struct RuleSourcePage {
           } else {
             SymbolGlyph($r('sys.symbol.plus_circle'))
               .fontSize(18)
-              .fontColor([AppColor.OnBrand])
+              .fontColor([this.importActionForeground()])
           }
           Text(this.isImporting ? $r('app.string.rule_source_importing') :
             $r('app.string.rule_source_import_action'))
             .fontSize(AppFont.Body)
-            .fontColor(this.isImporting ? AppColor.Brand : AppColor.OnBrand)
+            .fontColor(this.importActionForeground())
             .fontWeight(FontWeight.Medium)
         }
         .justifyContent(FlexAlign.Center)
+        .hitTestBehavior(HitTestMode.None)
+        .accessibilityLevel('no-hide-descendants')
       }
       .width('100%')
       .height(44)
-      .backgroundColor(this.isImporting ? AppColor.BrandSoft :
-        (this.importJson.trim().length > 0 ? AppColor.Brand : AppColor.BrandDisabled))
+      .backgroundColor(this.canImportSources() ? AppColor.Brand : $r('app.color.input_background'))
       .borderRadius(AppRadius.Sm)
-      .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0 &&
-        this.importJson.trim().length > 0)
-      .onClick(() => this.importSources())
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

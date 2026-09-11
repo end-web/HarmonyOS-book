@@ -10,7 +10,7 @@
 - `PlatformCompat` 按设备 API 分流：API 23 起启用 HDS 浮动底栏和媒体离线缓存，API 26 起启用 `uiMaterial`、媒体中心增强控制和浮动导航避让；较新系统模块延迟加载。API 20–22 使用固定底栏及独立迷你播放器，封面预下载通过下载信息轮询完成。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.10`、`versionCode = 1000010`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.11`、`versionCode = 1000011`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。

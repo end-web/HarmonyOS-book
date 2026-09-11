@@ -662,7 +662,7 @@ export struct SearchPage {
     .layoutWeight(1)
     .width('100%')
     .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .align(Alignment.Top)
     .onDidScroll(() => this.syncHistoryCollapse())
     .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
@@ -800,7 +800,7 @@ export struct SearchPage {
     .layoutWeight(1)
     .width('100%')
     .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .padding({
       left: AppSpace.Md,
       right: AppSpace.Md
@@ -888,7 +888,7 @@ export struct SearchPage {
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .cachedCount(6)
     .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
       RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)

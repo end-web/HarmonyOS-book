@@ -868,6 +868,8 @@ export struct FavoritePage {
             .attributeModifier(new CompatibleGridInsets(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
               SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP, WindowUtils.getFloatingTabBottomVp(), AppSpace.Md))
             .scrollBar(BarState.Off)
+            // 空书架只有添加入口，也需要在上下边界提供原生回弹。
+            .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .backgroundColor(Color.Transparent)
           } else {
             List({ scroller: this.listScroller }) {
@@ -896,6 +898,7 @@ export struct FavoritePage {
               startMargin: 88
             })
             .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .backgroundColor(Color.Transparent)
           }
         }

@@ -287,7 +287,9 @@ export struct ProfilePage {
         .layoutWeight(1)
 
         SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(14)
+          .fontSize(24)
+          .width(24)
+          .height(24)
           .fontColor([$r('sys.color.font_tertiary')])
       }
       .width('100%')
@@ -352,7 +354,9 @@ export struct ProfilePage {
         .layoutWeight(1)
 
       SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(14)
+        .fontSize(24)
+        .width(24)
+        .height(24)
         .fontColor([$r('sys.color.font_tertiary')])
     }
     .width('100%')

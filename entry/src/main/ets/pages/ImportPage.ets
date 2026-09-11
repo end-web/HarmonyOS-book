@@ -561,15 +561,31 @@ export struct ImportPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      Button(this.importing ? '导入中...' : '开始导入')
-        .width('100%')
-        .height(48)
-        .backgroundColor(this.canImport() ? AppColor.Brand : AppColor.BrandDisabled)
-        .fontColor(Color.White)
-        .fontSize(AppFont.BodyL)
-        .borderRadius(AppRadius.Md)
-        .enabled(this.canImport() && !this.importing)
-        .onClick(() => this.doImport())
+      Stack() {
+        // 视觉内容独立绘制，避免原生 Button 禁用时同步淡化文字。
+        Button()
+          .width('100%')
+          .height('100%')
+          .backgroundColor(Color.Transparent)
+          .borderRadius(AppRadius.Md)
+          .enabled(this.canImport() && !this.importing)
+          .accessibilityText(this.importing ? '导入中...' : '开始导入')
+          .onClick(() => this.doImport())
+
+        Row() {
+          Text(this.importing ? '导入中...' : '开始导入')
+            .fontColor(this.importActionForeground())
+            .fontSize(AppFont.BodyL)
+            .fontWeight(FontWeight.Medium)
+        }
+        .justifyContent(FlexAlign.Center)
+        .hitTestBehavior(HitTestMode.None)
+        .accessibilityLevel('no-hide-descendants')
+      }
+      .width('100%')
+      .height(48)
+      .backgroundColor(this.canImport() && !this.importing ? AppColor.Brand : $r('app.color.input_background'))
+      .borderRadius(AppRadius.Md)
     }
     .width('100%')
     .padding({
@@ -583,5 +599,20 @@ export struct ImportPage {
 
   private canImport(): boolean {
     return this.pickedFiles.length > 0 && this.bookTitle.length > 0;
+  }
+
+  private importColorChannel(hex: string, offset: number): number {
+    const channel: number = parseInt(hex.substring(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+  }
+
+  private importActionForeground(): ResourceColor {
+    if (!this.canImport() || this.importing) return $r('app.color.text_secondary');
+    const brand: ResourceStr = AppColor.Brand;
+    // 默认深浅两套橙色都配黑字；自定义色按 sRGB 相对亮度选择对比度更高的黑/白。
+    if (typeof brand !== 'string') return Color.Black;
+    const luminance: number = 0.2126 * this.importColorChannel(brand, 1) +
+      0.7152 * this.importColorChannel(brand, 3) + 0.0722 * this.importColorChannel(brand, 5);
+    return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? Color.Black : Color.White;
   }
 }
