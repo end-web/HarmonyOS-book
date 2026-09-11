@@ -1,13 +1,10 @@
+import { HdsCompat } from '../utils/HdsCompat';
+import { CompatibleGridInsets } from '../utils/PlatformCompat';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
-import {
-  HdsNavigation,
-  HdsNavigationTitleMode,
-  ScrollEffectType,
-  hdsMaterial
-} from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import {
   AppColor,
   AppRadius,
@@ -868,9 +865,8 @@ export struct FavoritePage {
               left: AppSpace.Md,
               right: AppSpace.Md
             })
-            .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
-              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
-            .contentEndOffset(WindowUtils.getFloatingTabBottomVp())
+            .attributeModifier(new CompatibleGridInsets(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
+              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP, WindowUtils.getFloatingTabBottomVp(), AppSpace.Md))
             .scrollBar(BarState.Off)
             .backgroundColor(Color.Transparent)
           } else {
@@ -937,7 +933,7 @@ export struct FavoritePage {
         },
         style: {
           scrollEffectOpts: {
-            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+            scrollEffectType: HdsCompat.scrollEffect
           },
           originalStyle: {
             backgroundStyle: {
@@ -965,10 +961,7 @@ export struct FavoritePage {
               }
             }
           },
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
+          systemMaterialEffect: HdsCompat.material
         }
       })
       .titleMode(HdsNavigationTitleMode.MINI)

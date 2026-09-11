@@ -133,7 +133,7 @@ export struct AppearanceSettingsComponent {
         ForEach(ACCENT_CHOICES, (choice: AccentChoice) => {
           Column({ space: AppSpace.Xs }) {
             Stack() {
-              Circle().width(42).height(42).fill(choice.color || '#FF6B3D')
+              Row().width(42).height(42).borderRadius(21).backgroundColor(choice.color || '#FF6B3D')
               if (this.appearance.accent === choice.color) {
                 SymbolGlyph($r('sys.symbol.checkmark'))
                   .fontSize(20)
@@ -191,14 +191,14 @@ export struct AppearanceSettingsComponent {
         height: SheetSize.FIT_CONTENT,
         preferType: SheetType.BOTTOM,
         title: { title: $r('app.string.appearance_material') },
-        backgroundColor: Color.Transparent,
+        backgroundColor: AppMaterial.SheetBackground,
         systemMaterial: AppMaterial.Sheet
       })
       this.divider()
       Row({ space: AppSpace.Sm }) {
         Text($r('app.string.appearance_accent')).fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary')).layoutWeight(1)
-        Circle().width(22).height(22).fill(AppColor.Brand)
+        Row().width(22).height(22).borderRadius(11).backgroundColor(AppColor.Brand)
         Text(this.appearance.accent || $r('app.string.appearance_accent_default')).fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
         SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('sys.color.font_tertiary')])
@@ -213,7 +213,7 @@ export struct AppearanceSettingsComponent {
         height: SheetSize.FIT_CONTENT,
         preferType: SheetType.BOTTOM,
         title: { title: $r('app.string.appearance_accent') },
-        backgroundColor: Color.Transparent,
+        backgroundColor: AppMaterial.SheetBackground,
         systemMaterial: AppMaterial.Sheet
       })
     }

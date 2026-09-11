@@ -6,10 +6,10 @@ import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius, AppMaterial } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
-import { PlayerState, PLAYER_STATE_KEY, PlayMode } from '../model/PlayerState';
+import { PlayerState, PLAYER_STATE_KEY, PlayMode, SleepMode } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
-import { AudioPlayFailedPayload, AudioService, EVT_AUDIO_PLAY_FAILED } from '../service/AudioService';
+import { AudioPlayFailedPayload, AudioService, EVT_AUDIO_PLAY_FAILED, EVT_SLEEP_CANCELLED } from '../service/AudioService';
 import { PreferenceService } from '../service/PreferenceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { PlaybackStore } from '../service/PlaybackStore';
@@ -97,6 +97,11 @@ export struct PlayerPage {
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
   @Local showSleepSheet: boolean = false;
+  @Local sleepSheetMode: SleepMode = SleepMode.Duration;
+  @Local sleepCustomVisible: boolean = false;
+  @Local sleepCustomValue: string = '';
+  @Local sleepInputError: ResourceStr = '';
+  @Local sleepSmartStopDraft: boolean = false;
   @Local showSkipSheet: boolean = false;
   @Local showSpeedSheet: boolean = false;
   @Local skipIntroValue: number = 0;
@@ -129,6 +134,9 @@ export struct PlayerPage {
     if (!data || data.bookId !== this.bookId) return;
     this.downloadTick = this.downloadTick + 1;
     if (!data.progressOnly) this.chapterDataSource.notifyDataReloaded();
+  };
+  private sleepCancelledHandler = (): void => {
+    this.showToast($r('app.string.player_sleep_switch_cancelled'));
   };
   private audioPlayFailedHandler = (evt: emitter.EventData): void => {
     const data = evt.data as AudioPlayFailedPayload;
@@ -198,6 +206,7 @@ export struct PlayerPage {
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     emitter.on(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
+    emitter.on(EVT_SLEEP_CANCELLED, this.sleepCancelledHandler);
     setTimeout(() => {
       if (this.isLeaving) return;
       this.loadBook();
@@ -220,6 +229,7 @@ export struct PlayerPage {
       emitter.off(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
       emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
       emitter.off(EVT_AUDIO_PLAY_FAILED, this.audioPlayFailedHandler);
+      emitter.off(EVT_SLEEP_CANCELLED, this.sleepCancelledHandler);
     }
     WindowUtils.setStatusBarLight(false);
     AudioService.getInstance().flushHistory();
@@ -716,28 +726,103 @@ export struct PlayerPage {
     return m + ':' + (s < 10 ? '0' : '') + s;
   }
 
+  private sleepActive(): boolean {
+    return this.playerState.sleepMode !== SleepMode.Off;
+  }
+
+  private sleepLabel(): ResourceStr {
+    if (this.playerState.sleepMode === SleepMode.Chapters) {
+      return this.playerState.sleepChaptersRemaining === 1 ? $r('app.string.player_sleep_this_chapter')
+        : $r('app.string.player_sleep_remaining_chapters', this.playerState.sleepChaptersRemaining);
+    }
+    if (this.playerState.sleepWaitingForChapter) return $r('app.string.player_sleep_this_chapter');
+    return this.sleepActive() ? this.formatSleepRemaining() : $r('app.string.player_sleep');
+  }
+
+  private openSleepSheet(): void {
+    if (this.sleepActive()) {
+      this.sleepSheetMode = this.playerState.sleepMode;
+      this.sleepSmartStopDraft = this.playerState.sleepSmartStop;
+    }
+    this.sleepCustomVisible = false;
+    this.sleepInputError = '';
+    this.showSleepSheet = true;
+  }
+
+  private selectSleepMode(mode: SleepMode): void {
+    this.sleepSheetMode = mode;
+    this.sleepCustomVisible = false;
+    this.sleepInputError = '';
+  }
+
   private setSleep(minutes: number): void {
-    if (minutes > 0) {
-      // 设置定时：使用当前的智能停止状态
-      const smartStop = this.playerState.sleepSmartStop;
-      AudioService.getInstance().setSleepTimer(minutes, smartStop, false);
+    if (minutes === 0) {
+      AudioService.getInstance().cancelSleepTimer();
+      this.showToast($r('app.string.player_sleep_cancelled'));
+    } else if (AudioService.getInstance().setSleepTimer(minutes, this.sleepSmartStopDraft)) {
+      this.showToast($r('app.string.player_sleep_minutes_set', minutes));
     } else {
-      // 取消定时：重置所有相关状态
-      this.playerState.sleepSmartStop = false;
-      this.playerState.sleepFadeOut = false;
-      AudioService.getInstance().setSleepTimer(0, false, false);
+      this.sleepInputError = $r('app.string.player_sleep_minutes_error');
+      return;
     }
     this.showSleepSheet = false;
   }
 
-  private toggleSleepSmartStop(isOn: boolean): void {
-    this.playerState.sleepSmartStop = isOn;
-    // 如果当前已设置定时，重新应用配置
-    const minutes = this.playerState.sleepMinutes;
-    if (minutes > 0) {
-      AudioService.getInstance().setSleepTimer(minutes, isOn, false);
+  private selectSleepOption(value: number): void {
+    if (value === 0) {
+      this.sleepCustomVisible = true;
+      const selected = this.sleepSheetMode === SleepMode.Duration
+        ? this.playerState.sleepMinutes : this.playerState.sleepChapterCount;
+      this.sleepCustomValue = this.playerState.sleepMode === this.sleepSheetMode && selected > 0
+        ? selected.toString() : '';
+      this.sleepInputError = '';
+      return;
     }
-    // 如果未设置定时，只更新状态，用户选择时长时会自动应用
+    if (this.sleepSheetMode === SleepMode.Duration) {
+      this.setSleep(value);
+      return;
+    }
+    if (!AudioService.getInstance().setSleepChapters(value)) {
+      this.sleepInputError = $r('app.string.player_sleep_chapters_error', this.sleepChapterLimit());
+      return;
+    }
+    this.showToast($r('app.string.player_sleep_target', this.playerState.sleepTargetTitle));
+    this.showSleepSheet = false;
+  }
+
+  private sleepChapterLimit(): number {
+    return AudioService.getInstance().getAvailableSleepChapters();
+  }
+
+  private submitCustomSleep(): void {
+    const value = Number(this.sleepCustomValue);
+    const max = this.sleepSheetMode === SleepMode.Duration ? 1440 : this.sleepChapterLimit();
+    if (!new RegExp('^[0-9]+$').test(this.sleepCustomValue) || !Number.isInteger(value) || value < 1 || value > max) {
+      this.sleepInputError = this.sleepSheetMode === SleepMode.Duration
+        ? $r('app.string.player_sleep_minutes_error') : $r('app.string.player_sleep_chapters_error', max);
+      return;
+    }
+    this.selectSleepOption(value);
+  }
+
+  private sleepOptionSelected(value: number): boolean {
+    if (this.playerState.sleepMode !== this.sleepSheetMode) return false;
+    const selected = this.sleepSheetMode === SleepMode.Duration
+      ? this.playerState.sleepMinutes : this.playerState.sleepChapterCount;
+    if (value > 0) return selected === value;
+    const presets: number[] = this.sleepSheetMode === SleepMode.Duration ? [15, 30, 45, 60] : [1, 3, 5, 7];
+    return selected > 0 && !presets.includes(selected);
+  }
+
+  private sleepOptionLabel(value: number): ResourceStr {
+    if (value === 0) {
+      if (!this.sleepOptionSelected(0)) return $r('app.string.player_sleep_custom');
+      return this.sleepSheetMode === SleepMode.Duration
+        ? $r('app.string.player_sleep_custom_minutes', this.playerState.sleepMinutes)
+        : $r('app.string.player_sleep_custom_chapters', this.playerState.sleepChapterCount);
+    }
+    if (this.sleepSheetMode === SleepMode.Duration) return $r('app.string.player_sleep_minutes', value);
+    return value === 1 ? $r('app.string.player_sleep_finish_current') : $r('app.string.player_sleep_chapters', value);
   }
 
   private cyclePlayMode(): void {
@@ -883,7 +968,7 @@ export struct PlayerPage {
       .width(40)
       .height(40)
       .borderRadius(20)
-      .systemMaterial(AppMaterial.FloatingControl)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.FloatingControl, AppColor.GlassSheetFallback))
       .onClick(() => {
         this.isLeaving = true;
         this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
@@ -899,7 +984,7 @@ export struct PlayerPage {
       .width(40)
       .height(40)
       .borderRadius(20)
-      .systemMaterial(AppMaterial.FloatingControl)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.FloatingControl, AppColor.GlassSheetFallback))
       .onClick(() => this.openBookDetail())
     }
     .width('100%')
@@ -1159,13 +1244,13 @@ export struct PlayerPage {
       Column({ space: 4 }) {
         SymbolGlyph($r('sys.symbol.clock'))
           .fontSize(22)
-          .fontColor([this.playerState.sleepMinutes > 0 ? AppColor.Brand : '#FFFFFF'])
-        Text(this.playerState.sleepMinutes > 0 ? this.formatSleepRemaining() : '定时')
+          .fontColor([this.sleepActive() ? AppColor.Brand : '#FFFFFF'])
+        Text(this.sleepLabel())
           .fontSize(AppFont.Caption)
-          .fontColor(this.playerState.sleepMinutes > 0 ? AppColor.Brand : '#FFFFFF')
+          .fontColor(this.sleepActive() ? AppColor.Brand : '#FFFFFF')
       }
       .layoutWeight(1)
-      .onClick(() => { this.showSleepSheet = true; })
+      .onClick(() => this.openSleepSheet())
       .bindSheet($$this.showSleepSheet, this.buildSleepSheet(), {
         height: SheetSize.FIT_CONTENT,
         preferType: SheetType.BOTTOM,
@@ -1176,7 +1261,7 @@ export struct PlayerPage {
         onDisappear: () => { this.showSleepSheet = false; }
       })
       .gesture(LongPressGesture().onAction(() => {
-        if (this.playerState.sleepMinutes > 0) {
+        if (this.sleepActive()) {
           this.hapticTick();
           this.setSleep(0);
         }
@@ -1340,86 +1425,182 @@ export struct PlayerPage {
   }
 
   @Builder
+  buildSleepModeTab(mode: SleepMode) {
+    Button(mode === SleepMode.Duration ? $r('app.string.player_sleep_by_time') : $r('app.string.player_sleep_by_chapter'))
+      .type(ButtonType.Normal)
+      .layoutWeight(1)
+      .height(40)
+      .fontSize(AppFont.Body)
+      .fontWeight(this.sleepSheetMode === mode ? FontWeight.Medium : FontWeight.Normal)
+      .fontColor(this.sleepSheetMode === mode ? AppColor.Brand : $r('sys.color.font_secondary'))
+      .backgroundColor(this.sleepSheetMode === mode ? AppColor.BrandSoft : Color.Transparent)
+      .borderRadius(AppRadius.Sm)
+      .onClick(() => this.selectSleepMode(mode))
+  }
+
+  @Builder
+  buildSleepOption(value: number) {
+    Button(this.sleepOptionLabel(value))
+      .type(ButtonType.Normal)
+      .layoutWeight(1)
+      .height(48)
+      .fontSize(AppFont.BodyL)
+      .fontColor(this.sleepOptionSelected(value) ? AppColor.Brand : $r('sys.color.font_primary'))
+      .backgroundColor(this.sleepOptionSelected(value) ? AppColor.BrandSoft : $r('sys.color.comp_background_tertiary'))
+      .border({ width: this.sleepOptionSelected(value) ? 1 : 0, color: AppColor.Brand })
+      .borderRadius(AppRadius.Md)
+      .enabled(value === 0 || this.sleepSheetMode === SleepMode.Duration || value <= this.sleepChapterLimit())
+      .onClick(() => this.selectSleepOption(value))
+  }
+
+  @Builder
   buildSleepSheet() {
     Column({ space: AppSpace.Md }) {
       Row() {
-      Text('定时关闭')
-        .fontSize(AppFont.Title)
-        .fontColor($r('sys.color.font_primary'))
-        .fontWeight(FontWeight.Bold)
-      Blank()
-      SymbolGlyph($r('sys.symbol.xmark'))
-        .fontSize(20)
-        .fontColor([$r('sys.color.font_secondary')])
+        Text($r('app.string.player_sleep_title'))
+          .fontSize(AppFont.Title)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Bold)
+        Blank()
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(20)
+            .fontColor([$r('sys.color.font_secondary')])
+        }
+        .width(40)
+        .height(40)
+        .backgroundColor(Color.Transparent)
+        .accessibilityText($r('app.string.player_sleep_close'))
         .onClick(() => { this.showSleepSheet = false; })
       }
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
 
-    // 预设时间选项
-      ForEach([15, 30, 45, 60], (min: number) => {
-      Row() {
-        Text(min + ' 分钟')
-          .fontSize(AppFont.BodyL)
-          .fontColor(this.playerState.sleepMinutes === min ? AppColor.Brand : $r('sys.color.font_primary'))
-          .layoutWeight(1)
-        if (this.playerState.sleepMinutes === min) {
-          SymbolGlyph($r('sys.symbol.checkmark'))
-            .fontSize(18)
-            .fontColor([AppColor.Brand])
-        }
+      Row({ space: AppSpace.Xs }) {
+        this.buildSleepModeTab(SleepMode.Duration)
+        this.buildSleepModeTab(SleepMode.Chapters)
       }
+      .padding(AppSpace.Xs)
+      .backgroundColor($r('sys.color.comp_background_tertiary'))
+      .borderRadius(AppRadius.Md)
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-      .onClick(() => this.setSleep(min))
-      }, (min: number) => min.toString())
 
-    // 分隔线
-      Divider()
-      .color($r('sys.color.comp_divider'))
-      .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
-
-    // 增强选项：章节结束后停止（始终显示）
-      Row() {
-      Column({ space: 2 }) {
-        Text('章节结束后停止')
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
-        Text('定时到后播完当前章节再暂停')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-
-      Toggle({ type: ToggleType.Switch, isOn: this.playerState.sleepSmartStop })
-        .selectedColor(AppColor.Brand)
-        .onChange((isOn: boolean) => {
-          this.toggleSleepSmartStop(isOn);
-        })
-      }
-      .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
-
-    // 取消定时按钮
-      if (this.playerState.sleepMinutes > 0) {
-        Divider()
-          .color($r('sys.color.comp_divider'))
-          .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
-
-        Row() {
-          Text('取消定时')
-            .fontSize(AppFont.BodyL)
-            .fontColor('#FF6B6B')
-            .layoutWeight(1)
+      if (this.sleepSheetMode === SleepMode.Duration) {
+        Row({ space: AppSpace.Sm }) {
+          this.buildSleepOption(15)
+          this.buildSleepOption(30)
         }
         .width('100%')
-        .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-        .onClick(() => this.setSleep(0))
+        Row({ space: AppSpace.Sm }) {
+          this.buildSleepOption(45)
+          this.buildSleepOption(60)
+        }
+        .width('100%')
+        Row() {
+          this.buildSleepOption(0)
+        }
+        .width('100%')
+      } else {
+        Row({ space: AppSpace.Sm }) {
+          this.buildSleepOption(1)
+          this.buildSleepOption(3)
+        }
+        .width('100%')
+        Row({ space: AppSpace.Sm }) {
+          this.buildSleepOption(5)
+          this.buildSleepOption(7)
+        }
+        .width('100%')
+        Row() {
+          this.buildSleepOption(0)
+        }
+        .width('100%')
+      }
+
+      if (this.sleepCustomVisible) {
+        Row({ space: AppSpace.Sm }) {
+          TextInput({ text: this.sleepCustomValue, placeholder: this.sleepSheetMode === SleepMode.Duration
+            ? $r('app.string.player_sleep_minutes_placeholder')
+            : $r('app.string.player_sleep_chapters_placeholder', this.sleepChapterLimit()) })
+            .type(InputType.Number)
+            .enterKeyType(EnterKeyType.Done)
+            .maxLength(4)
+            .height(48)
+            .layoutWeight(1)
+            .caretColor(AppColor.Brand)
+            .onChange((value: string) => {
+              this.sleepCustomValue = value;
+              this.sleepInputError = '';
+            })
+            .onSubmit(() => this.submitCustomSleep())
+          Text(this.sleepSheetMode === SleepMode.Duration
+            ? $r('app.string.player_sleep_minute_unit') : $r('app.string.player_sleep_chapter_unit'))
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width('100%')
+        Text($r('app.string.player_sleep_custom_hint'))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+      if (this.sleepInputError !== '') {
+        Text(this.sleepInputError)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.warning'))
+          .width('100%')
+      }
+
+      if (this.sleepSheetMode === SleepMode.Duration) {
+        Row({ space: AppSpace.Sm }) {
+          Column({ space: 4 }) {
+            Text($r('app.string.player_sleep_smart'))
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary'))
+            Text($r('app.string.player_sleep_smart_hint'))
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary'))
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.sleepSmartStopDraft })
+            .selectedColor(AppColor.Brand)
+            .onChange((enabled: boolean) => {
+              this.sleepSmartStopDraft = enabled;
+              AudioService.getInstance().setSleepSmartStop(enabled);
+            })
+        }
+        .width('100%')
+      } else {
+        Text($r('app.string.player_sleep_chapter_hint'))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+          .width('100%')
+      }
+
+      if (this.playerState.sleepMode === SleepMode.Chapters && this.sleepSheetMode === SleepMode.Chapters) {
+        Text($r('app.string.player_sleep_target', this.playerState.sleepTargetTitle))
+          .fontSize(AppFont.Caption)
+          .fontColor(AppColor.Brand)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+      } else if (this.playerState.sleepWaitingForChapter && this.sleepSheetMode === SleepMode.Duration) {
+        Text($r('app.string.player_sleep_waiting'))
+          .fontSize(AppFont.Caption)
+          .fontColor(AppColor.Brand)
+          .width('100%')
+      }
+      if (this.sleepActive()) {
+        Button($r('app.string.player_sleep_cancel'))
+          .height(44)
+          .width('100%')
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.warning'))
+          .backgroundColor(Color.Transparent)
+          .onClick(() => this.setSleep(0))
       }
     }
     .width('100%')
-    .padding({ bottom: AppSpace.Lg })
+    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Lg })
   }
 
   @Builder

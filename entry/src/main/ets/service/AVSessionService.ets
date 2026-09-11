@@ -1,4 +1,5 @@
 import { avSession } from '@kit.AVSessionKit';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { image } from '@kit.ImageKit';
 import { http } from '@kit.NetworkKit';
 import { common, wantAgent } from '@kit.AbilityKit';
@@ -193,7 +194,7 @@ export class AVSessionService {
   }
 
   private async configureMediaCenter(): Promise<void> {
-    if (!this.session) return;
+    if (!this.session || !PlatformCompat.supports(26)) return;
     try {
       await this.session.setSupportedPlaySpeeds(SUPPORTED_PLAY_SPEEDS);
     } catch (err) {

@@ -1,5 +1,7 @@
-import { curves, uiMaterial } from '@kit.ArkUI';
+import { curves } from '@kit.ArkUI';
+import lazy { uiMaterial } from '@kit.ArkUI';
 import { AppAppearance } from '../model/AppAppearance';
+import { PlatformCompat } from '../utils/PlatformCompat';
 
 export class AppColor {
   static get Brand(): ResourceStr {
@@ -87,29 +89,69 @@ export class AppMaterial {
     return material;
   }
 
-  static get InteractiveThin(): uiMaterial.Material {
+  static get InteractiveThin(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('interactiveThin', uiMaterial.ImmersiveStyle.THIN, false, true);
   }
-  static get InteractiveClean(): uiMaterial.Material {
+  static get InteractiveClean(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('interactiveClean', uiMaterial.ImmersiveStyle.THIN, false, true, true);
   }
-  static get SurfaceClean(): uiMaterial.Material {
+  static get SurfaceClean(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('surfaceClean', uiMaterial.ImmersiveStyle.THIN, false, false);
   }
-  static get FloatingControl(): uiMaterial.Material {
+  static get FloatingControl(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('floating', uiMaterial.ImmersiveStyle.ULTRA_THIN, true, true);
   }
-  static get Sheet(): uiMaterial.Material {
+  static get Sheet(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('sheet', uiMaterial.ImmersiveStyle.THIN, true, false);
   }
-  static get PlayerSheet(): uiMaterial.Material {
+  static get PlayerSheet(): uiMaterial.Material | undefined {
     return AppMaterial.Sheet;
   }
-  static get DialogUltraThick(): uiMaterial.Material {
+  static get DialogUltraThick(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('dialog', uiMaterial.ImmersiveStyle.ULTRA_THICK, true, false);
   }
-  static get SurfaceRegular(): uiMaterial.Material {
+  static get SurfaceRegular(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('regular', uiMaterial.ImmersiveStyle.REGULAR, true, false);
+  }
+
+  static get SheetBackground(): ResourceColor {
+    return PlatformCompat.immersiveMaterial ? Color.Transparent : $r('sys.color.comp_background_primary');
+  }
+
+  static modifier(material: uiMaterial.Material | undefined,
+    fallbackColor: ResourceColor = AppColor.GlassControlFallback): CompatibleMaterialModifier {
+    const preference: number = AppAppearance.current.material;
+    const blur: BlurStyle = preference === 1 || preference === 2 ? BlurStyle.COMPONENT_THIN :
+      (preference >= 4 ? BlurStyle.COMPONENT_THICK : BlurStyle.COMPONENT_REGULAR);
+    return new CompatibleMaterialModifier(material, fallbackColor, blur);
+  }
+}
+
+/** API 20 使用背景色和磨砂；旧设备不调用 systemMaterial，也不加载 uiMaterial。 */
+class CompatibleMaterialModifier implements AttributeModifier<CommonAttribute> {
+  private material: uiMaterial.Material | undefined;
+  private fallbackColor: ResourceColor;
+  private blur: BlurStyle;
+
+  constructor(material: uiMaterial.Material | undefined, fallbackColor: ResourceColor, blur: BlurStyle) {
+    this.material = material;
+    this.fallbackColor = fallbackColor;
+    this.blur = blur;
+  }
+
+  applyNormalAttribute(instance: CommonAttribute): void {
+    if (PlatformCompat.immersiveMaterial && this.material !== undefined) {
+      instance.systemMaterial(this.material);
+    } else {
+      instance.backgroundColor(this.fallbackColor).backgroundBlurStyle(this.blur);
+    }
   }
 }
 

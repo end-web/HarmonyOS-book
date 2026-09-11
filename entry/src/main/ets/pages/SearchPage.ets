@@ -1,5 +1,7 @@
+import { HdsCompat } from '../utils/HdsCompat';
+import { CompatibleGridInsets } from '../utils/PlatformCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
-import { HdsNavDestination, HdsNavDestinationTitleMode, ScrollEffectType } from '@kit.UIDesignKit';
+import { HdsNavDestination, HdsNavDestinationTitleMode } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
@@ -734,7 +736,7 @@ export struct SearchPage {
       .height(40)
       .borderRadius(AppRadius.Pill)
       .backgroundColor(Color.Transparent)
-      .systemMaterial(AppMaterial.InteractiveClean)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
     }
     .width('100%')
     .height(48)
@@ -803,9 +805,8 @@ export struct SearchPage {
       left: AppSpace.Md,
       right: AppSpace.Md
     })
-    .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
-      RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)
-    .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
+    .attributeModifier(new CompatibleGridInsets(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
+      RESULT_TOOLBAR_HEIGHT + AppSpace.Sm, WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg, AppSpace.Md))
   }
 
   @Builder
@@ -910,7 +911,7 @@ export struct SearchPage {
       .height(SEARCH_TITLE_CONTROL_HEIGHT)
       .borderRadius(AppRadius.Pill)
       .backgroundColor(Color.Transparent)
-      .systemMaterial(AppMaterial.InteractiveClean)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
       .onClick(() => this.navStack.pop())
 
@@ -924,7 +925,7 @@ export struct SearchPage {
         .height(SEARCH_TITLE_CONTROL_HEIGHT)
         .backgroundColor(Color.Transparent)
         .borderRadius(AppRadius.Pill)
-        .systemMaterial(AppMaterial.InteractiveClean)
+        .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
         .id('search-page-input')
         .focusable(true)
         .onAppear(() => this.scheduleSearchFocus())
@@ -1009,7 +1010,7 @@ export struct SearchPage {
       // 与首页一致：透明初态，内容上滑后由系统绘制沉浸渐变模糊。
       style: {
         scrollEffectOpts: {
-          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          scrollEffectType: HdsCompat.scrollEffect
         },
         originalStyle: {
           backgroundStyle: { backgroundColor: Color.Transparent }

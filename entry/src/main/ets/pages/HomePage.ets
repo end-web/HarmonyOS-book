@@ -1,12 +1,8 @@
+import { HdsCompat } from '../utils/HdsCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LengthMetrics } from '@kit.ArkUI';
-import {
-  HdsNavigation,
-  HdsNavigationTitleMode,
-  HideMode,
-  ScrollEffectType
-} from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode, HideMode } from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
@@ -528,7 +524,7 @@ export struct HomePage {
       .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
       .borderRadius(AppRadius.Pill)
       .backgroundColor(Color.Transparent)
-      .systemMaterial(AppMaterial.InteractiveClean)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
       .onClick(() => this.onSearchTap())
     }
     .width('100%')
@@ -703,7 +699,7 @@ export struct HomePage {
       },
       style: {
         scrollEffectOpts: {
-          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          scrollEffectType: HdsCompat.scrollEffect
         },
         originalStyle: {
           backgroundStyle: {
@@ -1011,7 +1007,7 @@ export struct HomePage {
           .height(COLLAPSED_SEARCH_SIZE)
           .borderRadius(AppRadius.Pill)
           .backgroundColor(Color.Transparent)
-          .systemMaterial(AppMaterial.InteractiveClean)
+          .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
           .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
           .onClick(() => this.onSearchTap())
         }

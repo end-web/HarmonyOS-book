@@ -91,7 +91,7 @@ export struct ReaderKitVerifyPage {
           right: AppSpace.Md,
           top: WindowUtils.getStatusBarHeightVp()
         })
-        .systemMaterial(AppMaterial.FloatingControl)
+        .attributeModifier(AppMaterial.modifier(AppMaterial.FloatingControl))
 
         Column({ space: AppSpace.Md }) {
           if (this.running) {

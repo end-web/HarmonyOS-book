@@ -8,6 +8,7 @@
  */
 
 import { rcp } from '@kit.RemoteCommunicationKit';
+import { PlatformCompat } from '../../utils/PlatformCompat';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CharsetCodec } from '../../utils/CharsetCodec';
 import { LocalRuleTlsTrustStore } from '../rulesource/LocalRuleTlsTrustStore';
@@ -55,6 +56,7 @@ export class HttpClient {
    * 这里使用共享 sharedSession，保证与 request() 的连接池一致，天然可复用。
    */
   static preconnect(origin: string): void {
+    if (!PlatformCompat.supports(24)) return;
     try {
       const session = getSession();
       const request = new rcp.Request(origin, 'GET');

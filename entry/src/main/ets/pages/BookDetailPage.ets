@@ -914,7 +914,7 @@ export struct BookDetailPage {
       .width(40)
       .height(40)
       .borderRadius(20)
-      .systemMaterial(AppMaterial.FloatingControl)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.FloatingControl))
       .onClick(() => this.toggleFavorite())
     }
     .width('100%')

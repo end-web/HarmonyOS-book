@@ -28,7 +28,7 @@ import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { LocalRuleBrowserLoginCoordinator } from '../service/rulesource/LocalRuleBrowserLoginCoordinator';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
-import { HdsNavDestination, hdsMaterial } from '@kit.UIDesignKit';
+import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppRadius } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import {

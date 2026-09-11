@@ -1,5 +1,6 @@
 import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { PlatformCompat } from '../../utils/PlatformCompat';
 
 const DOMAIN: number = 0x0000;
 const TAG: string = 'ArkWebSecurity';
@@ -11,7 +12,7 @@ let configured: boolean = false;
  * Keep script/runtime features enabled because TingYou authentication depends on site JavaScript.
  */
 export function configureArkWebSecurity(): void {
-  if (configured) return;
+  if (configured || !PlatformCompat.supports(26)) return;
 
   const securityParams: webview.SecurityParams = {
     disableJITCompilation: false,

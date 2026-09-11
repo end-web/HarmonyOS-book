@@ -5,7 +5,7 @@
         "name": "default",
         "bundleName": "com.huan.quickjsbuild",
         "targetSdkVersion": "26.0.0",
-        "compatibleSdkVersion": "26.0.0",
+        "compatibleSdkVersion": "6.0.0(20)",
         "runtimeOS": "HarmonyOS"
       }
     ],

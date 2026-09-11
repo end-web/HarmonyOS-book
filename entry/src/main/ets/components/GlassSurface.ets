@@ -27,7 +27,7 @@ export struct GlassControlSurface {
       .width(LayoutPolicy.matchParent)
       .height(LayoutPolicy.matchParent)
       .borderRadius(this.cornerRadius)
-      .systemMaterial(AppMaterial.InteractiveClean)
+      .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
 
       Column()
         .width(LayoutPolicy.matchParent)
@@ -58,7 +58,7 @@ export struct GlassSheetSurface {
       Column()
         .width(LayoutPolicy.matchParent)
         .height(LayoutPolicy.matchParent)
-        .systemMaterial(AppMaterial.DialogUltraThick)
+        .attributeModifier(AppMaterial.modifier(AppMaterial.DialogUltraThick))
         .hitTestBehavior(HitTestMode.None)
 
       Column()

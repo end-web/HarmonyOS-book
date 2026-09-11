@@ -1,5 +1,6 @@
+import { HdsCompat } from '../utils/HdsCompat';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType, hdsMaterial } from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { SearchResult } from '../model/BookSource';
@@ -179,7 +180,7 @@ export struct BlockMorePage {
       },
       style: {
         scrollEffectOpts: {
-          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+          scrollEffectType: HdsCompat.scrollEffect
         },
         originalStyle: {
           backgroundStyle: {
@@ -209,10 +210,7 @@ export struct BlockMorePage {
             }
           }
         },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-        }
+        systemMaterialEffect: HdsCompat.material
       }
     })
     .titleMode(HdsNavigationTitleMode.MINI)

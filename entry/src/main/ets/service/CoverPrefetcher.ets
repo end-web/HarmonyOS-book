@@ -13,6 +13,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { cacheDownload } from '@kit.BasicServicesKit';
 import { HttpClient } from './http/HttpClient';
+import { PlatformCompat } from '../utils/PlatformCompat';
 
 const DOMAIN = 0x0000;
 const TAG = 'CoverPrefetcher';
@@ -51,6 +52,9 @@ export class CoverPrefetcher {
     try {
       cacheDownload.setFileCacheSize(100 * 1024 * 1024);
       cacheDownload.setMemoryCacheSize(32 * 1024 * 1024);
+      if (!PlatformCompat.supports(23)) {
+        cacheDownload.setDownloadInfoListSize(256);
+      }
       CoverPrefetcher.initialized = true;
     } catch (_e) { /* ignore */ }
   }
@@ -175,7 +179,7 @@ export class CoverPrefetcher {
       CoverPrefetcher.releaseSlot(url);
       CoverPrefetcher.pump();
     };
-    const onError = (_err: cacheDownload.DownloadError): void => {
+    const onError = (): void => {
       CoverPrefetcher.detachHandlers(url);
       CoverPrefetcher.releaseSlot(url);
       const attempts: number = CoverPrefetcher.attemptCount.get(url) ?? 0;
@@ -194,20 +198,28 @@ export class CoverPrefetcher {
     CoverPrefetcher.errorHandlers.set(url, onError);
 
     try {
-      cacheDownload.onDownloadSuccess(url, onSuccess);
-      cacheDownload.onDownloadError(url, onError);
-      const retryOpts: cacheDownload.RetryOptions = { maxRetryCount: 2 };
-      const timeoutOpts: cacheDownload.TimeoutOptions = {
-        networkCheckTimeout: 15,
-        httpTotalTimeout: 45
-      };
       const options: cacheDownload.CacheDownloadOptions = {
-        headers: CoverPrefetcher.requestHeaders.get(url) ?? COVER_HEADERS,
-        cacheStrategy: cacheDownload.CacheStrategy.LAZY,
-        retry: retryOpts,
-        timeout: timeoutOpts
+        headers: CoverPrefetcher.requestHeaders.get(url) ?? COVER_HEADERS
       };
+      if (PlatformCompat.supports(23)) {
+        cacheDownload.onDownloadSuccess(url, onSuccess);
+        cacheDownload.onDownloadError(url, onError);
+        options.cacheStrategy = cacheDownload.CacheStrategy.LAZY;
+      }
+      if (PlatformCompat.supports(26)) {
+        options.retry = { maxRetryCount: 2 };
+        options.timeout = { networkCheckTimeout: 15, httpTotalTimeout: 45 };
+      }
+      // API 20 的查询可能仍保留上次结果，不能把旧失败当成这次下载已经完成。
+      let previousInfo: string = '';
+      if (!PlatformCompat.supports(23)) {
+        const info: cacheDownload.DownloadInfo | undefined = cacheDownload.getDownloadInfo(url);
+        if (info !== undefined) previousInfo = JSON.stringify(info);
+      }
       cacheDownload.download(url, options);
+      if (!PlatformCompat.supports(23)) {
+        CoverPrefetcher.pollDownloadInfo(url, nextAttempt, previousInfo, onSuccess, onError);
+      }
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'download threw %{public}s: %{public}s', url, String(e));
       CoverPrefetcher.detachHandlers(url);
@@ -223,7 +235,7 @@ export class CoverPrefetcher {
 
     // 部分 LAZY 命中/系统丢弃场景可能不回调，用看门狗释放槽位并允许再入队
     setTimeout((): void => {
-      if (!CoverPrefetcher.inFlight.has(url)) {
+      if (!CoverPrefetcher.inFlight.has(url) || CoverPrefetcher.attemptCount.get(url) !== nextAttempt) {
         return;
       }
       if (CoverPrefetcher.succeeded.has(url)) {
@@ -252,7 +264,36 @@ export class CoverPrefetcher {
     }
   }
 
+  /** API 20 没有完成事件，读取下载结果；仍由统一看门狗取消超时任务并释放并发槽位。 */
+  private static pollDownloadInfo(url: string, attempt: number, previousInfo: string,
+    onSuccess: () => void, onError: () => void): void {
+    setTimeout((): void => {
+      if (!CoverPrefetcher.inFlight.has(url) || CoverPrefetcher.attemptCount.get(url) !== attempt) return;
+      try {
+        const info: cacheDownload.DownloadInfo | undefined = cacheDownload.getDownloadInfo(url);
+        if (info !== undefined && JSON.stringify(info) !== previousInfo) {
+          if (info.resource.size > 0) {
+            onSuccess();
+            return;
+          }
+          if (info.resource.size < 0) {
+            onError();
+            return;
+          }
+        }
+      } catch (_e) {
+        // 系统暂未提供结果时继续等待，最长等待时间由看门狗限制。
+      }
+      CoverPrefetcher.pollDownloadInfo(url, attempt, previousInfo, onSuccess, onError);
+    }, 250);
+  }
+
   private static detachHandlers(url: string): void {
+    if (!PlatformCompat.supports(23)) {
+      CoverPrefetcher.successHandlers.delete(url);
+      CoverPrefetcher.errorHandlers.delete(url);
+      return;
+    }
     const successCb: (() => void) | undefined = CoverPrefetcher.successHandlers.get(url);
     const errorCb: ((err: cacheDownload.DownloadError) => void) | undefined =
       CoverPrefetcher.errorHandlers.get(url);

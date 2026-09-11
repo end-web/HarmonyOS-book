@@ -23,6 +23,10 @@ obfuscation-cache.json
 /artifacts/*.png
 /artifacts/*.hap
 /artifacts/*.hap.sha256
+/artifacts/*.app
+/artifacts/*.app.sha256
+/artifacts/releases/
+/signing/
 /*.hap
 /ui-dump*/
 

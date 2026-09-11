@@ -1,6 +1,7 @@
 import { window } from '@kit.ArkUI';
 import { display } from '@kit.ArkUI';
 import { ConfigurationConstant } from '@kit.AbilityKit';
+import { PlatformCompat } from './PlatformCompat';
 
 interface SafeAreaInsets {
   top: number;
@@ -46,7 +47,9 @@ export class WindowUtils {
       navigationBarColor: '#00000000'
     });
     try {
-      await win.setFloatNavigationAvoidAreaEnabled(true);
+      if (PlatformCompat.supports(26)) {
+        await win.setFloatNavigationAvoidAreaEnabled(true);
+      }
     } catch (_e) {
       // Keep the regular system/nav-indicator fallback on devices without float-navigation support.
     }
@@ -221,7 +224,8 @@ export class WindowUtils {
       WindowUtils.updateDensity(win);
       const systemArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_SYSTEM);
       const navigationArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-      const floatNavigationArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_FLOAT_NAVIGATION);
+      const floatNavigationArea = PlatformCompat.supports(26)
+        ? WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_FLOAT_NAVIGATION) : null;
       let hasBottomArea: boolean = false;
       let nextBottomPx: number = 0;
       if (systemArea !== null) {

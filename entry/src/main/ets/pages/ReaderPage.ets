@@ -1,3 +1,5 @@
+import { HdsCompat, CompatibleTabsModifier } from '../utils/HdsCompat';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -5,7 +7,7 @@ import { curves, display, SymbolGlyphModifier } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
 import { readerCore } from '@hms.core.readerservice.readerComponent';
-import { HdsAnimationMode, HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
+import { HdsAnimationMode, HdsTabs, HdsTabsController, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
 import { EpubReaderComponent } from '../components/EpubReaderComponent';
 import { Book, Chapter } from '../model/Book';
 import { TextReadingPosition, TextReadingSettings } from '../model/TextReading';
@@ -864,28 +866,36 @@ export struct ReaderPage {
     if (this.readerBarVisible) {
       this.hideReaderBar();
     } else {
-      this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
+      if (PlatformCompat.floatingTabs) {
+        this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
+      }
       this.readerBarVisible = true;
     }
   }
 
   private hideReaderBar(): void {
     if (!this.readerBarVisible) return;
-    this.tabController.applyHideAnimation(HdsAnimationMode.CLICK_ANIMATION);
+    if (PlatformCompat.floatingTabs) {
+      this.tabController.applyHideAnimation(HdsAnimationMode.CLICK_ANIMATION);
+    }
     this.readerBarVisible = false;
   }
 
   /** 弹层关闭后恢复底部 tab：与 toggleReaderBar 的显示分支保持同一动画 */
   private showReaderBar(): void {
     if (this.readerBarVisible) return;
-    this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
+    if (PlatformCompat.floatingTabs) {
+      this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
+    }
     this.readerBarVisible = true;
   }
 
   private hideReaderBarAfterMount(): void {
     setTimeout((): void => {
       if (this.leaving || this.readerBarVisible) return;
-      this.tabController.applyHideAnimation(HdsAnimationMode.CLICK_ANIMATION);
+      if (PlatformCompat.floatingTabs) {
+        this.tabController.applyHideAnimation(HdsAnimationMode.CLICK_ANIMATION);
+      }
     }, 0);
   }
 
@@ -972,6 +982,17 @@ export struct ReaderPage {
     }
   }
 
+  private floatingBarStyle(): HdsTabsFloatingStyle | undefined {
+    if (!PlatformCompat.floatingTabs) return undefined;
+    return {
+        barBottomMargin: Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + READER_FLOATING_BOTTOM,
+        gradientMask: { maskColor: ReaderPalette.withAlpha(this.palette.background, 0x66), maskHeight: 92 },
+        systemMaterialEffect: HdsCompat.adaptiveMaterial,
+        lightColor: '#66FFC15C',
+        adaptToHandedness: true
+      };
+  }
+
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       // 背景层最底：底色 + 纸纹/布纹/相册图，正文与弹层都浮在它上面
@@ -1047,17 +1068,8 @@ export struct ReaderPage {
         .barPosition(BarPosition.End)
         .vertical(false)
         .scrollable(false)
-        .barFloatingStyle({
-          barBottomMargin: Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + READER_FLOATING_BOTTOM,
-          gradientMask: { maskColor: ReaderPalette.withAlpha(this.palette.background, 0x66), maskHeight: 92 },
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.ADAPTIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          },
-          lightColor: '#66FFC15C',
-          adaptToHandedness: true
-        })
-        .onContentWillChange((_currentIndex: number, _comingIndex: number): boolean => false)
+        .attributeModifier(new CompatibleTabsModifier(this.floatingBarStyle(), this.readerBarVisible ? 56 + this.bottomSafeVp : 0))
+      .onContentWillChange((_currentIndex: number, _comingIndex: number): boolean => false)
         .onTabBarClick((index: number): void => {
           this.handleReaderTabClick(index);
         })
@@ -1065,7 +1077,7 @@ export struct ReaderPage {
           height: '82%',
           preferType: SheetType.BOTTOM,
           showClose: false,
-          backgroundColor: Color.Transparent,
+          backgroundColor: AppMaterial.SheetBackground,
           maskColor: Color.Transparent,
           systemMaterial: AppMaterial.Sheet,
           onDisappear: (): void => {
@@ -1090,7 +1102,7 @@ export struct ReaderPage {
       height: '58%',
       preferType: SheetType.BOTTOM,
       showClose: false,
-      backgroundColor: Color.Transparent,
+      backgroundColor: AppMaterial.SheetBackground,
       maskColor: Color.Transparent,
       systemMaterial: AppMaterial.Sheet,
       onAppear: (): void => this.scrollChapterListToCurrent(),

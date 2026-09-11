@@ -12,6 +12,12 @@ export enum PlayMode {
   SingleLoop = 2
 }
 
+export enum SleepMode {
+  Off = 0,
+  Duration = 1,
+  Chapters = 2
+}
+
 /**
  * 全局播放状态（V2）
  * 通过 AppStorageV2 全局单例供任意页面订阅
@@ -32,8 +38,13 @@ export class PlayerState {
    */
   @Trace savedDurationMs: number = 0;
   @Trace speed: number = 1.0;
+  @Trace sleepMode: SleepMode = SleepMode.Off;
   @Trace sleepMinutes: number = 0;
   @Trace sleepRemainingMs: number = 0;
+  @Trace sleepChapterCount: number = 0;
+  @Trace sleepChaptersRemaining: number = 0;
+  @Trace sleepTargetTitle: string = '';
+  @Trace sleepWaitingForChapter: boolean = false;
   /** 睡眠定时是否启用"章节结束后停止"（智能停止） */
   @Trace sleepSmartStop: boolean = false;
   /** 睡眠定时是否启用"渐弱淡出" */

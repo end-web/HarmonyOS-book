@@ -1,20 +1,20 @@
 # ListenBook（简·欢）
 
-面向 HarmonyOS 7 手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
+面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.9`，API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.10`，最低 API 20 / 目标 API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载 v0.1.9 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.9/ListenBook-v0.1.9.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载 v0.1.10 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.10/ListenBook-v0.1.10.hap)
 
-安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件，源码仓库不再保留旧 HAP。当前采用 Release 模式构建并沿用开发签名，适用于 HarmonyOS 7 / API 26 的获授权手机开发测试，尚未上架应用市场。
+安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件，源码仓库不再保留旧 HAP。当前采用 Release 模式构建并沿用开发签名，适用于 HarmonyOS 6.0 及以上的获授权手机开发测试，尚未上架应用市场。
 
 ```bash
-hdc install ListenBook-v0.1.9.hap
+hdc install ListenBook-v0.1.10.hap
 ```
 
-`v0.1.9` 更新：播放页标题调整为 20fp；优化搜索页原生转场与历史标签布局，减少返回闪烁；修复书源重导后单源测试使用旧定义的问题，并提供 13听书网导入示例。
+`v0.1.10` 更新：最低兼容 HarmonyOS 6.0；为材质、底栏、播放缓存、封面预下载和系统控制增加版本适配；定时关闭支持按时长、按章节及自定义数值。鸿蒙 6 完整真机回归仍待完成。
 
 ## 当前功能
 
@@ -24,7 +24,7 @@ hdc install ListenBook-v0.1.9.hap
 - **搜索推荐与历史**：从启用来源的真实结果抽取最多 5 本推荐书；最近 20 条搜索历史使用自然换行的沉浸标签，支持整体清空与滚动吸顶。
 - **首页浏览**：已启用的听友导入源提供推荐与分类；搜索入口随滚动折叠，分类吸顶，支持骨架屏、下拉刷新和板块“更多”。
 - **小说阅读**：在线正文分页、章节跳转、位置恢复；支持字号、行高、翻页方式、主题、自定义底色、纹理和相册背景。
-- **音频播放**：章节续播、0.5x–3.0x 倍速、片头片尾跳过、睡眠定时、后台播放、系统媒体控制和在线音频投播。
+- **音频播放**：章节续播、0.125x–4.0x 无级倍速、片头片尾跳过、睡眠定时、后台播放、系统媒体控制和在线音频投播。
 - **本地与离线**：音频文件和音频 ZIP 导入、章节下载、下载管理，以及将已完成章节导出到系统文件管理。
 - **书架与记录**：收藏、内容类型筛选、继续阅读/收听、播放进度、收听统计和历史批量管理。
 - **系统集成**：桌面播放卡片、系统备份与在线播放任务跨设备迁移、首启隐私同意与使用说明。
@@ -53,7 +53,7 @@ hdc install ListenBook-v0.1.9.hap
 ### 播放与下载
 
 - 播放页可切换章节、调节倍速、设置片头片尾跳过。长按“倍速”恢复 1.0x，长按“跳过”清除设置。
-- “定时”提供 15/30/45/60 分钟。开启“章节结束后停止”后，仅在到时仍在播放且本章剩余不超过 10 分钟时等待章节结束；其余情况直接暂停。长按“定时”可取消。
+- “定时”支持按时长或按章节关闭：15/30/45/60 分钟、1/3/5/7 章，以及自定义值。开启“到时播完本章”后，仅在到时本章剩余不超过 10 分钟时等待章节结束；长按“定时”可取消。
 - 迷你播放栏外圈显示当前章节进度，封面保持静止；展开后可进入完整播放页。
 - 在线 HTTP(S) 音频可通过“投播”打开系统设备选择器。系统媒体卡片支持倍速、上一集、下一集和收藏。
 - 在书籍详情下载章节后，可从下载管理导出已完成章节。系统托管的在线缓存与离线下载分别管理。
@@ -68,7 +68,7 @@ hdc install ListenBook-v0.1.9.hap
 
 | 部分 | 技术 / 目录 | 职责 |
 |---|---|---|
-| 手机 App | ArkTS、ArkUI V2、HarmonyOS 7 / API 26；`entry/` | 本地规则执行、阅读、播放和设备数据 |
+| 手机 App | ArkTS、ArkUI V2、HarmonyOS 6.0+ / 最低 API 20；`entry/` | 本地规则执行、阅读、播放和设备数据 |
 | 规则运行时 | 受限 QuickJS HAR、原生 HTTP、DOM/JSON/正则提取 | 执行 Legado/Reader 兼容子集 |
 | 可选服务 | Node.js 22+、Express 5、TypeScript、SQLite；`server/src/` | 独立音频聚合 API、缓存、同步与检测 |
 | 运维后台 | Vue 3、TypeScript、Vite、Pinia、Vue Router；`server/admin/` | 来源管理、调试和操作日志 |
@@ -126,7 +126,9 @@ AGENTS.md                 协作与工程约定
 
 ## 开发与验证
 
-使用支持 HarmonyOS SDK API 26 的 DevEco Studio，在本机 Signing Configs 配置签名。不要提交证书、口令或 `build-profile.json5` 的本机改动。
+使用支持 HarmonyOS SDK API 26 的 DevEco Studio，在本机 Signing Configs 配置签名。不要提交证书、口令或 `build-profile.json5` 的本机改动。新环境可先用 [build-profile.template.json5](build-profile.template.json5) 创建本机 `build-profile.json5`，再配置签名；模板保留最低 API 20 与目标 API 26，不包含签名材料。
+
+GitHub HAP 使用 `product=default, buildMode=release`；官方邀测 APP 使用 `product=release, buildMode=release`，须绑定 AppGallery 正式发布证书与 `release / app_gallery` Profile。APP 包上传 AGC，GitHub 开发签名 HAP 供获授权设备安装。
 
 Agent 开发流程：修改 `.ets` 后先运行 `arkts_check`，再运行 `build_project` 增量构建，成功后 `start_app`。工具不可用时：
 

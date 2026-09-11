@@ -1,15 +1,16 @@
 # ListenBook（简·欢）
 
-面向 HarmonyOS 7 手机的本地优先听书与小说阅读 App。在线内容由用户导入的书源提供，规则在设备端执行；支持本地音频导入、章节下载、书架、收听记录、阅读设置、系统媒体控制与桌面播放卡片。`server/` 是可选独立聚合服务和运维后台，App 没有服务器地址配置入口。
+面向 HarmonyOS 6.0 及以上手机的本地优先听书与小说阅读 App。在线内容由用户导入的书源提供，规则在设备端执行；支持本地音频导入、章节下载、书架、收听记录、阅读设置、系统媒体控制与桌面播放卡片。`server/` 是可选独立聚合服务和运维后台，App 没有服务器地址配置入口。
 
 本文描述当前代码，页面行为见 [docs/APP_UI.md](docs/APP_UI.md)，开发约束见 [AGENTS.md](AGENTS.md)，服务端使用见 [server/README.md](server/README.md)。
 
 ## 技术基线
 
-- HarmonyOS 7 / API 26；`targetSdkVersion = compatibleSdkVersion = 26.0.0`。
+- 最低 HarmonyOS 6.0 / API 20；`compatibleSdkVersion = 6.0.0(20)`，保留 `targetSdkVersion = 26.0.0`。主工程 default / release 与 QuickJS HAR 的最低版本一致。
+- `PlatformCompat` 按设备 API 分流：API 23 起启用 HDS 浮动底栏和媒体离线缓存，API 26 起启用 `uiMaterial`、媒体中心增强控制和浮动导航避让；较新系统模块延迟加载。API 20–22 使用固定底栏及独立迷你播放器，封面预下载通过下载信息轮询完成。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.9`、`versionCode = 1000009`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.10`、`versionCode = 1000010`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -96,7 +97,7 @@
 - `ReaderPage` 还保留已有 EPUB 路径的 ReaderKit 分支及 `EpubReaderComponent`；当前 `ImportPage` 只导入音频和音频 ZIP，没有完整的本地 EPUB 导入、独立电子书库或书签管理入口。
 - 阅读页默认隐藏“详情 / 章节 / 设置”悬浮栏；阅读设置包括字号、行高、翻页方式、五种主题、自定义底色、纸纹、布纹和相册背景。
 - AVPlayer 负责播放、音频焦点和续播，`AVSessionService` 对接系统倍速、上下集和收藏，后台任务维持收听。
-- 播放页支持 0.5x–3.0x 倍速、片头片尾跳过、睡眠定时和 HTTP(S) URL 投播。定时预设为 15/30/45/60 分钟，智能停止仅在到时仍在播放且本章剩余时长大于 0、不超过 10 分钟时等待章节结束。
+- 播放页支持 0.5x–3.0x 倍速、片头片尾跳过、睡眠定时和 HTTP(S) URL 投播。定时支持按时长（15/30/45/60 分钟、自定义 1–1440 分钟）或按章节（本章、3/5/7 章、自定义最多 999 章且不超过目录剩余数），预设点选、自定义键盘完成后立即生效。章数包含当前章，按目录顺序播放，停止先于续播/循环，片尾跳过计为章末；手动暂停保留、手动切章切书取消章节停止。智能停止仅在到时仍在播放且本章剩余时长大于 0、不超过 10 分钟时等待章节结束，可取消等待，切换开关不重置倒计时。
 - 在线 `MediaSource` 系统缓存与用户主动章节下载分开；下载文件可经系统文件选择器导出副本。
 - 迷你播放器封面和完整播放页封面保持静止，迷你播放器外圈展示当前集进度。
 
@@ -151,7 +152,7 @@ scripts/                HAR 构建与图标工具
 
 鸿蒙技能统一按 [AGENTS.md 的在线技能路由](AGENTS.md#online-harmonyos-skill-routing) 使用：每项新任务查询在线索引和目录，按需求读取仓库中的对应技能及必要参考资料；包含嵌套技能和后续新增技能，不在项目中保留整套鸿蒙技能副本。
 
-1. 修改 `.ets` 前在线读取适用的 ArkTS 语法与 ArkUI 技能，遵循 [AGENTS.md](AGENTS.md) 的 API 26 / ArkUI V2 约束。
+1. 修改 `.ets` 前在线读取适用的 ArkTS 语法与 ArkUI 技能，遵循 [AGENTS.md](AGENTS.md) 的最低 API 20、目标 API 26 / ArkUI V2 约束。
 2. 对修改文件运行 `arkts_check` 或现有工具对应的 `check_ets_files`，再运行 `build_project` 增量构建；成功后用 `start_app` 真机或模拟器验证。发生 ArkTS 错误先在线读取对应的编译修复技能。
 3. 工具不可用时使用 `ohpm install`、`hvigorw assembleHap --mode module -p product=default`；`release` 产品用于发布配置。只在确认缓存问题时清理构建。
 4. App 单测位于 `entry/src/test/`，涵盖本地规则、原生适配、批量测试、搜索缓存与历史、在线分页、阅读主题、播放进度和下载策略；设备测试位于 `entry/src/ohosTest/ets/test/`。

@@ -1,4 +1,5 @@
 import { media } from '@kit.MediaKit';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { audio } from '@kit.AudioKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -7,7 +8,7 @@ import { emitter } from '@kit.BasicServicesKit';
 import { avSession } from '@kit.AVSessionKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { BookSource } from '../model/BookSource';
-import { PlayerState, PlayMode } from '../model/PlayerState';
+import { PlayerState, PlayMode, SleepMode } from '../model/PlayerState';
 import { PreferenceService, PlayProgress, ChapterPlayProgress } from './PreferenceService';
 import { SourceDataService } from './SourceDataService';
 import { AudioRequestInfo, BookSourceService } from './BookSourceService';
@@ -31,6 +32,7 @@ const AUDIO_RESOLVE_TIMEOUT_MS = 15000;
 /** 播放历史落盘后广播的事件名,书架等页面订阅以实时刷新进度文案 */
 export const EVT_HISTORY_UPDATED = 'app.history.updated';
 export const EVT_AUDIO_PLAY_FAILED = 'app.audio.play.failed';
+export const EVT_SLEEP_CANCELLED = 'app.audio.sleep.cancelled';
 
 export interface AudioPlayFailedPayload {
   bookId: string;
@@ -56,6 +58,9 @@ export class AudioService {
   private pendingSeek: number = 0;
   private sleepTimer: number = -1;
   private sleepEndTime: number = 0;
+  private chapterEndHandled: boolean = false;
+  private sleepPausePending: boolean = false;
+  private resumeAfterSleepChapter: boolean = false;
   private isApplying: boolean = false;
   private currentFile: fileIo.File | null = null;
   /** 用户偏好的焦点模式：0=共享(SHARE_MODE)、1=独立(INDEPENDENT_MODE) */
@@ -315,9 +320,17 @@ export class AudioService {
           try { p.setPlaybackRate(this.state.speed); } catch (_e) { /* 状态异常忽略 */ }
         }
         // 立即设置播放状态，让UI立即响应
-        this.state.isPlaying = true;
-        p.play();
+        this.state.isPlaying = !this.sleepPausePending;
+        if (!this.sleepPausePending) p.play();
+        else this.state.isLoading = false;
       } else if (newState === 'playing') {
+        if (this.sleepPausePending) {
+          p.pause().catch((err: Error): void => {
+            hilog.warn(DOMAIN, TAG, 'Sleep pause failed: %{public}s', err.message);
+          });
+          return;
+        }
+        this.chapterEndHandled = false;
         this.state.isPlaying = true;
         // 真正开始出声,清掉 loading 标记
         this.state.isLoading = false;
@@ -351,7 +364,7 @@ export class AudioService {
         if (this.context) {
           BackgroundTaskService.stop(this.context).catch((_e: Error): void => {});
         }
-        this.autoPlayNext();
+        this.handleChapterEnd();
       }
     });
     p.on('timeUpdate', (ms: number) => {
@@ -369,8 +382,11 @@ export class AudioService {
         }
         this.resumeTargetMs = 0;
       }
-      // 片尾跳过：到达片尾位置时自动跳下一章
-      this.checkSkipOutro(ms);
+      // 单集循环可能只 seek 而不再发 playing；回到正文后才允许下一次章尾结算。
+      const outroMs = Math.max(0, this.state.currentBook?.skipOutro ?? 0) * 1000;
+      if (this.chapterEndHandled && !this.sleepPausePending && ms < p.duration - outroMs - 1000) {
+        this.chapterEndHandled = false;
+      }
       // 节流:跳进度 / 暂停 / 切章节时立即写,正常播放每 500ms 写一次,
       // 避免 100ms 级 @Trace 抖动导致 V2 全局级联重绘
       const now = Date.now();
@@ -379,6 +395,8 @@ export class AudioService {
         this.state.progressMs = ms;
         this.lastProgressWriteAt = now;
       }
+      // 先更新进度，再处理片尾停止，确保落盘的是本次章尾位置。
+      this.checkSkipOutro(ms);
       // 稀疏持久化:正常播放期间每 5s 落盘一次,避免杀进程丢失大段进度。
       // 与 tick 的 15s 持久化错开:这里管播放中兜底,tick 管 Widget 同步兜底。
       if (this.state.isPlaying && now - this.lastPersistAt >= AudioService.PERSIST_INTERVAL_MS) {
@@ -665,10 +683,11 @@ export class AudioService {
    * - 同书+不同章节: await 当前进度落盘 → reset → 装载新章节
    * - 不同书: await 当前进度落盘 → reset → 拿新书 PlayProgress 兜底 savedDurationMs → 装载
    */
-  async playChapter(book: Book, chapter: Chapter): Promise<void> {
+  async playChapter(book: Book, chapter: Chapter, automatic: boolean = false): Promise<void> {
     if (!this.state || !this.context) {
       throw new Error('AudioService not bound');
     }
+    this.prepareSleepForPlayback(book, chapter, automatic);
     this.cancelExternalMediaWatch();
 
     // ★ 同书+同章节短路:不 reset,直接 seek(0) + play,避免重新嗅探 URL
@@ -1112,7 +1131,9 @@ export class AudioService {
           return false;
         }
         const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
-        mediaSource.enableOfflineCache(true);
+        if (PlatformCompat.supports(23)) {
+          mediaSource.enableOfflineCache(true);
+        }
         await p.setMediaSource(mediaSource);
       } else if (src.type === 'file') {
         // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）。
@@ -1174,6 +1195,7 @@ export class AudioService {
   }
 
   async toggle(): Promise<void> {
+    if (await this.resumeAfterSleep()) return;
     // 用户主动操作，清除焦点暂停标记
     this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
@@ -1195,7 +1217,7 @@ export class AudioService {
         this.syncPlaybackState();
       }
       await p.pause();
-    } else if (p.state === 'paused') {
+    } else if (p.state === 'paused' || p.state === 'prepared') {
       // 立即设置播放状态，让UI立即响应
       if (this.state) {
         this.state.isPlaying = true;
@@ -1225,6 +1247,9 @@ export class AudioService {
   }
 
   async seek(ms: number): Promise<void> {
+    this.sleepPausePending = false;
+    this.resumeAfterSleepChapter = false;
+    this.chapterEndHandled = false;
     this.cancelExternalMediaWatch();
     const p = await this.ensurePlayer();
     // 同步先把 state.progressMs 推到目标位置,避免 UI 滑块回弹
@@ -1298,41 +1323,68 @@ export class AudioService {
     try { await this.persistHistory(); } catch (_e) { /* ignore */ }
   }
 
-  setSleepTimer(minutes: number, smartStop: boolean = false, fadeOut: boolean = false): void {
-    this.cancelSleepTimer();
-    if (!this.state) return;
-    if (minutes <= 0) {
-      this.state.sleepMinutes = 0;
-      this.state.sleepRemainingMs = 0;
-      this.state.sleepSmartStop = false;
-      this.state.sleepFadeOut = false;
-      return;
+  setSleepTimer(minutes: number, smartStop: boolean = false, fadeOut: boolean = false): boolean {
+    if (!this.state) return false;
+    if (minutes === 0) {
+      this.cancelSleepTimer();
+      return true;
     }
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return false;
+    this.cancelSleepTimer();
+    this.state.sleepMode = SleepMode.Duration;
     this.state.sleepMinutes = minutes;
     this.state.sleepSmartStop = smartStop;
     this.state.sleepFadeOut = fadeOut;
     this.sleepEndTime = Date.now() + minutes * 60 * 1000;
     this.state.sleepRemainingMs = minutes * 60 * 1000;
+    this.sleepTimer = setInterval(() => this.updateSleepTimer(), 1000);
+    return true;
+  }
 
-    this.sleepTimer = setInterval(() => {
-      if (!this.state) return;
-      const remaining = this.sleepEndTime - Date.now();
+  getAvailableSleepChapters(): number {
+    if (!this.state || !this.state.currentBook || !this.state.currentChapter) return 0;
+    const book = this.state.currentBook;
+    const index = this.findChapterIndex(book, this.state.currentChapter);
+    return index < 0 ? 0 : Math.min(999, book.chapters.length - index);
+  }
 
-      if (remaining <= 0) {
-        this.state.sleepRemainingMs = 0;
-        this.state.sleepMinutes = 0;
-        this.cancelSleepTimer();
+  setSleepChapters(count: number): boolean {
+    if (!this.state || !this.state.currentBook || !this.state.currentChapter) return false;
+    const available = this.getAvailableSleepChapters();
+    if (!Number.isInteger(count) || count < 1 || count > available) return false;
+    const book = this.state.currentBook;
+    const index = this.findChapterIndex(book, this.state.currentChapter);
+    this.cancelSleepTimer();
+    this.state.sleepMode = SleepMode.Chapters;
+    this.state.sleepChapterCount = count;
+    this.state.sleepChaptersRemaining = count;
+    this.state.sleepTargetTitle = book.chapters[index + count - 1].title;
+    return true;
+  }
 
-        // 智能停止：章节结束后停止
-        if (smartStop) {
-          this.pauseForSleepSmart();
-        } else {
-          this.pauseForSleep();
-        }
-      } else {
-        this.state.sleepRemainingMs = remaining;
-      }
-    }, 1000);
+  /** 修改智能停止选项不重置已走过的倒计时。 */
+  setSleepSmartStop(enabled: boolean): void {
+    if (!this.state || this.state.sleepMode !== SleepMode.Duration) return;
+    this.state.sleepSmartStop = enabled;
+    if (!enabled && this.state.sleepWaitingForChapter) this.finishSleep(false);
+  }
+
+  private updateSleepTimer(atChapterEnd: boolean = false): void {
+    if (!this.state || this.state.sleepMode !== SleepMode.Duration || this.state.sleepWaitingForChapter) return;
+    const remaining = Math.max(0, this.sleepEndTime - Date.now());
+    this.state.sleepRemainingMs = remaining;
+    if (remaining > 0) return;
+    if (atChapterEnd) {
+      this.finishSleep(true);
+      return;
+    }
+    const chapterRemaining = this.state.durationMs - this.state.progressMs;
+    if (this.state.sleepSmartStop && this.player?.state === 'playing'
+      && !this.state.isLoading && chapterRemaining > 0 && chapterRemaining <= 10 * 60 * 1000) {
+      this.state.sleepWaitingForChapter = true;
+      return;
+    }
+    this.finishSleep(false);
   }
 
   cancelSleepTimer(): void {
@@ -1340,66 +1392,81 @@ export class AudioService {
       clearInterval(this.sleepTimer);
       this.sleepTimer = -1;
     }
+    this.sleepEndTime = 0;
+    if (!this.state) return;
+    this.state.sleepMode = SleepMode.Off;
+    this.state.sleepMinutes = 0;
+    this.state.sleepRemainingMs = 0;
+    this.state.sleepChapterCount = 0;
+    this.state.sleepChaptersRemaining = 0;
+    this.state.sleepTargetTitle = '';
+    this.state.sleepWaitingForChapter = false;
+    this.state.sleepSmartStop = false;
+    this.state.sleepFadeOut = false;
   }
 
-  /** 智能停止：播完当前章节后暂停 */
-  private async pauseForSleepSmart(): Promise<void> {
-    if (!this.state || !this.player) {
-      await this.pauseForSleep();
+  private prepareSleepForPlayback(book: Book, chapter: Chapter, automatic: boolean): void {
+    if (!this.state) return;
+    const changed = this.state.currentBook?.id !== book.id || this.state.currentChapter?.id !== chapter.id;
+    if (!automatic && changed && (this.state.sleepMode === SleepMode.Chapters || this.state.sleepWaitingForChapter)) {
+      this.cancelSleepTimer();
+      emitter.emit(EVT_SLEEP_CANCELLED, {});
+    }
+    this.sleepPausePending = false;
+    this.resumeAfterSleepChapter = false;
+  }
+
+  /** 自然结束与跳过片尾共用入口，一章只能结算一次，先停止再决定是否续播。 */
+  private handleChapterEnd(): void {
+    if (!this.state || this.state.isLoading || this.isApplying || this.chapterEndHandled) return;
+    this.chapterEndHandled = true;
+    this.updateSleepTimer(true);
+    if (this.sleepPausePending) return;
+    if (this.state.sleepWaitingForChapter) {
+      this.finishSleep(true);
       return;
     }
-
-    // 如果当前没有在播放，直接暂停
-    if (this.player.state !== 'playing') {
-      await this.pauseForSleep();
-      return;
-    }
-
-    // 计算当前章节剩余时长
-    const remainingMs = this.state.durationMs - this.state.progressMs;
-    const maxWaitMs = 10 * 60 * 1000; // 最多等待10分钟
-
-    // 如果剩余时长超过10分钟，直接暂停
-    if (remainingMs > maxWaitMs || remainingMs <= 0) {
-      await this.pauseForSleep();
-      return;
-    }
-
-    // 等待章节播完，监听 completed 事件
-    hilog.info(DOMAIN, TAG, 'Smart stop: waiting for chapter to complete, remaining: %{public}d ms', remainingMs);
-
-    // 设置超时兜底
-    const timeoutId = setTimeout(() => {
-      this.pauseForSleep();
-    }, remainingMs + 5000);
-
-    // 监听状态变化
-    const stateHandler = (newState: media.AVPlayerState): void => {
-      if (newState === 'completed' || newState === 'paused' || newState === 'stopped') {
-        clearTimeout(timeoutId);
-        if (this.player) {
-          this.player.off('stateChange', stateHandler);
-        }
-        this.pauseForSleep();
+    if (this.state.sleepMode === SleepMode.Chapters) {
+      this.state.sleepChaptersRemaining = Math.max(0, this.state.sleepChaptersRemaining - 1);
+      if (this.state.sleepChaptersRemaining === 0) {
+        this.finishSleep(true);
+        return;
       }
-    };
-
-    if (this.player) {
-      this.player.on('stateChange', stateHandler);
     }
+    this.autoPlayNext();
+  }
+
+  private finishSleep(atChapterEnd: boolean): void {
+    this.cancelSleepTimer();
+    this.sleepPausePending = true;
+    this.resumeAfterSleepChapter = atChapterEnd;
+    this.pausedByFocus = false;
+    this.cancelExternalMediaWatch();
+    this.pauseForSleep().catch((err: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'Sleep stop failed: %{public}s', err.message);
+    });
   }
 
   private async pauseForSleep(): Promise<void> {
-    const p = await this.ensurePlayer();
-    if (p.state === 'playing') {
-      await p.pause();
-    }
-    // 睡眠暂停后 stopTick 停了 5s 强推,卡片容易卡在"播放中"。
-    // 延迟 1.5s 再补推一次:给 FormExt 进程的 preferences 缓存足够的重载窗口,
-    // 确保卡片能读到最新的 isPlaying=false。
-    setTimeout(() => {
-      this.syncPlaybackState();
-    }, 1500);
+    const p = this.player;
+    if (this.state) this.state.isPlaying = false;
+    if (p?.state === 'playing') await p.pause();
+    await this.persistHistory();
+    PlaybackStore.getInstance().setPlaying(this.state?.isPlaying ?? false);
+    this.syncPlaybackState();
+  }
+
+  /** 定时停在章尾后，用户再次播放从下一章继续；末章沿用原重播行为。 */
+  private async resumeAfterSleep(): Promise<boolean> {
+    this.sleepPausePending = false;
+    if (!this.resumeAfterSleepChapter || !this.state || !this.state.currentBook || !this.state.currentChapter) return false;
+    this.resumeAfterSleepChapter = false;
+    const book = this.state.currentBook;
+    const index = this.findChapterIndex(book, this.state.currentChapter);
+    if (index < 0) return false;
+    const nextIndex = index < book.chapters.length - 1 ? index + 1 : index;
+    await this.playChapter(book, book.chapters[nextIndex]);
+    return true;
   }
 
   async release(): Promise<void> {
@@ -1488,29 +1555,29 @@ export class AudioService {
     const outroStartMs = duration - skipOutro * 1000;
     if (outroStartMs <= 0) return;
     if (ms >= outroStartMs) {
-      this.autoPlayNext();
+      this.handleChapterEnd();
     }
   }
 
   private autoPlayNext(): void {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
-    const mode = this.state.playMode;
+    const mode = this.state.sleepMode === SleepMode.Chapters ? PlayMode.Sequence : this.state.playMode;
     const chapters = this.state.currentBook.chapters;
     const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
     if (idx < 0) return;
 
     if (mode === PlayMode.SingleLoop) {
       // 单集循环:重播当前章节
-      this.playChapterAndSeek(this.state.currentBook, chapters[idx], 0);
+      this.playChapterAndSeek(this.state.currentBook, chapters[idx], 0, true);
       return;
     }
     if (idx < chapters.length - 1) {
-      this.playChapter(this.state.currentBook, chapters[idx + 1]);
+      this.playChapter(this.state.currentBook, chapters[idx + 1], true);
       return;
     }
     if (mode === PlayMode.ListLoop && chapters.length > 0) {
       // 列表循环:回到第一集
-      this.playChapter(this.state.currentBook, chapters[0]);
+      this.playChapter(this.state.currentBook, chapters[0], true);
     }
     // 顺序播放:停在最后一集
   }
@@ -1520,10 +1587,11 @@ export class AudioService {
    * - 同书+同章节+player 已 prepared/playing/paused: 仅 seek(seekMs),不 reset
    * - 同书+不同章 / 不同书: await 落盘 → reset → 装载 → prepared 后 seek
    */
-  async playChapterAndSeek(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
+  async playChapterAndSeek(book: Book, chapter: Chapter, seekMs: number, automatic: boolean = false): Promise<void> {
     if (!this.state || !this.context) {
       throw new Error('AudioService not bound');
     }
+    this.prepareSleepForPlayback(book, chapter, automatic);
     this.cancelExternalMediaWatch();
     // ★ 同书+同章节+合理状态: 直接 seek,不 reset
     if (this.canReuseSameChapter(book, chapter)) {
@@ -1626,6 +1694,7 @@ export class AudioService {
 
   /** 公开:供卡片 callee 直接播放;未装载音源时按 state 起播续播 */
   async play(): Promise<void> {
+    if (await this.resumeAfterSleep()) return;
     this.cancelExternalMediaWatch();
     if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped') {
       if (this.state && this.state.currentBook && this.state.currentChapter) {

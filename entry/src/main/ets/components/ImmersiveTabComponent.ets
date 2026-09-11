@@ -49,7 +49,7 @@ export struct ImmersiveTabComponent {
     .borderRadius(AppRadius.Pill)
     .justifyContent(FlexAlign.Center)
     .backgroundColor(Color.Transparent)
-    .systemMaterial(AppMaterial.InteractiveClean)
+    .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
     // 历史标签按内容换行，首次测量的尺寸变化不能触发整块材质动画。
     .animation(this.fitContent ? null : { duration: AppMotion.Base, curve: AppCurve.Spring })
     .onClick(() => this.onTap())

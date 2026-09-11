@@ -1,12 +1,8 @@
+import { HdsCompat, CompatibleTabsModifier } from '../utils/HdsCompat';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, SymbolGlyphModifier } from '@kit.ArkUI';
-import {
-  HdsTabs,
-  HdsTabsController,
-  hdsMaterial,
-  HdsBarStyle,
-  HdsTabsBarChangeMode
-} from '@kit.UIDesignKit';
+import { HdsTabs, HdsTabsController, HdsBarStyle, HdsTabsBarChangeMode, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { HomePage } from './HomePage';
@@ -263,7 +259,7 @@ export struct MainPage {
         collapsed: this.miniBarCollapsed,
         onTapBody: () => {
           // 折叠态:点击封面 → 展开迷你栏(不进播放器);展开态:进播放器
-          if (this.miniBarCollapsed) {
+          if (PlatformCompat.floatingTabs && this.miniBarCollapsed) {
             this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
           } else {
             this.navigateToPlayer();
@@ -272,7 +268,7 @@ export struct MainPage {
         onToggle: () => AudioService.getInstance().toggle(),
         onNext: () => this.playNext(),
         onExpand: () => {
-          if (this.miniBarCollapsed) {
+          if (PlatformCompat.floatingTabs && this.miniBarCollapsed) {
             this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
           } else {
             this.navigateToPlayer();
@@ -280,6 +276,30 @@ export struct MainPage {
         }
       })
     }
+  }
+
+  private floatingBarStyle(): HdsTabsFloatingStyle | undefined {
+    if (!PlatformCompat.floatingTabs) return undefined;
+    return {
+      barBottomMargin: Math.max(this.bottomSafeVp, FLOATING_MIN_SAFE_BOTTOM) + FLOATING_BOTTOM,
+      gradientMask: { maskColor: '#66F1F3F5', maskHeight: 92 },
+      systemMaterialEffect: HdsCompat.adaptiveMaterial,
+      // 沉浸光感颜色:暖黄色光晕(替代默认白色)
+      lightColor: AppColor.Brand,
+      // 智感握持:左右手自动跟手
+      adaptToHandedness: true,
+      // 迷你栏配置:HdsTabs 会自动管理折叠/展开
+      miniBar: this.playerState.currentBook ? {
+        miniBarBuilder: () => this.miniBarBuilder(),
+        enableMiniBarBackground: true,
+        enableMiniBarClip: true,
+        // 系统切换样式时同步给 MiniPlayer,让它切换内部布局(折叠态只显示封面)
+        onBarStyleChange: (miniStyle: HdsBarStyle, tabStyle: HdsBarStyle,
+          miniBarWidth: number, tabBarWidth: number, mode: HdsTabsBarChangeMode) => {
+          this.handleBarStyleChange(miniStyle, tabStyle, miniBarWidth, tabBarWidth, mode);
+        }
+      } : undefined
+    };
   }
 
   build() {
@@ -328,29 +348,7 @@ export struct MainPage {
       .barOverlap(true)
       .barPosition(BarPosition.End)
       .vertical(false)
-      .barFloatingStyle({
-        barBottomMargin: Math.max(this.bottomSafeVp, FLOATING_MIN_SAFE_BOTTOM) + FLOATING_BOTTOM,
-        gradientMask: { maskColor: '#66F1F3F5', maskHeight: 92 },
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-        },
-        // 沉浸光感颜色:暖黄色光晕(替代默认白色)
-        lightColor: AppColor.Brand,
-        // 智感握持:左右手自动跟手
-        adaptToHandedness: true,
-        // 迷你栏配置:HdsTabs 会自动管理折叠/展开
-        miniBar: this.playerState.currentBook ? {
-          miniBarBuilder: () => this.miniBarBuilder(),
-          enableMiniBarBackground: true,
-          enableMiniBarClip: true,
-          // 系统切换样式时同步给 MiniPlayer,让它切换内部布局(折叠态只显示封面)
-          onBarStyleChange: (miniStyle: HdsBarStyle, tabStyle: HdsBarStyle,
-            miniBarWidth: number, tabBarWidth: number, mode: HdsTabsBarChangeMode) => {
-            this.handleBarStyleChange(miniStyle, tabStyle, miniBarWidth, tabBarWidth, mode);
-          }
-        } : undefined
-      })
+      .attributeModifier(new CompatibleTabsModifier(this.floatingBarStyle(), 56 + this.bottomSafeVp))
       .onTabBarClick((index: number) => {
         const now = Date.now();
         const DOUBLE_TAP_DELAY = 300;
@@ -372,6 +370,19 @@ export struct MainPage {
       .height('100%')
       .backgroundColor(HomeTheme.BgNeutral)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+      if (!PlatformCompat.floatingTabs && this.playerState.currentBook) {
+        Column() {
+          this.miniBarBuilder()
+        }
+        .height(64)
+        .width('92%')
+        .backgroundColor($r('sys.color.comp_background_primary'))
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+        .borderRadius(24)
+        .clip(true)
+        .margin({ bottom: 64 + this.bottomSafeVp })
+      }
 
       // 欢部分音频地址需要 ArkWeb 兜底提取，按需创建隐藏宿主。
       if (this.gate.needAudioExtractor) {

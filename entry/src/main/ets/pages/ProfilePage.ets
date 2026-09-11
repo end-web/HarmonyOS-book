@@ -1,10 +1,6 @@
+import { HdsCompat } from '../utils/HdsCompat';
 import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
-import {
-  HdsNavigation,
-  HdsNavigationTitleMode,
-  ScrollEffectType,
-  hdsMaterial
-} from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import { common } from '@kit.AbilityKit';
@@ -163,7 +159,7 @@ export struct ProfilePage {
         },
         style: {
           scrollEffectOpts: {
-            scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR
+            scrollEffectType: HdsCompat.scrollEffect
           },
           originalStyle: {
             backgroundStyle: {
@@ -185,10 +181,7 @@ export struct ProfilePage {
               }
             }
           },
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
-          }
+          systemMaterialEffect: HdsCompat.material
         }
       })
       .titleMode(HdsNavigationTitleMode.MINI)
