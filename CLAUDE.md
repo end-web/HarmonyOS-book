@@ -6,11 +6,12 @@
 
 ## 技术基线
 
-- 最低 HarmonyOS 6.0 / API 20；`compatibleSdkVersion = 6.0.0(20)`，保留 `targetSdkVersion = 26.0.0`。主工程 default / release 与 QuickJS HAR 的最低版本一致。
-- `PlatformCompat` 按设备 API 分流：API 23 起启用 HDS 浮动底栏和媒体离线缓存，API 26 起启用 `uiMaterial`、媒体中心增强控制和浮动导航避让；较新系统模块延迟加载。API 20–22 使用固定底栏及独立迷你播放器，封面预下载通过下载信息轮询完成。
+- 最低 HarmonyOS 6.0 / API 20；`compatibleSdkVersion = 6.0.0(20)`，目标 HarmonyOS 6.1.1 / API 24，`targetSdkVersion = 6.1.1(24)`。主工程 default / release 与 QuickJS HAR 的最低版本一致。
+- `PlatformCompat` 按设备 API 分流：API 23 起启用 HDS 浮动底栏和媒体离线缓存，API 26 起启用正式版 `uiMaterial` 沉浸光感、媒体中心增强控制和浮动导航避让；较新系统模块延迟加载。API 20–22 使用固定底栏及独立迷你播放器，封面预下载通过下载信息轮询完成；API 20–25 的材质使用五档磨砂回退。
+- 编译使用经确认的 Release SDK；当前配套为 DevEco Studio 26.0.0.821，编译版本与目标/最低版本分开管理。上传前检查 APP 内所有 HAP 的 `apiReleaseType = Release`，QuickJS HAR 也需用正式工具链重建。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.11`、`versionCode = 1000011`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.12`、`versionCode = 1000012`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -152,7 +153,7 @@ scripts/                HAR 构建与图标工具
 
 鸿蒙技能统一按 [AGENTS.md 的在线技能路由](AGENTS.md#online-harmonyos-skill-routing) 使用：每项新任务查询在线索引和目录，按需求读取仓库中的对应技能及必要参考资料；包含嵌套技能和后续新增技能，不在项目中保留整套鸿蒙技能副本。
 
-1. 修改 `.ets` 前在线读取适用的 ArkTS 语法与 ArkUI 技能，遵循 [AGENTS.md](AGENTS.md) 的最低 API 20、目标 API 26 / ArkUI V2 约束。
+1. 修改 `.ets` 前在线读取适用的 ArkTS 语法与 ArkUI 技能，遵循 [AGENTS.md](AGENTS.md) 的最低 API 20、目标 API 24 / ArkUI V2 约束。
 2. 对修改文件运行 `arkts_check` 或现有工具对应的 `check_ets_files`，再运行 `build_project` 增量构建；成功后用 `start_app` 真机或模拟器验证。发生 ArkTS 错误先在线读取对应的编译修复技能。
 3. 工具不可用时使用 `ohpm install`、`hvigorw assembleHap --mode module -p product=default`；`release` 产品用于发布配置。只在确认缓存问题时清理构建。
 4. App 单测位于 `entry/src/test/`，涵盖本地规则、原生适配、批量测试、搜索缓存与历史、在线分页、阅读主题、播放进度和下载策略；设备测试位于 `entry/src/ohosTest/ets/test/`。

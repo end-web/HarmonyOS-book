@@ -1197,7 +1197,8 @@ export struct PlayerPage {
           preferType: SheetType.BOTTOM,
           showClose: false,
           dragBar: true,
-          backgroundColor: Color.Transparent,
+          backgroundColor: AppMaterial.SheetBackground,
+          blurStyle: AppMaterial.SheetBlur,
           systemMaterial: AppMaterial.PlayerSheet,
           onAppear: () => this.scrollToCurrentChapter(),
           onDisappear: () => { this.showChapterList = false; }
@@ -1232,7 +1233,8 @@ export struct PlayerPage {
         preferType: SheetType.BOTTOM,
         showClose: false,
         dragBar: true,
-        backgroundColor: Color.Transparent,
+        backgroundColor: AppMaterial.SheetBackground,
+        blurStyle: AppMaterial.SheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
         onDisappear: () => { this.showSpeedSheet = false; }
       })
@@ -1256,7 +1258,8 @@ export struct PlayerPage {
         preferType: SheetType.BOTTOM,
         showClose: false,
         dragBar: true,
-        backgroundColor: Color.Transparent,
+        backgroundColor: AppMaterial.SheetBackground,
+        blurStyle: AppMaterial.SheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
         onDisappear: () => { this.showSleepSheet = false; }
       })
@@ -1286,7 +1289,8 @@ export struct PlayerPage {
         preferType: SheetType.BOTTOM,
         showClose: false,
         dragBar: true,
-        backgroundColor: Color.Transparent,
+        backgroundColor: AppMaterial.SheetBackground,
+        blurStyle: AppMaterial.SheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
         onDisappear: () => { this.showSkipSheet = false; }
       })

@@ -6,7 +6,7 @@
       {
         "name": "default",
         "bundleName": "com.huan.listenbook",
-        "targetSdkVersion": "26.0.0",
+        "targetSdkVersion": "6.1.1(24)",
         "compatibleSdkVersion": "6.0.0(20)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
@@ -19,7 +19,7 @@
       {
         "name": "release",
         "bundleName": "com.huan.listenbook",
-        "targetSdkVersion": "26.0.0",
+        "targetSdkVersion": "6.1.1(24)",
         "compatibleSdkVersion": "6.0.0(20)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {

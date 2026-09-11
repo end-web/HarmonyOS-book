@@ -192,6 +192,7 @@ export struct AppearanceSettingsComponent {
         preferType: SheetType.BOTTOM,
         title: { title: $r('app.string.appearance_material') },
         backgroundColor: AppMaterial.SheetBackground,
+        blurStyle: AppMaterial.SheetBlur,
         systemMaterial: AppMaterial.Sheet
       })
       this.divider()
@@ -214,6 +215,7 @@ export struct AppearanceSettingsComponent {
         preferType: SheetType.BOTTOM,
         title: { title: $r('app.string.appearance_accent') },
         backgroundColor: AppMaterial.SheetBackground,
+        blurStyle: AppMaterial.SheetBlur,
         systemMaterial: AppMaterial.Sheet
       })
     }

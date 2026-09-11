@@ -1079,6 +1079,7 @@ export struct ReaderPage {
           showClose: false,
           backgroundColor: AppMaterial.SheetBackground,
           maskColor: Color.Transparent,
+          blurStyle: AppMaterial.SheetBlur,
           systemMaterial: AppMaterial.Sheet,
           onDisappear: (): void => {
             this.showSettingsSheet = false;
@@ -1104,6 +1105,7 @@ export struct ReaderPage {
       showClose: false,
       backgroundColor: AppMaterial.SheetBackground,
       maskColor: Color.Transparent,
+      blurStyle: AppMaterial.SheetBlur,
       systemMaterial: AppMaterial.Sheet,
       onAppear: (): void => this.scrollChapterListToCurrent(),
       onDisappear: (): void => {

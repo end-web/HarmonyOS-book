@@ -125,12 +125,23 @@ export class AppMaterial {
     return PlatformCompat.immersiveMaterial ? Color.Transparent : $r('sys.color.comp_background_primary');
   }
 
+  static get SheetBlur(): BlurStyle | undefined {
+    return PlatformCompat.immersiveMaterial ? undefined : AppMaterial.fallbackBlur;
+  }
+
+  private static get fallbackBlur(): BlurStyle {
+    switch (AppAppearance.current.material) {
+      case 1: return BlurStyle.COMPONENT_ULTRA_THIN;
+      case 2: return BlurStyle.COMPONENT_THIN;
+      case 4: return BlurStyle.COMPONENT_THICK;
+      case 5: return BlurStyle.COMPONENT_ULTRA_THICK;
+      default: return BlurStyle.COMPONENT_REGULAR;
+    }
+  }
+
   static modifier(material: uiMaterial.Material | undefined,
     fallbackColor: ResourceColor = AppColor.GlassControlFallback): CompatibleMaterialModifier {
-    const preference: number = AppAppearance.current.material;
-    const blur: BlurStyle = preference === 1 || preference === 2 ? BlurStyle.COMPONENT_THIN :
-      (preference >= 4 ? BlurStyle.COMPONENT_THICK : BlurStyle.COMPONENT_REGULAR);
-    return new CompatibleMaterialModifier(material, fallbackColor, blur);
+    return new CompatibleMaterialModifier(material, fallbackColor, AppMaterial.fallbackBlur);
   }
 }
 

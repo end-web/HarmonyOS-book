@@ -1,5 +1,6 @@
 param(
-  [string]$DevEcoRoot = $env:DEVECO_HOME
+  [string]$DevEcoRoot = $env:DEVECO_HOME,
+  [switch]$RequireReleaseSdk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,7 @@ $quickJsRoot = Join-Path $projectRoot 'third_party\quickjs'
 $nodeExecutable = Join-Path $DevEcoRoot 'tools\node\node.exe'
 $ohpmCli = Join-Path $DevEcoRoot 'tools\ohpm\bin\pm-cli.js'
 $hvigorCli = Join-Path $DevEcoRoot 'tools\hvigor\bin\hvigorw.js'
+$sdkRoot = Join-Path $DevEcoRoot 'sdk'
 $builtHar = Join-Path $quickJsRoot 'quickjs\build\default\outputs\default\quickjs.har'
 $targetHar = Join-Path $projectRoot 'entry\libs\quickjs.har'
 $targetHash = Join-Path $projectRoot 'entry\libs\quickjs.har.sha256'
@@ -23,8 +25,17 @@ foreach ($requiredPath in @($nodeExecutable, $ohpmCli, $hvigorCli)) {
   }
 }
 
+if ($RequireReleaseSdk) {
+  $sdkMetadata = Get-Content -LiteralPath (Join-Path $sdkRoot 'default\sdk-pkg.json') -Raw | ConvertFrom-Json
+  if ($sdkMetadata.data.releaseType -ne 'Release') {
+    throw '发布依赖必须使用 Release SDK，不能使用 Beta 或 Canary'
+  }
+}
+
+$previousSdkRoot = $env:DEVECO_SDK_HOME
 Push-Location $quickJsRoot
 try {
+  $env:DEVECO_SDK_HOME = $sdkRoot
   & $nodeExecutable $ohpmCli install
   if ($LASTEXITCODE -ne 0) { throw "ohpm install 失败：$LASTEXITCODE" }
 
@@ -32,10 +43,11 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "QuickJS clean 失败：$LASTEXITCODE" }
 
   & $nodeExecutable --max-old-space-size=8192 --expose-gc $hvigorCli `
-    assembleHar --mode module -p product=default -p module=quickjs@default
+    assembleHar --mode module -p product=default -p module=quickjs@default -p buildMode=release --no-daemon
   if ($LASTEXITCODE -ne 0) { throw "QuickJS HAR 构建失败：$LASTEXITCODE" }
 } finally {
   Pop-Location
+  $env:DEVECO_SDK_HOME = $previousSdkRoot
 }
 
 if (-not (Test-Path -LiteralPath $builtHar)) {

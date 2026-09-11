@@ -54,8 +54,6 @@ struct Index {
   // detail 路由自定义转场:缩放淡入,无方向位移
   @Local detailScale: number = 1;
   @Local detailOpacity: number = 1;
-  @Local sourceTransitionOffset: number = 0;
-  @Local importTransitionOffset: number = 0;
   private widgetSubscribed: boolean = false;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
@@ -315,19 +313,6 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_secondary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-      .translate({ x: `${this.sourceTransitionOffset}%` })
-      .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        // 打开交给系统弹簧转场；仅保留 350ms 的返回退场。
-        if (op !== NavigationOperation.POP || isEnter) return undefined;
-        this.sourceTransitionOffset = 0;
-        return [{
-          duration: 350,
-          curve: Curve.EaseInOut,
-          event: () => { this.sourceTransitionOffset = 100; },
-          onTransitionEnd: () => { this.sourceTransitionOffset = 0; }
-        }];
-      })
-      .onShown(() => { this.sourceTransitionOffset = 0; })
     } else if (name === 'ruleSourceAccount') {
       NavDestination() {
         RuleSourceAccountPage({ navStack: this.navStack, sourceUrl: String(param) })
@@ -393,19 +378,6 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-      .translate({ x: `${this.importTransitionOffset}%` })
-      .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        // 与书源管理一致，进入时使用系统默认弹簧动画。
-        if (op !== NavigationOperation.POP || isEnter) return undefined;
-        this.importTransitionOffset = 0;
-        return [{
-          duration: 350,
-          curve: Curve.EaseInOut,
-          event: () => { this.importTransitionOffset = 100; },
-          onTransitionEnd: () => { this.importTransitionOffset = 0; }
-        }];
-      })
-      .onShown(() => { this.importTransitionOffset = 0; })
     } else if (name === 'stats') {
       NavDestination() {
         ReadingStatsPage({ navStack: this.navStack })

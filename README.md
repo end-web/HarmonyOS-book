@@ -2,7 +2,7 @@
 
 面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.11`，最低 API 20 / 目标 API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.12`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
 ## 下载与更新
 
@@ -126,9 +126,13 @@ AGENTS.md                 协作与工程约定
 
 ## 开发与验证
 
-使用支持 HarmonyOS SDK API 26 的 DevEco Studio，在本机 Signing Configs 配置签名。不要提交证书、口令或 `build-profile.json5` 的本机改动。新环境可先用 [build-profile.template.json5](build-profile.template.json5) 创建本机 `build-profile.json5`，再配置签名；模板保留最低 API 20 与目标 API 26，不包含签名材料。
+使用配套正式版 SDK 的 DevEco Studio（当前为 26.0.0.821 Release，目标 HarmonyOS 6.1.1 / API 24），在本机 Signing Configs 配置签名。不要提交证书、口令或 `build-profile.json5` 的本机改动。新环境可先用 [build-profile.template.json5](build-profile.template.json5) 创建本机 `build-profile.json5`，再配置签名；模板保留最低 API 20 与目标 API 24，不包含签名材料。编译版本由正式版 IDE 自带 SDK 决定；上传包内的 `apiReleaseType` 必须为 `Release`，不能用修改版本标记的方式替代正式 SDK。
 
 GitHub HAP 使用 `product=default, buildMode=release`；官方邀测 APP 使用 `product=release, buildMode=release`，须绑定 AppGallery 正式发布证书与 `release / app_gallery` Profile。APP 包上传 AGC，GitHub 开发签名 HAP 供获授权设备安装。
+
+上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.12 --version-code 1000012`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
+
+切换本机构建套件时，将 `DEVECO_SDK_HOME` 指向 Release IDE 的 `sdk` 目录，并使用同一安装目录下的 Node/Hvigor；HarmonyOS 构建不会从 `local.properties` 的 `hwsdk.dir` 切换 SDK。重建原生依赖可用 `scripts/build-quickjs.ps1 -DevEcoRoot <正式版IDE目录> -RequireReleaseSdk`。正式版与 Beta 的发布用途见[华为版本说明](https://developer.huawei.com/consumer/cn/doc/harmonyos-releases/overview-allversion)。
 
 Agent 开发流程：修改 `.ets` 后先运行 `arkts_check`，再运行 `build_project` 增量构建，成功后 `start_app`。工具不可用时：
 
