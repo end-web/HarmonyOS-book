@@ -134,6 +134,25 @@ export class WindowUtils {
     return valueVp * WindowUtils.density;
   }
 
+  /** 按所在屏幕的物理对角线分档，窗口缩放和字体大小不影响页面转场时长。 */
+  static getPageTransitionDuration(): number {
+    try {
+      const displayId = WindowUtils.mainWindow?.getWindowProperties().displayId;
+      const screen = displayId === undefined ? display.getDefaultDisplaySync() : display.getDisplayByIdSync(displayId);
+      if (!Number.isFinite(screen.width) || !Number.isFinite(screen.height) ||
+        !Number.isFinite(screen.xDPI) || !Number.isFinite(screen.yDPI) ||
+        screen.width <= 0 || screen.height <= 0 || screen.xDPI <= 0 || screen.yDPI <= 0) return 300;
+      const widthInches = screen.width / screen.xDPI;
+      const heightInches = screen.height / screen.yDPI;
+      const diagonalInches = Math.sqrt(widthInches * widthInches + heightInches * heightInches);
+      if (diagonalInches < 8.5) return 200;
+      return diagonalInches <= 12 ? 250 : 300;
+    } catch (_e) {
+      // 屏幕信息不可用时按最高下限兜底，避免未知大屏使用过短的转场。
+      return 300;
+    }
+  }
+
   // 与 MainPage 中常量保持一致
   private static readonly FLOATING_TAB_HEIGHT: number = 60;
   private static readonly FLOATING_GAP: number = 12;

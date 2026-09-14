@@ -14,7 +14,7 @@ const TAG = 'ChapterCache';
 
 export const EVT_CHAPTER_DURATION_UPDATED = 'app.chapter.duration.updated';
 
-let PRE_DOWNLOAD_FORWARD = 3;
+let PRE_DOWNLOAD_FORWARD = 1;
 let PRE_DOWNLOAD_BACKWARD = 0;
 const MAX_CONCURRENT = 2;             // URL 解析（WebView/HTTP）最多 2 并发
 const MAX_FILE_CONCURRENT = 2;        // 音频文件下载最多 2 并发

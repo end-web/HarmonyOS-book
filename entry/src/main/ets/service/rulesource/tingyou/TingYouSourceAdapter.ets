@@ -5,6 +5,7 @@ import { LocalRuleContentResult } from '../LocalRuleRuntimeTypes';
 import { TingYouApiClient } from './TingYouApiClient';
 import { TingYouChapterAddress, TingYouSourceIdentity } from './TingYouSourceIdentity';
 import { LocalRuleUrlAnalyzer } from '../LocalRuleUrlAnalyzer';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const TINGYOU_RECOMMENDS_PATH: string = 'homepage/recommends';
 const TINGYOU_THRILLER_PATH: string = 'types/14/popular/p1';
@@ -129,8 +130,8 @@ export class TingYouSourceAdapter {
   static async getCategory(source: LocalRuleSource, rawPath: string, pageNumber: number = 1): Promise<TingYouCategoryResult> {
     TingYouSourceAdapter.requireImportedSource(source);
     const result = new TingYouCategoryResult();
-    const path = TingYouSourceIdentity.parseCategoryPath(
-      LocalRuleUrlAnalyzer.expandTemplate(rawPath, source, {}, '', pageNumber));
+    const expandedPath: string = LocalRuleUrlAnalyzer.expandTemplate(rawPath, source, {}, '', pageNumber);
+    const path = TingYouSourceIdentity.parseCategoryPath(expandedPath, pageNumber);
     if (path === TINGYOU_RECOMMENDS_PATH) {
       const homepage = await TingYouApiClient.getPublicData('homepage');
       if (homepage !== undefined) {
@@ -139,6 +140,8 @@ export class TingYouSourceAdapter {
       return result;
     }
     if (!path) {
+      hilog.warn(0x0000, 'TingYouSourceAdapter', 'Unsupported category route: %{public}s',
+        expandedPath.split(new RegExp('[?#,]'), 1)[0].substring(0, 200));
       throw new Error('听友分类地址无效');
     }
     const data = await TingYouApiClient.getPublicData(path);

@@ -58,15 +58,56 @@ export class TingYouSourceIdentity {
     return Number.isSafeInteger(albumId) && albumId > 0 ? albumId : undefined;
   }
 
-  static parseCategoryPath(address: string): string {
+  static parseCategoryPath(address: string, pageNumber: number = 1): string {
     let path = address.trim();
     if (new RegExp('^https?://', 'i').test(path)) {
       if (!TingYouSourceIdentity.isSourceUrl(path)) return '';
       path = TingYouSourceIdentity.httpPath(path);
     }
-    path = path.replace(new RegExp('^/+|/+$', 'g'), '');
+    path = path.split(new RegExp('[?#]'), 1)[0].replace(new RegExp('^/+|/+$', 'g'), '');
+    // 导入源也会把分类、排序和分页放在首页 URL 的查询参数中。
+    if (path.length === 0) return TingYouSourceIdentity.parseCategoryQuery(address, pageNumber);
+    // 网站分类页使用 type ID，公开数据接口还需要排序方式和页码。
+    if (new RegExp('^categories/[0-9]+$').test(path)) {
+      const typeId: number = Number(path.substring('categories/'.length));
+      if (!Number.isSafeInteger(typeId) || typeId <= 0) return '';
+      const page: number = Number.isSafeInteger(pageNumber) && pageNumber > 0 ? pageNumber : 1;
+      return `types/${typeId}/comprehensive/p${page}`;
+    }
     return path === 'homepage/recommends' || new RegExp('^types/[0-9]+/[A-Za-z_-]+/p[0-9]+$').test(path)
       ? path : '';
+  }
+
+  private static parseCategoryQuery(address: string, pageNumber: number): string {
+    const clean = address.split('#', 1)[0];
+    const queryStart = clean.indexOf('?');
+    if (queryStart < 0) return '';
+    let typeId: string = '';
+    let sort: string = 'comprehensive';
+    let page: string = String(Number.isSafeInteger(pageNumber) && pageNumber > 0 ? pageNumber : 1);
+    const seen = new Set<string>();
+    for (const pair of clean.substring(queryStart + 1).split('&')) {
+      const separator = pair.indexOf('=');
+      if (separator < 0) continue;
+      let name: string;
+      let value: string;
+      try {
+        name = decodeURIComponent(pair.substring(0, separator));
+        value = decodeURIComponent(pair.substring(separator + 1));
+      } catch (_error) {
+        return '';
+      }
+      if (name !== 'type' && name !== 'sort' && name !== 'page') continue;
+      if (seen.has(name)) return '';
+      seen.add(name);
+      if (name === 'type') typeId = value;
+      else if (name === 'sort') sort = value;
+      else page = value;
+    }
+    if (!new RegExp('^[0-9]+$').test(typeId) || !Number.isSafeInteger(Number(typeId)) ||
+      Number(typeId) <= 0 || !new RegExp('^[A-Za-z_-]+$').test(sort) ||
+      !new RegExp('^[0-9]+$').test(page) || !Number.isSafeInteger(Number(page)) || Number(page) <= 0) return '';
+    return `types/${Number(typeId)}/${sort}/p${Number(page)}`;
   }
 
   static toPlayUrl(address: TingYouChapterAddress): string {

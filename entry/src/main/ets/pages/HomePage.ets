@@ -10,6 +10,7 @@ import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
 import { HomeCategoryBookRow, HomeCategoryRowDataSource } from '../utils/HomeCategoryRowDataSource';
+import { HomeCategoryOverviewRow, HomeCategoryOverviewDataSource } from '../utils/HomeCategoryOverviewDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
@@ -17,7 +18,7 @@ import { BookSourceService, ExploreFetchResult } from '../service/BookSourceServ
 import { SourceDataService } from '../service/SourceDataService';
 import { emitter } from '@kit.BasicServicesKit';
 import { LocalRuleSource } from '../model/LocalRuleSource';
-import { EVT_HOME_SOURCE_CHANGED } from '../service/PreferenceService';
+import { EVT_HOME_SOURCE_CHANGED, PreferenceService } from '../service/PreferenceService';
 import { HomeSourceCategory, HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 class HomeCategoryDataSource implements IDataSource {
@@ -65,6 +66,9 @@ const FEATURED_COVER_SIZE: number = 60;
 const FEATURED_NEXT_PEEK: number = 32;
 const HOME_COVER_CARD_SIZE: number = 128;
 const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
+const CATEGORY_OVERVIEW_INDEX: number = -2;
+const CATEGORY_CARD_COLORS: string[] = ['#B84332', '#287EA2', '#6750AB', '#248279',
+  '#AA4169', '#9B632F', '#475EA8', '#54783A'];
 
 @ComponentV2
 struct HomeLoadingSkeleton {
@@ -221,11 +225,14 @@ export struct HomePage {
   @Local loadingHome: boolean = false;
   @Local homeError: ResourceStr = '';
   @Local homeSourceName: string = '';
+  @Local homeSources: LocalRuleSource[] = [];
+  @Local homeSourceIndex: number = -1;
+  @Local savingHomeSource: boolean = false;
   @Local homeCategories: HomeSourceCategory[] = [];
   private currentSource: LocalRuleSource | undefined = undefined;
   private lastSourceRevision: number = -1;
   private sourceChangedHandler: () => void = (): void => { this.reloadSource(); };
-  /** 当前选中的入口索引（-1=推荐，其他值对应所选源的分类）。 */
+  /** 当前入口：-1=推荐，-2=分类总览，非负值对应所选源的分类。 */
   @Local selectedCategoryIndex: number = -1;
   /** 分类书单数据 */
   @Local categoryBooks: Book[] = [];
@@ -244,8 +251,10 @@ export struct HomePage {
   @Event onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) => void = () => {};
 
   private contentScroller: Scroller = new Scroller();
+  private categoryNavScroller: Scroller = new Scroller();
   private categoryDS: HomeCategoryRowDataSource = new HomeCategoryRowDataSource();
   private categoryNavDataSource: HomeCategoryDataSource = new HomeCategoryDataSource();
+  private categoryOverviewDataSource: HomeCategoryOverviewDataSource = new HomeCategoryOverviewDataSource();
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private homeGen: number = 0;
   private refreshInFlight: boolean = false;
@@ -270,7 +279,37 @@ export struct HomePage {
     this.selectedCategoryIndex = -1;
     this.resetSearchCollapse();
     this.scrollContentToTop();
+    this.revealCategoryTab(-1);
     this.loadHomeBlocks();
+  }
+
+  private async selectHomeSource(index: number): Promise<void> {
+    const source: LocalRuleSource | undefined = this.homeSources[index];
+    if (this.savingHomeSource || source === undefined) return;
+    this.homeSourceIndex = index;
+    this.homeSourceName = source.bookSourceName;
+    if (source.bookSourceUrl === this.currentSource?.bookSourceUrl) return;
+    this.savingHomeSource = true;
+    try {
+      // 与书源管理共用保存入口，由现有源变更事件刷新推荐和分类。
+      await HomeSourceService.setSelectedSource(source.bookSourceUrl);
+      this.showHomeSourceToast($r('app.string.home_source_saved'));
+    } catch (_error) {
+      this.showHomeSourceToast($r('app.string.rule_source_operation_failed'));
+      this.homeSourceIndex = this.homeSources.findIndex((item: LocalRuleSource): boolean =>
+        item.bookSourceUrl === this.currentSource?.bookSourceUrl);
+      this.homeSourceName = this.currentSource?.bookSourceName ?? '';
+    } finally {
+      this.savingHomeSource = false;
+    }
+  }
+
+  private showHomeSourceToast(message: ResourceStr): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message });
+    } catch (_error) {
+      hilog.warn(DOMAIN, TAG, 'Home source toast unavailable');
+    }
   }
 
   /** 刷新推荐板块或当前分类，保留旧内容直到新数据返回。 */
@@ -279,7 +318,7 @@ export struct HomePage {
       this.lastSourceRevision = SourceDataService.getInvalidationCounter();
       this.selectedCategoryIndex = -1;
       await this.loadHomeBlocks();
-    } else if (this.selectedCategoryIndex === -1) {
+    } else if (this.selectedCategoryIndex < 0) {
       await this.loadHomeBlocks(true);
     } else {
       await this.switchCategory(this.selectedCategoryIndex, true);
@@ -312,21 +351,24 @@ export struct HomePage {
     if (!preserveContent) {
       this.homeBlocks = [];
       this.homeBlockDataSource.clear();
-      this.homeCategories = [];
-      this.categoryNavDataSource.setCategories([]);
+      this.updateHomeCategories([]);
       this.currentSource = undefined;
       this.homeSourceName = '';
+      this.homeSourceIndex = -1;
     }
     this.categoryBooks = [];
     this.categoryDS.setBooks([]);
     try {
-      const source = await HomeSourceService.getSelectedSource();
+      const sources: LocalRuleSource[] = await HomeSourceService.getSources();
+      const source = HomeSourceService.selectAvailable(sources, await PreferenceService.getHomeSourceUrl());
       if (generation !== this.homeGen) return;
+      this.homeSources = sources;
+      this.homeSourceIndex = sources.findIndex((item: LocalRuleSource): boolean =>
+        item.bookSourceUrl === source?.bookSourceUrl);
       if (source === undefined || source.bookSourceUrl !== this.currentSource?.bookSourceUrl) {
         this.homeBlocks = [];
         this.homeBlockDataSource.clear();
-        this.homeCategories = [];
-        this.categoryNavDataSource.setCategories([]);
+        this.updateHomeCategories([]);
       }
       this.currentSource = source;
       this.homeSourceName = source?.bookSourceName ?? '';
@@ -340,8 +382,7 @@ export struct HomePage {
       }
       const categories = await HomeSourceService.getCategories(source);
       if (generation !== this.homeGen) return;
-      this.homeCategories = categories;
-      this.categoryNavDataSource.setCategories(categories);
+      this.updateHomeCategories(categories);
       const blocks = await HomeSourceService.getHomeBlocks(source, categories);
       if (generation !== this.homeGen) return;
       this.homeBlocks = blocks;
@@ -368,6 +409,30 @@ export struct HomePage {
     } catch (_e) { /* ignore */ }
   }
 
+  private updateHomeCategories(categories: HomeSourceCategory[]): void {
+    this.homeCategories = categories;
+    this.categoryNavDataSource.setCategories(categories);
+    this.categoryOverviewDataSource.setCategories(categories);
+  }
+
+  private revealCategoryTab(index: number): void {
+    try {
+      // 滚动列表首项是精品推荐，源分类的列表索引顺延一位。
+      this.categoryNavScroller.scrollToIndex(index < 0 ? 0 : index + 1, false,
+        index < 0 ? ScrollAlign.START : ScrollAlign.CENTER);
+    } catch (_error) { /* 分类标签尚未布局时保留当前位置。 */ }
+  }
+
+  private showCategoryOverview(): void {
+    if (this.selectedCategoryIndex === CATEGORY_OVERVIEW_INDEX) return;
+    // 首次加载仍需取得分类定义；已有分类书单请求则停止回写。
+    if (!this.loadingHome) this.homeGen++;
+    this.selectedCategoryIndex = CATEGORY_OVERVIEW_INDEX;
+    this.categoryLoading = false;
+    this.resetSearchCollapse();
+    this.scrollContentToTop();
+  }
+
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
   private async switchCategory(index: number, forceReload: boolean = false): Promise<void> {
     if (this.selectedCategoryIndex === index && !forceReload) return;
@@ -377,6 +442,7 @@ export struct HomePage {
     this.categoryLoading = false;
     this.resetSearchCollapse();
     this.scrollContentToTop();
+    this.revealCategoryTab(index);
     if (index === -1) {
       this.categoryBooks = [];
       this.categoryDS.setBooks([]);
@@ -439,7 +505,7 @@ export struct HomePage {
   }
 
   private isCategorySelected(cat: HomeSourceCategory): boolean {
-    if (this.selectedCategoryIndex === -1) return false;
+    if (this.selectedCategoryIndex < 0) return false;
     const selected = this.homeCategories[this.selectedCategoryIndex];
     return selected && selected.url === cat.url;
   }
@@ -535,7 +601,7 @@ export struct HomePage {
   /** 标题栏主区域：放入 Navigation 生效范围，启用原生沉浸光感。 */
   @Builder
   buildSearchTitleBar() {
-    Column() {
+    Row({ space: AppSpace.Sm }) {
       Row({ space: AppSpace.Xs }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass'))
           .fontSize(17)
@@ -545,25 +611,42 @@ export struct HomePage {
           .fontColor($r('sys.color.font_tertiary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Blank()
-        if (this.homeSourceName.length > 0) {
-          Text(this.homeSourceName)
-            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '35%' })
-        }
+          .layoutWeight(1)
       }
-      .width('100%')
+      .layoutWeight(1)
       .height(SEARCH_FIELD_HEIGHT)
       .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
       .borderRadius(AppRadius.Pill)
       .backgroundColor(Color.Transparent)
       .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
       .onClick(() => this.onSearchTap())
+
+      Select(this.homeSources.map((source: LocalRuleSource): SelectOption => {
+        return { value: source.bookSourceName };
+      }))
+        .selected($$this.homeSourceIndex)
+        .value(this.homeSourceName || $r('app.string.home_source_setting'))
+        .font({ size: AppFont.Caption, weight: FontWeight.Medium })
+        .fontColor(AppColor.Brand)
+        .selectedOptionFontColor(AppColor.Brand)
+        .selectedOptionBgColor(AppColor.BrandSoft)
+        .space(AppSpace.Xs)
+        .menuAlign(MenuAlignType.END)
+        .width(LayoutPolicy.wrapContent)
+        .constraintSize({ maxWidth: '45%' })
+        .height(SEARCH_FIELD_HEIGHT)
+        .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+        .borderRadius(AppRadius.Pill)
+        .backgroundColor(Color.Transparent)
+        .attributeModifier(AppMaterial.selectModifier())
+        .enabled(this.homeSources.length > 0 && !this.savingHomeSource)
+        .accessibilityDescription($r('app.string.home_source_setting'))
+        .onSelect((index: number) => this.selectHomeSource(index))
     }
     .width('100%')
     .height(SEARCH_FIELD_ROW_HEIGHT)
     .padding({ left: AppSpace.Md, right: AppSpace.Md })
-    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
     .backgroundColor(Color.Transparent)
   }
 
@@ -609,8 +692,53 @@ export struct HomePage {
           .justifyContent(FlexAlign.End)
         }
 
-        // 第2~N项：推荐板块或分类书单。
-        if (this.selectedCategoryIndex === -1) {
+        // 第2~N项：分类总览、推荐板块或分类书单。
+        if (this.selectedCategoryIndex === CATEGORY_OVERVIEW_INDEX) {
+          ListItem() {
+            Row() {
+              Text($r('app.string.home_categories_all'))
+                .fontSize(AppFont.Title).fontWeight(FontWeight.Bold)
+                .fontColor($r('sys.color.font_primary'))
+              Blank()
+              Text($r('app.string.home_categories_count', this.homeCategories.length))
+                .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+            }
+            .width('100%').padding({ left: AppSpace.Md, right: AppSpace.Md,
+              top: AppSpace.Sm, bottom: AppSpace.Md })
+          }
+          if (this.homeCategories.length === 0) {
+            ListItem() {
+              Column({ space: AppSpace.Sm }) {
+                if (this.loadingHome) {
+                  LoadingProgress().width(32).height(32).color(AppColor.Brand)
+                } else {
+                  Text(this.homeError || $r('app.string.home_categories_empty'))
+                    .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary'))
+                    .textAlign(TextAlign.Center)
+                }
+              }
+              .width('100%').height(220).justifyContent(FlexAlign.Center).padding(AppSpace.Md)
+            }
+          } else {
+            LazyForEach(this.categoryOverviewDataSource, (row: HomeCategoryOverviewRow) => {
+              ListItem() {
+                Row({ space: AppSpace.Sm }) {
+                  ForEach(row.categories, (category: HomeSourceCategory, columnIndex: number) => {
+                    Column() {
+                      this.buildCategoryCard(category, row.startIndex + columnIndex)
+                    }
+                    .layoutWeight(1)
+                  }, (category: HomeSourceCategory) => category.url)
+                  if (row.categories.length < 2) {
+                    Column().layoutWeight(1)
+                  }
+                }
+                .width('100%').padding({ left: AppSpace.Md, right: AppSpace.Md })
+              }
+              .margin({ bottom: AppSpace.Sm })
+            }, (row: HomeCategoryOverviewRow) => `${this.currentSource?.bookSourceUrl}#${row.key}`)
+          }
+        } else if (this.selectedCategoryIndex === -1) {
           if (this.loadingHome && this.homeBlocks.length === 0) {
             ListItem() {
               Column().width('100%').height(300)
@@ -779,7 +907,7 @@ export struct HomePage {
     })
     .backgroundColor(Color.Transparent)
 
-      if (this.loadingHome && this.homeBlocks.length === 0) {
+      if (this.selectedCategoryIndex === -1 && this.loadingHome && this.homeBlocks.length === 0) {
         Column() {
           HomeLoadingSkeleton()
         }
@@ -1017,9 +1145,40 @@ export struct HomePage {
   }
 
   @Builder
+  buildCategoryCard(category: HomeSourceCategory, index: number) {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      SymbolGlyph($r('sys.symbol.square_grid_2x2'))
+        .fontSize(56).fontColor([Color.White]).opacity(0.16)
+        .rotate({ angle: -12 }).margin({ right: AppSpace.Sm, bottom: AppSpace.Sm })
+      Column() {
+        Text(category.name)
+          .fontSize(19).fontWeight(FontWeight.Bold).fontColor(Color.White)
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Blank()
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(16).fontColor([Color.White]).opacity(0.9)
+      }
+      .width('100%').height('100%').padding(AppSpace.Md)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%').height(112).borderRadius(AppRadius.Md)
+    .backgroundColor(CATEGORY_CARD_COLORS[index % CATEGORY_CARD_COLORS.length])
+    .clip(true)
+    .accessibilityGroup(true).accessibilityText(category.name)
+    .onClick(() => this.switchCategoryByUrl(category.url))
+  }
+
+  @Builder
   buildCategoryTags() {
     Row({ space: AppSpace.Xs }) {
-      List({ space: AppSpace.Xs }) {
+      ImmersiveTabComponent({
+        label: $r('app.string.home_categories'),
+        itemWidth: 56,
+        selected: this.selectedCategoryIndex === CATEGORY_OVERVIEW_INDEX,
+        onTap: () => this.showCategoryOverview()
+      })
+      List({ space: AppSpace.Xs, scroller: this.categoryNavScroller }) {
         ListItem() {
           ImmersiveTabComponent({
             label: $r('app.string.home_recommendations'),
@@ -1027,7 +1186,6 @@ export struct HomePage {
             onTap: () => this.switchCategory(-1)
           })
         }
-
         LazyForEach(this.categoryNavDataSource, (cat: HomeSourceCategory) => {
           ListItem() {
             ImmersiveTabComponent({

@@ -11,6 +11,54 @@ import { LocalRuleUrlAnalyzer } from '../main/ets/service/rulesource/LocalRuleUr
 
 export default function tingYouExternalSourceTest() {
   describe('TingYouExternalSource', () => {
+    it('maps imported query category links with sorting and page templates', 0, () => {
+      const source = LocalRuleSource.descriptor('https://tingyou.fm', '听友FM');
+      const address = LocalRuleUrlAnalyzer.expandTemplate(
+        'https://tingyou.fm/?type=46&sort=popular&page={{page}}', source, {}, '', 2);
+      expect(TingYouSourceIdentity.parseCategoryPath(address, 2)).assertEqual('types/46/popular/p2');
+      expect(TingYouSourceIdentity.parseCategoryPath('https://www.tingyou.fm?type=11&sort=popular&page=3', 1))
+        .assertEqual('types/11/popular/p3');
+      expect(TingYouSourceIdentity.parseCategoryPath('/?sort=popular&type=1', 4))
+        .assertEqual('types/1/popular/p4');
+      expect(TingYouSourceIdentity.parseCategoryPath('?type=%34%36#list'))
+        .assertEqual('types/46/comprehensive/p1');
+    });
+
+    it('rejects invalid query category routes without accepting foreign hosts', 0, () => {
+      const invalid: string[] = ['https://example.com/?type=46',
+        'https://tingyou.fm.example.com/?type=46', 'https://tingyou.fm@example.com/?type=46',
+        '//example.com/?type=46', '/albums/46?type=46', '/?type=0', '/?type=-1',
+        '/?type=9007199254740992', '/?type=46&type=11', '/?type=46&sort=../api',
+        '/?type=46&sort=%2Fapi', '/?type=46&page=0', '/?type=46&page=1.5',
+        '/?type=46&page=9007199254740992', '/?type=%ZZ', '/#?type=46'];
+      for (const address of invalid) {
+        expect(TingYouSourceIdentity.parseCategoryPath(address)).assertEqual('');
+      }
+    });
+
+    it('maps website category links to the public category feed and preserves pagination', 0, () => {
+      expect(TingYouSourceIdentity.parseCategoryPath('https://tingyou.fm/categories/46'))
+        .assertEqual('types/46/comprehensive/p1');
+      expect(TingYouSourceIdentity.parseCategoryPath('https://www.tingyou.fm/categories/46/', 3))
+        .assertEqual('types/46/comprehensive/p3');
+      expect(TingYouSourceIdentity.parseCategoryPath('/categories/11?from=home#list', 2))
+        .assertEqual('types/11/comprehensive/p2');
+      expect(TingYouSourceIdentity.parseCategoryPath('categories/1', 0))
+        .assertEqual('types/1/comprehensive/p1');
+      expect(TingYouSourceIdentity.parseCategoryPath('types/46/comprehensive/p2', 3))
+        .assertEqual('types/46/comprehensive/p2');
+    });
+
+    it('rejects foreign hosts and malformed website category IDs', 0, () => {
+      const invalid: string[] = ['https://example.com/categories/46',
+        'https://tingyou.fm.example.com/categories/46', 'https://tingyou.fm@example.com/categories/46',
+        '//example.com/categories/46', '/categories/0', '/categories/-1',
+        '/categories/9007199254740992', '/categories/46/../../api/me'];
+      for (const address of invalid) {
+        expect(TingYouSourceIdentity.parseCategoryPath(address)).assertEqual('');
+      }
+    });
+
     it('normalizes imported discovery links and their requested page without accepting other hosts', 0, () => {
       const source = LocalRuleSource.descriptor('https://tingyou.fm', 'TingYou');
       const address = LocalRuleUrlAnalyzer.expandTemplate(

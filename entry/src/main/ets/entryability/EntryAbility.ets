@@ -46,6 +46,9 @@ export default class EntryAbility extends UIAbility {
   /** 防止 timeout 路径与正常完成路径重复调度下载恢复 */
   private downloadRecoveryScheduled: boolean = false;
   private pendingContinuationPayload: string = '';
+  private startupServicesReady: boolean = false;
+  private startupPlaybackPending: boolean = true;
+  private isInForeground: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // Must run before the first Web component initializes ArkWeb. Do not eagerly initialize the engine here.
@@ -147,6 +150,26 @@ export default class EntryAbility extends UIAbility {
 
     // 下载文件校验 + 中断任务恢复：延后到 ready 之后，避免主线程扫盘卡死
     this.scheduleDownloadRecovery();
+    this.startupServicesReady = true;
+    this.tryAutoPlayOnLaunch();
+  }
+
+  /** 冷启动且进入前台后仅尝试一次；音频解析不阻塞服务初始化。 */
+  private async tryAutoPlayOnLaunch(): Promise<void> {
+    if (!this.startupServicesReady || !this.isInForeground || !this.startupPlaybackPending) return;
+    try {
+      const enabled = await PreferenceService.getAutoPlayOnLaunch();
+      // 初始化完成和 onForeground 都可能进入此处，读取偏好后再次判定以去重。
+      if (!this.startupPlaybackPending) return;
+      this.startupPlaybackPending = false;
+      if (!enabled || !this.isInForeground) return;
+      const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
+      if (!state.currentBook || !state.currentChapter || state.isPlaying || state.isLoading) return;
+      await AudioService.getInstance().play();
+    } catch (error) {
+      this.startupPlaybackPending = false;
+      hilog.warn(DOMAIN, TAG, 'Auto play on launch failed: %{public}s', String(error));
+    }
   }
 
   /** 延后恢复下载队列，不阻塞冷启动 / 首帧 */
@@ -172,7 +195,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   private captureContinuation(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    if (launchParam.launchReason !== AbilityConstant.LaunchReason.CONTINUATION || !want.parameters) return;
+    if (launchParam.launchReason !== AbilityConstant.LaunchReason.CONTINUATION) return;
+    // 跨设备续播由载荷决定播放/暂停状态，不能被启动偏好覆盖。
+    this.startupPlaybackPending = false;
+    if (!want.parameters) return;
     const payload = want.parameters[CONTINUATION_PAYLOAD_KEY];
     if (typeof payload === 'string') this.pendingContinuationPayload = payload;
   }
@@ -325,6 +351,7 @@ export default class EntryAbility extends UIAbility {
   private registerCallee(): void {
     try {
       this.callee.on('play', (_data: rpc.MessageSequence) => {
+        this.startupPlaybackPending = false;
         // 乐观更新:立即翻转卡片图标，不等 AVPlayer
         WidgetUpdater.optimisticSetPlaying(true).catch((err: Error) => {
           hilog.warn(DOMAIN, TAG, 'optimistic play push failed: %{public}s', err?.message ?? '');
@@ -337,6 +364,7 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('pause', (_data: rpc.MessageSequence) => {
+        this.startupPlaybackPending = false;
         // 乐观更新:立即翻转卡片图标，不等 AVPlayer
         WidgetUpdater.optimisticSetPlaying(false).catch((err: Error) => {
           hilog.warn(DOMAIN, TAG, 'optimistic pause push failed: %{public}s', err?.message ?? '');
@@ -349,6 +377,7 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('next', (_data: rpc.MessageSequence) => {
+        this.startupPlaybackPending = false;
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().playNext();
         }).catch((err: Error) => {
@@ -357,6 +386,7 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('prev', (_data: rpc.MessageSequence) => {
+        this.startupPlaybackPending = false;
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().playPrevious();
         }).catch((err: Error) => {
@@ -383,6 +413,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   async onDestroy(): Promise<void> {
+    this.isInForeground = false;
+    this.startupPlaybackPending = false;
     try {
       this.callee.off('play');
       this.callee.off('pause');
@@ -445,6 +477,8 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    this.isInForeground = false;
+    this.startupPlaybackPending = false;
     try {
       await AudioService.getInstance().flushHistory();
     } catch (err) {
@@ -478,12 +512,14 @@ export default class EntryAbility extends UIAbility {
    * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
+    this.isInForeground = true;
     WindowUtils.refreshAvoidArea();
     try {
       // 等待 bootstrapAudioService 完成(带超时保护,避免初始化卡死时永久阻塞前台回调)
       // 超时设为 5 秒,与 onCreate 的总超时时间对齐,避免初始化刚好超时时这里也超时
       await AudioService.getInstance().whenReady(5000);
       await AudioService.getInstance().ensureHealthy();
+      this.tryAutoPlayOnLaunch();
     } catch (err) {
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'onForeground ensureHealthy failed: %{public}s',

@@ -20,6 +20,7 @@ const KEY_MATERIAL_STYLE = 'material_style';
 const KEY_ACCENT_COLOR = 'accent_color';
 const KEY_IMPORTED_BOOKS = 'imported_books';
 const KEY_DEFAULT_TAB = 'default_tab';
+const KEY_AUTO_PLAY_ON_LAUNCH = 'auto_play_on_launch';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
@@ -87,10 +88,11 @@ export class PreferenceBackupSnapshot {
   materialStyle: number = 0;
   accentColor: string = '';
   defaultTab: number = 0;
+  autoPlayOnLaunch: boolean = false;
   audioInterruptMode: number = 0;
   audioAutoResume: boolean = true;
   homeGridColumns: number = 3;
-  preloadChapters: number = 3;
+  preloadChapters: number = 1;
 }
 
 /**
@@ -560,6 +562,18 @@ export class PreferenceService {
     await s.flush();
   }
 
+  /** 打开应用时续播上次内容；新安装和旧版本升级默认关闭。 */
+  static async getAutoPlayOnLaunch(): Promise<boolean> {
+    const store = await PreferenceService.ensureStore();
+    return (await store.get(KEY_AUTO_PLAY_ON_LAUNCH, false)) === true;
+  }
+
+  static async setAutoPlayOnLaunch(enabled: boolean): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    await store.put(KEY_AUTO_PLAY_ON_LAUNCH, enabled);
+    await store.flush();
+  }
+
   /** 失去焦点暂停后，是否在系统通知 RESUME 时自动恢复播放 */
   static async getAudioAutoResume(): Promise<boolean> {
     const s = await PreferenceService.ensureStore();
@@ -729,11 +743,11 @@ export class PreferenceService {
 
   static async getPreloadChapters(): Promise<number> {
     const s = await PreferenceService.ensureStore();
-    const count = await s.get(KEY_PRELOAD_CHAPTERS, 3) as number;
+    const count = await s.get(KEY_PRELOAD_CHAPTERS, 1) as number;
     if (count === 0 || count === 1 || count === 3 || count === 5 || count === 10) {
       return count;
     }
-    return 3;
+    return 1;
   }
 
   static async setPreloadChapters(count: number): Promise<void> {
@@ -800,6 +814,7 @@ export class PreferenceService {
     snapshot.materialStyle = AppAppearance.current.material;
     snapshot.accentColor = AppAppearance.current.accent;
     snapshot.defaultTab = await PreferenceService.getDefaultTab();
+    snapshot.autoPlayOnLaunch = await PreferenceService.getAutoPlayOnLaunch();
     snapshot.audioInterruptMode = await PreferenceService.getAudioInterruptMode();
     snapshot.audioAutoResume = await PreferenceService.getAudioAutoResume();
     snapshot.homeGridColumns = await PreferenceService.getHomeGridColumns();
@@ -881,6 +896,7 @@ export class PreferenceService {
     await s.put(KEY_ACCENT_COLOR, accent);
     await s.put(KEY_COLOR_MODE, snapshot.colorMode);
     await s.put(KEY_DEFAULT_TAB, snapshot.defaultTab);
+    await s.put(KEY_AUTO_PLAY_ON_LAUNCH, snapshot.autoPlayOnLaunch === true);
     await s.put(KEY_AUDIO_INTERRUPT_MODE, snapshot.audioInterruptMode);
     await s.put(KEY_AUDIO_AUTO_RESUME, snapshot.audioAutoResume);
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);

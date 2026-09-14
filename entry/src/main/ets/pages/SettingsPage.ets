@@ -69,9 +69,11 @@ export struct SettingsPage {
   @Local currentMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
   @Local selectedThemeIndex: number = 0;
   @Local defaultTab: number = 0;
+  @Local autoPlayOnLaunch: boolean = false;
+  @Local isSavingAutoPlayOnLaunch: boolean = false;
   @Local focusMode: number = 0;
   @Local autoResume: boolean = true;
-  @Local preloadCount: number = 3;
+  @Local preloadCount: number = 1;
   @Local isLoaded: boolean = false;
   @Local isClearingCache: boolean = false;
   @Local isClearingBookshelf: boolean = false;
@@ -123,6 +125,7 @@ export struct SettingsPage {
       this.selectedThemeIndex = 0;
     }
     this.defaultTab = await PreferenceService.getDefaultTab();
+    this.autoPlayOnLaunch = await PreferenceService.getAutoPlayOnLaunch();
     this.focusMode = await PreferenceService.getAudioInterruptMode();
     this.autoResume = await PreferenceService.getAudioAutoResume();
     this.preloadCount = await PreferenceService.getPreloadChapters();
@@ -132,6 +135,22 @@ export struct SettingsPage {
   private async setDefaultTab(idx: number): Promise<void> {
     this.defaultTab = idx;
     await PreferenceService.setDefaultTab(idx);
+  }
+
+  private async setAutoPlayOnLaunch(enabled: boolean): Promise<void> {
+    if (this.isSavingAutoPlayOnLaunch || this.autoPlayOnLaunch === enabled) return;
+    const previous = this.autoPlayOnLaunch;
+    this.isSavingAutoPlayOnLaunch = true;
+    this.autoPlayOnLaunch = enabled;
+    try {
+      await PreferenceService.setAutoPlayOnLaunch(enabled);
+    } catch (error) {
+      this.autoPlayOnLaunch = previous;
+      hilog.warn(0xFF00, 'SettingsPage', 'Save auto play on launch failed: %{public}s', String(error));
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_save_failed') });
+    } finally {
+      this.isSavingAutoPlayOnLaunch = false;
+    }
   }
 
   private async setFocusMode(mode: number): Promise<void> {
@@ -416,6 +435,16 @@ export struct SettingsPage {
           this.defaultTab,
           (index: number) => this.setDefaultTab(index)
         )
+
+        this.buildDivider()
+
+        this.buildSwitchItem(
+          $r('app.string.settings_auto_play_on_launch'),
+          $r('app.string.settings_auto_play_on_launch_desc'),
+          this.autoPlayOnLaunch,
+          (isOn: boolean) => this.setAutoPlayOnLaunch(isOn),
+          !this.isSavingAutoPlayOnLaunch
+        )
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))
@@ -539,17 +568,18 @@ export struct SettingsPage {
 
   @Builder
   buildSwitchItem(
-    title: string,
-    subtitle: string,
+    title: ResourceStr,
+    subtitle: ResourceStr,
     isOn: boolean,
-    onChange: (isOn: boolean) => void
+    onChange: (isOn: boolean) => void,
+    enabled: boolean = true
   ) {
     Row() {
       Column({ space: 2 }) {
         Text(title)
           .fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary'))
-        if (subtitle.length > 0) {
+        if (typeof subtitle !== 'string' || subtitle.length > 0) {
           Text(subtitle)
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
@@ -560,6 +590,7 @@ export struct SettingsPage {
 
       Toggle({ type: ToggleType.Switch, isOn: isOn })
         .selectedColor(AppColor.Brand)
+        .enabled(enabled)
         .onChange((on: boolean) => onChange(on))
     }
     .width('100%')

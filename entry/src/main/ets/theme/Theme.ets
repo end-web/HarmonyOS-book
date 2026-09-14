@@ -143,6 +143,11 @@ export class AppMaterial {
     fallbackColor: ResourceColor = AppColor.GlassControlFallback): CompatibleMaterialModifier {
     return new CompatibleMaterialModifier(material, fallbackColor, AppMaterial.fallbackBlur);
   }
+
+  static selectModifier(): CompatibleSelectMaterialModifier {
+    return new CompatibleSelectMaterialModifier(AppMaterial.InteractiveClean, AppMaterial.Sheet,
+      AppMaterial.fallbackBlur);
+  }
 }
 
 /** API 20 使用背景色和磨砂；旧设备不调用 systemMaterial，也不加载 uiMaterial。 */
@@ -162,6 +167,29 @@ class CompatibleMaterialModifier implements AttributeModifier<CommonAttribute> {
       instance.systemMaterial(this.material);
     } else {
       instance.backgroundColor(this.fallbackColor).backgroundBlurStyle(this.blur);
+    }
+  }
+}
+
+/** 下拉入口和弹出菜单分别应用材质，避免菜单保留系统默认厚背景。 */
+class CompatibleSelectMaterialModifier extends CompatibleMaterialModifier {
+  private menuMaterial: uiMaterial.Material | undefined;
+  private menuBlur: BlurStyle;
+
+  constructor(controlMaterial: uiMaterial.Material | undefined, menuMaterial: uiMaterial.Material | undefined,
+    blur: BlurStyle) {
+    super(controlMaterial, AppColor.GlassControlFallback, blur);
+    this.menuMaterial = menuMaterial;
+    this.menuBlur = blur;
+  }
+
+  applyNormalAttribute(instance: SelectAttribute): void {
+    super.applyNormalAttribute(instance);
+    instance.menuBackgroundColor(Color.Transparent);
+    if (PlatformCompat.immersiveMaterial && this.menuMaterial !== undefined) {
+      instance.menuBackgroundBlurStyle(BlurStyle.NONE).menuSystemMaterial(this.menuMaterial);
+    } else {
+      instance.menuBackgroundBlurStyle(this.menuBlur);
     }
   }
 }

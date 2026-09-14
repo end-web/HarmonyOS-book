@@ -14,6 +14,10 @@
     {"name": "home_source_empty", "value": "当前首页源暂无内容，可下拉刷新或在书源管理中更换首页源"},
     {"name": "home_source_load_failed", "value": "首页内容加载失败，请下拉重试或在书源管理中更换首页源"},
     {"name": "home_recommendations", "value": "精品推荐"},
+    {"name": "home_categories", "value": "分类"},
+    {"name": "home_categories_all", "value": "全部分类"},
+    {"name": "home_categories_count", "value": "%d 个分类"},
+    {"name": "home_categories_empty", "value": "当前首页源暂无分类，可下拉刷新或更换首页源"},
     {"name": "home_source_category_failed", "value": "分类加载失败，请下拉重试"},
     {"name": "app_description", "value": "简听，让聆听与阅读更从容"},
     {"name": "about_platform", "value": "HarmonyOS / ArkUI V2"},
@@ -301,6 +305,18 @@
     {
       "name": "search_verify_text_source",
       "value": "验证电子书源"
+    },
+    {
+      "name": "settings_auto_play_on_launch",
+      "value": "打开软件自动播放"
+    },
+    {
+      "name": "settings_auto_play_on_launch_desc",
+      "value": "下次启动时继续播放上次内容，默认关闭"
+    },
+    {
+      "name": "settings_save_failed",
+      "value": "设置保存失败，请重试"
     },
     {
       "name": "settings_audio_storage_cleanup",

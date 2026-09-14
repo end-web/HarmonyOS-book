@@ -30,6 +30,7 @@ import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppRadius } from '../theme/Theme';
+import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { WindowUtils } from '../utils/WindowUtils';
 import {
   BookOneShotPayload,
@@ -300,44 +301,29 @@ struct Index {
       .backgroundColor('#F5F2EA')
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'settings') {
-      NavDestination() {
+      ProfileMenuDestination() {
         SettingsPage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'ruleSources') {
-      NavDestination() {
+      ProfileMenuDestination({ pageBackground: $r('sys.color.background_secondary') }) {
         RuleSourcePage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_secondary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'ruleSourceAccount') {
-      NavDestination() {
+      ProfileMenuDestination() {
         RuleSourceAccountPage({ navStack: this.navStack, sourceUrl: String(param) })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'ruleSourceChildren') {
-      NavDestination() {
+      ProfileMenuDestination({ pageBackground: $r('sys.color.background_secondary') }) {
         RuleSourceChildrenPage({ navStack: this.navStack, sourceUrl: String(param) })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_secondary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'ruleSourceLogin') {
-      NavDestination() {
+      ProfileMenuDestination() {
         RuleSourceLoginPage({
           navStack: this.navStack,
           route: param instanceof RuleSourceLoginRouteParams ?
             param : new RuleSourceLoginRouteParams()
         })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'RuleSourceEditPage') {
       RuleSourceEditPage({
         navStack: this.navStack,
@@ -351,33 +337,21 @@ struct Index {
     } else if (name === 'ruleSourceExplore' || name === 'ruleSourceLoginPanel') {
       RuleSourcePanelPage({ navStack: this.navStack, sourceUrl: String(param), login: name === 'ruleSourceLoginPanel' })
     } else if (name === 'downloads') {
-      NavDestination() {
+      ProfileMenuDestination({ pageBackground: $r('sys.color.background_secondary') }) {
         DownloadManagerPage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_secondary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'about') {
-      NavDestination() {
+      ProfileMenuDestination() {
         AboutPage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'guide') {
-      NavDestination() {
+      ProfileMenuDestination() {
         GuidePage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'import') {
-      NavDestination() {
+      ProfileMenuDestination() {
         ImportPage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'stats') {
       NavDestination() {
         ReadingStatsPage({ navStack: this.navStack })
@@ -393,12 +367,9 @@ struct Index {
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'privacy') {
-      NavDestination() {
+      ProfileMenuDestination() {
         PrivacyPage({ navStack: this.navStack })
       }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
-      .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'blockMore') {
       NavDestination() {
         BlockMorePageWrapper({ navStack: this.navStack, param: param as Object })
