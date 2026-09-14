@@ -40,6 +40,7 @@ const RULE_SOURCE_DANGER_SOFT: string = '#14D03050';
 const RULE_SOURCE_WARNING: string = '#9A6700';
 const RULE_SOURCE_IMPORT_MAX_LENGTH: number = 10 * 1024 * 1024;
 const RULE_SOURCE_TEST_KEYWORD: string = '我的';
+const RULE_SOURCE_MIN_BOTTOM_INSET: number = 28;
 
 class RuleSourceDataSource implements IDataSource {
   private sources: LocalRuleSource[] = [];
@@ -109,6 +110,8 @@ export struct RuleSourcePage {
   @Local trustHostDraft: string = '';
   @Local dragSourceName: string = '';
   @Local orderCount: number = 0;
+  @Local safeTop: number = WindowUtils.getStatusBarHeightVp();
+  @Local safeBottom: number = WindowUtils.getBottomSafeVp();
   private orderDataSource: RuleSourceDataSource = new RuleSourceDataSource();
   private failureDataSource: RuleSourceDataSource = new RuleSourceDataSource();
   private orderedSources: LocalRuleSource[] = [];
@@ -120,14 +123,20 @@ export struct RuleSourcePage {
   private filteredSources: LocalRuleSource[] = [];
   private lastInvalidationCounter: number = 0;
   private refreshCheckTimer: number = -1;
+  private safeAreaListener: (top: number, bottom: number) => void = (top: number, bottom: number): void => {
+    this.safeTop = top;
+    this.safeBottom = bottom;
+  };
 
   aboutToAppear(): void {
+    WindowUtils.addSafeAreaListener(this.safeAreaListener);
     this.lastInvalidationCounter = SourceDataService.getInvalidationCounter();
     this.loadSources();
     this.startRefreshCheck();
   }
 
   aboutToDisappear(): void {
+    WindowUtils.removeSafeAreaListener(this.safeAreaListener);
     this.stopRefreshCheck();
     this.activeTester?.cancel();
   }
@@ -1185,7 +1194,7 @@ export struct RuleSourcePage {
           left: AppSpace.Md,
           right: AppSpace.Md,
           top: AppSpace.Xs,
-          bottom: AppSpace.Xl
+          bottom: AppSpace.Xs
         })
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
@@ -1193,6 +1202,8 @@ export struct RuleSourcePage {
     }
     .width('100%')
     .height('100%')
+    // 底部避让取系统安全区与 28vp 的较大值，避免重复叠加导航条留白。
+    .padding({ bottom: Math.max(this.safeBottom, RULE_SOURCE_MIN_BOTTOM_INSET) })
     .backgroundColor($r('sys.color.background_secondary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
@@ -1292,7 +1303,7 @@ export struct RuleSourcePage {
       }
       .width('100%')
       .padding({
-        top: WindowUtils.getStatusBarHeightVp() + AppSpace.Xs,
+        top: this.safeTop + AppSpace.Xs,
         left: AppSpace.Xs,
         right: AppSpace.Md,
         bottom: 0

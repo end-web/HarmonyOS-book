@@ -372,6 +372,14 @@
       "value": "暂无章节"
     },
     {
+      "name": "reader_first_page",
+      "value": "已经是第一页"
+    },
+    {
+      "name": "reader_last_page",
+      "value": "已经是最后一页"
+    },
+    {
       "name": "reader_back_to_current_chapter",
       "value": "回到当前章节"
     },

@@ -13,6 +13,7 @@ import { Book, Chapter } from '../model/Book';
 import { TextReadingPosition, TextReadingSettings } from '../model/TextReading';
 import { ReaderPalette, ReaderPattern, ReaderThemeId, resolvePalette } from '../model/ReaderTheme';
 import { ReaderBackground } from '../components/ReaderBackground';
+import { ReaderPageTurnComponent } from '../components/ReaderPageTurnComponent';
 import { ReaderSettingsSheet } from '../components/ReaderSettingsSheet';
 import { DataService } from '../service/DataService';
 import { BookSourceService } from '../service/BookSourceService';
@@ -40,7 +41,12 @@ const READER_TEXT_VERTICAL_PADDING: number = 12;
 const READER_TEXT_HEADER_HEIGHT: number = 36;
 const READER_TEXT_FOOTER_HEIGHT: number = 24;
 const READER_TEXT_LAYOUT_GUARD: number = 4;
-const READER_TEXT_SWIPE_DISTANCE: number = 48;
+class ReaderOnlineTextTurnPreview {
+  chapterIndex: number = 0;
+  pageIndex: number = 0;
+  content: string = '';
+  pages: OnlineTextPage[] = [];
+}
 
 @ComponentV2
 export struct ReaderPage {
@@ -75,6 +81,9 @@ export struct ReaderPage {
   @Local onlineTextPages: OnlineTextPage[] = [];
   @Local onlineTextPageIndex: number = 0;
   @Local onlineTextLoading: boolean = false;
+  @Local onlineTextTurnPreview: ReaderOnlineTextTurnPreview | null = null;
+  private onlineTextTurnSerial: number = 0;
+  private onlineTextTurnLoading: boolean = false;
   private currentPosition: TextReadingPosition | null = null;
   private context: common.UIAbilityContext | null = null;
   private leaving: boolean = false;
@@ -135,6 +144,7 @@ export struct ReaderPage {
 
   aboutToDisappear(): void {
     this.leaving = true;
+    this.completeOnlineTextTurn(false);
     this.onlineTextLoadSerial++;
     this.cancelReaderSettingsRefresh();
     this.saveProgress();
@@ -275,6 +285,7 @@ export struct ReaderPage {
     pageOffset: number, openLastPage: boolean, initialLoad: boolean): Promise<boolean> {
     const currentBook = this.book;
     if (currentBook === null || resourceIndex < 0 || resourceIndex >= currentBook.chapters.length) return false;
+    this.completeOnlineTextTurn(false);
     const serial = ++this.onlineTextLoadSerial;
     this.onlineTextLoading = true;
     this.jumpingResourceIndex = resourceIndex;
@@ -380,6 +391,7 @@ export struct ReaderPage {
   }
 
   private repaginateOnlineText(): void {
+    this.completeOnlineTextTurn(false);
     if (!this.isOnlineTextBook() || this.onlineTextContent.length === 0) return;
     const charOffset = this.currentOnlineTextCharOffset();
     const pages = this.paginateOnlineTextContent(this.onlineTextContent);
@@ -623,6 +635,7 @@ export struct ReaderPage {
   }
 
   private handlePageTurnModeChange(mode: string): void {
+    this.completeOnlineTextTurn(false);
     this.pageTurnMode = TextReadingSettings.normalizePageTurnMode(mode);
     this.saveReadingSettings();
   }
@@ -781,63 +794,93 @@ export struct ReaderPage {
     }
   }
 
-  private async previousOnlineTextPage(): Promise<void> {
-    if (this.onlineTextLoading) return;
+  private async prepareOnlineTextTurn(forward: boolean): Promise<boolean> {
+    if (this.onlineTextLoading || this.leaving) return false;
     const currentBook = this.book;
-    if (currentBook === null) return;
-    const target: OnlineTextNavigationTarget = OnlineTextPageNavigator.previous(
-      this.currentResourceIndex, this.onlineTextPageIndex);
-    if (!target.moved) {
-      this.showToast('已经是第一页');
-      return;
-    }
-    if (target.chapterIndex === this.currentResourceIndex) {
-      this.onlineTextPageIndex = target.pageIndex;
-      this.updateOnlineTextPosition(true);
-      return;
-    }
-    await this.loadOnlineTextChapter(
-      target.chapterIndex, 0, target.pageIndex, target.openLastPage, false);
-  }
-
-  private async nextOnlineTextPage(): Promise<void> {
-    if (this.onlineTextLoading) return;
-    const currentBook = this.book;
-    if (currentBook === null) return;
-    const target: OnlineTextNavigationTarget = OnlineTextPageNavigator.next(
+    if (currentBook === null) return false;
+    const target: OnlineTextNavigationTarget = forward ? OnlineTextPageNavigator.next(
       this.currentResourceIndex, this.onlineTextPageIndex,
-      this.onlineTextPages.length, currentBook.chapters.length);
+      this.onlineTextPages.length, currentBook.chapters.length) :
+      OnlineTextPageNavigator.previous(this.currentResourceIndex, this.onlineTextPageIndex);
     if (!target.moved) {
-      this.showToast('已经是最后一页');
-      return;
+      this.showToast(forward ? $r('app.string.reader_last_page') : $r('app.string.reader_first_page'));
+      return false;
     }
-    if (target.chapterIndex === this.currentResourceIndex) {
-      this.onlineTextPageIndex = target.pageIndex;
-      this.updateOnlineTextPosition(true);
-      return;
+    const ticket = ++this.onlineTextTurnSerial;
+    const preview = new ReaderOnlineTextTurnPreview();
+    preview.chapterIndex = target.chapterIndex;
+    preview.content = this.onlineTextContent;
+    preview.pages = this.onlineTextPages;
+    try {
+      if (target.chapterIndex !== this.currentResourceIndex) {
+        this.onlineTextTurnLoading = true;
+        this.onlineTextLoading = true;
+        this.jumpingResourceIndex = target.chapterIndex;
+        preview.content = await this.getOnlineTextChapterContent(currentBook, target.chapterIndex);
+        if (this.leaving || ticket !== this.onlineTextTurnSerial) return false;
+        preview.pages = this.paginateOnlineTextContent(preview.content);
+      }
+      if (this.leaving || ticket !== this.onlineTextTurnSerial) return false;
+      preview.pageIndex = target.openLastPage ? Math.max(0, preview.pages.length - 1) : target.pageIndex;
+      this.onlineTextTurnPreview = preview;
+      return true;
+    } catch (e) {
+      if (!this.leaving && ticket === this.onlineTextTurnSerial) {
+        this.showToast(e instanceof Error ? e.message : String(e));
+      }
+      return false;
+    } finally {
+      if (ticket === this.onlineTextTurnSerial) {
+        this.onlineTextTurnLoading = false;
+        this.onlineTextLoading = false;
+        this.jumpingResourceIndex = -1;
+      }
     }
-    await this.loadOnlineTextChapter(
-      target.chapterIndex, 0, target.pageIndex, target.openLastPage, false);
   }
 
-  private handleOnlineTextPan(event: GestureEvent): void {
-    if (Math.abs(event.offsetX) < READER_TEXT_SWIPE_DISTANCE ||
-      Math.abs(event.offsetX) <= Math.abs(event.offsetY)) return;
-    if (event.offsetX < 0) {
-      this.nextOnlineTextPage();
-    } else {
-      this.previousOnlineTextPage();
+  private completeOnlineTextTurn(commit: boolean): void {
+    const preview = this.onlineTextTurnPreview;
+    this.onlineTextTurnSerial++;
+    this.onlineTextTurnPreview = null;
+    if (this.onlineTextTurnLoading) {
+      this.onlineTextTurnLoading = false;
+      this.onlineTextLoading = false;
+      this.jumpingResourceIndex = -1;
+    }
+    if (commit && preview !== null && !this.leaving) {
+      this.onlineTextContent = preview.content;
+      this.onlineTextPages = preview.pages;
+      this.onlineTextPageIndex = preview.pageIndex;
+      this.currentResourceIndex = preview.chapterIndex;
+      this.currentChapterTitle = this.chapterTitle(preview.chapterIndex);
+      this.updateOnlineTextPosition(true);
+      this.prefetchAdjacentOnlineTextChapters(preview.chapterIndex);
     }
   }
 
   private currentOnlineTextPageContent(): string {
-    const page = this.onlineTextPages[this.onlineTextPageIndex];
+    const preview = this.onlineTextTurnPreview;
+    const page = preview !== null ? preview.pages[preview.pageIndex] :
+      this.onlineTextPages[this.onlineTextPageIndex];
     return page !== undefined ? page.text : '';
   }
 
   private onlineTextPageLabel(): string {
-    const total = Math.max(1, this.onlineTextPages.length);
-    return `${Math.min(this.onlineTextPageIndex + 1, total)}/${total}`;
+    const preview = this.onlineTextTurnPreview;
+    const total = Math.max(1, preview !== null ? preview.pages.length : this.onlineTextPages.length);
+    const index = preview !== null ? preview.pageIndex : this.onlineTextPageIndex;
+    return `${Math.min(index + 1, total)}/${total}`;
+  }
+
+  private onlineTextChapterIndex(): number {
+    const preview = this.onlineTextTurnPreview;
+    return preview !== null ? preview.chapterIndex : this.currentResourceIndex;
+  }
+
+  private onlineTextTurnRevision(): string {
+    return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:` +
+      `${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.overlayAlpha}:` +
+      `${this.topSafeVp}:${this.bottomSafeVp}`;
   }
 
   private showToast(message: ResourceStr): void {
@@ -1121,11 +1164,17 @@ export struct ReaderPage {
   }
 
   @Builder
-  buildOnlineTextReader(): void {
+  buildOnlineTextPage(): void {
     Stack() {
+      ReaderBackground({
+        palette: this.palette,
+        pattern: this.backgroundPattern,
+        bgImagePath: this.bgImagePath,
+        overlayAlpha: this.overlayAlpha
+      })
       Column() {
         Row() {
-          Text(this.currentChapterTitle)
+          Text(this.chapterTitle(this.onlineTextChapterIndex()))
             .fontSize(AppFont.Caption)
             .fontColor(this.palette.secondary)
             .maxLines(1)
@@ -1155,7 +1204,7 @@ export struct ReaderPage {
 
         Row() {
           if (this.book !== null) {
-            Text(`${this.currentResourceIndex + 1}/${this.book.chapters.length}`)
+            Text(`${this.onlineTextChapterIndex() + 1}/${this.book.chapters.length}`)
               .fontSize(AppFont.Caption)
               .fontColor(this.palette.secondary)
           }
@@ -1179,32 +1228,23 @@ export struct ReaderPage {
         bottom: this.bottomSafeVp + READER_TEXT_VERTICAL_PADDING
       })
 
-      Row() {
-        Column()
-          .height('100%')
-          .layoutWeight(3)
-          .backgroundColor(Color.Transparent)
-          .onClick((): void => {
-            this.previousOnlineTextPage();
-          })
-        Column()
-          .height('100%')
-          .layoutWeight(4)
-          .backgroundColor(Color.Transparent)
-          .onClick((): void => {
-            this.toggleReaderBar();
-          })
-        Column()
-          .height('100%')
-          .layoutWeight(3)
-          .backgroundColor(Color.Transparent)
-          .onClick((): void => {
-            this.nextOnlineTextPage();
-          })
-      }
-      .width('100%')
-      .height('100%')
+    }
+    .width('100%')
+    .height('100%')
+  }
 
+  @Builder
+  buildOnlineTextReader(): void {
+    Stack() {
+      ReaderPageTurnComponent({
+        mode: this.pageTurnMode,
+        revision: this.onlineTextTurnRevision(),
+        paperColor: this.palette.background,
+        pageContent: (): void => this.buildOnlineTextPage(),
+        onPrepare: (forward: boolean): Promise<boolean> => this.prepareOnlineTextTurn(forward),
+        onComplete: (commit: boolean): void => this.completeOnlineTextTurn(commit),
+        onCenterTap: (): void => this.toggleReaderBar()
+      })
       if (this.onlineTextLoading) {
         Column({ space: AppSpace.Sm }) {
           LoadingProgress()
@@ -1226,13 +1266,6 @@ export struct ReaderPage {
     }
     .width('100%')
     .height('100%')
-    // 背景由 ReaderBackground 铺
-    .parallelGesture(
-      PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: READER_TEXT_SWIPE_DISTANCE })
-        .onActionEnd((event: GestureEvent): void => {
-          this.handleOnlineTextPan(event);
-        })
-    )
   }
 
   @Builder
