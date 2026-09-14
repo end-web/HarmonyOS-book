@@ -108,7 +108,7 @@ Single HarmonyOS module (`entry/`) + optional Node server (`server/`):
 - `entry/src/main/ets/components/` — reusable widgets
 - `entry/src/main/ets/theme/` — theme tokens (`AppColor`, `AppMaterial`)
 - `entry/src/main/ets/widget/` — desktop form widget
-- `server/` — JianHu cloud API + Vue admin + Docker deploy
+- `server/` — 简听 cloud API + Vue admin + Docker deploy
 - `third_party/quickjs/` / `scripts/build-quickjs.ps1` — QuickJS source, licenses and reproducible HAR build
 
 Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, `server/node_modules/`, `server/dist/`, `third_party/quickjs/.hvigor/`, `third_party/quickjs/oh_modules/`, `third_party/quickjs/quickjs/.cxx/`, `third_party/quickjs/quickjs/build/`, `third_party/quickjs/quickjs/oh_modules/`

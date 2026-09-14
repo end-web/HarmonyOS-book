@@ -17,7 +17,7 @@ async function logout(): Promise<void> {
     <aside class="sidebar">
       <div class="brand-block">
         <span class="brand-mark">简</span>
-        <div><strong>简·欢</strong><small>源控制台</small></div>
+        <div><strong>简听</strong><small>源控制台</small></div>
       </div>
       <nav class="primary-nav" aria-label="主导航">
         <RouterLink :to="{ name: 'dashboard' }"><Activity :size="18" />运行概览</RouterLink>

@@ -31,7 +31,7 @@ async function submit(): Promise<void> {
     <section class="login-panel" aria-labelledby="login-title">
       <div class="login-identity">
         <span class="brand-mark large">简</span>
-        <div><h1 id="login-title">简·欢</h1><p>源控制台</p></div>
+        <div><h1 id="login-title">简听</h1><p>源控制台</p></div>
       </div>
       <form @submit.prevent="submit">
         <label for="password">管理密码</label>

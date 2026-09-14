@@ -162,7 +162,7 @@ export struct AboutPage {
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
             Blank()
-            Text('HarmonyOS Next / ArkUI')
+            Text($r('app.string.about_platform'))
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
           }
@@ -176,7 +176,7 @@ export struct AboutPage {
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
             Blank()
-            Text('API 12 (6.1.0)')
+            Text($r('app.string.about_sdk'))
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
           }
@@ -230,7 +230,7 @@ export struct AboutPage {
         .borderRadius(AppRadius.Lg)
         .margin({ left: AppSpace.Sm, right: AppSpace.Sm })
 
-        Text('纯血鸿蒙听书应用')
+        Text($r('app.string.app_description'))
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_tertiary'))
           .textAlign(TextAlign.Center)

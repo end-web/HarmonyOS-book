@@ -72,7 +72,8 @@ export struct BlockMorePage {
     try {
       const source = await SourceDataService.getSourceByUrl(this.sourceUrl);
       if (!source) {
-        this.errorMsg = '欢 FM 暂不可用';
+        this.errorMsg = this.getUIContext().getHostContext()?.resourceManager
+          .getStringSync($r('app.string.imported_source_unavailable').id) ?? '';
         this.hasMore = false;
         return;
       }

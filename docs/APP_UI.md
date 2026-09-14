@@ -1,6 +1,8 @@
-# App 当前交互说明
+# 简听当前交互说明
 
 本文记录当前手机端页面行为，作为 UI 开发与真机回归基线。架构和数据说明见 [CLAUDE.md](../CLAUDE.md)，服务端说明见 [server/README.md](../server/README.md)。这里的回归清单是验证要求，不代表每项已在当前设备执行。
+
+应用对外名称统一为“简听”，桌面入口、播放卡片、关于页面和隐私政策保持一致。当前上架文案与实机截图见 [app-gallery/README.md](app-gallery/README.md)。
 
 ## 主框架与导航
 
