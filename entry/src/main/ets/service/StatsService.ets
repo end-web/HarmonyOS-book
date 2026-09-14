@@ -1,9 +1,12 @@
 import { preferences } from '@kit.ArkData';
+import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 
 const STORE_NAME = 'listenbook_stats';
 const KEY_BOOK_USAGE = 'book_usage_records_v2';
+const KEY_BOOK_USAGE_REVISION = 'book_usage_revision_v3';
+const SNAPSHOT_FILE = 'listening_stats_v3.json';
 
 export const EVT_USAGE_STATS_UPDATED = 'app.usageStats.updated';
 
@@ -55,7 +58,7 @@ export interface HeatPoint {
   seconds: number;
 }
 
-/** 一次读盘算全部指标的整包快照,避免页面分多次读 store 时被并发写撕裂成不一致状态 */
+/** 从同一份已恢复的缓存计算全部指标，避免并发写入造成展示值不一致 */
 export interface StatsBundle {
   records: BookUsageStats[];
   summary: UsageStatsSummary;
@@ -63,128 +66,250 @@ export interface StatsBundle {
   heatDays: HeatPoint[];
 }
 
-export class StatsService {
-  private static store: preferences.Preferences | null = null;
-  private static initPromise: Promise<void> | null = null;
+class StatsDiskSnapshot {
+  version: number = 1;
+  revision: number = 0;
+  records: BookUsageStats[] = [];
+}
 
-  static async init(context: common.BaseContext): Promise<void> {
-    if (StatsService.store) return;
-    if (!StatsService.initPromise) {
-      StatsService.initPromise = preferences.getPreferences(context, { name: STORE_NAME }).then((s) => {
-        StatsService.store = s;
+export class StatsService {
+  private static store: preferences.Preferences | undefined = undefined;
+  private static initPromise: Promise<void> | undefined = undefined;
+  private static initialized: boolean = false;
+  private static records: BookUsageStats[] = [];
+  private static revision: number = 0;
+  private static snapshotPath: string = '';
+  private static dirty: boolean = false;
+  private static writeQueue: Promise<void> = Promise.resolve();
+
+  static async init(context: common.Context): Promise<void> {
+    if (StatsService.initialized) return;
+    if (StatsService.initPromise === undefined) {
+      StatsService.initPromise = StatsService.initialize(context).catch((error: Error): void => {
+        StatsService.initPromise = undefined;
+        throw new Error(error.message);
       });
     }
     await StatsService.initPromise;
   }
 
-  private static async ensureStore(): Promise<preferences.Preferences> {
-    if (!StatsService.store && StatsService.initPromise) {
-      await StatsService.initPromise;
+  private static async initialize(context: common.Context): Promise<void> {
+    StatsService.snapshotPath = `${context.filesDir}/${SNAPSHOT_FILE}`;
+    StatsService.store = await preferences.getPreferences(context, { name: STORE_NAME });
+    let primary: StatsDiskSnapshot | undefined = undefined;
+    let backup: StatsDiskSnapshot | undefined = undefined;
+    let readFailed: boolean = false;
+    try {
+      const raw = await StatsService.store.get(KEY_BOOK_USAGE, '');
+      if (typeof raw !== 'string') throw new Error('Invalid statistics value');
+      if (raw.length > 0) {
+        primary = new StatsDiskSnapshot();
+        primary.records = StatsService.parseRecords(raw);
+        const revision = await StatsService.store.get(KEY_BOOK_USAGE_REVISION, 0);
+        primary.revision = typeof revision === 'number' && Number.isFinite(revision) ? revision : 0;
+      }
+    } catch (error) {
+      readFailed = true;
+      primary = undefined;
+      console.warn(`[StatsService] preferences read failed: ${String(error)}`);
     }
-    if (!StatsService.store) {
-      throw new Error('StatsService not initialized');
+    try {
+      if (await fileIo.access(StatsService.snapshotPath)) {
+        const snapshot: StatsDiskSnapshot = JSON.parse(await fileIo.readText(StatsService.snapshotPath));
+        if (!snapshot || snapshot.version !== 1 || !Number.isFinite(snapshot.revision) ||
+          !Array.isArray(snapshot.records)) throw new Error('Invalid statistics snapshot');
+        backup = new StatsDiskSnapshot();
+        backup.revision = snapshot.revision;
+        backup.records = StatsService.normalizeRecords(snapshot.records);
+      }
+    } catch (error) {
+      readFailed = true;
+      backup = undefined;
+      console.warn(`[StatsService] snapshot read failed: ${String(error)}`);
     }
-    return StatsService.store;
+    const selected = backup !== undefined && (primary === undefined || backup.revision > primary.revision)
+      ? backup : primary;
+    if (selected === undefined && readFailed) {
+      throw new Error('Statistics could not be loaded; existing data will not be overwritten');
+    }
+    StatsService.records = selected?.records ?? [];
+    StatsService.revision = selected?.revision ?? 0;
+    // 首次读取旧版记录即补齐独立快照，不等到下一次播放才保护已有累计值。
+    StatsService.dirty = selected !== undefined &&
+      (primary === undefined || backup === undefined || primary.revision !== backup.revision);
+    if (StatsService.dirty) await StatsService.persistSnapshot();
+    StatsService.initialized = true;
+  }
+
+  private static async ensureReady(): Promise<void> {
+    if (StatsService.initPromise !== undefined) await StatsService.initPromise;
+    if (!StatsService.initialized) throw new Error('StatsService not initialized');
+  }
+
+  private static enqueue(action: () => Promise<void>): Promise<void> {
+    const pending = StatsService.writeQueue.then(action);
+    StatsService.writeQueue = pending.catch((): void => {});
+    return pending;
   }
 
   static async addListenSeconds(seconds: number, book: BookUsageInput): Promise<void> {
-    await StatsService.addSeconds(seconds, book);
+    if (!Number.isFinite(seconds) || seconds < 1 || !book.bookId) return;
+    // 在入队前固定书籍和日期，避免排队跨过零点后把昨日时长写入今天。
+    const recordedAt = Date.now();
+    const input: BookUsageInput = {
+      bookId: book.bookId, title: book.title, author: book.author, cover: book.cover,
+      sourceUrl: book.sourceUrl, bookUrl: book.bookUrl
+    };
+    await StatsService.enqueue(async (): Promise<void> => {
+      await StatsService.ensureReady();
+      await StatsService.addSeconds(Math.floor(seconds), input, recordedAt);
+    });
   }
 
-  private static async addSeconds(seconds: number, book: BookUsageInput): Promise<void> {
-    const delta = Math.floor(seconds);
-    if (delta <= 0 || !book.bookId) return;
-    const s = await StatsService.ensureStore();
-    const records = await StatsService.getBookStats();
-    const day = StatsService.formatDay(new Date());
-    let rec = records.find((item) => item.bookId === book.bookId);
-    if (!rec) {
+  private static async addSeconds(delta: number, book: BookUsageInput, recordedAt: number): Promise<void> {
+    const records = StatsService.normalizeRecords(StatsService.records);
+    const day = StatsService.formatDay(new Date(recordedAt));
+    let rec = records.find((item: BookUsageStats): boolean => item.bookId === book.bookId);
+    if (rec === undefined) {
       rec = {
-        bookId: book.bookId,
-        title: book.title || '未知书籍',
-        author: book.author || '',
-        cover: book.cover || '',
-        listenSeconds: 0,
-        updatedAt: Date.now(),
-        days: [],
-        sourceUrl: book.sourceUrl || '',
-        bookUrl: book.bookUrl || ''
+        bookId: book.bookId, title: book.title || '未知书籍', author: book.author || '',
+        cover: book.cover || '', listenSeconds: 0, updatedAt: recordedAt, days: [],
+        sourceUrl: book.sourceUrl || '', bookUrl: book.bookUrl || ''
       };
       records.push(rec);
     }
-
     rec.title = book.title || rec.title;
     rec.author = book.author || rec.author;
     rec.cover = book.cover || rec.cover;
-    rec.updatedAt = Date.now();
+    rec.updatedAt = recordedAt;
     if (book.sourceUrl) rec.sourceUrl = book.sourceUrl;
     if (book.bookUrl) rec.bookUrl = book.bookUrl;
-    let dayItem = rec.days.find((item) => item.day === day);
-    if (!dayItem) {
+    let dayItem = rec.days.find((item: BookUsageDay): boolean => item.day === day);
+    if (dayItem === undefined) {
       dayItem = { day, listenSeconds: 0 };
       rec.days.push(dayItem);
     }
     rec.listenSeconds += delta;
     dayItem.listenSeconds += delta;
     rec.days = StatsService.trimDays(rec.days);
-    records.sort((a, b) => b.updatedAt - a.updatedAt);
-    await s.put(KEY_BOOK_USAGE, JSON.stringify(records));
-    await s.flush();
+    records.sort((left: BookUsageStats, right: BookUsageStats): number => right.updatedAt - left.updatedAt);
+    await StatsService.commitRecords(records);
     emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day, bookId: book.bookId } });
   }
 
   static async getBookStats(): Promise<BookUsageStats[]> {
-    const s = await StatsService.ensureStore();
-    const raw = await s.get(KEY_BOOK_USAGE, '[]') as string;
+    await StatsService.ensureReady();
+    await StatsService.writeQueue;
+    // 返回副本，页面、备份或删除筛选均不能修改服务持有的最后一份有效数据。
+    return StatsService.normalizeRecords(StatsService.records);
+  }
+
+  private static parseRecords(raw: string): BookUsageStats[] {
+    const list: BookUsageStats[] = JSON.parse(raw);
+    if (!Array.isArray(list)) throw new Error('Invalid statistics records');
+    return StatsService.normalizeRecords(list);
+  }
+
+  private static normalizeRecords(records: BookUsageStats[]): BookUsageStats[] {
+    return records.map((item: BookUsageStats): BookUsageStats => {
+      if (!item || typeof item.bookId !== 'string' || !item.bookId) {
+        throw new Error('Invalid statistics record');
+      }
+      const days = Array.isArray(item.days) ? item.days : [];
+      const lifetime = days.reduce((total: number, day: BookUsageDay): number =>
+        total + StatsService.safeSeconds(day?.listenSeconds), 0);
+      return {
+        bookId: item.bookId, title: item.title || '未知书籍', author: item.author || '', cover: item.cover || '',
+        listenSeconds: Math.max(StatsService.safeSeconds(item.listenSeconds), lifetime),
+        updatedAt: item.updatedAt || 0, days: StatsService.trimDays(days),
+        sourceUrl: item.sourceUrl || '', bookUrl: item.bookUrl || ''
+      };
+    }).sort((left: BookUsageStats, right: BookUsageStats): number => right.updatedAt - left.updatedAt);
+  }
+
+  private static safeSeconds(seconds: number | undefined): number {
+    return seconds !== undefined && Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  }
+
+  private static async commitRecords(records: BookUsageStats[]): Promise<void> {
+    StatsService.records = records;
+    StatsService.revision = Math.max(Date.now(), StatsService.revision + 1);
+    StatsService.dirty = true;
+    await StatsService.persistSnapshot();
+  }
+
+  private static async persistSnapshot(): Promise<void> {
+    const store = StatsService.store;
+    if (store === undefined) throw new Error('StatsService not initialized');
+    const snapshot = new StatsDiskSnapshot();
+    snapshot.revision = StatsService.revision;
+    snapshot.records = StatsService.records;
+    let snapshotSaved: boolean = false;
+    let preferencesSaved: boolean = false;
     try {
-      const list = JSON.parse(raw) as BookUsageStats[];
-      if (!Array.isArray(list)) return [];
-      return list
-        .filter((item) => !!item && !!item.bookId)
-        .map((item): BookUsageStats => {
-          const days = Array.isArray(item.days) ? item.days : [];
-          return {
-            bookId: item.bookId,
-            title: item.title || '未知书籍',
-            author: item.author || '',
-            cover: item.cover || '',
-            listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0)),
-            updatedAt: item.updatedAt || 0,
-            days: StatsService.trimDays(days),
-            sourceUrl: item.sourceUrl || '',
-            bookUrl: item.bookUrl || ''
-          };
-        })
-        .sort((a, b) => b.updatedAt - a.updatedAt);
-    } catch (_e) {
-      return [];
+      const temporaryPath = `${StatsService.snapshotPath}.tmp`;
+      const file = await fileIo.open(temporaryPath,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC | fileIo.OpenMode.READ_WRITE);
+      try {
+        await fileIo.write(file.fd, JSON.stringify(snapshot));
+        await fileIo.fsync(file.fd);
+      } finally {
+        await fileIo.close(file);
+      }
+      await fileIo.rename(temporaryPath, StatsService.snapshotPath);
+      snapshotSaved = true;
+    } catch (error) {
+      console.warn(`[StatsService] snapshot write failed: ${String(error)}`);
     }
+    try {
+      await store.put(KEY_BOOK_USAGE, JSON.stringify(snapshot.records));
+      await store.put(KEY_BOOK_USAGE_REVISION, snapshot.revision);
+      await store.flush();
+      preferencesSaved = true;
+    } catch (error) {
+      console.warn(`[StatsService] preferences write failed: ${String(error)}`);
+    }
+    StatsService.dirty = !snapshotSaved || !preferencesSaved;
+    if (!snapshotSaved && !preferencesSaved) {
+      throw new Error('Statistics could not be persisted; retained in memory for retry');
+    }
+  }
+
+  /** 退后台或退出前等待统计写入，并重试未完成的持久化。 */
+  static async flush(): Promise<void> {
+    await StatsService.enqueue(async (): Promise<void> => {
+      if (StatsService.initPromise !== undefined) await StatsService.initPromise;
+      if (StatsService.initialized && StatsService.dirty) await StatsService.persistSnapshot();
+    });
   }
 
   static async removeBookStats(bookIds: string[]): Promise<void> {
     if (bookIds.length === 0) return;
-    const s = await StatsService.ensureStore();
     const deleted = new Set(bookIds);
-    const next = (await StatsService.getBookStats()).filter((item) => !deleted.has(item.bookId));
-    await s.put(KEY_BOOK_USAGE, JSON.stringify(next));
-    await s.flush();
-    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
+    await StatsService.enqueue(async (): Promise<void> => {
+      await StatsService.ensureReady();
+      await StatsService.commitRecords(StatsService.records.filter((item: BookUsageStats): boolean =>
+        !deleted.has(item.bookId)));
+      emitter.emit(EVT_USAGE_STATS_UPDATED);
+    });
   }
 
   static async clearBookStats(): Promise<void> {
-    const s = await StatsService.ensureStore();
-    await s.put(KEY_BOOK_USAGE, '[]');
-    await s.flush();
-    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
+    await StatsService.enqueue(async (): Promise<void> => {
+      await StatsService.ensureReady();
+      await StatsService.commitRecords([]);
+      emitter.emit(EVT_USAGE_STATS_UPDATED);
+    });
   }
 
   static async restoreBackupStats(records: BookUsageStats[]): Promise<void> {
-    const s = await StatsService.ensureStore();
-    const safeRecords = records.filter((item: BookUsageStats) =>
-      !!item && !!item.bookId && !item.bookId.startsWith('import_'));
-    await s.put(KEY_BOOK_USAGE, JSON.stringify(safeRecords));
-    await s.flush();
-    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day: StatsService.formatDay(new Date()) } });
+    const safeRecords = StatsService.normalizeRecords(records.filter((item: BookUsageStats): boolean =>
+      !!item && !!item.bookId && !item.bookId.startsWith('import_')));
+    await StatsService.enqueue(async (): Promise<void> => {
+      await StatsService.ensureReady();
+      await StatsService.commitRecords(safeRecords);
+      emitter.emit(EVT_USAGE_STATS_UPDATED);
+    });
   }
 
   static async getAllDailyStats(): Promise<DailyUsageStats[]> {
@@ -260,46 +385,46 @@ export class StatsService {
   }
 
   static async getSummary(): Promise<UsageStatsSummary> {
-    const stats = await StatsService.getAllDailyStats();
-    const today = StatsService.formatDay(new Date());
-    const weekStart = StatsService.formatDay(StatsService.addDays(new Date(), -6));
-    const monthStart = StatsService.formatDay(StatsService.addDays(new Date(), -29));
-    return {
-      todaySeconds: StatsService.sum(stats.filter((item) => item.day === today)),
-      weekSeconds: StatsService.sum(stats.filter((item) => item.day >= weekStart)),
-      monthSeconds: StatsService.sum(stats.filter((item) => item.day >= monthStart)),
-      totalSeconds: StatsService.sum(stats)
-    };
+    const records = await StatsService.getBookStats();
+    return StatsService.computeSummary(StatsService.toMap(StatsService.aggregateDaily(records)),
+      records.reduce((total: number, record: BookUsageStats): number => total + record.listenSeconds, 0));
   }
 
   /**
-   * 一次读盘 → 从同一份 records 快照算出所有指标。
+   * 等待在途写入完成，从同一份 records 缓存快照算出所有指标。
    * 页面用这个替代分散的 getBookStats/getSummary/getStreakDays/getDailyTotals 多次读盘,
    * 保证 6 个展示值内部一致(不会出现"今日有值但累计/本数/连续为 0"的撕裂)。
    */
   static async getStatsBundle(heatmapDays: number): Promise<StatsBundle> {
-    const records = await StatsService.getBookStats();
+    return StatsService.buildStatsBundle(await StatsService.getBookStats(), heatmapDays);
+  }
+
+  static getCachedStatsBundle(heatmapDays: number): StatsBundle | undefined {
+    if (!StatsService.initialized) return undefined;
+    return StatsService.buildStatsBundle(StatsService.normalizeRecords(StatsService.records), heatmapDays);
+  }
+
+  private static buildStatsBundle(records: BookUsageStats[], heatmapDays: number): StatsBundle {
     const daily = StatsService.aggregateDaily(records);
     const map = StatsService.toMap(daily);
     return {
       records,
-      summary: StatsService.computeSummary(map),
+      summary: StatsService.computeSummary(map,
+        records.reduce((total: number, record: BookUsageStats): number => total + record.listenSeconds, 0)),
       streak: StatsService.computeStreak(map),
       heatDays: StatsService.computeHeatDays(map, heatmapDays)
     };
   }
 
-  private static computeSummary(map: Map<string, DailyUsageStats>): UsageStatsSummary {
+  private static computeSummary(map: Map<string, DailyUsageStats>, totalSeconds: number): UsageStatsSummary {
     const today = StatsService.formatDay(new Date());
     const weekStart = StatsService.formatDay(StatsService.addDays(new Date(), -6));
     const monthStart = StatsService.formatDay(StatsService.addDays(new Date(), -29));
     let todaySeconds = 0;
     let weekSeconds = 0;
     let monthSeconds = 0;
-    let totalSeconds = 0;
     for (const item of map.values()) {
       const secs = item.listenSeconds;
-      totalSeconds += secs;
       if (item.day === today) todaySeconds += secs;
       if (item.day >= weekStart) weekSeconds += secs;
       if (item.day >= monthStart) monthSeconds += secs;
@@ -354,10 +479,10 @@ export class StatsService {
   private static trimDays(days: BookUsageDay[]): BookUsageDay[] {
     const start = StatsService.formatDay(StatsService.addDays(new Date(), -730));
     return days
-      .filter((item) => item && item.day >= start)
+      .filter((item) => item && typeof item.day === 'string' && item.day >= start)
       .map((item): BookUsageDay => ({
         day: item.day,
-        listenSeconds: Math.max(0, Math.floor(item.listenSeconds || 0))
+        listenSeconds: StatsService.safeSeconds(item.listenSeconds)
       }))
       .sort((a, b) => a.day.localeCompare(b.day));
   }

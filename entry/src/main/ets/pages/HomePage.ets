@@ -5,7 +5,7 @@ import { HdsNavigation, HdsNavigationTitleMode, HideMode } from '@kit.UIDesignKi
 import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { Book, Chapter } from '../model/Book';
-import { BookSource, SearchResult, HomeBlockSection } from '../model/BookSource';
+import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
@@ -15,44 +15,25 @@ import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { BookSourceService, ExploreFetchResult } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
-import { TingYouSourceIdentity } from '../service/rulesource/tingyou/TingYouSourceIdentity';
-
-/** 首页分类入口项 */
-interface HomeCategory {
-  name: string;
-  /** 分类列表 URL（欢FM 的 types/<typeId>/comprehensive/p1 路径） */
-  url: string;
-}
-
-/** 听友公开分类；只有用户已导入并启用听友源时才会请求。 */
-const HOME_CATEGORIES: HomeCategory[] = [
-  { name: '玄幻奇幻', url: 'types/46/popular/p1' },
-  { name: '武侠小说', url: 'types/11/popular/p1' },
-  { name: '恐怖惊悚', url: 'types/14/popular/p1' },
-  { name: '言情通俗', url: 'types/19/popular/p1' },
-  { name: '历史军事', url: 'types/15/popular/p1' },
-  { name: '官场商战', url: 'types/17/popular/p1' },
-  { name: '百家讲坛', url: 'types/9/popular/p1' },
-  { name: '有声文学', url: 'types/10/popular/p1' },
-  { name: '刑侦反腐', url: 'types/16/popular/p1' },
-  { name: '广播剧', url: 'types/36/popular/p1' },
-  { name: '人物纪实', url: 'types/18/popular/p1' },
-  { name: '相声小品', url: 'types/21/popular/p1' },
-  { name: '健康养生', url: 'types/33/popular/p1' },
-  { name: '商业财经', url: 'types/42/popular/p1' },
-  { name: '童话寓言', url: 'types/20/popular/p1' },
-  { name: '单田芳', url: 'types/1/popular/p1' }
-];
+import { emitter } from '@kit.BasicServicesKit';
+import { LocalRuleSource } from '../model/LocalRuleSource';
+import { EVT_HOME_SOURCE_CHANGED } from '../service/PreferenceService';
+import { HomeSourceCategory, HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 class HomeCategoryDataSource implements IDataSource {
-  private categories: HomeCategory[] = HOME_CATEGORIES;
+  private categories: HomeSourceCategory[] = [];
   private listeners: DataChangeListener[] = [];
+
+  setCategories(categories: HomeSourceCategory[]): void {
+    this.categories = categories;
+    for (const listener of this.listeners) listener.onDataReloaded();
+  }
 
   totalCount(): number {
     return this.categories.length;
   }
 
-  getData(index: number): HomeCategory {
+  getData(index: number): HomeSourceCategory {
     return this.categories[index];
   }
 
@@ -238,7 +219,13 @@ struct HomeLoadingSkeleton {
 export struct HomePage {
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local loadingHome: boolean = false;
-  /** 当前选中的入口索引（-1=推荐，其他值对应 HOME_CATEGORIES）。 */
+  @Local homeError: ResourceStr = '';
+  @Local homeSourceName: string = '';
+  @Local homeCategories: HomeSourceCategory[] = [];
+  private currentSource: LocalRuleSource | undefined = undefined;
+  private lastSourceRevision: number = -1;
+  private sourceChangedHandler: () => void = (): void => { this.reloadSource(); };
+  /** 当前选中的入口索引（-1=推荐，其他值对应所选源的分类）。 */
   @Local selectedCategoryIndex: number = -1;
   /** 分类书单数据 */
   @Local categoryBooks: Book[] = [];
@@ -266,14 +253,33 @@ export struct HomePage {
   aboutToAppear(): void {
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
     CoverPrefetcher.init();
+    this.lastSourceRevision = SourceDataService.getInvalidationCounter();
+    emitter.on(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);
     this.loadHomeBlocks();
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.contentScroller);
   }
 
+  aboutToDisappear(): void {
+    emitter.off(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);
+    this.homeGen++;
+  }
+
+  private reloadSource(): void {
+    this.lastSourceRevision = SourceDataService.getInvalidationCounter();
+    this.selectedCategoryIndex = -1;
+    this.resetSearchCollapse();
+    this.scrollContentToTop();
+    this.loadHomeBlocks();
+  }
+
   /** 刷新推荐板块或当前分类，保留旧内容直到新数据返回。 */
   private async refreshHomeData(): Promise<void> {
-    if (this.selectedCategoryIndex === -1) {
+    if (this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) {
+      this.lastSourceRevision = SourceDataService.getInvalidationCounter();
+      this.selectedCategoryIndex = -1;
+      await this.loadHomeBlocks();
+    } else if (this.selectedCategoryIndex === -1) {
       await this.loadHomeBlocks(true);
     } else {
       await this.switchCategory(this.selectedCategoryIndex, true);
@@ -299,21 +305,44 @@ export struct HomePage {
   }
 
   private async loadHomeBlocks(preserveContent: boolean = false): Promise<void> {
-    this.homeGen++;
-    const generation = this.homeGen;
-    if (this.homeBlocks.length === 0) this.loadingHome = true;
+    const generation = ++this.homeGen;
+    this.loadingHome = true;
+    this.categoryLoading = false;
+    this.homeError = '';
     if (!preserveContent) {
       this.homeBlocks = [];
       this.homeBlockDataSource.clear();
+      this.homeCategories = [];
+      this.categoryNavDataSource.setCategories([]);
+      this.currentSource = undefined;
+      this.homeSourceName = '';
     }
     this.categoryBooks = [];
     this.categoryDS.setBooks([]);
     try {
-      const source = await this.findEnabledTingYouSource();
+      const source = await HomeSourceService.getSelectedSource();
+      if (generation !== this.homeGen) return;
+      if (source === undefined || source.bookSourceUrl !== this.currentSource?.bookSourceUrl) {
+        this.homeBlocks = [];
+        this.homeBlockDataSource.clear();
+        this.homeCategories = [];
+        this.categoryNavDataSource.setCategories([]);
+      }
+      this.currentSource = source;
+      this.homeSourceName = source?.bookSourceName ?? '';
       if (source === undefined) {
+        this.homeError = $r('app.string.home_source_no_audio');
         return;
       }
-      const blocks = await BookSourceService.getHomeBlocks(source);
+      if (!HomeSourceService.hasHomeContent(source)) {
+        this.homeError = $r('app.string.home_source_no_discovery');
+        return;
+      }
+      const categories = await HomeSourceService.getCategories(source);
+      if (generation !== this.homeGen) return;
+      this.homeCategories = categories;
+      this.categoryNavDataSource.setCategories(categories);
+      const blocks = await HomeSourceService.getHomeBlocks(source, categories);
       if (generation !== this.homeGen) return;
       this.homeBlocks = blocks;
       this.homeBlockDataSource.setBlocks(blocks);
@@ -325,6 +354,8 @@ export struct HomePage {
       }
       CoverPrefetcher.prefetchMany(covers, 12);
     } catch (error) {
+      if (generation !== this.homeGen) return;
+      this.homeError = $r('app.string.home_source_load_failed');
       hilog.error(DOMAIN, TAG, 'loadHomeBlocks failed: %{public}s', String(error));
     } finally {
       if (generation === this.homeGen) this.loadingHome = false;
@@ -340,7 +371,10 @@ export struct HomePage {
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
   private async switchCategory(index: number, forceReload: boolean = false): Promise<void> {
     if (this.selectedCategoryIndex === index && !forceReload) return;
+    const generation = ++this.homeGen;
     this.selectedCategoryIndex = index;
+    this.loadingHome = false;
+    this.categoryLoading = false;
     this.resetSearchCollapse();
     this.scrollContentToTop();
     if (index === -1) {
@@ -349,8 +383,9 @@ export struct HomePage {
       if (this.homeBlocks.length === 0) await this.loadHomeBlocks();
       return;
     }
-    const category = HOME_CATEGORIES[index];
-    if (category === undefined) return;
+    const category = this.homeCategories[index];
+    const source = this.currentSource;
+    if (category === undefined || source === undefined) return;
     if (!forceReload) {
       this.categoryBooks = [];
       this.categoryDS.setBooks([]);
@@ -360,58 +395,52 @@ export struct HomePage {
     this.categoryHasMore = true;
     this.categoryNextUrl = '';
     try {
-      const source = await this.findEnabledTingYouSource();
-      if (source === undefined) {
-        this.categoryError = $r('app.string.home_source_required');
-        return;
-      }
       const books: Book[] = [];
-      const visited = new Set<string>();
+      const seen = new Set<string>();
       let nextUrl = category.url;
-      while (books.length < 50 && nextUrl.length > 0 && !visited.has(nextUrl)) {
-        visited.add(nextUrl);
-        const page: ExploreFetchResult = await BookSourceService.getExploreBooksByUrl(
-          source, nextUrl, 1);
-        for (const item of page.books) books.push(this.homeBookFromResult(item));
+      let pageNumber: number = 1;
+      // 页码模板可能始终使用同一个 URL，按页推进并限制最多四页。
+      while (books.length < 50 && nextUrl.length > 0 && pageNumber <= 4) {
+        const page: ExploreFetchResult = await BookSourceService.getExploreBooksByUrl(source, nextUrl, pageNumber);
+        if (generation !== this.homeGen) return;
+        let added: number = 0;
+        for (const item of HomeSourceService.audioBooks(page.books)) {
+          if (seen.has(item.bookUrl)) continue;
+          seen.add(item.bookUrl);
+          books.push(this.homeBookFromResult(item));
+          added++;
+        }
         nextUrl = page.nextUrl;
-        if (page.books.length === 0) break;
+        pageNumber = page.nextPage ?? (pageNumber + 1);
+        if (added === 0) break;
       }
       this.categoryBooks = books;
       this.categoryDS.setBooks(books);
       this.categoryNextUrl = nextUrl;
       this.categoryHasMore = nextUrl.length > 0;
-      const covers: string[] = [];
-      for (const book of books) {
-        if (book.cover.startsWith('http')) covers.push(book.cover);
-      }
-      CoverPrefetcher.prefetchMany(covers, 16);
+      if (books.length === 0) this.categoryError = $r('app.string.home_source_empty');
+      CoverPrefetcher.prefetchMany(books.map((book: Book): string => book.cover)
+        .filter((cover: string): boolean => cover.startsWith('http')), 16);
     } catch (error) {
-      this.categoryError = `加载失败：${String(error)}`;
+      if (generation !== this.homeGen) return;
+      this.categoryError = $r('app.string.home_source_category_failed');
       hilog.error(DOMAIN, TAG, 'switchCategory failed: %{public}s', String(error));
     } finally {
-      this.categoryLoading = false;
+      if (generation === this.homeGen) this.categoryLoading = false;
     }
-  }
-
-  private async findEnabledTingYouSource(): Promise<BookSource | undefined> {
-    const sources = await SourceDataService.getEnabledSources();
-    for (const source of sources) {
-      if (TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl)) return source;
-    }
-    return undefined;
   }
 
   /** 通过 URL 切换分类 */
   private async switchCategoryByUrl(url: string): Promise<void> {
-    const index = HOME_CATEGORIES.findIndex(cat => cat.url === url);
+    const index = this.homeCategories.findIndex(cat => cat.url === url);
     if (index !== -1) {
       await this.switchCategory(index);
     }
   }
 
-  private isCategorySelected(cat: HomeCategory): boolean {
+  private isCategorySelected(cat: HomeSourceCategory): boolean {
     if (this.selectedCategoryIndex === -1) return false;
-    const selected = HOME_CATEGORIES[this.selectedCategoryIndex];
+    const selected = this.homeCategories[this.selectedCategoryIndex];
     return selected && selected.url === cat.url;
   }
 
@@ -517,6 +546,11 @@ export struct HomePage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Blank()
+        if (this.homeSourceName.length > 0) {
+          Text(this.homeSourceName)
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: '35%' })
+        }
       }
       .width('100%')
       .height(SEARCH_FIELD_HEIGHT)
@@ -587,7 +621,7 @@ export struct HomePage {
                 this.buildHomeBlock(block, idx)
               }
               .margin({ bottom: AppSpace.Sm })
-            }, (block: HomeBlockSection, idx: number) => `${block.sourceUrl}#${block.title}#${idx}`)
+            }, (block: HomeBlockSection) => `${block.sourceUrl}#${block.moreUrl}#${block.title}`)
           } else {
             ListItem() {
               Column() {
@@ -598,7 +632,7 @@ export struct HomePage {
                   .fontSize(AppFont.Body)
                   .fontColor($r('sys.color.font_tertiary'))
                   .margin({ top: AppSpace.Md })
-                Text($r('app.string.home_imported_source_hint'))
+                Text(this.homeError || $r('app.string.home_source_empty'))
                   .fontSize(AppFont.Caption)
                   .fontColor($r('sys.color.font_tertiary'))
                   .margin({ top: AppSpace.Xs })
@@ -754,6 +788,9 @@ export struct HomePage {
         .padding({ top: this.headerHeight })
       }
     }
+    .onVisibleAreaChange([0, 1], (visible: boolean): void => {
+      if (visible && this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) this.reloadSource();
+    })
   }
 
   @Builder
@@ -985,13 +1022,13 @@ export struct HomePage {
       List({ space: AppSpace.Xs }) {
         ListItem() {
           ImmersiveTabComponent({
-            label: $r('app.string.home_tingyou_source_label'),
+            label: $r('app.string.home_recommendations'),
             selected: this.selectedCategoryIndex === -1,
             onTap: () => this.switchCategory(-1)
           })
         }
 
-        LazyForEach(this.categoryNavDataSource, (cat: HomeCategory) => {
+        LazyForEach(this.categoryNavDataSource, (cat: HomeSourceCategory) => {
           ListItem() {
             ImmersiveTabComponent({
               label: cat.name,
@@ -999,7 +1036,7 @@ export struct HomePage {
               onTap: () => this.switchCategoryByUrl(cat.url)
             })
           }
-        }, (cat: HomeCategory) => cat.url)
+        }, (cat: HomeSourceCategory) => `${this.currentSource?.bookSourceUrl}#${cat.url}#${cat.name}`)
       }
       .layoutWeight(1)
       .height(CATEGORY_NAV_HEIGHT)

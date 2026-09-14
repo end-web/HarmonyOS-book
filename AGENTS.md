@@ -82,7 +82,7 @@ The App obtains online content from user-imported sources stored in encrypted `r
 | GuangYu / ShuShan imported sources | `NativeRuleSourceDispatcher` | Native protocol adapters and separate main-account sessions |
 | TingYou imported source | `LocalRuleDispatcher` / `TingYouSourceAdapter` | Native protocol adapter, including Home recommendations and categories |
 
-`SourceDataService` lists imported sources only and excludes `builtin://` addresses. Database failures return empty source lists or unresolved lookups. Search runs enabled sources with required search rules in batches of six and deduplicates by `sourceUrl + bookUrl`; one source failure must not stop other sources. Home recommendations and categories require an enabled imported TingYou source.
+`SourceDataService` lists imported sources only and excludes `builtin://` addresses. Database failures return empty source lists or unresolved lookups. Search runs enabled sources with required search rules in batches of six and deduplicates by `sourceUrl + bookUrl`; one source failure must not stop other sources. Home recommendations and categories use the enabled imported audio source selected in RuleSourcePage and persisted in PreferenceService. HomeSourceService reads source-defined discovery categories and previews; TingYou recommendations retain their existing adapter. Only audio sources are eligible, and missing home content shows an empty state.
 
 `BookSourceService` dispatches to imported-source adapters and rules. Startup does not call `registerBuiltInSources()`, and Search does not run a separate `KkBiqugeTextSource` task. Related files still exist, and some `service/builtin/` utilities remain referenced; file presence alone does not make a source active.
 
@@ -116,6 +116,7 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 ## Testing
 
 - **App unit tests**: `entry/src/test/*.test.ets` (Hypium framework) — local rules, native adapters, bulk testing, search history/cache, pagination/themes, playback progress and download policies
+- **Statistics persistence regression**: `node scripts/test-stats-persistence.cjs` with `DEVECO_HOME` pointing to the installed IDE; runs the real service against temporary files and simulated platform APIs for midnight rollover, restart, recovery and concurrent writes.
 - **App device tests**: `entry/src/ohosTest/ets/test/*.test.ets`
 - **Server tests**: `cd server && npm test` (Vitest) — 7 test files covering catalog, providers, auth, DB, sync
 - After changing playback/source adapters/download: smoke-test search → detail → chapter → play on device, then verify resume, download and export

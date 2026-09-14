@@ -21,6 +21,8 @@ import {
 } from '../service/rulesource/RuleSourceAccountService';
 import { RuleSourceChildService } from '../service/rulesource/RuleSourceChildService';
 import { SourceDataService } from '../service/SourceDataService';
+import { PreferenceService } from '../service/PreferenceService';
+import { HomeSourceService } from '../service/rulesource/HomeSourceService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { CharsetCodec } from '../utils/CharsetCodec';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -95,6 +97,11 @@ export struct RuleSourcePage {
   @Local loadFailed: boolean = false;
   @Local busySourceUrl: string = '';
   @Local managementView: string = '';
+  @Local homeSourceUrl: string = '';
+  @Local homeSourceName: string = '';
+  @Local homeSourceCount: number = 0;
+  @Local savingHomeSource: boolean = false;
+  private homeSourceDataSource: RuleSourceDataSource = new RuleSourceDataSource();
   @Local sourceGroups: string[] = [];
   @Local selectedGroup: string = '';
   @Local statusFilter: number = 0;
@@ -171,6 +178,7 @@ export struct RuleSourcePage {
       this.allSources = sources;
       this.sourceGroups = await LocalRuleSourceRepository.listGroups();
       this.sourceCount = sources.length;
+      await this.updateHomeSources();
       if (sources.length === 0) this.showImportPanel = true;
       this.applyFilters();
       this.loadFailed = false;
@@ -180,6 +188,10 @@ export struct RuleSourcePage {
       this.allSources = [];
       this.filteredSources = [];
       this.dataSource.setSources([]);
+      this.homeSourceUrl = '';
+      this.homeSourceName = '';
+      this.homeSourceCount = 0;
+      this.homeSourceDataSource.setSources([]);
       this.loadFailed = true;
     } finally {
       this.isLoading = false;
@@ -267,6 +279,7 @@ export struct RuleSourcePage {
   }
 
   private managementTitle(): ResourceStr {
+    if (this.managementView === 'homeSource') return $r('app.string.home_source_setting');
     if (this.managementView === 'groups') return $r('app.string.source_manage_groups');
     if (this.managementView === 'groupAssign') return $r('app.string.source_manage_group_assign');
     if (this.managementView === 'order') return $r('app.string.source_manage_order');
@@ -279,6 +292,31 @@ export struct RuleSourcePage {
     this.managementView = '';
     this.editingGroup = '';
     this.groupDraft = '';
+  }
+
+  private async updateHomeSources(): Promise<void> {
+    const sources = this.allSources.filter((source: LocalRuleSource): boolean => HomeSourceService.isEligible(source));
+    const selected = HomeSourceService.selectAvailable(sources, await PreferenceService.getHomeSourceUrl());
+    this.homeSourceUrl = selected?.bookSourceUrl ?? '';
+    this.homeSourceName = selected?.bookSourceName ?? '';
+    this.homeSourceCount = sources.length;
+    this.homeSourceDataSource.setSources(sources);
+  }
+
+  private async selectHomeSource(source: LocalRuleSource): Promise<void> {
+    if (this.savingHomeSource) return;
+    this.savingHomeSource = true;
+    try {
+      await HomeSourceService.setSelectedSource(source.bookSourceUrl);
+      this.homeSourceUrl = source.bookSourceUrl;
+      this.homeSourceName = source.bookSourceName;
+      this.showToast($r('app.string.home_source_saved'));
+    } catch (_error) {
+      this.showToast($r('app.string.rule_source_operation_failed'));
+      await this.loadSources(false);
+    } finally {
+      this.savingHomeSource = false;
+    }
   }
 
   private async openManagement(view: string): Promise<void> {
@@ -1138,6 +1176,11 @@ export struct RuleSourcePage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: AppSpace.Sm }) {
+          if (!this.loadFailed && !this.isEditMode) {
+            ListItem() {
+              this.buildHomeSourceEntry()
+            }
+          }
           if (this.showImportPanel) {
             ListItem() {
               this.buildImportSection()
@@ -1500,7 +1543,9 @@ export struct RuleSourcePage {
 
   @Builder
   buildManagementBody() {
-    if (this.managementView === 'groups') {
+    if (this.managementView === 'homeSource') {
+      this.buildHomeSourceManager()
+    } else if (this.managementView === 'groups') {
       this.buildGroupManager()
     } else if (this.managementView === 'groupAssign') {
       this.buildGroupAssignment()
@@ -1511,6 +1556,67 @@ export struct RuleSourcePage {
     } else if (this.managementView === 'tls') {
       this.buildTlsManager()
     }
+  }
+
+  @Builder
+  buildHomeSourceEntry() {
+    Row({ space: AppSpace.Sm }) {
+      SymbolGlyph($r('sys.symbol.house_fill')).fontSize(22).fontColor([AppColor.Brand])
+      Text($r('app.string.home_source_setting'))
+        .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+      Text(this.homeSourceName || $r('app.string.home_source_unset'))
+        .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+        .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.End)
+      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('sys.color.font_tertiary')])
+    }
+    .width('100%').constraintSize({ minHeight: 56 }).padding(AppSpace.Md)
+    .backgroundColor($r('sys.color.background_primary')).borderRadius(AppRadius.Md)
+    .onClick(() => this.openManagement('homeSource'))
+  }
+
+  @Builder
+  buildHomeSourceManager() {
+    List({ space: AppSpace.Sm }) {
+      ListItem() {
+        Text($r('app.string.home_source_setting_hint'))
+          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          .width('100%').padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
+      }
+      if (this.homeSourceCount === 0) {
+        ListItem() {
+          Text($r('app.string.home_source_no_audio'))
+            .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary'))
+            .width('100%').padding(AppSpace.Md).textAlign(TextAlign.Center)
+        }
+      }
+      LazyForEach(this.homeSourceDataSource, (source: LocalRuleSource) => {
+        ListItem() {
+          Row({ space: AppSpace.Sm }) {
+            Column({ space: AppSpace.Xs }) {
+              Text(source.bookSourceName).fontSize(AppFont.Body)
+                .fontColor($r('sys.color.font_primary')).maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(HomeSourceService.hasHomeContent(source) ? source.bookSourceUrl :
+                $r('app.string.home_source_no_discovery'))
+                .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .layoutWeight(1).alignItems(HorizontalAlign.Start)
+            if (this.homeSourceUrl === source.bookSourceUrl) {
+              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(22).fontColor([AppColor.Brand])
+                .accessibilityText($r('app.string.home_source_current'))
+            }
+          }
+          .width('100%').constraintSize({ minHeight: 72 }).padding(AppSpace.Md)
+          .backgroundColor($r('sys.color.background_primary')).borderRadius(AppRadius.Md)
+          .enabled(!this.savingHomeSource)
+          .onClick(() => this.selectHomeSource(source))
+        }
+      }, (source: LocalRuleSource) => source.bookSourceUrl)
+    }
+    .width('100%').layoutWeight(1).padding({ left: AppSpace.Md, right: AppSpace.Md })
+    .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
   }
 
   @Builder

@@ -49,6 +49,8 @@ export struct ReadingStatsPage {
   @Param onlyUnfavorited: boolean = false;
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
 
+  @Local statsReady: boolean = false;
+  @Local statsError: boolean = false;
   @Local streak: number = 0;
   @Local sourceRecords: BookUsageStats[] = [];
   @Local records: ListenRecordView[] = [];
@@ -68,6 +70,8 @@ export struct ReadingStatsPage {
   };
 
   aboutToAppear(): void {
+    const cached = StatsService.getCachedStatsBundle(1);
+    if (cached !== undefined) this.applyStatsBundle(cached);
     this.onScrollerReady(this.scroller);
     this.loadStats();
     emitter.on(EVT_USAGE_STATS_UPDATED, this.statsHandler);
@@ -84,6 +88,13 @@ export struct ReadingStatsPage {
     try { emitter.off(EVT_FAVORITES_CHANGED, this.favoritesHandler); } catch (_e) { /* ignore */ }
   }
 
+  private applyStatsBundle(bundle: StatsBundle): void {
+    this.streak = bundle.streak;
+    this.sourceRecords = bundle.records;
+    this.statsReady = true;
+    this.statsError = false;
+  }
+
   private async loadStats(): Promise<void> {
     if (this.loadingStats) {
       this.reloadPending = true;
@@ -93,19 +104,20 @@ export struct ReadingStatsPage {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       await StatsService.init(ctx);
-      await PreferenceService.ensureReady(ctx);
       const bundle: StatsBundle = await StatsService.getStatsBundle(1);
+      // 顶部统计独立于书籍明细；离线或某本书读取失败时仍显示持久化累计值。
+      this.applyStatsBundle(bundle);
+      await PreferenceService.ensureReady(ctx);
       const history = await PreferenceService.getHistory();
       const favoriteIds = new Set<string>(await PreferenceService.getFavorites());
       const allRecords = await this.buildRecordViews(ctx, bundle.records, history);
-      this.streak = bundle.streak;
-      this.sourceRecords = bundle.records;
       this.records = allRecords.filter((item: ListenRecordView): boolean =>
         this.shouldShowRecord(item, favoriteIds));
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
       if (this.selectedIds.size === 0) this.selectMode = false;
     } catch (e) {
+      if (!this.statsReady) this.statsError = true;
       console.error(`[ReadingStatsPage] load stats failed: ${JSON.stringify(e)}`);
     } finally {
       this.loading = false;
@@ -489,7 +501,7 @@ export struct ReadingStatsPage {
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_secondary'))
           Row({ space: AppSpace.Xs }) {
-            Text(`${Math.floor(this.totalListenSeconds() / 3600)}`)
+            Text(this.statsReady ? `${Math.floor(this.totalListenSeconds() / 3600)}` : $r('app.string.record_stats_pending'))
               .fontSize(32)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Bold)
@@ -497,7 +509,7 @@ export struct ReadingStatsPage {
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
               .margin({ bottom: 4 })
-            Text(`${Math.floor((this.totalListenSeconds() % 3600) / 60)}`)
+            Text(this.statsReady ? `${Math.floor((this.totalListenSeconds() % 3600) / 60)}` : $r('app.string.record_stats_pending'))
               .fontSize(AppFont.Title)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Bold)
@@ -510,7 +522,8 @@ export struct ReadingStatsPage {
           .width('100%')
           .alignItems(VerticalAlign.Bottom)
           .justifyContent(FlexAlign.Start)
-          Text(`相当于读完 ${this.equivalentBookCount()} 本书`)
+          Text(this.statsReady ? $r('app.string.record_stats_equivalent_books', this.equivalentBookCount()) :
+            (this.statsError ? $r('app.string.record_stats_read_failed') : $r('app.string.record_stats_loading')))
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
             .maxLines(1)
@@ -530,7 +543,7 @@ export struct ReadingStatsPage {
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_secondary'))
           Row({ space: AppSpace.Xs }) {
-            Text(`${this.streak}`)
+            Text(this.statsReady ? `${this.streak}` : $r('app.string.record_stats_pending'))
               .fontSize(AppFont.Title)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Bold)
@@ -553,14 +566,14 @@ export struct ReadingStatsPage {
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_secondary'))
           Row({ space: AppSpace.Xs }) {
-            Text(`${Math.floor(this.monthListenSeconds() / 3600)}`)
+            Text(this.statsReady ? `${Math.floor(this.monthListenSeconds() / 3600)}` : $r('app.string.record_stats_pending'))
               .fontSize(AppFont.Title)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Bold)
             Text('小时')
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
-            Text(`${Math.floor((this.monthListenSeconds() % 3600) / 60)}`)
+            Text(this.statsReady ? `${Math.floor((this.monthListenSeconds() % 3600) / 60)}` : $r('app.string.record_stats_pending'))
               .fontSize(AppFont.Title)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Bold)
@@ -590,6 +603,7 @@ export struct ReadingStatsPage {
     .opacity(this.appeared ? 1 : 0)
     .translate({ y: this.appeared ? 0 : 18 })
     .animation({ duration: 460, curve: AppCurve.Decelerate })
+    .onClick(() => { if (this.statsError) this.loadStats(); })
   }
 
   @Builder

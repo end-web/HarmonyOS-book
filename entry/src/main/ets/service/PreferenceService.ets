@@ -6,6 +6,7 @@ import { AppAppearance } from '../model/AppAppearance';
 
 /** 书架收藏变化事件:加入/移出书架后触发,书架页据此自动刷新 */
 export const EVT_FAVORITES_CHANGED = 'app.favorites.changed';
+export const EVT_HOME_SOURCE_CHANGED = 'app.home.source.changed';
 
 /**
  * 本地持久化：书架 / 播放历史 / 设置
@@ -23,6 +24,7 @@ const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
+const KEY_HOME_SOURCE_URL = 'home_source_url';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
 /** 搜索历史记录 */
@@ -568,6 +570,20 @@ export class PreferenceService {
     const s = await PreferenceService.ensureStore();
     await s.put(KEY_AUDIO_AUTO_RESUME, enabled);
     await s.flush();
+  }
+
+  /** 首页默认听书源，以导入源 URL 持久化。 */
+  static async getHomeSourceUrl(): Promise<string> {
+    const store = await PreferenceService.ensureStore();
+    const value = await store.get(KEY_HOME_SOURCE_URL, '');
+    return typeof value === 'string' ? value : '';
+  }
+
+  static async setHomeSourceUrl(sourceUrl: string): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    await store.put(KEY_HOME_SOURCE_URL, sourceUrl);
+    await store.flush();
+    emitter.emit(EVT_HOME_SOURCE_CHANGED);
   }
 
   /** 首页书籍栅格列数：1 / 2 / 3，默认 3 */

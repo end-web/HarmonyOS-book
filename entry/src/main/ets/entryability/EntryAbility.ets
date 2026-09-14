@@ -395,6 +395,11 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, TAG, 'AudioService release failed: %{public}s',
         (err as Error)?.message ?? JSON.stringify(err));
     }
+    try {
+      await StatsService.flush();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'StatsService flush failed: %{public}s', String(error));
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -446,6 +451,11 @@ export default class EntryAbility extends UIAbility {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'onBackground flushHistory failed: %{public}s',
         e?.message ?? JSON.stringify(err));
+    }
+    try {
+      await StatsService.flush();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'onBackground stats flush failed: %{public}s', String(error));
     }
     // 退后台/息屏前再确认一次：若仍有下载队列，维持 dataTransfer 长时任务
     try {
