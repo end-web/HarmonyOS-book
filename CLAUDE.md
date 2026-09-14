@@ -11,7 +11,7 @@
 - 编译使用经确认的 Release SDK；当前配套为 DevEco Studio 26.0.0.821，编译版本与目标/最低版本分开管理。上传前检查 APP 内所有 HAP 的 `apiReleaseType = Release`，QuickJS HAR 也需用正式工具链重建。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.15`、`versionCode = 1000015`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.16`、`versionCode = 1000016`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -54,6 +54,7 @@
 - 书源管理顶部和首页搜索框右侧的独立下拉标签均可设置首页源，共用 `HomeSourceService` 的来源筛选与保存逻辑，仅列已启用的听书源。首页标签按源名称自适应宽度，文字跟随主题色。首页使用保存的源 URL；未设置或原源禁用、删除后，优先选取有首页内容的可用听书源，无听书源时清空内容。默认选中精品推荐，源分类读取所选源的发现定义并保留返回顺序；通用源通过前四个分类生成推荐预览，听友继续使用已有协议获取推荐。未提供或未启用发现的通用源显示提示，仍可搜索。
 - 搜索页推荐使用来源真实返回的书籍，优先尝试首页板块，不足时从来源搜索结果补充，再去重随机抽取最多 5 本。
 - 首页“分类”入口固定在第一位，提供当前源全部分类的双列卡片总览，复用 `HomeSourceService` 返回的分类与现有分类书单加载方法。右侧“精品推荐”和源分类 Tab 共同横向滚动，默认选中精品推荐；点击总览卡片同步切换书单并定位对应 Tab，分类总览按行懒加载。
+- 精品推荐页在分类栏下通过 `HomeCoverCarousel` 展示当前源最多 6 本去重音频封面，复用推荐数据与详情路由；原生 Swiper 提供自动/手动轮播，以滑动进度驱动封面的四角投影，两侧按约 55° 水平压缩呈向内收拢的梯形透视，外沿较高、内沿较短，按可用宽度约束两侧位置以完整保留外沿。透视使用 API 20 的 `transform3D`，背景透明，下方仅展示随深浅模式适配的书名。轮播仅在可见时自动播放，源切换清空内容，刷新重置位置。
 - 听友导入源的站点分类地址 `/categories/<typeId>` 通过原生适配转换为 `types/<typeId>/comprehensive/p<page>`；兼容导入源 `/?type=<typeId>&sort=<sort>&page={{page}}` 的查询参数格式，保留排序与页码。支持本站完整地址、相对地址和连续翻页；原有 `types/...` 地址保留其排序与页码，外部域名不参与此转换。
 - 启动流程不调用 `registerBuiltInSources()`，`BookSourceService` 不调用 `BuiltInDispatcher`，搜索页不启动 `KkBiqugeTextSource` 独立任务。相关实现和验证页面仍在仓库，但不代表当前产品入口；`service/builtin/` 中仍有被引用的公共工具，不能按目录整体删除。
 

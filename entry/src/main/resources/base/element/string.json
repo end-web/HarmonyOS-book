@@ -14,6 +14,7 @@
     {"name": "home_source_empty", "value": "当前首页源暂无内容，可下拉刷新或在书源管理中更换首页源"},
     {"name": "home_source_load_failed", "value": "首页内容加载失败，请下拉重试或在书源管理中更换首页源"},
     {"name": "home_recommendations", "value": "精品推荐"},
+    {"name": "home_carousel_open", "value": "打开书籍详情"},
     {"name": "home_categories", "value": "分类"},
     {"name": "home_categories_all", "value": "全部分类"},
     {"name": "home_categories_count", "value": "%d 个分类"},

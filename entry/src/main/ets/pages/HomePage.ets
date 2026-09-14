@@ -1,4 +1,5 @@
 import { HdsCompat } from '../utils/HdsCompat';
+import { LengthMetrics } from '@kit.ArkUI';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HdsNavigation, HdsNavigationTitleMode, HideMode } from '@kit.UIDesignKit';
@@ -9,6 +10,7 @@ import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
+import { HomeCoverCarousel, homeCoverPerspective } from '../components/HomeCoverCarousel';
 import { HomeCategoryBookRow, HomeCategoryRowDataSource } from '../utils/HomeCategoryRowDataSource';
 import { HomeCategoryOverviewRow, HomeCategoryOverviewDataSource } from '../utils/HomeCategoryOverviewDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
@@ -58,6 +60,7 @@ const TAG = 'HomePage';
 const SEARCH_FIELD_HEIGHT: number = 40;
 const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
+const CATEGORY_NAV_FADE_LENGTH: number = 24;
 const CATEGORY_NAV_ROW_HEIGHT: number = 48;
 const COLLAPSED_SEARCH_SIZE: number = 42;
 const FEATURED_PAGE_SIZE: number = 3;
@@ -199,6 +202,21 @@ struct HomeLoadingSkeleton {
   build() {
     Column() {
       Column({ space: AppSpace.Md }) {
+        Stack() {
+          Row().width(180).height(180).borderRadius(AppRadius.Md)
+            .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
+            .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), -1, this.getUIContext().vp2px(-104)))
+            .backgroundColor(AppColor.Divider).opacity(0.55)
+          Row().width(180).height(180).borderRadius(AppRadius.Md)
+            .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
+            .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), 1, this.getUIContext().vp2px(104)))
+            .backgroundColor(AppColor.Divider).opacity(0.55)
+          Row().width('52%').height(180).borderRadius(AppRadius.Md)
+            .backgroundColor(AppColor.Divider)
+        }
+        .width('100%').height(204)
+        Row().width('64%').height(18).borderRadius(AppRadius.Xs).backgroundColor(AppColor.Divider)
+          .margin({ bottom: AppSpace.Md })
         this.skeletonFeaturedSection()
         this.skeletonSection()
       }
@@ -222,6 +240,7 @@ struct HomeLoadingSkeleton {
 @ComponentV2
 export struct HomePage {
   @Local homeBlocks: HomeBlockSection[] = [];
+  @Local carouselBooks: SearchResult[] = [];
   @Local loadingHome: boolean = false;
   @Local homeError: ResourceStr = '';
   @Local homeSourceName: string = '';
@@ -350,6 +369,7 @@ export struct HomePage {
     this.homeError = '';
     if (!preserveContent) {
       this.homeBlocks = [];
+      this.carouselBooks = [];
       this.homeBlockDataSource.clear();
       this.updateHomeCategories([]);
       this.currentSource = undefined;
@@ -367,6 +387,7 @@ export struct HomePage {
         item.bookSourceUrl === source?.bookSourceUrl);
       if (source === undefined || source.bookSourceUrl !== this.currentSource?.bookSourceUrl) {
         this.homeBlocks = [];
+        this.carouselBooks = [];
         this.homeBlockDataSource.clear();
         this.updateHomeCategories([]);
       }
@@ -386,6 +407,7 @@ export struct HomePage {
       const blocks = await HomeSourceService.getHomeBlocks(source, categories);
       if (generation !== this.homeGen) return;
       this.homeBlocks = blocks;
+      this.carouselBooks = this.collectCarouselBooks(blocks);
       this.homeBlockDataSource.setBlocks(blocks);
       const covers: string[] = [];
       for (const block of blocks) {
@@ -538,6 +560,24 @@ export struct HomePage {
   private openBook(book: Book): void {
     SearchCache.put(book);
     this.onBookTap(book.id);
+  }
+
+  private collectCarouselBooks(blocks: HomeBlockSection[]): SearchResult[] {
+    const books: SearchResult[] = [];
+    const seen = new Set<string>();
+    // 优先使用封面推荐板块，其余板块补足；内容始终来自当前首页源。
+    const ordered = blocks.filter((block: HomeBlockSection): boolean => block.layout === 'horizontal')
+      .concat(blocks.filter((block: HomeBlockSection): boolean => block.layout !== 'horizontal'));
+    for (const block of ordered) {
+      for (const book of block.books) {
+        const key = `${book.sourceUrl}#${book.bookUrl}`;
+        if (book.contentType === 'text' || !book.bookUrl || !book.coverUrl.startsWith('http') || seen.has(key)) continue;
+        seen.add(key);
+        books.push(book);
+        if (books.length === 6) return books;
+      }
+    }
+    return books;
   }
 
   /** 首板块按每页三条分组，横向切换时保留稳定的书籍顺序。 */
@@ -744,6 +784,15 @@ export struct HomePage {
               Column().width('100%').height(300)
             }
           } else if (this.homeBlocks.length > 0) {
+            if (this.carouselBooks.length > 0) {
+              ListItem() {
+                HomeCoverCarousel({
+                  books: this.carouselBooks,
+                  onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
+                })
+              }
+              .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Sm })
+            }
             LazyForEach(this.homeBlockDataSource, (block: HomeBlockSection, idx: number) => {
               ListItem() {
                 this.buildHomeBlock(block, idx)
@@ -1200,6 +1249,8 @@ export struct HomePage {
       .height(CATEGORY_NAV_HEIGHT)
       .listDirection(Axis.Horizontal)
       .scrollBar(BarState.Off)
+      // 标签在固定分类入口和收起后的搜索按钮旁渐隐，避免胶囊被硬切。
+      .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(CATEGORY_NAV_FADE_LENGTH) })
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .cachedCount(1)
 

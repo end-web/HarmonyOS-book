@@ -282,9 +282,9 @@ export struct MainPage {
     if (!PlatformCompat.floatingTabs) return undefined;
     return {
       barBottomMargin: Math.max(this.bottomSafeVp, FLOATING_MIN_SAFE_BOTTOM) + FLOATING_BOTTOM,
-      gradientMask: { maskColor: '#66F1F3F5', maskHeight: 92 },
+      gradientMask: { maskColor: $r('app.color.floating_bar_mask'), maskHeight: 92 },
       systemMaterialEffect: HdsCompat.adaptiveMaterial,
-      // 沉浸光感颜色:暖黄色光晕(替代默认白色)
+      // 保留随主题色变化的沉浸光感。
       lightColor: AppColor.Brand,
       // 智感握持:左右手自动跟手
       adaptToHandedness: true,

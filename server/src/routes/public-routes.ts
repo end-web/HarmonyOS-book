@@ -21,7 +21,7 @@ export function createPublicRouter(catalog: CatalogService, reader: ReaderClient
   });
 
   router.get('/sources', (request, response) => {
-    sendData(request, response, { name: '简·欢聚合', capabilities: ['search', 'detail', 'chapters', 'audio'] });
+    sendData(request, response, { name: '简听聚合', capabilities: ['search', 'detail', 'chapters', 'audio'] });
   });
 
   router.get('/audio-books/search', searchLimit, async (request, response) => {
