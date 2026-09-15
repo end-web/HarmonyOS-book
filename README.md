@@ -2,18 +2,18 @@
 
 简听是面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.19`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.20`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
-`v0.1.19` 优化首页轮播展开与收起，采用固定布局和原生弹簧位移，减少逐帧重排；阅读页支持自定义图片主题、蒙层调整及电量时间显示，统一全屏阅读与厚材质设置弹层，并兼容迁移旧主题设置。
+`v0.1.20` 优化点击“精品推荐”展开时的卡顿：切换分类时保留推荐列表，横向书单按可见范围加载，并将布局准备与轮播动画分开执行，减少内容重建和首帧开销；保留横向浏览位置，支持吸顶、双击回顶与下拉刷新。本次还补充了微信公众号图文介绍素材。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.19 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.19/JianTing-v0.1.19.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.20 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.20/JianTing-v0.1.20.hap)
 
 安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件。当前采用 Release SDK 和 Release 模式构建；GitHub HAP 沿用开发签名，供获授权手机安装，AppGallery 使用单独的正式签名 APP。
 
 ```bash
-hdc install JianTing-v0.1.19.hap
+hdc install JianTing-v0.1.20.hap
 ```
 
 包名保持 `com.huan.listenbook`，沿用已有书架、书源与记录。
@@ -143,7 +143,7 @@ AGENTS.md                 协作与工程约定
 
 GitHub HAP 使用 `product=default, buildMode=release`；官方邀测 APP 使用 `product=release, buildMode=release`，须绑定 AppGallery 正式发布证书与 `release / app_gallery` Profile。APP 包上传 AGC，GitHub 开发签名 HAP 供获授权设备安装。
 
-上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.19 --version-code 1000019`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
+上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.20 --version-code 1000020`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
 
 切换本机构建套件时，将 `DEVECO_SDK_HOME` 指向 Release IDE 的 `sdk` 目录，并使用同一安装目录下的 Node/Hvigor；HarmonyOS 构建不会从 `local.properties` 的 `hwsdk.dir` 切换 SDK。重建原生依赖可用 `scripts/build-quickjs.ps1 -DevEcoRoot <正式版IDE目录> -RequireReleaseSdk`。正式版与 Beta 的发布用途见[华为版本说明](https://developer.huawei.com/consumer/cn/doc/harmonyos-releases/overview-allversion)。
 
