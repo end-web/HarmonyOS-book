@@ -60,6 +60,8 @@ export class AudioService {
   private sleepEndTime: number = 0;
   private chapterEndHandled: boolean = false;
   private sleepPausePending: boolean = false;
+  /** 手动、系统播控或耳机摘下要求暂停；加载完成和迟到的焦点事件不得覆盖。 */
+  private pauseRequested: boolean = false;
   private resumeAfterSleepChapter: boolean = false;
   private isApplying: boolean = false;
   private currentFile: fileIo.File | null = null;
@@ -223,8 +225,12 @@ export class AudioService {
   private initAVSession(): void {
     if (!this.context) return;
     const cbs: AVSessionCallbacks = {
-      onPlay: () => { this.toggle(); },
-      onPause: () => { this.pauseFromSession(); },
+      onPlay: () => {
+        this.play().catch((err: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'Session play failed: %{public}s', err.message);
+        });
+      },
+      onPause: () => { this.pause(); },
       onPlayNext: () => { this.playNext(); },
       onPlayPrevious: () => { this.playPrevious(); },
       onFastForward: (ms: number) => { this.seekBy(ms); },
@@ -320,13 +326,13 @@ export class AudioService {
           try { p.setPlaybackRate(this.state.speed); } catch (_e) { /* 状态异常忽略 */ }
         }
         // 立即设置播放状态，让UI立即响应
-        this.state.isPlaying = !this.sleepPausePending;
-        if (!this.sleepPausePending) p.play();
+        this.state.isPlaying = !this.sleepPausePending && !this.pauseRequested;
+        if (this.state.isPlaying) p.play();
         else this.state.isLoading = false;
       } else if (newState === 'playing') {
-        if (this.sleepPausePending) {
+        if (this.sleepPausePending || this.pauseRequested) {
           p.pause().catch((err: Error): void => {
-            hilog.warn(DOMAIN, TAG, 'Sleep pause failed: %{public}s', err.message);
+            hilog.warn(DOMAIN, TAG, 'Pending pause failed: %{public}s', err.message);
           });
           return;
         }
@@ -424,11 +430,12 @@ export class AudioService {
       }
       // 加载/解析过的 URL 失效（缓存或上次解析的临时链接）:清缓存后自动重新解析一次再播，
       // loading 不会提前消失（playChapter 内会重新置 true）；重试仍失败则由限流阻止再次自动重试。
-      if (book && ch && usingResolvedUrl && this.canAutoRetryLoad(ch.id)) {
+      if (book && ch && usingResolvedUrl && !this.pauseRequested && !this.sleepPausePending
+        && this.canAutoRetryLoad(ch.id)) {
         this.autoRetryChapterId = ch.id;
         this.autoRetryAt = Date.now();
         hilog.warn(DOMAIN, TAG, 'AVPlayer error with resolved URL, auto re-resolve chapter: %{public}s', ch.title);
-        this.playChapter(book, ch).catch((err2: Error): void => {
+        this.playChapter(book, ch, true).catch((err2: Error): void => {
           hilog.warn(DOMAIN, TAG, 'auto retry playChapter failed: %{public}s',
             err2 && err2.message ? err2.message : JSON.stringify(err2));
         });
@@ -439,6 +446,14 @@ export class AudioService {
     p.on('audioInterrupt', (event: audio.InterruptEvent) => {
       this.handleInterrupt(event);
     });
+    // API 11：包括支持佩戴检测的耳机双耳摘下，以及蓝牙断开/有线耳机拔出。
+    // 新设备可用仅表示路由变化；戴上续播交给耳机/系统通过 AVSession 下发 play。
+    p.on('audioOutputDeviceChangeWithInfo', (info: audio.AudioStreamDeviceChangeInfo): void => {
+      if (this.player !== p
+        || info.changeReason !== audio.AudioStreamDeviceChangeReason.REASON_OLD_DEVICE_UNAVAILABLE) return;
+      hilog.info(DOMAIN, TAG, 'Audio output unavailable, pause playback');
+      this.pause();
+    });
     // 焦点模式不在这里设——AVPlayer 刚 createAVPlayer 完是 idle 状态,
     // setter 会被鸿蒙拒绝(Operate Not Permit)。改在 stateChange 'prepared' 里设。
     this.player = p;
@@ -446,6 +461,7 @@ export class AudioService {
   }
 
   private handleInterrupt(event: audio.InterruptEvent): void {
+    if (this.pauseRequested || this.sleepPausePending) return;
     if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
       if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE) {
         // 临时暂停（语音、电话、闹铃等）：标记为焦点暂停，等待系统后续下发 RESUME
@@ -493,8 +509,10 @@ export class AudioService {
   }
 
   private async resumeFromInterrupt(): Promise<void> {
+    if (this.pauseRequested || this.sleepPausePending) return;
     try {
       const p = await this.ensurePlayer();
+      if (this.pauseRequested || this.sleepPausePending) return;
       if (p.state === 'paused') {
         // 立即设置播放状态
         if (this.state) {
@@ -516,10 +534,11 @@ export class AudioService {
    * 若用户在等待期间已经手动操作过(toggle/pause/play/playChapter),pausedByExternalMedia 已被清零,直接返回。
    */
   private async resumeAfterExternalMedia(): Promise<void> {
-    if (!this.pausedByExternalMedia || !this.autoResume) return;
+    if (!this.pausedByExternalMedia || !this.autoResume || this.pauseRequested || this.sleepPausePending) return;
     this.pausedByExternalMedia = false;
     try {
       const p = await this.ensurePlayer();
+      if (this.pauseRequested || this.sleepPausePending) return;
       if (p.state === 'paused') {
         if (this.state) {
           this.state.isPlaying = true;
@@ -1164,26 +1183,6 @@ export class AudioService {
     }
   }
 
-  /** AVSession pause 指令专用：直接暂停，不做 toggle */
-  private async pauseFromSession(): Promise<void> {
-    if (!this.player) return;
-    if (this.player.state === 'playing') {
-      // 立即设置暂停状态，让UI立即响应（乐观更新）
-      if (this.state) {
-        this.state.isPlaying = false;
-        // 立即同步到 AVSession 和控制中心
-        this.syncPlaybackState();
-      }
-      try {
-        await this.player.pause();
-      } catch (err) {
-        const e = err as Error;
-        hilog.error(DOMAIN, TAG, 'pauseFromSession failed: %{public}s',
-          e?.message ?? JSON.stringify(err));
-      }
-    }
-  }
-
   private async toggleFavoriteFromSession(): Promise<void> {
     const book = this.state?.currentBook;
     if (!book) return;
@@ -1195,44 +1194,10 @@ export class AudioService {
   }
 
   async toggle(): Promise<void> {
-    if (await this.resumeAfterSleep()) return;
-    // 用户主动操作，清除焦点暂停标记
-    this.pausedByFocus = false;
-    this.cancelExternalMediaWatch();
-    // 冷启动后从持久化状态恢复:player 还没装载音源时,先按 currentChapter + progressMs 起播续播
-    if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped') {
-      if (this.state && this.state.currentBook && this.state.currentChapter) {
-        // 立即翻 loading，避免用户点了 4s 没反应
-        this.state.isLoading = true;
-        await this.resumeFromState();
-        return;
-      }
-    }
-    const p = await this.ensurePlayer();
-    if (p.state === 'playing') {
-      // 立即设置暂停状态，让UI立即响应（乐观更新）
-      if (this.state) {
-        this.state.isPlaying = false;
-        // 立即同步到 AVSession 和控制中心
-        this.syncPlaybackState();
-      }
-      await p.pause();
-    } else if (p.state === 'paused' || p.state === 'prepared') {
-      // 立即设置播放状态，让UI立即响应
-      if (this.state) {
-        this.state.isPlaying = true;
-        // 立即同步到 AVSession 和控制中心
-        this.syncPlaybackState();
-      }
-      await p.play();
-    } else if (p.state === 'completed') {
-      // completed 直接 play 在部分机型不会重置进度,先 seek 到 0 再 play
-      p.seek(0, media.SeekMode.SEEK_PREV_SYNC);
-      if (this.state) {
-        this.state.progressMs = 0;
-        this.state.isPlaying = true;
-      }
-      await p.play();
+    if (!this.pauseRequested && (this.player?.state === 'playing' || this.state?.isLoading)) {
+      await this.pause();
+    } else {
+      await this.play();
     }
   }
 
@@ -1407,6 +1372,8 @@ export class AudioService {
 
   private prepareSleepForPlayback(book: Book, chapter: Chapter, automatic: boolean): void {
     if (!this.state) return;
+    if (!automatic) this.pauseRequested = false;
+    this.pausedByFocus = false;
     const changed = this.state.currentBook?.id !== book.id || this.state.currentChapter?.id !== chapter.id;
     if (!automatic && changed && (this.state.sleepMode === SleepMode.Chapters || this.state.sleepWaitingForChapter)) {
       this.cancelSleepTimer();
@@ -1418,7 +1385,7 @@ export class AudioService {
 
   /** 自然结束与跳过片尾共用入口，一章只能结算一次，先停止再决定是否续播。 */
   private handleChapterEnd(): void {
-    if (!this.state || this.state.isLoading || this.isApplying || this.chapterEndHandled) return;
+    if (!this.state || this.state.isLoading || this.isApplying || this.chapterEndHandled || this.pauseRequested) return;
     this.chapterEndHandled = true;
     this.updateSleepTimer(true);
     if (this.sleepPausePending) return;
@@ -1470,6 +1437,7 @@ export class AudioService {
   }
 
   async release(): Promise<void> {
+    this.pauseRequested = true;
     this.cancelExternalMediaWatch();
     this.cancelSleepTimer();
     this.stopTick();
@@ -1490,6 +1458,7 @@ export class AudioService {
       try { this.player.off('timeUpdate'); } catch (_e) { /* ignore */ }
       try { this.player.off('error'); } catch (_e) { /* ignore */ }
       try { this.player.off('audioInterrupt'); } catch (_e) { /* ignore */ }
+      try { this.player.off('audioOutputDeviceChangeWithInfo'); } catch (_e) { /* ignore */ }
       await this.player.release();
       this.player = null;
     }
@@ -1671,47 +1640,47 @@ export class AudioService {
     }
   }
 
-  /** 公开:供卡片 callee 直接暂停(不做 toggle) */
+  /** 系统播控、耳机和卡片共用的暂停入口，重复指令保持暂停。 */
   async pause(): Promise<void> {
+    this.pauseRequested = true;
+    this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
-    if (!this.player) return;
-    if (this.player.state === 'playing') {
-      // 立即设置暂停状态，让UI立即响应（乐观更新）
-      if (this.state) {
-        this.state.isPlaying = false;
-        // 立即同步到 AVSession 和控制中心
-        this.syncPlaybackState();
-      }
-      try {
-        await this.player.pause();
-      } catch (err) {
-        const e = err as Error;
-        hilog.error(DOMAIN, TAG, 'pause failed: %{public}s',
-          e?.message ?? JSON.stringify(err));
-      }
+    this.stopTick();
+    if (this.state) this.state.isPlaying = false;
+    PlaybackStore.getInstance().setPlaying(false);
+    this.syncPlaybackState();
+    try {
+      if (this.player?.state === 'playing') await this.player.pause();
+      // 装载中的进度由 prepared/后续暂停处理，避免将旧音源位置写入新章节。
+      if (!this.state?.isLoading) await this.persistHistory();
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'pause failed: %{public}s', JSON.stringify(err));
     }
   }
 
-  /** 公开:供卡片 callee 直接播放;未装载音源时按 state 起播续播 */
+  /** 系统播控、耳机和卡片共用的播放入口；重复 play 不切换为暂停或重载音源。 */
   async play(): Promise<void> {
-    if (await this.resumeAfterSleep()) return;
+    this.pauseRequested = false;
+    this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
+    if (await this.resumeAfterSleep()) return;
+    if (this.pauseRequested || this.isApplying || this.state?.isLoading) return;
     if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped') {
       if (this.state && this.state.currentBook && this.state.currentChapter) {
         await this.resumeFromState();
       }
       return;
     }
-    if (this.player.state === 'paused') {
+    if (this.player.state === 'paused' || this.player.state === 'prepared') {
       if (this.state) {
         this.state.isPlaying = true;
       }
       try {
         await this.player.play();
       } catch (err) {
-        const e = err as Error;
-        hilog.error(DOMAIN, TAG, 'play failed: %{public}s',
-          e?.message ?? JSON.stringify(err));
+        if (this.state) this.state.isPlaying = false;
+        this.syncPlaybackState();
+        hilog.error(DOMAIN, TAG, 'play failed: %{public}s', JSON.stringify(err));
       }
     } else if (this.player.state === 'completed') {
       this.player.seek(0, media.SeekMode.SEEK_PREV_SYNC);

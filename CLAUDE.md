@@ -11,7 +11,7 @@
 - 编译使用经确认的 Release SDK；当前配套为 DevEco Studio 26.0.0.821，编译版本与目标/最低版本分开管理。上传前检查 APP 内所有 HAP 的 `apiReleaseType = Release`，QuickJS HAR 也需用正式工具链重建。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.16`、`versionCode = 1000016`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.17`、`versionCode = 1000017`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -54,7 +54,7 @@
 - 书源管理顶部和首页搜索框右侧的独立下拉标签均可设置首页源，共用 `HomeSourceService` 的来源筛选与保存逻辑，仅列已启用的听书源。首页标签按源名称自适应宽度，文字跟随主题色。首页使用保存的源 URL；未设置或原源禁用、删除后，优先选取有首页内容的可用听书源，无听书源时清空内容。默认选中精品推荐，源分类读取所选源的发现定义并保留返回顺序；通用源通过前四个分类生成推荐预览，听友继续使用已有协议获取推荐。未提供或未启用发现的通用源显示提示，仍可搜索。
 - 搜索页推荐使用来源真实返回的书籍，优先尝试首页板块，不足时从来源搜索结果补充，再去重随机抽取最多 5 本。
 - 首页“分类”入口固定在第一位，提供当前源全部分类的双列卡片总览，复用 `HomeSourceService` 返回的分类与现有分类书单加载方法。右侧“精品推荐”和源分类 Tab 共同横向滚动，默认选中精品推荐；点击总览卡片同步切换书单并定位对应 Tab，分类总览按行懒加载。
-- 精品推荐页在分类栏下通过 `HomeCoverCarousel` 展示当前源最多 6 本去重音频封面，复用推荐数据与详情路由；原生 Swiper 提供自动/手动轮播，以滑动进度驱动封面的四角投影，两侧按约 55° 水平压缩呈向内收拢的梯形透视，外沿较高、内沿较短，按可用宽度约束两侧位置以完整保留外沿。透视使用 API 20 的 `transform3D`，背景透明，下方仅展示随深浅模式适配的书名。轮播仅在可见时自动播放，源切换清空内容，刷新重置位置。
+- 精品推荐页在搜索栏下、分类栏上通过 `HomeCoverCarousel` 展示当前源最多 6 本去重音频封面，复用推荐数据与详情路由；原生 Swiper 提供自动/手动轮播，以滑动进度驱动封面的四角投影，两侧按约 55° 水平压缩呈向内收拢的梯形透视，外沿较高、内沿较短，按可用宽度约束两侧位置以完整保留外沿。透视使用 API 20 的 `transform3D`，背景透明，不再额外展示底部书名，书名保留在封面无障碍说明中。搜索、轮播和分类 Tab 共用同一个外层 Scroll 的位移，搜索前景同步滚动位移，视口 HdsNavigation 在搜索完全移出后收起标题区域，轮播与 Tab 随内容中的 HdsNavigation 等距上移，三者相对位置不变；Tab 到状态栏下方吸顶后，内层 List 才开始滚动，下滑先回列表顶部再展开头部。轮播与 Tab 保留在 bottomBuilder 内，搜索保留在视口标题栏的 stackBuilder 前景中以正常接收点击，使用原生沉浸光感；滚动不改变标题区域尺寸或裁剪轮播，API 26 起通过 BuilderOptions.updated=false 保留节点，旧系统沿用固定构建函数。固定视口的外层 HdsNavigation 提供轮播经过顶部时的原生渐变模糊，吸顶后的内容模糊由内层标题栏响应列表滚动；没有手工状态栏底色遮罩。Refresh 位于父子滚动容器外，下拉跟随比例固定为 0.5，内容位移达到 96vp（手指约 192vp）后松手刷新，请求入口再次校验位移。Tab 下方的主题色指示器在拖动时显示距离进度环，真正刷新后才旋转；头部抵消刷新位移，内容单独跟随下拉。轮播使用每张封面独立的 AttributeUpdater 接收原生可见页位置，逐帧仅更新绘制属性，不回写父组件状态或在换页时重置进度；尺寸换算移出帧回调，层级仅在中心封面交接时切换。轮播仅在可见时自动播放，源切换清空内容，刷新重置位置。
 - 听友导入源的站点分类地址 `/categories/<typeId>` 通过原生适配转换为 `types/<typeId>/comprehensive/p<page>`；兼容导入源 `/?type=<typeId>&sort=<sort>&page={{page}}` 的查询参数格式，保留排序与页码。支持本站完整地址、相对地址和连续翻页；原有 `types/...` 地址保留其排序与页码，外部域名不参与此转换。
 - 启动流程不调用 `registerBuiltInSources()`，`BookSourceService` 不调用 `BuiltInDispatcher`，搜索页不启动 `KkBiqugeTextSource` 独立任务。相关实现和验证页面仍在仓库，但不代表当前产品入口；`service/builtin/` 中仍有被引用的公共工具，不能按目录整体删除。
 
@@ -101,6 +101,7 @@
 - `ReaderPage` 还保留已有 EPUB 路径的 ReaderKit 分支及 `EpubReaderComponent`；当前 `ImportPage` 只导入音频和音频 ZIP，没有完整的本地 EPUB 导入、独立电子书库或书签管理入口。
 - 阅读页默认隐藏“详情 / 章节 / 设置”悬浮栏；阅读设置包括字号、行高、翻页方式、五种主题、自定义底色、纸纹、布纹和相册背景。
 - AVPlayer 负责播放、音频焦点和续播，`AVSessionService` 对接系统倍速、上下集和收藏，后台任务维持收听。
+- 耳机摘戴通过 AVPlayer 的 `audioOutputDeviceChangeWithInfo` 与 AVSession 播控适配：旧输出设备不可用时暂停并取消焦点自动恢复，加载完成也保持暂停；支持佩戴检测的耳机/系统下发 `play` 后按原进度续播。重复 `play`/`pause` 保持各自语义，设备重新连接本身不触发播放。
 - 设置的“启动”分组提供“打开软件自动播放”，默认关闭并随通用设置备份。开启后，冷启动完成播放状态恢复且进入前台时尝试续播上次章节和进度；没有可恢复内容时不播放，普通后台返回不重复起播，跨设备续播及卡片控制优先。
 - 播放页支持 0.5x–3.0x 倍速、片头片尾跳过、睡眠定时和 HTTP(S) URL 投播。定时支持按时长（15/30/45/60 分钟、自定义 1–1440 分钟）或按章节（本章、3/5/7 章、自定义最多 999 章且不超过目录剩余数），预设点选、自定义键盘完成后立即生效。章数包含当前章，按目录顺序播放，停止先于续播/循环，片尾跳过计为章末；手动暂停保留、手动切章切书取消章节停止。智能停止仅在到时仍在播放且本章剩余时长大于 0、不超过 10 分钟时等待章节结束，可取消等待，切换开关不重置倒计时。
 - 在线 `MediaSource` 系统缓存与用户主动章节下载分开；下载文件可经系统文件选择器导出副本。
@@ -163,6 +164,7 @@ scripts/                HAR 构建与图标工具
 2. 对修改文件运行 `arkts_check` 或现有工具对应的 `check_ets_files`，再运行 `build_project` 增量构建；成功后用 `start_app` 真机或模拟器验证。发生 ArkTS 错误先在线读取对应的编译修复技能。
 3. 工具不可用时使用 `ohpm install`、`hvigorw assembleHap --mode module -p product=default`；`release` 产品用于发布配置。只在确认缓存问题时清理构建。
 4. App 单测位于 `entry/src/test/`，涵盖本地规则、原生适配、批量测试、搜索缓存与历史、在线分页、阅读主题、播放进度和下载策略；设备测试位于 `entry/src/ohosTest/ets/test/`。
+   - 播控事件回归：`DEVECO_HOME` 指向已安装 IDE 后运行 `node scripts/test-audio-commands.cjs`，以模拟平台事件执行真实 `AudioService`，覆盖耳机摘下、AVSession 重复指令、加载中暂停和迟到焦点恢复；实际佩戴检测仍需耳机真机验证。
    - 书源回归设备类：`LocalRuleCompatibility,LocalRuleFeatures,LocalRuleRuntime,LocalRulePersistence,LocalRuleRequestLimiter`。HTTP/网页集成另启动 `node scripts/local-rule-http-fixture.cjs`，用 HDC 映射 `rport tcp:18997 tcp:18997`，运行 `LocalRuleBrowserIntegration` 并传入 `-s fixtureUrl http://127.0.0.1:18997`；结束后停止服务并移除该映射。
    - `LocalRuleImportedSmoke` 仅在显式传入 `sourceUrl` 时访问实际来源，可用 `importUrl` 临时导入缺失定义，完成后清理临时来源。`SourcePlaybackSmoke` 的 `playbackImportUrl`、`playbackSourceUrl`、`playbackKeyword` 参数覆盖搜索到实际起播和暂停续播，设备测试静音播放。
 5. 服务端校验使用 `npm run typecheck`、`npm test`、`npm run build:all`；部署细节见 `server/README.md`。

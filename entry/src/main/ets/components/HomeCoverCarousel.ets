@@ -1,9 +1,20 @@
-import { matrix4 } from '@kit.ArkUI';
+import { AttributeUpdater, matrix4 } from '@kit.ArkUI';
 import { SearchResult } from '../model/BookSource';
 import { CoverImage } from './CoverImage';
-import { AppRadius, AppSpace } from '../theme/Theme';
+import { AppRadius } from '../theme/Theme';
 
 const HOME_COVER_SIDE_ANGLE: number = 55 * Math.PI / 180;
+const HOME_COVER_SIDE_WIDTH_RATIO: number = Math.cos(HOME_COVER_SIDE_ANGLE);
+const HOME_COVER_VERTICAL_SPACE: number = 20;
+
+export function homeCoverSize(contentWidth: number): number {
+  return Math.min(216, Math.max(144, contentWidth * 0.52));
+}
+
+/** 与轮播实际布局共用，供导航标题栏及列表占位计算完整高度。 */
+export function homeCoverCarouselHeight(contentWidth: number): number {
+  return homeCoverSize(contentWidth) + HOME_COVER_VERTICAL_SPACE;
+}
 
 /** 将封面投影成向内收拢的梯形：外沿较高，靠近中间封面的内沿较短。 */
 export function homeCoverPerspective(sizePx: number, relativePosition: number,
@@ -29,25 +40,67 @@ export function homeCoverPerspective(sizePx: number, relativePosition: number,
   });
 }
 
+/** 仅在中间封面交接时调整层级，避免滑动途中反复重排。 */
+class HomeCoverLayer extends AttributeUpdater<StackAttribute> {
+  private front: boolean = true;
+
+  initializeModifier(instance: StackAttribute): void {
+    instance.zIndex(this.front ? 10 : 5);
+  }
+
+  setFront(front: boolean): void {
+    if (this.front === front) return;
+    this.front = front;
+    this.attribute?.zIndex(front ? 10 : 5);
+  }
+}
+
+/** 每张封面独立直通更新绘制属性，不经过父组件的状态更新与 ForEach。 */
+class HomeCoverMotion extends AttributeUpdater<StackAttribute> {
+  readonly layer: HomeCoverLayer = new HomeCoverLayer();
+  private sizePx: number = 180;
+  private sideOffsetPx: number = 0;
+  private position: number = 0;
+
+  initializeModifier(instance: StackAttribute): void {
+    this.applyMotion(instance);
+  }
+
+  setGeometry(sizePx: number, sideOffsetPx: number): void {
+    if (this.sizePx === sizePx && this.sideOffsetPx === sideOffsetPx) return;
+    this.sizePx = sizePx;
+    this.sideOffsetPx = sideOffsetPx;
+    this.updateMotion();
+  }
+
+  setPosition(position: number): void {
+    if (!Number.isFinite(position)) return;
+    const nextPosition = Math.max(-1, Math.min(1, position));
+    if (Math.abs(this.position - nextPosition) < 0.0001) return;
+    this.position = nextPosition;
+    this.layer.setFront(Math.abs(nextPosition) < 0.5);
+    this.updateMotion();
+  }
+
+  private updateMotion(): void {
+    // 真机在节点尚未绑定时可能返回 null，统一为未就绪状态。
+    const attribute = this.attribute ?? undefined;
+    if (attribute !== undefined) this.applyMotion(attribute);
+  }
+
+  private applyMotion(instance: StackAttribute): void {
+    instance.transform3D(homeCoverPerspective(this.sizePx, this.position,
+      -this.position * this.sideOffsetPx))
+      .opacity(1 - Math.abs(this.position) * 0.2);
+  }
+}
+
 @ComponentV2
 struct HomeCarouselCover {
   @Param book: SearchResult | undefined = undefined;
   @Param cardSize: number = 180;
-  @Param viewportWidth: number = 336;
-  @Param relativePosition: number = 0;
+  @Param motion: HomeCoverMotion = new HomeCoverMotion();
   @Event onOpen: () => void = () => {};
-
-  private distance(): number {
-    return Math.min(1, Math.abs(this.relativePosition));
-  }
-
-  private sideOffsetPx(): number {
-    const sideWidth = this.cardSize * Math.cos(HOME_COVER_SIDE_ANGLE);
-    // 两侧投影的外沿与轮播容器边缘对齐，沿用下方内容的页面边距。
-    const sideDistance = Math.max(0, (this.viewportWidth - sideWidth) / 2);
-    return this.getUIContext().vp2px(-Math.max(-1, Math.min(1, this.relativePosition)) *
-      (this.cardSize - sideDistance));
-  }
 
   build() {
     Stack() {
@@ -66,13 +119,11 @@ struct HomeCarouselCover {
       .borderRadius(AppRadius.Md)
       .shadow({ radius: 18, color: '#40000000', offsetY: 8 })
       .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-      .transform3D(homeCoverPerspective(this.getUIContext().vp2px(this.cardSize), this.relativePosition,
-        this.sideOffsetPx()))
-      .opacity(1 - this.distance() * 0.2)
+      .attributeModifier(this.motion)
     }
     // Swiper 只负责外层页面布局，封面的尺寸和透视由内层节点保持。
-    .width('100%').height(this.cardSize + 28)
-    .zIndex(Math.round(10 - this.distance() * 5))
+    .width('100%').height(this.cardSize + HOME_COVER_VERTICAL_SPACE)
+    .attributeModifier(this.motion.layer)
     .accessibilityGroup(true)
     .accessibilityText(this.book?.name ?? '')
     .accessibilityDescription($r('app.string.home_carousel_open'))
@@ -85,88 +136,100 @@ struct HomeCarouselCover {
 export struct HomeCoverCarousel {
   @Param books: SearchResult[] = [];
   @Event onBookTap: (book: SearchResult) => void = () => {};
-  @Local activeIndex: number = 0;
-  @Local scrollIndex: number = 0;
-  @Local scrollOffset: number = 0;
   @Local contentWidth: number = 336;
   @Local inViewport: boolean = false;
+  private swiperController: SwiperController = new SwiperController();
+  private coverMotions: Map<string, HomeCoverMotion> = new Map();
+  private indexedMotions: HomeCoverMotion[] = [];
+
+  aboutToAppear(): void {
+    this.syncCoverMotions(true);
+  }
 
   @Monitor('books')
   private resetSelection(): void {
-    this.activeIndex = 0;
-    this.scrollIndex = 0;
-    this.scrollOffset = 0;
+    this.syncCoverMotions(true);
+    this.swiperController.changeIndex(0, false);
   }
 
   private coverSize(): number {
-    return Math.min(216, Math.max(144, this.contentWidth * 0.52));
+    return homeCoverSize(this.contentWidth);
   }
 
-  private itemPosition(index: number): number {
-    let distance = index - this.scrollIndex;
+  private initialPosition(index: number): number {
+    let distance = index;
     // 两本时不循环，避免同一本同时出现在 Swiper 的前后两侧。
     if (this.books.length > 2) {
       const count = this.books.length;
       if (distance > count / 2) distance -= count;
       if (distance < -count / 2) distance += count;
     }
-    return distance + this.scrollOffset;
+    return distance;
   }
 
-  private currentBook(): SearchResult | undefined {
-    return this.books[this.activeIndex] ?? this.books[0];
+  private motionForBook(book: SearchResult, index: number): HomeCoverMotion {
+    const key = `${book.sourceUrl}#${book.bookUrl}`;
+    let motion = this.coverMotions.get(key);
+    if (motion === undefined) {
+      motion = new HomeCoverMotion();
+      motion.setPosition(this.initialPosition(index));
+      this.coverMotions.set(key, motion);
+    }
+    return motion;
   }
 
-  private openCurrentBook(): void {
-    const book = this.currentBook();
-    if (book !== undefined) this.onBookTap(book);
+  private syncCoverMotions(resetPosition: boolean): void {
+    const cardSize = this.coverSize();
+    // 尺寸换算只在数据或容器宽度变化时执行，帧回调仅接收原生页面位置。
+    const sizePx = this.getUIContext().vp2px(cardSize);
+    const sideDistance = Math.max(0, (this.contentWidth - cardSize * HOME_COVER_SIDE_WIDTH_RATIO) / 2);
+    const sideOffsetPx = this.getUIContext().vp2px(cardSize - sideDistance);
+    const nextMotions: Map<string, HomeCoverMotion> = new Map();
+    const indexedMotions: HomeCoverMotion[] = [];
+    this.books.forEach((book: SearchResult, index: number) => {
+      const motion = this.motionForBook(book, index);
+      motion.setGeometry(sizePx, sideOffsetPx);
+      if (resetPosition) motion.setPosition(this.initialPosition(index));
+      nextMotions.set(`${book.sourceUrl}#${book.bookUrl}`, motion);
+      indexedMotions.push(motion);
+    });
+    this.coverMotions = nextMotions;
+    this.indexedMotions = indexedMotions;
   }
 
   build() {
     Column() {
-      Swiper() {
+      Swiper(this.swiperController) {
         ForEach(this.books, (book: SearchResult, index: number) => {
           HomeCarouselCover({
             book: book,
             cardSize: this.coverSize(),
-            viewportWidth: this.contentWidth,
-            relativePosition: this.itemPosition(index),
+            motion: this.motionForBook(book, index),
             onOpen: () => this.onBookTap(book)
           })
         }, (book: SearchResult) => `${book.sourceUrl}#${book.bookUrl}`)
       }
-      .width('100%').height(this.coverSize() + 28)
-      .index(this.activeIndex)
+      .width('100%').height(this.coverSize() + HOME_COVER_VERTICAL_SPACE)
+      .index(0)
       .displayCount(1)
       .prevMargin((this.contentWidth - this.coverSize()) / 2)
       .nextMargin((this.contentWidth - this.coverSize()) / 2)
       .loop(this.books.length > 2)
       .autoPlay(this.books.length > 1 && this.inViewport, { stopWhenTouched: true })
-      .interval(4500).duration(550).curve(Curve.EaseInOut)
+      .interval(4500).duration(400).curve(Curve.EaseOut)
       .indicator(false)
-      .onContentDidScroll((selectedIndex: number, index: number, position: number) => {
-        if (index !== selectedIndex) return;
-        this.scrollIndex = selectedIndex;
-        this.scrollOffset = position;
+      .onContentDidScroll((_selectedIndex: number, index: number, position: number) => {
+        // 每个可见页都有自己的原生位置，循环和换向时也不推导或重置中间进度。
+        const count = this.indexedMotions.length;
+        if (count > 0) this.indexedMotions[((index % count) + count) % count].setPosition(position);
       })
-      .onChange((index: number) => {
-        this.activeIndex = index;
-        this.scrollIndex = index;
-        this.scrollOffset = 0;
-      })
-
-      Text(this.currentBook()?.name ?? '')
-        .fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
-        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%').textAlign(TextAlign.Center)
-        .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-        .onClick(() => this.openCurrentBook())
     }
-    .width('100%').padding({ bottom: AppSpace.Xs })
+    .width('100%')
     .onSizeChange((_oldSize: SizeOptions, newSize: SizeOptions) => {
       const width = Number(newSize.width);
       if (Number.isFinite(width) && width > 0 && Math.abs(width - this.contentWidth) > 1) {
         this.contentWidth = width;
+        this.syncCoverMotions(false);
       }
     })
     .onVisibleAreaChange([0, 0.5, 1], (visible: boolean, ratio: number) => {

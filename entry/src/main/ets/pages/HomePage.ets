@@ -1,16 +1,19 @@
 import { HdsCompat } from '../utils/HdsCompat';
-import { LengthMetrics } from '@kit.ArkUI';
+import { LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { HdsNavigation, HdsNavigationTitleMode, HideMode } from '@kit.UIDesignKit';
+import {
+  HdsNavigation, HdsNavigationTitleMode, HideMode, BottomBuilderParams, BuilderOptions, TitleBarContentOptions
+} from '@kit.UIDesignKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { Book, Chapter } from '../model/Book';
 import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
-import { HomeCoverCarousel, homeCoverPerspective } from '../components/HomeCoverCarousel';
+import { HomeCoverCarousel, homeCoverPerspective, homeCoverCarouselHeight } from '../components/HomeCoverCarousel';
 import { HomeCategoryBookRow, HomeCategoryRowDataSource } from '../utils/HomeCategoryRowDataSource';
 import { HomeCategoryOverviewRow, HomeCategoryOverviewDataSource } from '../utils/HomeCategoryOverviewDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
@@ -18,9 +21,10 @@ import { BookIdentity } from '../utils/BookIdentity';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { BookSourceService, ExploreFetchResult } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
+import { DataService } from '../service/DataService';
 import { emitter } from '@kit.BasicServicesKit';
 import { LocalRuleSource } from '../model/LocalRuleSource';
-import { EVT_HOME_SOURCE_CHANGED, PreferenceService } from '../service/PreferenceService';
+import { EVT_HOME_SOURCE_CHANGED, EVT_FAVORITES_CHANGED, PreferenceService } from '../service/PreferenceService';
 import { HomeSourceCategory, HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 class HomeCategoryDataSource implements IDataSource {
@@ -62,6 +66,9 @@ const SEARCH_FIELD_ROW_HEIGHT: number = 56;
 const CATEGORY_NAV_HEIGHT: number = 34;
 const CATEGORY_NAV_FADE_LENGTH: number = 24;
 const CATEGORY_NAV_ROW_HEIGHT: number = 48;
+const HOME_REFRESH_TRIGGER_DISTANCE: number = 96;
+// 内容位移为手指移动的一半：至少下拉约 192vp，再松手才刷新。
+const HOME_REFRESH_PULL_DOWN_RATIO: number = 0.5;
 const COLLAPSED_SEARCH_SIZE: number = 42;
 const FEATURED_PAGE_SIZE: number = 3;
 const FEATURED_ROW_HEIGHT: number = 72;
@@ -75,6 +82,8 @@ const CATEGORY_CARD_COLORS: string[] = ['#B84332', '#287EA2', '#6750AB', '#24827
 
 @ComponentV2
 struct HomeLoadingSkeleton {
+  @Param showCarousel: boolean = true;
+  @Param showRecommendations: boolean = true;
   @Local pulsing: boolean = false;
 
   onDidBuild(): void {
@@ -202,23 +211,25 @@ struct HomeLoadingSkeleton {
   build() {
     Column() {
       Column({ space: AppSpace.Md }) {
-        Stack() {
-          Row().width(180).height(180).borderRadius(AppRadius.Md)
-            .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-            .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), -1, this.getUIContext().vp2px(-104)))
-            .backgroundColor(AppColor.Divider).opacity(0.55)
-          Row().width(180).height(180).borderRadius(AppRadius.Md)
-            .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-            .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), 1, this.getUIContext().vp2px(104)))
-            .backgroundColor(AppColor.Divider).opacity(0.55)
-          Row().width('52%').height(180).borderRadius(AppRadius.Md)
-            .backgroundColor(AppColor.Divider)
+        if (this.showCarousel) {
+          Stack() {
+            Row().width(180).height(180).borderRadius(AppRadius.Md)
+              .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
+              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), -1, this.getUIContext().vp2px(-104)))
+              .backgroundColor(AppColor.Divider).opacity(0.55)
+            Row().width(180).height(180).borderRadius(AppRadius.Md)
+              .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
+              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), 1, this.getUIContext().vp2px(104)))
+              .backgroundColor(AppColor.Divider).opacity(0.55)
+            Row().width('52%').height(180).borderRadius(AppRadius.Md)
+              .backgroundColor(AppColor.Divider)
+          }
+          .width('100%').height(204)
         }
-        .width('100%').height(204)
-        Row().width('64%').height(18).borderRadius(AppRadius.Xs).backgroundColor(AppColor.Divider)
-          .margin({ bottom: AppSpace.Md })
-        this.skeletonFeaturedSection()
-        this.skeletonSection()
+        if (this.showRecommendations) {
+          this.skeletonFeaturedSection()
+          this.skeletonSection()
+        }
       }
       .width('100%')
       .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Md })
@@ -231,7 +242,6 @@ struct HomeLoadingSkeleton {
       })
     }
     .width('100%')
-    .height('100%')
     .backgroundColor(HomeTheme.BgNeutral)
     .clip(true)
   }
@@ -247,6 +257,9 @@ export struct HomePage {
   @Local homeSources: LocalRuleSource[] = [];
   @Local homeSourceIndex: number = -1;
   @Local savingHomeSource: boolean = false;
+  @Local favoriteIds: string[] = [];
+  @Local savingFavorite: boolean = false;
+  private favoritesChangedHandler: () => void = (): void => { this.loadFavorites(); };
   @Local homeCategories: HomeSourceCategory[] = [];
   private currentSource: LocalRuleSource | undefined = undefined;
   private lastSourceRevision: number = -1;
@@ -260,7 +273,7 @@ export struct HomePage {
   @Local categoryHasMore: boolean = true;
   @Local categoryNextUrl: string = '';
   @Local isRefreshing: boolean = false;
-  @Local refreshStatus: RefreshStatus = RefreshStatus.Inactive;
+  @Local refreshPullOffset: number = 0;
 
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
@@ -270,6 +283,7 @@ export struct HomePage {
   @Event onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) => void = () => {};
 
   private contentScroller: Scroller = new Scroller();
+  private headerScroller: Scroller = new Scroller();
   private categoryNavScroller: Scroller = new Scroller();
   private categoryDS: HomeCategoryRowDataSource = new HomeCategoryRowDataSource();
   private categoryNavDataSource: HomeCategoryDataSource = new HomeCategoryDataSource();
@@ -277,20 +291,57 @@ export struct HomePage {
   private homeBlockDataSource: HomeBlockDataSource = new HomeBlockDataSource();
   private homeGen: number = 0;
   private refreshInFlight: boolean = false;
+  private readonly searchTitleBarBuilder: CustomBuilder = (): void => this.buildSearchTitleBar();
+  private readonly homeNavigationBottomBuilder: CustomBuilder = (): void => this.buildHomeNavigationBottom();
 
   aboutToAppear(): void {
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
     CoverPrefetcher.init();
     this.lastSourceRevision = SourceDataService.getInvalidationCounter();
     emitter.on(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);
+    emitter.on(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
+    this.loadFavorites();
     this.loadHomeBlocks();
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
-    this.onScrollerReady(this.contentScroller);
+    this.onScrollerReady(this.headerScroller);
   }
 
   aboutToDisappear(): void {
     emitter.off(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);
+    emitter.off(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     this.homeGen++;
+  }
+
+  private async loadFavorites(): Promise<void> {
+    try {
+      this.favoriteIds = await PreferenceService.getFavorites();
+    } catch (_error) {
+      hilog.warn(DOMAIN, TAG, 'Failed to load home favorites');
+    }
+  }
+
+  private isFeaturedFavorite(r: SearchResult): boolean {
+    return this.favoriteIds.includes(BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name));
+  }
+
+  private async toggleFeaturedFavorite(r: SearchResult): Promise<void> {
+    if (this.savingFavorite) return;
+    this.savingFavorite = true;
+    try {
+      const book = this.homeBookFromResult(r);
+      if (!(await PreferenceService.isFavorite(book.id))) {
+        const context = this.getUIContext().getHostContext();
+        if (!context) return;
+        const cached = await DataService.getBookById(context, book.id);
+        await DataService.upsertCachedBook(cached ?? book);
+      }
+      await PreferenceService.toggleFavorite(book.id);
+      await this.loadFavorites();
+    } catch (_error) {
+      this.showHomeSourceToast($r('app.string.home_favorite_failed'));
+    } finally {
+      this.savingFavorite = false;
+    }
   }
 
   private reloadSource(): void {
@@ -346,20 +397,20 @@ export struct HomePage {
 
   private async handleHomeRefresh(): Promise<void> {
     if (this.refreshInFlight) return;
+    // 自定义指示器与实际请求共用阈值，短拉回弹不发出刷新请求。
+    if (this.refreshPullOffset < HOME_REFRESH_TRIGGER_DISTANCE - 0.5) {
+      this.isRefreshing = false;
+      return;
+    }
     this.refreshInFlight = true;
     this.isRefreshing = true;
+    hilog.debug(DOMAIN, TAG, 'Home refresh started at offset %{public}.1fvp', this.refreshPullOffset);
     try {
       await this.refreshHomeData();
     } finally {
       this.refreshInFlight = false;
       this.isRefreshing = false;
-      this.refreshStatus = RefreshStatus.Inactive;
     }
-  }
-
-  private shouldShowPullRefreshIndicator(): boolean {
-    return this.isRefreshing || this.refreshStatus === RefreshStatus.Drag ||
-      this.refreshStatus === RefreshStatus.OverDrag;
   }
 
   private async loadHomeBlocks(preserveContent: boolean = false): Promise<void> {
@@ -428,6 +479,7 @@ export struct HomePage {
   private scrollContentToTop(): void {
     try {
       this.contentScroller.scrollEdge(Edge.Top);
+      this.headerScroller.scrollEdge(Edge.Top);
     } catch (_e) { /* ignore */ }
   }
 
@@ -603,24 +655,73 @@ export struct HomePage {
     return `${firstBook.sourceUrl}#${firstBook.bookUrl}`;
   }
 
-  /** 仅在滚动跨过关键阈值时更新，避免每帧重建标题栏。 */
+  /** 外层移动整个头部，Tab 吸顶后才把滚动交给内容列表。 */
   @Local isAtContentTop: boolean = true;
   @Local isSearchCollapsed: boolean = false;
+  @Local contentWidth: number = 360;
+  @Local contentHeight: number = 800;
+  @Local headerScrollOffset: number = 0;
 
-  /**
-   * 列表顶部占位始终为完整顶栏高度（状态栏+搜索+吸顶次行）。
-   * 折叠只改浮层视觉，不改占位，避免高度跳动导致“拉两次”。
-   */
   @Computed
-  get headerHeight(): number {
-    return WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT + CATEGORY_NAV_ROW_HEIGHT;
+  get carouselPanelHeight(): number {
+    if (this.selectedCategoryIndex !== -1) return 0;
+    if (this.loadingHome && this.homeBlocks.length === 0) return 204 + AppSpace.Md;
+    if (this.carouselBooks.length === 0) return 0;
+    return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2);
+  }
+
+  @Computed
+  get headerScrollRange(): number {
+    return SEARCH_FIELD_ROW_HEIGHT + this.carouselPanelHeight;
+  }
+
+  @Computed
+  get topBlurExtraHeight(): number {
+    // 模糊尾部止于尚未吸顶的 Tab 上方；吸顶后的内容模糊由 Tab 所在标题栏接管。
+    return Math.min(32, Math.max(0, this.headerScrollRange - this.headerScrollOffset));
+  }
+
+  @Computed
+  get searchTitleBarContent(): TitleBarContentOptions {
+    const content: TitleBarContentOptions = {
+      title: { mainTitle: '' },
+      stackBuilder: this.searchTitleBarBuilder
+    };
+    if (PlatformCompat.supports(26)) {
+      const searchBuilder: BuilderOptions = { builder: this.searchTitleBarBuilder, updated: false };
+      content.stackBuilderContent = searchBuilder;
+    }
+    return content;
+  }
+
+  @Computed
+  get homeTitleBarContent(): TitleBarContentOptions {
+    const bottom: BottomBuilderParams = {
+      builder: this.homeNavigationBottomBuilder,
+      height: this.carouselPanelHeight + CATEGORY_NAV_ROW_HEIGHT
+    };
+    const content: TitleBarContentOptions = {
+      title: { mainTitle: '' },
+      bottomBuilder: bottom
+    };
+    if (PlatformCompat.supports(26)) {
+      // 数据或尺寸变化时保留搜索和标签节点；滚动不改变标题栏高度或构建函数。
+      const bottomBuilder: BuilderOptions = { builder: this.homeNavigationBottomBuilder, updated: false };
+      bottom.builderContent = bottomBuilder;
+    }
+    return content;
   }
 
   private syncHeaderScrollState(): void {
     try {
-      const y: number = this.contentScroller.currentOffset().yOffset;
+      const y: number = this.headerScroller.currentOffset().yOffset;
+      this.headerScrollOffset = Math.max(0, Math.min(this.headerScrollRange, y));
       const nextAtTop: boolean = y <= 0.5;
-      const nextCollapsed: boolean = y >= SEARCH_FIELD_ROW_HEIGHT - 0.5;
+      // 主导航双击使外层回顶时，也归零内层列表；手势下滑由 SELF_FIRST 保证先回内容顶部。
+      if (nextAtTop && this.contentScroller.currentOffset().yOffset > 0.5) {
+        this.contentScroller.scrollEdge(Edge.Top);
+      }
+      const nextCollapsed: boolean = y >= this.headerScrollRange - 0.5;
       if (nextAtTop !== this.isAtContentTop) {
         this.isAtContentTop = nextAtTop;
       }
@@ -630,16 +731,18 @@ export struct HomePage {
     } catch (_e) {
       this.isAtContentTop = true;
       this.isSearchCollapsed = false;
+      this.headerScrollOffset = 0;
     }
   }
 
   private resetSearchCollapse(): void {
     this.isAtContentTop = true;
     this.isSearchCollapsed = false;
+    this.headerScrollOffset = 0;
   }
 
   /** 标题栏主区域：放入 Navigation 生效范围，启用原生沉浸光感。 */
-  @Builder
+  @LocalBuilder
   buildSearchTitleBar() {
     Row({ space: AppSpace.Sm }) {
       Row({ space: AppSpace.Xs }) {
@@ -666,11 +769,12 @@ export struct HomePage {
       }))
         .selected($$this.homeSourceIndex)
         .value(this.homeSourceName || $r('app.string.home_source_setting'))
-        .font({ size: AppFont.Caption, weight: FontWeight.Medium })
+        .font({ size: 13, weight: FontWeight.Medium })
+        .arrowModifier(new SymbolGlyphModifier().visibility(Visibility.None))
         .fontColor(AppColor.Brand)
         .selectedOptionFontColor(AppColor.Brand)
         .selectedOptionBgColor(AppColor.BrandSoft)
-        .space(AppSpace.Xs)
+        .space(0)
         .menuAlign(MenuAlignType.END)
         .width(LayoutPolicy.wrapContent)
         .constraintSize({ maxWidth: '45%' })
@@ -688,50 +792,180 @@ export struct HomePage {
     .padding({ left: AppSpace.Md, right: AppSpace.Md })
     .alignItems(VerticalAlign.Center)
     .backgroundColor(Color.Transparent)
+    // 原生显隐只负责收起标题区域；自定义搜索内容同步移动，避免到阈值才原地消失。
+    .translate({ y: -Math.min(SEARCH_FIELD_ROW_HEIGHT, this.headerScrollOffset) })
   }
 
-  /** 隐藏 Refresh 默认指示器，避免它出现在固定顶栏后方。 */
+  /** 位于分类 Tab 下方、推荐内容上方的下拉刷新指示器。 */
+  @Builder
+  pullRefreshIndicator() {
+    Row() {
+      if (this.isRefreshing) {
+        LoadingProgress()
+          .width(24)
+          .height(24)
+          .color(AppColor.Brand)
+      } else {
+        Progress({
+          value: Math.min(100, this.refreshPullOffset / HOME_REFRESH_TRIGGER_DISTANCE * 100),
+          total: 100,
+          type: ProgressType.Ring
+        })
+          .width(24)
+          .height(24)
+          .color(AppColor.Brand)
+          .backgroundColor(Color.Transparent)
+          .style({ strokeWidth: 2, enableSmoothEffect: false })
+      }
+    }
+    .width('100%')
+    .height(this.refreshPullOffset)
+    .justifyContent(FlexAlign.Center)
+    .opacity(Math.min(1, this.refreshPullOffset / 24))
+    .clip(true)
+  }
+
   @Builder
   emptyRefreshIndicator() {
     Column().width(0).height(0)
   }
 
-  /** 位于固定分类栏与内容列表之间的下拉刷新指示器。 */
-  @Builder
-  pullRefreshIndicator() {
-    LoadingProgress()
-      .width(24)
-      .height(24)
-      .color(AppColor.Brand)
-      .margin({ bottom: AppSpace.Sm })
-  }
-
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      // 页面与列表共用同一底色，并延伸到状态栏，避免顶部出现色差。
       Column()
         .width('100%')
         .height('100%')
         .backgroundColor(HomeTheme.BgNeutral)
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
 
-      // L1 原 HdsNavigation
+      // 固定视口的原生渐变模糊，搜索和轮播整体从其后方经过。
       HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.emptyRefreshIndicator() }) {
-          List({ scroller: this.contentScroller }) {
-        // 第1项:完整顶栏等高占位(高度固定，折叠只改浮层)。
-        // 下拉时刷新圈从占位项底部露出，位于分类栏和内容列表之间。
-        ListItem() {
-          Column() {
-            if (this.shouldShowPullRefreshIndicator()) {
-              this.pullRefreshIndicator()
-            }
+          Scroll(this.headerScroller) {
+            this.buildHomeNavigation()
           }
           .width('100%')
-          .height(this.headerHeight)
-          .justifyContent(FlexAlign.End)
+          .height('100%')
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+          .clip(false)
+          .onDidScroll(() => this.syncHeaderScrollState())
         }
+        .onRefreshing(() => this.handleHomeRefresh())
+        .onOffsetChange((offset: number) => { this.refreshPullOffset = Math.max(0, offset); })
+        .refreshOffset(HOME_REFRESH_TRIGGER_DISTANCE)
+        .pullDownRatio(HOME_REFRESH_PULL_DOWN_RATIO)
+        .pullToRefresh(this.isAtContentTop)
+        .width('100%')
+        .height('100%')
+        .clip(false)
+        .backgroundColor(Color.Transparent)
+      }
+      .titleBar({
+        avoidLayoutSafeArea: true,
+        content: this.searchTitleBarContent,
+        style: {
+          scrollEffectOpts: { scrollEffectType: HdsCompat.scrollEffect },
+          originalStyle: {
+            backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: this.topBlurExtraHeight }
+          },
+          scrollEffectStyle: {
+            backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: this.topBlurExtraHeight }
+          },
+          thermoCtrl: true,
+          systemMaterialEffect: HdsCompat.material
+        }
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .mode(NavigationMode.Stack)
+      .hideBackButton(true)
+      .bindToScrollable([this.headerScroller])
+      .dynamicHideTitleBar({
+        hideTitleArea: true,
+        hideBottomBuilder: true,
+        hideStatusBar: false,
+        mode: HideMode.SCROLL_UP_TO,
+        hideRatio: 1.0
+      })
+      .systemBarStyle(
+        { statusBarContentColor: WindowUtils.getSystemBarContentColor() },
+        { statusBarContentColor: WindowUtils.getSystemBarContentColor() }
+      )
+      .backgroundColor(Color.Transparent)
+    }
+    .onSizeChange((_oldSize: SizeOptions, newSize: SizeOptions) => {
+      const width: number = Number(newSize.width);
+      if (Number.isFinite(width) && width > 0 && Math.abs(width - this.contentWidth) > 1) {
+        this.contentWidth = width;
+      }
+      const height: number = Number(newSize.height);
+      if (Number.isFinite(height) && height > 0 && Math.abs(height - this.contentHeight) > 1) {
+        this.contentHeight = height;
+      }
+    })
+    .onVisibleAreaChange([0, 1], (visible: boolean): void => {
+      if (visible && this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) this.reloadSource();
+    })
+  }
 
+  @Builder
+  buildHomeNavigation() {
+    HdsNavigation() {
+      Column() {
+        Column()
+          .width('100%')
+          .height(WindowUtils.getStatusBarHeightVp() + this.headerScrollRange + CATEGORY_NAV_ROW_HEIGHT)
+
+        Stack({ alignContent: Alignment.Top }) {
+          if (this.refreshPullOffset > 0) {
+            this.pullRefreshIndicator()
+          }
+          this.buildHomeContent()
+        }
+        .width('100%')
+        .height(Math.max(1, this.contentHeight - WindowUtils.getStatusBarHeightVp() - CATEGORY_NAV_ROW_HEIGHT))
+        .clip(false)
+        .backgroundColor(Color.Transparent)
+      }
+      .width('100%')
+    }
+    .titleBar({
+      avoidLayoutSafeArea: true,
+      content: this.homeTitleBarContent,
+      style: {
+        scrollEffectOpts: {
+          scrollEffectType: HdsCompat.scrollEffect
+        },
+        originalStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent }
+        },
+        thermoCtrl: true,
+        systemMaterialEffect: HdsCompat.material
+      }
+    })
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .mode(NavigationMode.Stack)
+    .hideBackButton(true)
+    .systemBarStyle(
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() },
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() }
+    )
+    // 标题栏只响应吸顶后的内层滚动；外层原生移动整个 HDS，避免每帧裁剪、重建轮播。
+    .bindToScrollable([this.contentScroller])
+    .width('100%')
+    .height(this.contentHeight + this.headerScrollRange)
+    // 抵消 Refresh 对整个页面的下移，内容列表单独跟随下拉距离。
+    .translate({ y: -this.refreshPullOffset })
+    .backgroundColor(Color.Transparent)
+  }
+
+  @Builder
+  buildHomeContent() {
+    List({ scroller: this.contentScroller }) {
+      ListItemGroup() {
         // 第2~N项：分类总览、推荐板块或分类书单。
         if (this.selectedCategoryIndex === CATEGORY_OVERVIEW_INDEX) {
           ListItem() {
@@ -781,18 +1015,9 @@ export struct HomePage {
         } else if (this.selectedCategoryIndex === -1) {
           if (this.loadingHome && this.homeBlocks.length === 0) {
             ListItem() {
-              Column().width('100%').height(300)
+              HomeLoadingSkeleton({ showCarousel: false })
             }
           } else if (this.homeBlocks.length > 0) {
-            if (this.carouselBooks.length > 0) {
-              ListItem() {
-                HomeCoverCarousel({
-                  books: this.carouselBooks,
-                  onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
-                })
-              }
-              .padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Sm })
-            }
             LazyForEach(this.homeBlockDataSource, (block: HomeBlockSection, idx: number) => {
               ListItem() {
                 this.buildHomeBlock(block, idx)
@@ -879,95 +1104,25 @@ export struct HomePage {
           }, (row: HomeCategoryBookRow) => row.key)
         }
 
-        // 底部留白避开浮动 Tab + MiniPlayer
+        // 底部留白避开浮动 Tab + MiniPlayer。
         ListItem() {
           Column().height(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
         }
       }
-      .width('100%')
-      .height('100%')
-      .listDirection(Axis.Vertical)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-      .cachedCount(5)
+    }
+    .width('100%')
+    .height(Math.max(1, this.contentHeight - WindowUtils.getStatusBarHeightVp() - CATEGORY_NAV_ROW_HEIGHT))
+    .listDirection(Axis.Vertical)
+    .nestedScroll({
+      scrollForward: NestedScrollMode.PARENT_FIRST,
+      scrollBackward: NestedScrollMode.SELF_FIRST
+    })
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .cachedCount(5)
+    .translate({ y: this.refreshPullOffset })
     .clip(false)
     .backgroundColor(Color.Transparent)
-    .onDidScroll(() => {
-      this.syncHeaderScrollState();
-    })
-    }
-    .onStateChange((state: RefreshStatus) => {
-          this.refreshStatus = state;
-        })
-        .onRefreshing(() => {
-          this.handleHomeRefresh();
-        })
-        .refreshOffset(64)
-        // 列表在顶部、搜索入口完全展开时才允许下拉刷新
-        .pullToRefresh(this.isAtContentTop)
-        .width('100%')
-        .height('100%')
-        .clip(false)
-        .backgroundColor(Color.Transparent)
-    }
-    .titleBar({
-      avoidLayoutSafeArea: true,
-      content: {
-        title: { mainTitle: '' },
-        stackBuilder: (): void => this.buildSearchTitleBar(),
-        bottomBuilder: {
-          builder: (): void => this.buildCategoryTags(),
-          height: CATEGORY_NAV_ROW_HEIGHT
-        }
-      },
-      style: {
-        scrollEffectOpts: {
-          scrollEffectType: HdsCompat.scrollEffect
-        },
-        originalStyle: {
-          backgroundStyle: {
-            backgroundColor: Color.Transparent
-          }
-        },
-        scrollEffectStyle: {
-          backgroundStyle: {
-            backgroundColor: Color.Transparent
-          }
-        },
-        thermoCtrl: true
-      }
-    })
-    .titleMode(HdsNavigationTitleMode.MINI)
-    // 横屏时 HdsNavigation 默认会自动切换 Split，把首页内容压缩到左栏。
-    // 首页没有独立的导航栏，始终使用全宽 Stack 模式。
-    .mode(NavigationMode.Stack)
-    .hideBackButton(true)
-    .systemBarStyle(
-      { statusBarContentColor: WindowUtils.getSystemBarContentColor() },
-      { statusBarContentColor: WindowUtils.getSystemBarContentColor() }
-    )
-    .bindToScrollable([this.contentScroller])
-    .dynamicHideTitleBar({
-      hideTitleArea: true,
-      hideBottomBuilder: false,
-      hideStatusBar: false,
-      mode: HideMode.SCROLL_UP_TO,
-      hideRatio: 1.0
-    })
-    .backgroundColor(Color.Transparent)
-
-      if (this.selectedCategoryIndex === -1 && this.loadingHome && this.homeBlocks.length === 0) {
-        Column() {
-          HomeLoadingSkeleton()
-        }
-        .width('100%')
-        .height('100%')
-        .padding({ top: this.headerHeight })
-      }
-    }
-    .onVisibleAreaChange([0, 1], (visible: boolean): void => {
-      if (visible && this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) this.reloadSource();
-    })
   }
 
   @Builder
@@ -1094,9 +1249,20 @@ export struct HomePage {
         .alignItems(HorizontalAlign.Start)
         .justifyContent(FlexAlign.Center)
 
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(16)
-          .fontColor([$r('sys.color.font_tertiary')])
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(this.isFeaturedFavorite(r) ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
+            .fontSize(22)
+            .fontColor([this.isFeaturedFavorite(r) ? AppColor.Brand : $r('sys.color.font_secondary')])
+        }
+        .width(40)
+        .height(40)
+        .backgroundColor(Color.Transparent)
+        .enabled(!this.savingFavorite)
+        .accessibilityText(this.isFeaturedFavorite(r) ?
+          $r('app.string.home_favorite_remove') : $r('app.string.home_favorite_add'))
+        .onClick(() => {
+          this.toggleFeaturedFavorite(r);
+        })
       }
       .width('100%')
       .height(FEATURED_ROW_HEIGHT - 1)
@@ -1216,6 +1382,30 @@ export struct HomePage {
     .clip(true)
     .accessibilityGroup(true).accessibilityText(category.name)
     .onClick(() => this.switchCategoryByUrl(category.url))
+  }
+
+  @LocalBuilder
+  buildHomeNavigationBottom() {
+    Column() {
+      if (this.carouselPanelHeight > 0) {
+        Column() {
+          if (this.loadingHome && this.homeBlocks.length === 0) {
+            HomeLoadingSkeleton({ showRecommendations: false })
+          } else {
+            HomeCoverCarousel({
+              books: this.carouselBooks,
+              onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
+            })
+              .padding({ left: AppSpace.Md, right: AppSpace.Md })
+          }
+        }
+        .width('100%')
+        .height(this.carouselPanelHeight)
+      }
+      this.buildCategoryTags()
+    }
+    .width('100%')
+    .height(this.carouselPanelHeight + CATEGORY_NAV_ROW_HEIGHT)
   }
 
   @Builder

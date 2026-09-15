@@ -3,27 +3,40 @@ import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Them
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
-import { common } from '@kit.AbilityKit';
+import { common, sendableContextManager, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
-interface ProfileItem {
+class ProfileItem {
   icon: Resource;
-  label: string;
+  label: ResourceStr;
   id: string;
   iconBg: ResourceColor;
+
+  constructor(icon: Resource, label: ResourceStr, id: string, iconBg: ResourceColor) {
+    this.icon = icon;
+    this.label = label;
+    this.id = id;
+    this.iconBg = iconBg;
+  }
 }
 
 const CONTENT_ITEMS: ProfileItem[] = [
-  { icon: $r('sys.symbol.arrow_down_circle'), label: '本地导入', id: 'import', iconBg: '#34C759' },
-  { icon: $r('sys.symbol.arrow_down_circle'), label: '下载管理', id: 'downloads', iconBg: '#0A84FF' }
+  new ProfileItem($r('sys.symbol.arrow_down_circle'), '本地导入', 'import', '#34C759'),
+  new ProfileItem($r('sys.symbol.arrow_down_circle'), '下载管理', 'downloads', '#0A84FF')
 ];
 
 const SYSTEM_ITEMS: ProfileItem[] = [
-  { icon: $r('sys.symbol.gearshape'), label: '设置', id: 'settings', iconBg: '#8E8E93' },
-  { icon: $r('sys.symbol.questionmark_circle'), label: '使用说明', id: 'guide', iconBg: '#5AC8FA' },
-  { icon: $r('sys.symbol.info_circle'), label: '关于', id: 'about', iconBg: '#0A59F7' }
+  new ProfileItem($r('sys.symbol.gearshape'), '设置', 'settings', '#8E8E93'),
+  new ProfileItem($r('sys.symbol.questionmark_circle'), '使用说明', 'guide', '#5AC8FA'),
+  new ProfileItem($r('sys.symbol.info_circle'), '关于', 'about', '#0A59F7'),
+  new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community', AppColor.Brand)
 ];
 
+const COMMUNITY_GROUP_URL: string = 'https://qun.qq.com/universal-share/share?ac=1'
+  + '&authKey=1pWjvoTkmo3Fk%2FBmECPutUxD3VHJlWqTVCpY1IoOfg8%2FEKjDUgydIFLt%2FOo9B67c'
+  + '&busi_data=eyJncm91cENvZGUiOiIxMDY0MjAyOTMzIiwidG9rZW4iOiJKZVB5N0NRV1N3VFhOYmhVanVCdUtQZk9US2tGTTZwMC9EZkc1UWxPazBNYStxOXFmcDAwM2lFYjVtRjVmaWhLIiwidWluIjoiMTEzMjMwOTM4MCJ9'
+  + '&data=a1oLJEYrqdKba2Vp4RvxW0zYyBqaMVR92iMcbgjVqWfvk2Y04zoNKhF4Wc7QKy6CUquDpD2g8yEiAIC7n3b9Ig'
+  + '&svctype=4&tempid=h5_group_info';
 const ROW_INDENT: number = AppSpace.Md;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
 
@@ -107,6 +120,30 @@ export struct ProfilePage {
       this.navStack.pushPathByName('guide', '');
     } else if (id === 'about') {
       this.navStack.pushPathByName('about', '');
+    } else if (id === 'community') {
+      this.openCommunityGroup();
+    }
+  }
+
+  private async openCommunityGroup(): Promise<void> {
+    try {
+      const hostContext = this.getUIContext().getHostContext();
+      if (hostContext === undefined) {
+        throw new Error('UIAbilityContext is unavailable');
+      }
+      const context = sendableContextManager.convertToUIAbilityContext(
+        sendableContextManager.convertFromContext(hostContext));
+      const want: Want = {
+        action: 'ohos.want.action.viewData',
+        entities: ['entity.system.browsable'],
+        uri: COMMUNITY_GROUP_URL
+      };
+      await context.startAbility(want);
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({
+        message: $r('app.string.profile_community_open_failed'),
+        duration: 2000
+      });
     }
   }
 

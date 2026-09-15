@@ -398,7 +398,7 @@ export class DataService {
   }
 
   /** 按 id 取书,并补齐章节:本地导入书自带章节;缓存书章节缺失时从 sidecar 懒加载(瞬时,无网络)。 */
-  static async getBookById(_context: common.UIAbilityContext, id: string): Promise<Book | undefined> {
+  static async getBookById(_context: common.Context, id: string): Promise<Book | undefined> {
     const local = await DataService.load();
     const fromLocal = local.find((b) => b.id === id);
     if (fromLocal) return fromLocal;

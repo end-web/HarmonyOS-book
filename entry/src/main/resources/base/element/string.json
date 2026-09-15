@@ -23,6 +23,8 @@
     {"name": "app_description", "value": "简听，让聆听与阅读更从容"},
     {"name": "about_platform", "value": "HarmonyOS / ArkUI V2"},
     {"name": "about_sdk", "value": "最低 API 20 / 目标 API 24"},
+    {"name": "profile_community_group", "value": "简听交流群"},
+    {"name": "profile_community_open_failed", "value": "无法打开浏览器，请稍后重试"},
     {"name": "imported_source_unavailable", "value": "导入的书源暂不可用"},
     {"name": "privacy_title", "value": "简听隐私政策"},
     {"name": "privacy_overview_title", "value": "一、应用与信息使用"},
@@ -1358,6 +1360,9 @@
     {"name": "appearance_accent_hex_hint", "value": "自定义色值，如 #8E55B8"},
     {"name": "appearance_apply", "value": "应用"},
     {"name": "appearance_accent_invalid", "value": "请输入 # 加六位十六进制色值"},
-    {"name": "appearance_save_failed", "value": "外观设置保存失败，请重试"}
+    {"name": "appearance_save_failed", "value": "外观设置保存失败，请重试"},
+    {"name": "home_favorite_add", "value": "收藏"},
+    {"name": "home_favorite_remove", "value": "取消收藏"},
+    {"name": "home_favorite_failed", "value": "收藏操作失败，请重试"}
   ]
 }

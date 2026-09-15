@@ -1,5 +1,4 @@
 import { HdsCompat } from '../utils/HdsCompat';
-import { CompatibleGridInsets } from '../utils/PlatformCompat';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
@@ -842,22 +841,21 @@ export struct FavoritePage {
       HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.refreshIndicator() }) {
           if (this.viewMode === 0) {
-            Grid(this.listScroller) {
+            // 三列书卡复用 List 的首尾边界，内容不足一屏时回弹后仍停留在安全起点。
+            List({ scroller: this.listScroller, space: AppSpace.Md }) {
               LazyForEach(this.bookDataSource, (book: Book) => {
-                GridItem() {
+                ListItem() {
                   this.buildBookTile(book)
                 }
                 // key 带上"总章数 + 当前章索引":LazyForEach 对相同 key 的项会复用旧节点、
                 // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
                 // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
               }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-              GridItem() {
+              ListItem() {
                 this.buildAddTile()
               }
             }
-            .columnsTemplate('1fr 1fr 1fr')
-            .columnsGap(AppSpace.Sm)
-            .rowsGap(AppSpace.Md)
+            .lanes(3, AppSpace.Sm)
             .cachedCount(6)
             .width('100%')
             .height('100%')
@@ -865,8 +863,9 @@ export struct FavoritePage {
               left: AppSpace.Md,
               right: AppSpace.Md
             })
-            .attributeModifier(new CompatibleGridInsets(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
-              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP, WindowUtils.getFloatingTabBottomVp(), AppSpace.Md))
+            .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
+              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
+            .contentEndOffset(WindowUtils.getFloatingTabBottomVp())
             .scrollBar(BarState.Off)
             // 空书架只有添加入口，也需要在上下边界提供原生回弹。
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })

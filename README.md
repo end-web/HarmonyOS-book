@@ -2,18 +2,18 @@
 
 简听是面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.16`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.17`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
-`v0.1.16` 新增首页推荐封面轮播：中间封面突出、两侧采用 55° 透视并与内容边缘对齐，仅显示书名；收紧上下间距，修复深色底栏白色反光，并统一剩余旧名称为“简听”。
+`v0.1.17` 优化首页搜索、封面轮播与分类栏的联动滚动、吸顶和下拉刷新，首页书单增加快捷收藏；修复耳机断开、重复播控和加载中暂停的处理，改善书架回弹与记录页深色显示，并在“我的 → 关于”下方新增“简听交流群”入口。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.16 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.16/JianTing-v0.1.16.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.17 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.17/JianTing-v0.1.17.hap)
 
 安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件。当前采用 Release SDK 和 Release 模式构建；GitHub HAP 沿用开发签名，供获授权手机安装，AppGallery 使用单独的正式签名 APP。
 
 ```bash
-hdc install JianTing-v0.1.16.hap
+hdc install JianTing-v0.1.17.hap
 ```
 
 包名保持 `com.huan.listenbook`，沿用已有书架、书源与记录。
@@ -32,7 +32,7 @@ hdc install JianTing-v0.1.16.hap
 - **书源校验**：单源测试继续检查详情、目录和正文/音频；批量提供搜索与发现/阅读两种模式，最多 6 个并发任务，支持关键词、范围选择、取消、重试与失败原因查看。
 - **多源搜索**：已启用且具备搜索规则的导入源每批最多 6 个并行，结果按来源和书籍地址去重，支持有声书/电子书筛选和网格/列表切换。
 - **搜索推荐与历史**：从启用来源的真实结果抽取最多 5 本推荐书；最近 20 条搜索历史使用自然换行的沉浸标签，支持整体清空与滚动吸顶。
-- **首页浏览**：在书源管理中选择已启用的听书源，推荐与分类跟随选择；“精品推荐”置首，其余分类按来源顺序展示，支持骨架屏、下拉刷新和板块“更多”。
+- **首页浏览**：在书源管理中选择已启用的听书源，推荐与分类跟随选择；支持透视封面轮播、分类吸顶、骨架屏、下拉刷新、书单快捷收藏和板块“更多”。
 - **小说阅读**：在线正文分页、章节跳转、位置恢复；支持字号、行高、翻页方式、主题、自定义底色、纹理和相册背景。
 - **音频播放**：章节续播、0.125x–4.0x 无级倍速、片头片尾跳过、睡眠定时、后台播放、系统媒体控制和在线音频投播。
 - **本地与离线**：音频文件和音频 ZIP 导入、章节下载、下载管理，以及将已完成章节导出到系统文件管理。
@@ -66,6 +66,7 @@ hdc install JianTing-v0.1.16.hap
 - “定时”支持按时长或按章节关闭：15/30/45/60 分钟、1/3/5/7 章，以及自定义值。开启“到时播完本章”后，仅在到时本章剩余不超过 10 分钟时等待章节结束；长按“定时”可取消。
 - 迷你播放栏外圈显示当前章节进度，封面保持静止；展开后可进入完整播放页。
 - 在线 HTTP(S) 音频可通过“投播”打开系统设备选择器。系统媒体卡片支持倍速、上一集、下一集和收藏。
+- 耳机断开或支持佩戴检测的耳机摘下时暂停；收到耳机或系统播放指令后继续原进度，重复播放/暂停指令保持各自语义，单纯重新连接不会自动起播。
 - 在书籍详情下载章节后，可从下载管理导出已完成章节。系统托管的在线缓存与离线下载分别管理。
 
 ### 书架与记录
@@ -73,6 +74,7 @@ hdc install JianTing-v0.1.16.hap
 - 书架支持网格/列表和内容类型筛选，长按拖到删除区可移除书籍。
 - 记录页展示统计和已收藏书的收听记录，“未收藏历史”单独查看；右侧播放按钮恢复收听，顶部编辑或长按进入多选删除。
 - 双击当前底部 Tab 回到该页顶部。更多操作说明见 App 内“我的 → 使用说明”。
+- “我的”页面“关于”下方的“简听交流群”通过浏览器打开 QQ 官方加群分享页，入口不展示群号。
 
 ## 技术与架构
 
@@ -140,7 +142,7 @@ AGENTS.md                 协作与工程约定
 
 GitHub HAP 使用 `product=default, buildMode=release`；官方邀测 APP 使用 `product=release, buildMode=release`，须绑定 AppGallery 正式发布证书与 `release / app_gallery` Profile。APP 包上传 AGC，GitHub 开发签名 HAP 供获授权设备安装。
 
-上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.16 --version-code 1000016`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
+上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.17 --version-code 1000017`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
 
 切换本机构建套件时，将 `DEVECO_SDK_HOME` 指向 Release IDE 的 `sdk` 目录，并使用同一安装目录下的 Node/Hvigor；HarmonyOS 构建不会从 `local.properties` 的 `hwsdk.dir` 切换 SDK。重建原生依赖可用 `scripts/build-quickjs.ps1 -DevEcoRoot <正式版IDE目录> -RequireReleaseSdk`。正式版与 Beta 的发布用途见[华为版本说明](https://developer.huawei.com/consumer/cn/doc/harmonyos-releases/overview-allversion)。
 

@@ -590,7 +590,7 @@ export struct ReadingStatsPage {
       .height(72)
       .width('100%')
       .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm, bottom: AppSpace.Sm })
-      .backgroundColor('#66FFFFFF')
+      .backgroundColor($r('app.color.record_stats_detail_surface'))
       .borderRadius({ topLeft: AppRadius.Lg, topRight: AppRadius.Lg, bottomLeft: AppRadius.Xl, bottomRight: AppRadius.Xl })
       .alignItems(VerticalAlign.Center)
     }

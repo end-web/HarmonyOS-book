@@ -19,6 +19,7 @@
     { "name": "home_top_control_tint", "value": "#E62C2C2C" },
     { "name": "home_card_surface", "value": "#2C2C2C" },
     { "name": "home_card_surface_soft", "value": "#2A241F" },
+    { "name": "record_stats_detail_surface", "value": "#332D28" },
     { "name": "home_card_shadow", "value": "#33000000" },
     { "name": "home_progress_track", "value": "#1FFFFFFF" },
     { "name": "app_brand", "value": "#FF8A5A" },
