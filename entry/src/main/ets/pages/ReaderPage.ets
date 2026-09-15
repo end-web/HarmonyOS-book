@@ -24,6 +24,7 @@ import {
   OnlineTextPaginator
 } from '../service/text/OnlineTextPaginator';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
+import { OnlineTextContentCache } from '../service/text/OnlineTextContentCache';
 import { TextReadingSettingsService } from '../service/text/TextReadingSettingsService';
 import { AppColor, AppFont, AppSpace, AppMaterial } from '../theme/Theme';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
@@ -99,7 +100,7 @@ export struct ReaderPage {
   private static epubHandlerCache: Map<string, bookParser.BookParserHandler> = new Map();
   /** 缓存上限，避免内存占用过大 */
   private static readonly MAX_HANDLER_CACHE_SIZE: number = 3;
-  /** 在线文本章节内容缓存：key 为 "bookId:chapterIndex"，避免重复请求接口 */
+  /** 在线文本章节内存缓存：按书源、书籍及章节地址隔离 */
   private static onlineTextContentCache: Map<string, string> = new Map();
   /** 在线文本章节内容缓存上限 */
   private static readonly MAX_TEXT_CONTENT_CACHE_SIZE: number = 50;
@@ -203,7 +204,11 @@ export struct ReaderPage {
         return;
       }
       if (this.isOnlineTextBookValue(value) && value.chapters.length === 0) {
+        value.chapters = await DataService.getChaptersForBook(value.id);
+      }
+      if (this.isOnlineTextBookValue(value) && value.chapters.length === 0) {
         value = await BookSourceService.loadTextBook(value);
+        if (value.chapters.length > 0) await DataService.upsertCachedBook(value);
       }
       if (this.isOnlineTextBookValue(value) && value.chapters.length === 0) {
         this.failReader('这本书暂时没有可读章节');
@@ -331,29 +336,30 @@ export struct ReaderPage {
   }
 
   private async getOnlineTextChapterContent(book: Book, resourceIndex: number): Promise<string> {
-    const cacheKey = `${book.id}:${resourceIndex}`;
+    const chapter = book.chapters[resourceIndex];
+    if (chapter === undefined) throw new Error('章节索引无效');
+    const chapterUrl = chapter.originSourceValue ?? chapter.source.value;
+    const cacheKey = OnlineTextContentCache.key(book.sourceUrl, book.bookUrl || book.id, chapterUrl);
     const cached = ReaderPage.onlineTextContentCache.get(cacheKey);
     if (cached !== undefined) {
+      ReaderPage.onlineTextContentCache.delete(cacheKey);
+      ReaderPage.onlineTextContentCache.set(cacheKey, cached);
       hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'reuse cached text content: %{public}s chapter %{public}d',
         book.title, resourceIndex);
       return cached;
     }
     const pending = this.onlineTextContentRequests.get(resourceIndex);
     if (pending !== undefined) return pending;
-    const chapter = book.chapters[resourceIndex];
-    if (chapter === undefined) throw new Error('章节索引无效');
-    const chapterUrl = chapter.originSourceValue ?? chapter.source.value;
-    const request: Promise<string> = BookSourceService.getTextChapterContent(
-      book, chapterUrl, chapter.title, chapter.variables).then((value): string => {
-      return OnlineTextPaginator.normalizeContent(value.content);
-    });
+    const request = this.readOrFetchOnlineTextContent(book, chapter, chapterUrl, cacheKey);
     this.onlineTextContentRequests.set(resourceIndex, request);
     try {
       const content = await request;
       // LRU 淘汰：缓存超限时移除最早的
       if (ReaderPage.onlineTextContentCache.size >= ReaderPage.MAX_TEXT_CONTENT_CACHE_SIZE) {
-        const firstKey = ReaderPage.onlineTextContentCache.keys().next().value as string;
-        ReaderPage.onlineTextContentCache.delete(firstKey);
+        for (const firstKey of ReaderPage.onlineTextContentCache.keys()) {
+          ReaderPage.onlineTextContentCache.delete(firstKey);
+          break;
+        }
         hilog.info(READER_LOG_DOMAIN, READER_LOG_TAG, 'evict oldest text content from cache');
       }
       ReaderPage.onlineTextContentCache.set(cacheKey, content);
@@ -363,6 +369,19 @@ export struct ReaderPage {
     } finally {
       this.onlineTextContentRequests.delete(resourceIndex);
     }
+  }
+
+  private async readOrFetchOnlineTextContent(book: Book, chapter: Chapter,
+    chapterUrl: string, cacheKey: string): Promise<string> {
+    const context = this.context;
+    if (context !== null) {
+      const saved = await OnlineTextContentCache.read(context, cacheKey);
+      if (saved !== undefined) return saved;
+    }
+    const value = await BookSourceService.getTextChapterContent(book, chapterUrl, chapter.title, chapter.variables);
+    const content = OnlineTextPaginator.normalizeContent(value.content);
+    if (context !== null) await OnlineTextContentCache.write(context, cacheKey, content);
+    return content;
   }
 
   private paginateOnlineTextContent(content: string): OnlineTextPage[] {

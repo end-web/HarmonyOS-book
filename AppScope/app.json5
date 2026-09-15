@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.huan.listenbook",
     "vendor": "ylwang",
-    "versionCode": 1000017,
-    "versionName": "0.1.17",
+    "versionCode": 1000018,
+    "versionName": "0.1.18",
     "buildVersion": "1",
     "icon": "$media:app_icon",
     "label": "$string:app_name"

@@ -16,6 +16,11 @@ export function homeCoverCarouselHeight(contentWidth: number): number {
   return homeCoverSize(contentWidth) + HOME_COVER_VERTICAL_SPACE;
 }
 
+/** 中间封面到侧封面的距离，真实轮播和骨架共用。 */
+export function homeCoverSideDistance(contentWidth: number): number {
+  return Math.max(0, (contentWidth - homeCoverSize(contentWidth) * HOME_COVER_SIDE_WIDTH_RATIO) / 2);
+}
+
 /** 将封面投影成向内收拢的梯形：外沿较高，靠近中间封面的内沿较短。 */
 export function homeCoverPerspective(sizePx: number, relativePosition: number,
   offsetXPx: number = 0): matrix4.Matrix4Transit {
@@ -182,7 +187,7 @@ export struct HomeCoverCarousel {
     const cardSize = this.coverSize();
     // 尺寸换算只在数据或容器宽度变化时执行，帧回调仅接收原生页面位置。
     const sizePx = this.getUIContext().vp2px(cardSize);
-    const sideDistance = Math.max(0, (this.contentWidth - cardSize * HOME_COVER_SIDE_WIDTH_RATIO) / 2);
+    const sideDistance = homeCoverSideDistance(this.contentWidth);
     const sideOffsetPx = this.getUIContext().vp2px(cardSize - sideDistance);
     const nextMotions: Map<string, HomeCoverMotion> = new Map();
     const indexedMotions: HomeCoverMotion[] = [];
@@ -210,7 +215,9 @@ export struct HomeCoverCarousel {
         }, (book: SearchResult) => `${book.sourceUrl}#${book.bookUrl}`)
       }
       .width('100%').height(this.coverSize() + HOME_COVER_VERTICAL_SPACE)
-      .index(0)
+      // 索引由 Swiper 自己保持；显式 .index(0) 会在可见性改变、暂停自动播放时
+      // 重置页面，但 AttributeUpdater 仍保留原页的透视，导致中间封面消失。
+      // 换源、刷新回到首张仅由 resetSelection 中的 controller 执行。
       .displayCount(1)
       .prevMargin((this.contentWidth - this.coverSize()) / 2)
       .nextMargin((this.contentWidth - this.coverSize()) / 2)

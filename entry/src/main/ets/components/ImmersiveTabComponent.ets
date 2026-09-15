@@ -16,6 +16,7 @@ export struct ImmersiveTabComponent {
         Text(this.label)
           .fontSize(13)
           .fontColor(this.selected ? HomeTheme.Accent : $r('sys.color.font_secondary'))
+          .animation(this.fitContent ? null : { duration: AppMotion.Fast, curve: AppCurve.Standard })
           .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Regular)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -31,18 +32,14 @@ export struct ImmersiveTabComponent {
       .height(30)
       .alignItems(VerticalAlign.Center)
 
-      if (this.selected) {
-        Row()
-          .width(18)
-          .height(2)
-          .borderRadius(1)
-          .backgroundColor(HomeTheme.Accent)
-      } else {
-        Row()
-          .width(18)
-          .height(2)
-          .opacity(0)
-      }
+      Row()
+        .width(18)
+        .height(2)
+        .borderRadius(1)
+        .backgroundColor(HomeTheme.Accent)
+        .opacity(this.selected ? 1 : 0)
+        .scale({ x: this.selected ? 1 : 0.35, y: 1 })
+        .animation(this.fitContent ? null : { duration: AppMotion.Base, curve: AppCurve.Spring })
     }
     .width(this.fitContent ? LayoutPolicy.wrapContent : this.itemWidth)
     .height(34)
@@ -52,6 +49,7 @@ export struct ImmersiveTabComponent {
     .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
     // 历史标签按内容换行，首次测量的尺寸变化不能触发整块材质动画。
     .animation(this.fitContent ? null : { duration: AppMotion.Base, curve: AppCurve.Spring })
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
     .onClick(() => this.onTap())
   }
 }

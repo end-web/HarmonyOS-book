@@ -1,11 +1,11 @@
 import { HdsCompat } from '../utils/HdsCompat';
-import { LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
+import { AnimatorResult, LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   HdsNavigation, HdsNavigationTitleMode, HideMode, BottomBuilderParams, BuilderOptions, TitleBarContentOptions
 } from '@kit.UIDesignKit';
-import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, HomeTheme } from '../theme/Theme';
+import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial, AppCurve, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { Book, Chapter } from '../model/Book';
@@ -13,7 +13,10 @@ import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
-import { HomeCoverCarousel, homeCoverPerspective, homeCoverCarouselHeight } from '../components/HomeCoverCarousel';
+import {
+  HomeCoverCarousel, homeCoverPerspective, homeCoverCarouselHeight, homeCoverSize, homeCoverSideDistance
+} from '../components/HomeCoverCarousel';
+import { HomeCategoryCard } from '../components/HomeCategoryCard';
 import { HomeCategoryBookRow, HomeCategoryRowDataSource } from '../utils/HomeCategoryRowDataSource';
 import { HomeCategoryOverviewRow, HomeCategoryOverviewDataSource } from '../utils/HomeCategoryOverviewDataSource';
 import { HomeBlockDataSource } from '../utils/HomeBlockDataSource';
@@ -69,6 +72,9 @@ const CATEGORY_NAV_ROW_HEIGHT: number = 48;
 const HOME_REFRESH_TRIGGER_DISTANCE: number = 96;
 // 内容位移为手指移动的一半：至少下拉约 192vp，再松手才刷新。
 const HOME_REFRESH_PULL_DOWN_RATIO: number = 0.5;
+const HOME_CAROUSEL_TRANSITION_DURATION: number = 650;
+const HOME_CONTENT_TRANSITION_DURATION: number = 360;
+const HOME_CAROUSEL_SCROLL_FADE_DISTANCE: number = 64;
 const COLLAPSED_SEARCH_SIZE: number = 42;
 const FEATURED_PAGE_SIZE: number = 3;
 const FEATURED_ROW_HEIGHT: number = 72;
@@ -76,6 +82,7 @@ const FEATURED_COVER_SIZE: number = 60;
 const FEATURED_NEXT_PEEK: number = 32;
 const HOME_COVER_CARD_SIZE: number = 128;
 const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
+const HOME_BLOCK_TITLE_HEIGHT: number = 28;
 const CATEGORY_OVERVIEW_INDEX: number = -2;
 const CATEGORY_CARD_COLORS: string[] = ['#B84332', '#287EA2', '#6750AB', '#248279',
   '#AA4169', '#9B632F', '#475EA8', '#54783A'];
@@ -84,10 +91,26 @@ const CATEGORY_CARD_COLORS: string[] = ['#B84332', '#287EA2', '#6750AB', '#24827
 struct HomeLoadingSkeleton {
   @Param showCarousel: boolean = true;
   @Param showRecommendations: boolean = true;
+  @Param contentWidth: number = 360;
   @Local pulsing: boolean = false;
 
   onDidBuild(): void {
     if (!this.pulsing) this.pulsing = true;
+  }
+
+  @Computed
+  get coverContentWidth(): number {
+    return this.contentWidth - AppSpace.Md * 2;
+  }
+
+  @Computed
+  get coverSize(): number {
+    return homeCoverSize(this.coverContentWidth);
+  }
+
+  @Computed
+  get sideDistancePx(): number {
+    return this.getUIContext().vp2px(homeCoverSideDistance(this.coverContentWidth));
   }
 
   @Builder
@@ -95,7 +118,7 @@ struct HomeLoadingSkeleton {
     Column({ space: 6 }) {
       Row()
         .width('100%')
-        .aspectRatio(1)
+        .aspectRatio(0.75)
         .borderRadius(AppRadius.Sm)
         .backgroundColor(AppColor.Divider)
       Row()
@@ -109,7 +132,7 @@ struct HomeLoadingSkeleton {
         .borderRadius(AppRadius.Xs)
         .backgroundColor(HomeTheme.ProgressTrack)
     }
-    .layoutWeight(1)
+    .width(HOME_COVER_CARD_SIZE)
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -153,7 +176,7 @@ struct HomeLoadingSkeleton {
 
   @Builder
   skeletonFeaturedSection() {
-    Column({ space: AppSpace.Sm }) {
+    Column({ space: AppSpace.Xs }) {
       Row() {
         Row()
           .width(104)
@@ -168,9 +191,16 @@ struct HomeLoadingSkeleton {
           .backgroundColor(HomeTheme.ProgressTrack)
       }
       .width('100%')
-      this.skeletonFeaturedRow(true)
-      this.skeletonFeaturedRow(true)
-      this.skeletonFeaturedRow(false)
+      .height(HOME_BLOCK_TITLE_HEIGHT)
+      .padding({ left: AppSpace.Md, right: AppSpace.Md })
+      .translate({ y: HOME_FIRST_BLOCK_TITLE_OFFSET })
+      Column() {
+        this.skeletonFeaturedRow(true)
+        this.skeletonFeaturedRow(true)
+        this.skeletonFeaturedRow(false)
+      }
+      .width('100%')
+      .padding({ left: AppSpace.Md, right: AppSpace.Md + FEATURED_NEXT_PEEK })
     }
     .width('100%')
   }
@@ -184,11 +214,12 @@ struct HomeLoadingSkeleton {
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)
+    .padding({ left: AppSpace.Md, right: AppSpace.Md })
   }
 
   @Builder
   skeletonSection() {
-    Column({ space: AppSpace.Sm }) {
+    Column({ space: AppSpace.Xs }) {
       Row() {
         Row()
           .width(104)
@@ -203,6 +234,8 @@ struct HomeLoadingSkeleton {
           .backgroundColor(HomeTheme.ProgressTrack)
       }
       .width('100%')
+      .height(HOME_BLOCK_TITLE_HEIGHT)
+      .padding({ left: AppSpace.Md, right: AppSpace.Md })
       this.skeletonCoverRow()
     }
     .width('100%')
@@ -210,21 +243,22 @@ struct HomeLoadingSkeleton {
 
   build() {
     Column() {
-      Column({ space: AppSpace.Md }) {
+      Column({ space: AppSpace.Xs }) {
         if (this.showCarousel) {
           Stack() {
-            Row().width(180).height(180).borderRadius(AppRadius.Md)
+            Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
               .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), -1, this.getUIContext().vp2px(-104)))
+              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(this.coverSize), -1, -this.sideDistancePx))
               .backgroundColor(AppColor.Divider).opacity(0.55)
-            Row().width(180).height(180).borderRadius(AppRadius.Md)
+            Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
               .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(180), 1, this.getUIContext().vp2px(104)))
+              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(this.coverSize), 1, this.sideDistancePx))
               .backgroundColor(AppColor.Divider).opacity(0.55)
-            Row().width('52%').height(180).borderRadius(AppRadius.Md)
+            Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
               .backgroundColor(AppColor.Divider)
           }
-          .width('100%').height(204)
+          .width('100%').height(homeCoverCarouselHeight(this.coverContentWidth))
+          .padding({ left: AppSpace.Md, right: AppSpace.Md })
         }
         if (this.showRecommendations) {
           this.skeletonFeaturedSection()
@@ -232,7 +266,6 @@ struct HomeLoadingSkeleton {
         }
       }
       .width('100%')
-      .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Md })
       .opacity(this.pulsing ? 0.48 : 0.9)
       .animation({
         duration: 900,
@@ -274,6 +307,11 @@ export struct HomePage {
   @Local categoryNextUrl: string = '';
   @Local isRefreshing: boolean = false;
   @Local refreshPullOffset: number = 0;
+  @Local contentEntered: boolean = true;
+  @Local carouselExpansion: number = 1;
+  private carouselAnimator: AnimatorResult | null = null;
+  private carouselAnimationSerial: number = 0;
+  private contentEntranceTimer: number = -1;
 
   @Event onBookTap: (id: string) => void = () => {};
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
@@ -307,6 +345,8 @@ export struct HomePage {
   }
 
   aboutToDisappear(): void {
+    this.cancelContentEntrance();
+    this.cancelCarouselAnimation();
     emitter.off(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);
     emitter.off(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     this.homeGen++;
@@ -345,8 +385,12 @@ export struct HomePage {
   }
 
   private reloadSource(): void {
+    this.cancelContentEntrance();
+    this.cancelCarouselAnimation();
+    this.contentEntered = true;
     this.lastSourceRevision = SourceDataService.getInvalidationCounter();
     this.selectedCategoryIndex = -1;
+    this.carouselExpansion = 1;
     this.resetSearchCollapse();
     this.scrollContentToTop();
     this.revealCategoryTab(-1);
@@ -387,6 +431,8 @@ export struct HomePage {
     if (this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) {
       this.lastSourceRevision = SourceDataService.getInvalidationCounter();
       this.selectedCategoryIndex = -1;
+      this.cancelCarouselAnimation();
+      this.carouselExpansion = 1;
       await this.loadHomeBlocks();
     } else if (this.selectedCategoryIndex < 0) {
       await this.loadHomeBlocks(true);
@@ -489,34 +535,88 @@ export struct HomePage {
     this.categoryOverviewDataSource.setCategories(categories);
   }
 
-  private revealCategoryTab(index: number): void {
+  private revealCategoryTab(index: number, animated: boolean = false): void {
     try {
       // 滚动列表首项是精品推荐，源分类的列表索引顺延一位。
-      this.categoryNavScroller.scrollToIndex(index < 0 ? 0 : index + 1, false,
+      this.categoryNavScroller.scrollToIndex(index < 0 ? 0 : index + 1, animated,
         index < 0 ? ScrollAlign.START : ScrollAlign.CENTER);
     } catch (_error) { /* 分类标签尚未布局时保留当前位置。 */ }
+  }
+
+  private cancelContentEntrance(): void {
+    if (this.contentEntranceTimer !== -1) {
+      clearTimeout(this.contentEntranceTimer);
+      this.contentEntranceTimer = -1;
+    }
+  }
+
+  private animateContentEntrance(): void {
+    this.cancelContentEntrance();
+    this.contentEntered = false;
+    // 先提交新内容的起始帧；快速连续切换只保留最后一次入场。
+    this.contentEntranceTimer = setTimeout(() => {
+      this.contentEntranceTimer = -1;
+      this.getUIContext().animateTo({ duration: HOME_CONTENT_TRANSITION_DURATION, curve: AppCurve.Decelerate }, () => {
+        this.contentEntered = true;
+      });
+    }, 16);
+  }
+
+  private selectCategoryTab(index: number): void {
+    this.selectedCategoryIndex = index;
+    this.resetSearchCollapse();
+    this.scrollContentToTop();
+    this.revealCategoryTab(index, true);
+    this.animateContentEntrance();
+    this.animateCarouselExpansion(index === -1 ? 1 : 0);
+  }
+
+  private cancelCarouselAnimation(): void {
+    this.carouselAnimationSerial++;
+    this.carouselAnimator?.cancel();
+    this.carouselAnimator = null;
+  }
+
+  private animateCarouselExpansion(target: number): void {
+    this.cancelCarouselAnimation();
+    if (Math.abs(this.carouselExpansion - target) < 0.001) {
+      this.carouselExpansion = target;
+      return;
+    }
+    const serial: number = this.carouselAnimationSerial;
+    // HDS bottomBuilder 的配置高度也需要逐帧同步；只给外层 height 做隐式动画会提前裁掉一截。
+    const animation: AnimatorResult = this.getUIContext().createAnimator({
+      duration: HOME_CAROUSEL_TRANSITION_DURATION,
+      easing: 'ease-in-out', delay: 0, fill: 'forwards', direction: 'normal',
+      iterations: 1, begin: this.carouselExpansion, end: target
+    });
+    this.carouselAnimator = animation;
+    animation.onFrame = (value: number): void => {
+      if (serial === this.carouselAnimationSerial) this.carouselExpansion = value;
+    };
+    animation.onFinish = (): void => {
+      if (serial !== this.carouselAnimationSerial) return;
+      this.carouselExpansion = target;
+      this.carouselAnimator = null;
+    };
+    animation.play();
   }
 
   private showCategoryOverview(): void {
     if (this.selectedCategoryIndex === CATEGORY_OVERVIEW_INDEX) return;
     // 首次加载仍需取得分类定义；已有分类书单请求则停止回写。
     if (!this.loadingHome) this.homeGen++;
-    this.selectedCategoryIndex = CATEGORY_OVERVIEW_INDEX;
+    this.selectCategoryTab(CATEGORY_OVERVIEW_INDEX);
     this.categoryLoading = false;
-    this.resetSearchCollapse();
-    this.scrollContentToTop();
   }
 
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
   private async switchCategory(index: number, forceReload: boolean = false): Promise<void> {
     if (this.selectedCategoryIndex === index && !forceReload) return;
     const generation = ++this.homeGen;
-    this.selectedCategoryIndex = index;
+    if (!forceReload) this.selectCategoryTab(index);
     this.loadingHome = false;
     this.categoryLoading = false;
-    this.resetSearchCollapse();
-    this.scrollContentToTop();
-    this.revealCategoryTab(index);
     if (index === -1) {
       this.categoryBooks = [];
       this.categoryDS.setBooks([]);
@@ -556,6 +656,7 @@ export struct HomePage {
       }
       this.categoryBooks = books;
       this.categoryDS.setBooks(books);
+      if (!forceReload) this.animateContentEntrance();
       this.categoryNextUrl = nextUrl;
       this.categoryHasMore = nextUrl.length > 0;
       if (books.length === 0) this.categoryError = $r('app.string.home_source_empty');
@@ -663,11 +764,25 @@ export struct HomePage {
   @Local headerScrollOffset: number = 0;
 
   @Computed
-  get carouselPanelHeight(): number {
-    if (this.selectedCategoryIndex !== -1) return 0;
-    if (this.loadingHome && this.homeBlocks.length === 0) return 204 + AppSpace.Md;
+  get carouselFullHeight(): number {
+    if (this.loadingHome && this.homeBlocks.length === 0) {
+      return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2);
+    }
     if (this.carouselBooks.length === 0) return 0;
     return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2);
+  }
+
+  @Computed
+  get carouselPanelHeight(): number {
+    return this.carouselExpansion * this.carouselFullHeight;
+  }
+
+  @Computed
+  get carouselViewportOpacity(): number {
+    // Tab 吸顶时封面底部仍位于透明状态栏内，最后 64vp 淡出，连阴影一起退出。
+    if (this.isSearchCollapsed) return 0;
+    const remaining: number = SEARCH_FIELD_ROW_HEIGHT + this.carouselFullHeight - this.headerScrollOffset;
+    return Math.max(0, Math.min(1, remaining / HOME_CAROUSEL_SCROLL_FADE_DISTANCE));
   }
 
   @Computed
@@ -676,8 +791,15 @@ export struct HomePage {
   }
 
   @Computed
+  get carouselScrollEffectEnabled(): boolean {
+    // 外层只模糊经过顶部的轮播；无轮播或 Tab 已吸顶时，模糊由内层导航接管。
+    return this.carouselPanelHeight > 0.5 && !this.isSearchCollapsed;
+  }
+
+  @Computed
   get topBlurExtraHeight(): number {
     // 模糊尾部止于尚未吸顶的 Tab 上方；吸顶后的内容模糊由 Tab 所在标题栏接管。
+    if (!this.carouselScrollEffectEnabled) return 0;
     return Math.min(32, Math.max(0, this.headerScrollRange - this.headerScrollOffset));
   }
 
@@ -794,6 +916,8 @@ export struct HomePage {
     .backgroundColor(Color.Transparent)
     // 原生显隐只负责收起标题区域；自定义搜索内容同步移动，避免到阈值才原地消失。
     .translate({ y: -Math.min(SEARCH_FIELD_ROW_HEIGHT, this.headerScrollOffset) })
+    .opacity(Math.max(0, Math.min(1, (SEARCH_FIELD_ROW_HEIGHT - this.headerScrollOffset) / 24)))
+    .visibility(this.headerScrollOffset >= SEARCH_FIELD_ROW_HEIGHT - 0.5 ? Visibility.Hidden : Visibility.Visible)
   }
 
   /** 位于分类 Tab 下方、推荐内容上方的下拉刷新指示器。 */
@@ -865,7 +989,10 @@ export struct HomePage {
         avoidLayoutSafeArea: true,
         content: this.searchTitleBarContent,
         style: {
-          scrollEffectOpts: { scrollEffectType: HdsCompat.scrollEffect },
+          scrollEffectOpts: {
+            enableScrollEffect: this.carouselScrollEffectEnabled,
+            scrollEffectType: HdsCompat.scrollEffect
+          },
           originalStyle: {
             backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: this.topBlurExtraHeight }
           },
@@ -873,7 +1000,7 @@ export struct HomePage {
             backgroundStyle: { backgroundColor: Color.Transparent, maskExtraHeight: this.topBlurExtraHeight }
           },
           thermoCtrl: true,
-          systemMaterialEffect: HdsCompat.material
+          systemMaterialEffect: this.carouselScrollEffectEnabled ? HdsCompat.material : undefined
         }
       })
       .titleMode(HdsNavigationTitleMode.MINI)
@@ -1015,7 +1142,7 @@ export struct HomePage {
         } else if (this.selectedCategoryIndex === -1) {
           if (this.loadingHome && this.homeBlocks.length === 0) {
             ListItem() {
-              HomeLoadingSkeleton({ showCarousel: false })
+              HomeLoadingSkeleton({ showCarousel: false, contentWidth: this.contentWidth })
             }
           } else if (this.homeBlocks.length > 0) {
             LazyForEach(this.homeBlockDataSource, (block: HomeBlockSection, idx: number) => {
@@ -1121,6 +1248,8 @@ export struct HomePage {
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .cachedCount(5)
     .translate({ y: this.refreshPullOffset })
+    .opacity(this.contentEntered ? 1 : 0)
+    .offset({ y: this.contentEntered ? 0 : 12 })
     .clip(false)
     .backgroundColor(Color.Transparent)
   }
@@ -1149,6 +1278,7 @@ export struct HomePage {
         }
       }
       .width('100%')
+      .height(HOME_BLOCK_TITLE_HEIGHT)
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
       .alignItems(VerticalAlign.Center)
       .translate({ y: blockIdx === 0 ? HOME_FIRST_BLOCK_TITLE_OFFSET : 0 })
@@ -1361,46 +1491,38 @@ export struct HomePage {
 
   @Builder
   buildCategoryCard(category: HomeSourceCategory, index: number) {
-    Stack({ alignContent: Alignment.BottomEnd }) {
-      SymbolGlyph($r('sys.symbol.square_grid_2x2'))
-        .fontSize(56).fontColor([Color.White]).opacity(0.16)
-        .rotate({ angle: -12 }).margin({ right: AppSpace.Sm, bottom: AppSpace.Sm })
-      Column() {
-        Text(category.name)
-          .fontSize(19).fontWeight(FontWeight.Bold).fontColor(Color.White)
-          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Blank()
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(16).fontColor([Color.White]).opacity(0.9)
-      }
-      .width('100%').height('100%').padding(AppSpace.Md)
-      .alignItems(HorizontalAlign.Start)
-    }
-    .width('100%').height(112).borderRadius(AppRadius.Md)
-    .backgroundColor(CATEGORY_CARD_COLORS[index % CATEGORY_CARD_COLORS.length])
-    .clip(true)
-    .accessibilityGroup(true).accessibilityText(category.name)
-    .onClick(() => this.switchCategoryByUrl(category.url))
+    HomeCategoryCard({
+      label: category.name,
+      cardColor: CATEGORY_CARD_COLORS[index % CATEGORY_CARD_COLORS.length],
+      indexHint: index,
+      onTap: () => this.switchCategoryByUrl(category.url)
+    })
   }
 
   @LocalBuilder
   buildHomeNavigationBottom() {
     Column() {
-      if (this.carouselPanelHeight > 0) {
+      // 保留完整尺寸的轮播节点，只动画外层占位，避免切换时直接删除或压扁封面。
+      if (this.carouselFullHeight > 0) {
         Column() {
-          if (this.loadingHome && this.homeBlocks.length === 0) {
-            HomeLoadingSkeleton({ showRecommendations: false })
-          } else {
-            HomeCoverCarousel({
-              books: this.carouselBooks,
-              onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
-            })
-              .padding({ left: AppSpace.Md, right: AppSpace.Md })
+          Column() {
+            if (this.loadingHome && this.homeBlocks.length === 0) {
+              HomeLoadingSkeleton({ showRecommendations: false, contentWidth: this.contentWidth })
+            } else {
+              HomeCoverCarousel({
+                books: this.carouselBooks,
+                onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
+              })
+                .padding({ left: AppSpace.Md, right: AppSpace.Md })
+            }
           }
+          .width('100%').height(this.carouselFullHeight)
+          .flexShrink(0)
         }
         .width('100%')
         .height(this.carouselPanelHeight)
+        .clip(true)
+        .opacity(this.carouselViewportOpacity)
       }
       this.buildCategoryTags()
     }
