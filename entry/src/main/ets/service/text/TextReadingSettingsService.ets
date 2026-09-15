@@ -12,6 +12,7 @@ const KEY_PATTERN: string = 'background_pattern';
 const KEY_BACKGROUND_IMAGE: string = 'background_image';
 const KEY_OVERLAY_ALPHA: string = 'overlay_alpha';
 const KEY_PAGE_TURN_MODE: string = 'page_turn_mode';
+const KEY_SHOW_READING_STATUS: string = 'show_reading_status';
 
 export class TextReadingSettingsService {
   private static store: preferences.Preferences | null = null;
@@ -38,20 +39,24 @@ export class TextReadingSettingsService {
     const savedLineHeight = store.getSync(KEY_LINE_HEIGHT, TextReadingSettings.LINE_HEIGHT_DEFAULT);
     const savedThemeId = store.getSync(KEY_THEME_ID, TextReadingSettings.THEME_DEFAULT);
     const savedBackground = store.getSync(KEY_CUSTOM_BACKGROUND, TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT);
-    const savedPattern = store.getSync(KEY_PATTERN, ReaderPattern.None as string);
+    const savedPattern = store.getSync(KEY_PATTERN, ReaderPattern.None);
     const savedImage = store.getSync(KEY_BACKGROUND_IMAGE, '');
     const savedOverlay = store.getSync(KEY_OVERLAY_ALPHA, TextReadingSettings.OVERLAY_DEFAULT);
     const savedPageTurnMode = store.getSync(KEY_PAGE_TURN_MODE, TextReadingSettings.PAGE_TURN_MODE_DEFAULT);
+    const savedReadingStatus = store.getSync(KEY_SHOW_READING_STATUS, TextReadingSettings.SHOW_READING_STATUS_DEFAULT);
     const fontSize = typeof savedFontSize === 'number' ? savedFontSize : TextReadingSettings.FONT_SIZE_DEFAULT;
     const lineHeight = typeof savedLineHeight === 'number' ? savedLineHeight : TextReadingSettings.LINE_HEIGHT_DEFAULT;
     const themeId = typeof savedThemeId === 'string' ? savedThemeId : TextReadingSettings.THEME_DEFAULT;
     const background = typeof savedBackground === 'string'
       ? savedBackground : TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
-    const pattern = typeof savedPattern === 'string' ? savedPattern : ReaderPattern.None as string;
+    const pattern = typeof savedPattern === 'string' ? savedPattern : ReaderPattern.None;
     const image = typeof savedImage === 'string' ? savedImage : '';
     const overlay = typeof savedOverlay === 'number' ? savedOverlay : TextReadingSettings.OVERLAY_DEFAULT;
     const pageTurnMode = typeof savedPageTurnMode === 'string' ? savedPageTurnMode : TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
-    return TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay, pageTurnMode);
+    const showReadingStatus = typeof savedReadingStatus === 'boolean' ? savedReadingStatus :
+      TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
+    return TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
+      pageTurnMode, showReadingStatus);
   }
 
   static async save(context: common.Context, settings: TextReadingSettings): Promise<void> {
@@ -66,6 +71,7 @@ export class TextReadingSettingsService {
     store.putSync(KEY_BACKGROUND_IMAGE, settings.backgroundImage);
     store.putSync(KEY_OVERLAY_ALPHA, TextReadingSettings.normalizeOverlay(settings.overlayAlpha));
     store.putSync(KEY_PAGE_TURN_MODE, TextReadingSettings.normalizePageTurnMode(settings.pageTurnMode));
+    store.putSync(KEY_SHOW_READING_STATUS, settings.showReadingStatus);
     await store.flush();
   }
 }

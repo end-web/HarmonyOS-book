@@ -1,5 +1,32 @@
 {
   "string": [
+    {"name": "reader_footer_title", "value": "页脚显示"},
+    {"name": "reader_show_battery_time", "value": "显示电量和时间"},
+    {"name": "reader_battery_level", "value": "电量 %s"},
+    {
+      "name": "reader_theme_title",
+      "value": "阅读主题"
+    },
+    {
+      "name": "reader_custom_image",
+      "value": "自定义图片"
+    },
+    {
+      "name": "reader_change_image",
+      "value": "更换图片"
+    },
+    {
+      "name": "reader_image_overlay",
+      "value": "蒙层"
+    },
+    {
+      "name": "reader_image_overlay_hint",
+      "value": "蒙层越浓，图片越淡，正文越清楚"
+    },
+    {
+      "name": "reader_image_apply_failed",
+      "value": "图片应用失败，请重试或更换图片"
+    },
     {"name": "record_stats_pending", "value": "—"},
     {"name": "record_stats_loading", "value": "正在读取收听统计"},
     {"name": "record_stats_read_failed", "value": "统计读取失败，点击重试"},
@@ -703,7 +730,7 @@
     },
     {
       "name": "guide_reader_settings_desc",
-      "value": "调整字号、行高、翻页方式、主题、底色和背景图案，设置会自动保存"
+      "value": "调整字号、行高、翻页方式、阅读主题、自定义图片和蒙层，设置会自动保存"
     },
     {
       "name": "guide_group_source",

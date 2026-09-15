@@ -282,6 +282,8 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor('#F5F2EA')
+      .onShown((): void => WindowUtils.setReaderActive(true))
+      .onHidden((): void => WindowUtils.setReaderActive(false))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'search') {
       SearchPage({ navStack: this.navStack })

@@ -25,6 +25,29 @@ export class WindowUtils {
   private static colorMode: ConfigurationConstant.ColorMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT;
   /** 最近一次页面请求的状态栏诉求：true=强制白字(深色背景页)，false=跟随系统 */
   private static forceLight: boolean = false;
+  private static readerActive: boolean = false;
+  private static readerStatusBarUpdate: Promise<void> = Promise.resolve();
+
+  /** 由阅读路由的显示/隐藏生命周期控制，覆盖跳转详情后返回的场景。 */
+  static setReaderActive(active: boolean): void {
+    if (WindowUtils.readerActive === active) return;
+    WindowUtils.readerActive = active;
+    // 首次绘制前就使用阅读安全区，不等待系统栏动画或异步回调。
+    WindowUtils.refreshAvoidArea();
+    WindowUtils.updateReaderStatusBar();
+  }
+
+  private static updateReaderStatusBar(): void {
+    // 只在进出阅读路由时切换系统栏，工具栏和翻页不改变正文视口。
+    WindowUtils.readerStatusBarUpdate = WindowUtils.readerStatusBarUpdate.then(async (): Promise<void> => {
+      const win = WindowUtils.mainWindow;
+      if (win === null) return;
+      await win.setSpecificSystemBarEnabled('status', !WindowUtils.readerActive, false);
+      WindowUtils.refreshAvoidArea();
+    }).catch((): void => {
+      // 窗口销毁或切换期间忽略失败，下次页面切换重新应用。
+    });
+  }
 
   static async setupImmersive(stage: window.WindowStage, colorMode?: ConfigurationConstant.ColorMode): Promise<void> {
     const win = await stage.getMainWindow();
@@ -249,6 +272,13 @@ export class WindowUtils {
       let nextBottomPx: number = 0;
       if (systemArea !== null) {
         WindowUtils.topPx = systemArea.topRect.height;
+        if (WindowUtils.readerActive && win.getWindowStatus() === window.WindowStatusType.FULL_SCREEN) {
+          const cutoutArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_CUTOUT);
+          if (cutoutArea !== null) {
+            // 临时拉出系统栏也不压缩正文；小窗仍使用实际系统避让区。
+            WindowUtils.topPx = cutoutArea.topRect.height;
+          }
+        }
         nextBottomPx = Math.max(nextBottomPx, systemArea.bottomRect.height);
         hasBottomArea = true;
       }

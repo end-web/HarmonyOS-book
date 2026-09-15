@@ -140,6 +140,7 @@ struct HomeCarouselCover {
 @ComponentV2
 export struct HomeCoverCarousel {
   @Param books: SearchResult[] = [];
+  @Param active: boolean = true;
   @Event onBookTap: (book: SearchResult) => void = () => {};
   @Local contentWidth: number = 336;
   @Local inViewport: boolean = false;
@@ -222,7 +223,7 @@ export struct HomeCoverCarousel {
       .prevMargin((this.contentWidth - this.coverSize()) / 2)
       .nextMargin((this.contentWidth - this.coverSize()) / 2)
       .loop(this.books.length > 2)
-      .autoPlay(this.books.length > 1 && this.inViewport, { stopWhenTouched: true })
+      .autoPlay(this.active && this.books.length > 1 && this.inViewport, { stopWhenTouched: true })
       .interval(4500).duration(400).curve(Curve.EaseOut)
       .indicator(false)
       .onContentDidScroll((_selectedIndex: number, index: number, position: number) => {

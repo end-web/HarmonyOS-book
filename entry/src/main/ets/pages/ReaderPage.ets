@@ -3,6 +3,7 @@ import { PlatformCompat } from '../utils/PlatformCompat';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { image } from '@kit.ImageKit';
 import { curves, display, SymbolGlyphModifier } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
@@ -15,6 +16,7 @@ import { ReaderPalette, ReaderPattern, ReaderThemeId, resolvePalette } from '../
 import { ReaderBackground } from '../components/ReaderBackground';
 import { ReaderPageTurnComponent } from '../components/ReaderPageTurnComponent';
 import { ReaderSettingsSheet } from '../components/ReaderSettingsSheet';
+import { ReaderStatusIndicator } from '../components/ReaderStatusIndicator';
 import { DataService } from '../service/DataService';
 import { BookSourceService } from '../service/BookSourceService';
 import {
@@ -62,12 +64,14 @@ export struct ReaderPage {
   @Local currentChapterTitle: string = '';
   @Local fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   @Local lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
+  private pickingBackgroundImage: boolean = false;
   @Local themeId: string = TextReadingSettings.THEME_DEFAULT;
   @Local customBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
   @Local backgroundPattern: string = ReaderPattern.None;
   @Local bgImagePath: string = '';
   @Local overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   @Local pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
+  @Local showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
   /** 由 themeId / customBackground 解析出的当前配色；所有阅读色都从这里取 */
   @Local palette: ReaderPalette = resolvePalette(TextReadingSettings.THEME_DEFAULT,
     TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT);
@@ -134,6 +138,7 @@ export struct ReaderPage {
   aboutToAppear(): void {
     this.leaving = false;
     this.readerBarVisible = false;
+    WindowUtils.setReaderActive(true);
     this.showChapterSheet = false;
     this.showSettingsSheet = false;
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -145,6 +150,7 @@ export struct ReaderPage {
 
   aboutToDisappear(): void {
     this.leaving = true;
+    WindowUtils.setReaderActive(false);
     this.completeOnlineTextTurn(false);
     this.onlineTextLoadSerial++;
     this.cancelReaderSettingsRefresh();
@@ -532,8 +538,14 @@ export struct ReaderPage {
       this.customBackground = settings.customBackground;
       this.backgroundPattern = settings.pattern;
       this.bgImagePath = settings.backgroundImage;
+      if (this.bgImagePath.length > 0 && !await fileIo.access(this.bgImagePath)) {
+        this.bgImagePath = '';
+        this.backgroundPattern = ReaderPattern.None;
+        if (this.themeId === ReaderThemeId.Image) this.themeId = TextReadingSettings.THEME_DEFAULT;
+      }
       this.overlayAlpha = settings.overlayAlpha;
       this.pageTurnMode = settings.pageTurnMode;
+      this.showReadingStatus = settings.showReadingStatus;
       this.refreshPalette();
     } catch (e) {
       hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'restore settings failed: %{public}s',
@@ -552,6 +564,7 @@ export struct ReaderPage {
     this.bgImagePath = '';
     this.overlayAlpha = TextReadingSettings.OVERLAY_DEFAULT;
     this.pageTurnMode = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
+    this.showReadingStatus = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
     this.refreshPalette();
   }
 
@@ -566,7 +579,7 @@ export struct ReaderPage {
     const currentContext = this.context;
     if (currentContext === null) return;
     const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
-      this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode);
+      this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
     TextReadingSettingsService.save(currentContext, settings).catch((e: Error): void => {
       hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'save settings failed: %{public}s', e.message);
     });
@@ -576,7 +589,8 @@ export struct ReaderPage {
     const currentDisplay = display.getDefaultDisplaySync();
     const scaledDensity = currentDisplay.scaledDensity > 0 ? currentDisplay.scaledDensity : 1;
     const density = currentDisplay.densityPixels > 0 ? currentDisplay.densityPixels : 1;
-    const verticalSafePx = (this.topSafeVp + this.bottomSafeVp) * density;
+    const verticalSafePx = (this.topSafeVp + this.bottomSafeVp +
+      READER_TEXT_FOOTER_HEIGHT + READER_TEXT_VERTICAL_PADDING) * density;
     const pageConfig: readerCore.ReaderSetting = {
       fontName: '系统字体',
       fontSize: TextReadingSettings.normalizeFontSize(this.fontSize),
@@ -586,7 +600,7 @@ export struct ReaderPage {
       lineHeight: TextReadingSettings.normalizeLineHeight(this.lineHeight),
       nightMode: this.palette.isDark,
       themeColor: this.palette.background,
-      // ReaderKit 自己渲染排版，背景图直接交给它；纸纹/布纹是 ArkUI 渐变层，这里传空
+      // ReaderKit 自己渲染排版，背景图使用它要求的沙箱文件路径
       themeBgImg: this.backgroundPattern === ReaderPattern.Image ? this.bgImagePath : '',
       flipMode: '0',
       scaledDensity: scaledDensity,
@@ -626,24 +640,13 @@ export struct ReaderPage {
   }
 
   private handleThemeChange(themeId: string): void {
-    this.themeId = TextReadingSettings.normalizeThemeId(themeId);
-    this.refreshPalette();
-    this.applyReadingSettings();
-    this.saveReadingSettings();
-  }
-
-  private handleCustomBackgroundChange(hex: string, commit: boolean): void {
-    this.customBackground = hex;
-    // 正在用自定义主题时才需要立刻重算配色并重排
-    if (this.themeId === ReaderThemeId.Custom) {
-      this.refreshPalette();
-      this.applyReadingSettings();
+    if (themeId === ReaderThemeId.Image && this.bgImagePath.length === 0) {
+      this.pickBackgroundImage();
+      return;
     }
-    if (commit) this.saveReadingSettings();
-  }
-
-  private handlePatternChange(pattern: string): void {
-    this.backgroundPattern = TextReadingSettings.normalizePattern(pattern);
+    this.themeId = TextReadingSettings.normalizeThemeId(themeId);
+    this.backgroundPattern = this.themeId === ReaderThemeId.Image ? ReaderPattern.Image : ReaderPattern.None;
+    this.refreshPalette();
     this.applyReadingSettings();
     this.saveReadingSettings();
   }
@@ -671,38 +674,57 @@ export struct ReaderPage {
    */
   private async pickBackgroundImage(): Promise<void> {
     const currentContext = this.context;
-    if (currentContext === null) return;
+    if (currentContext === null || this.pickingBackgroundImage) return;
+    this.pickingBackgroundImage = true;
+    let destination: string = '';
+    let applied: boolean = false;
     try {
       const options = new photoAccessHelper.PhotoSelectOptions();
       options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
       options.maxSelectNumber = 1;
       const result = await new photoAccessHelper.PhotoViewPicker().select(options);
-      if (!result || !result.photoUris || result.photoUris.length === 0) return;
-      const srcUri = result.photoUris[0];
+      if (result.photoUris.length === 0 || this.leaving) return;
       const dir = `${currentContext.filesDir}/reader_bg`;
+      if (!await fileIo.access(dir)) await fileIo.mkdir(dir, true);
+      destination = `${dir}/bg_${Date.now()}.jpg`;
+      const src = await fileIo.open(result.photoUris[0], fileIo.OpenMode.READ_ONLY);
       try {
-        await fileIo.mkdir(dir, true);
-      } catch (_e) {
-        // 目录已存在
+        await fileIo.copyFile(src.fd, destination);
+      } finally {
+        await fileIo.close(src);
       }
-      const dest = `${dir}/bg_${Date.now()}.jpg`;
-      const src = await fileIo.open(srcUri, fileIo.OpenMode.READ_ONLY);
-      const dst = await fileIo.open(dest, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
-      await fileIo.copyFile(src.fd, dst.fd);
-      await fileIo.close(src);
-      await fileIo.close(dst);
+      // 验证图片可解码后再替换当前主题；取消或失败保留原图与原设置。
+      const imageSource = image.createImageSource(destination);
+      try {
+        await imageSource.getImageInfo();
+      } finally {
+        await imageSource.release();
+      }
+      if (this.leaving) return;
       const previous = this.bgImagePath;
-      this.bgImagePath = dest;
+      if (this.themeId !== ReaderThemeId.Image) this.customBackground = this.palette.background;
+      this.bgImagePath = destination;
+      this.themeId = ReaderThemeId.Image;
       this.backgroundPattern = ReaderPattern.Image;
+      this.refreshPalette();
       this.applyReadingSettings();
-      this.saveReadingSettings();
-      // 换图成功后删掉上一张，避免沙箱里堆积
-      if (previous.length > 0 && previous !== dest) {
+      const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
+        this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
+      applied = true;
+      await TextReadingSettingsService.save(currentContext, settings);
+      // 新路径持久化成功后才删除上一张，避免重启仍引用已删文件。
+      if (previous.length > 0 && previous !== destination) {
         fileIo.unlink(previous).catch((_e: Error): void => {});
       }
     } catch (e) {
       hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'pick background failed: %{public}s',
         e instanceof Error ? e.message : String(e));
+      this.showToast($r('app.string.reader_image_apply_failed'));
+    } finally {
+      this.pickingBackgroundImage = false;
+      if (!applied && destination.length > 0) {
+        fileIo.unlink(destination).catch((_e: Error): void => {});
+      }
     }
   }
 
@@ -723,6 +745,11 @@ export struct ReaderPage {
   private handleReaderKitPageShow(info: readerCore.PageDataInfo): void {
     const currentBook = this.book;
     if (currentBook === null) return;
+    if (!this.showChapterSheet && !this.showSettingsSheet &&
+      (info.resourceIndex !== this.currentResourceIndex || info.startDomPos !== this.readerKitDomPos ||
+        info.pageOffset !== this.readerKitPageOffset)) {
+      this.hideReaderBar();
+    }
     const count = Math.max(1, currentBook.chapters.length);
     const resourceIndex = this.clampResourceIndex(info.resourceIndex, count);
     const title = this.chapterTitle(resourceIndex);
@@ -817,6 +844,8 @@ export struct ReaderPage {
     if (this.onlineTextLoading || this.leaving) return false;
     const currentBook = this.book;
     if (currentBook === null) return false;
+    // 只收起覆盖正文的工具栏，正文视口和系统栏始终保持不变。
+    this.hideReaderBar();
     const target: OnlineTextNavigationTarget = forward ? OnlineTextPageNavigator.next(
       this.currentResourceIndex, this.onlineTextPageIndex,
       this.onlineTextPages.length, currentBook.chapters.length) :
@@ -928,10 +957,7 @@ export struct ReaderPage {
     if (this.readerBarVisible) {
       this.hideReaderBar();
     } else {
-      if (PlatformCompat.floatingTabs) {
-        this.tabController.applyShowAnimation(HdsAnimationMode.CLICK_ANIMATION);
-      }
-      this.readerBarVisible = true;
+      this.showReaderBar();
     }
   }
 
@@ -1057,7 +1083,7 @@ export struct ReaderPage {
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
-      // 背景层最底：底色 + 纸纹/布纹/相册图，正文与弹层都浮在它上面
+      // 背景层最底：预设底色或自定义图片与蒙层
       ReaderBackground({
         palette: this.palette,
         pattern: this.backgroundPattern,
@@ -1095,8 +1121,13 @@ export struct ReaderPage {
                   .height('100%')
                   .padding({
                     top: this.topSafeVp,
-                    bottom: this.bottomSafeVp
+                    bottom: this.bottomSafeVp + READER_TEXT_FOOTER_HEIGHT + READER_TEXT_VERTICAL_PADDING
                   })
+                if (this.showReadingStatus) {
+                  ReaderStatusIndicator({ color: this.palette.secondary })
+                    .height(READER_TEXT_FOOTER_HEIGHT)
+                    .margin({ bottom: this.bottomSafeVp + READER_TEXT_VERTICAL_PADDING })
+                }
               }
 
             }
@@ -1141,8 +1172,8 @@ export struct ReaderPage {
           showClose: false,
           backgroundColor: AppMaterial.SheetBackground,
           maskColor: Color.Transparent,
-          blurStyle: AppMaterial.SheetBlur,
-          systemMaterial: AppMaterial.Sheet,
+          blurStyle: AppMaterial.ReaderSheetBlur,
+          systemMaterial: AppMaterial.ReaderSheetThick,
           onDisappear: (): void => {
             this.showSettingsSheet = false;
             if (!this.leaving) {
@@ -1167,8 +1198,8 @@ export struct ReaderPage {
       showClose: false,
       backgroundColor: AppMaterial.SheetBackground,
       maskColor: Color.Transparent,
-      blurStyle: AppMaterial.SheetBlur,
-      systemMaterial: AppMaterial.Sheet,
+      blurStyle: AppMaterial.ReaderSheetBlur,
+      systemMaterial: AppMaterial.ReaderSheetThick,
       onAppear: (): void => this.scrollChapterListToCurrent(),
       onDisappear: (): void => {
         this.showChapterSheet = false;
@@ -1221,16 +1252,21 @@ export struct ReaderPage {
         .alignItems(HorizontalAlign.Start)
         .clip(true)
 
-        Row() {
-          if (this.book !== null) {
-            Text(`${this.onlineTextChapterIndex() + 1}/${this.book.chapters.length}`)
-              .fontSize(AppFont.Caption)
-              .fontColor(this.palette.secondary)
+        Row({ space: AppSpace.Sm }) {
+          Text(this.book !== null ? `${this.onlineTextChapterIndex() + 1}/${this.book.chapters.length}` : '')
+            .fontSize(AppFont.Caption)
+            .fontColor(this.palette.secondary)
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (this.showReadingStatus) {
+            ReaderStatusIndicator({ color: this.palette.secondary })
           }
-          Blank()
           Text(this.book !== null ? this.book.title : '')
             .fontSize(AppFont.Caption)
             .fontColor(this.palette.secondary)
+            .layoutWeight(1)
+            .textAlign(TextAlign.End)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
@@ -1423,11 +1459,11 @@ export struct ReaderPage {
       fontSize: this.fontSize,
       lineHeight: this.lineHeight,
       themeId: this.themeId,
-      customBackground: this.customBackground,
       pattern: this.backgroundPattern,
       bgImagePath: this.bgImagePath,
       overlayAlpha: this.overlayAlpha,
       pageTurnMode: this.pageTurnMode,
+      showReadingStatus: this.showReadingStatus,
       palette: this.palette,
       onFontSizeChange: (value: number, commit: boolean): void => {
         this.handleFontSizeChange(value, commit);
@@ -1438,17 +1474,15 @@ export struct ReaderPage {
       onThemeChange: (themeId: string): void => {
         this.handleThemeChange(themeId);
       },
-      onCustomBackgroundChange: (hex: string, commit: boolean): void => {
-        this.handleCustomBackgroundChange(hex, commit);
-      },
-      onPatternChange: (pattern: string): void => {
-        this.handlePatternChange(pattern);
-      },
       onOverlayChange: (value: number, commit: boolean): void => {
         this.handleOverlayChange(value, commit);
       },
       onPageTurnModeChange: (mode: string): void => {
         this.handlePageTurnModeChange(mode);
+      },
+      onReadingStatusChange: (enabled: boolean): void => {
+        this.showReadingStatus = enabled;
+        this.saveReadingSettings();
       },
       onPickImage: (): void => {
         this.pickBackgroundImage();

@@ -1,4 +1,4 @@
-import { ReaderPattern, ReaderThemeId, findThemePreset, normalizeHex } from './ReaderTheme';
+import { ReaderPattern, ReaderThemeId, findThemePreset, normalizeHex, resolvePalette } from './ReaderTheme';
 
 export class TextChapterContent {
   title: string = '';
@@ -66,14 +66,15 @@ export class TextReadingSettings {
   static readonly THEME_DEFAULT: string = ReaderThemeId.Parchment;
   static readonly CUSTOM_BACKGROUND_DEFAULT: string = '#F5F2EA';
   static readonly PAGE_TURN_MODE_DEFAULT: string = PageTurnMode.Cover;
+  static readonly SHOW_READING_STATUS_DEFAULT: boolean = true;
 
   fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
-  /** 预设主题 id，或 ReaderThemeId.Custom 表示走 customBackground */
+  /** 预设主题 id，或 ReaderThemeId.Image 表示自定义图片 */
   themeId: string = TextReadingSettings.THEME_DEFAULT;
-  /** themeId=custom 时生效的底色 */
+  /** 自定义图片的蒙层底色，兼容旧自定义色 */
   customBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
-  /** 背景图案 */
+  /** 兼容旧偏好字段，只保留 none / image */
   pattern: string = ReaderPattern.None;
   /** pattern=image 时的沙箱内图片路径 */
   backgroundImage: string = '';
@@ -81,6 +82,8 @@ export class TextReadingSettings {
   overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   /** 翻页模式 */
   pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
+  /** 底部居中显示电量和时间，不影响正文视口。 */
+  showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
 
   static of(fontSize: number, lineHeight: number): TextReadingSettings {
     const value = new TextReadingSettings();
@@ -92,7 +95,7 @@ export class TextReadingSettings {
   /** 完整构造；服务层读盘后用它一次装配。 */
   static ofAll(fontSize: number, lineHeight: number, themeId: string,
     customBackground: string, pattern: string, backgroundImage: string,
-    overlayAlpha: number, pageTurnMode?: string): TextReadingSettings {
+    overlayAlpha: number, pageTurnMode?: string, showReadingStatus?: boolean): TextReadingSettings {
     const value = TextReadingSettings.of(fontSize, lineHeight);
     value.themeId = TextReadingSettings.normalizeThemeId(themeId);
     value.customBackground = normalizeHex(customBackground);
@@ -100,22 +103,32 @@ export class TextReadingSettings {
     value.backgroundImage = typeof backgroundImage === 'string' ? backgroundImage : '';
     value.overlayAlpha = TextReadingSettings.normalizeOverlay(overlayAlpha);
     value.pageTurnMode = TextReadingSettings.normalizePageTurnMode(pageTurnMode);
-    // 声明了图片图案但没有实际路径时退回无图案，避免画出空白层
-    if (value.pattern === ReaderPattern.Image && value.backgroundImage.length === 0) {
-      value.pattern = ReaderPattern.None;
+    value.showReadingStatus = typeof showReadingStatus === 'boolean' ? showReadingStatus :
+      TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
+    // 旧版「主题 + 相册图案」合并为图片主题，保留原蒙层配色与浓度。
+    if (value.pattern === ReaderPattern.Image && value.backgroundImage.length > 0
+      && value.themeId !== ReaderThemeId.Image) {
+      value.customBackground = resolvePalette(value.themeId, value.customBackground).background;
+      value.themeId = ReaderThemeId.Image;
     }
+    if (value.themeId === ReaderThemeId.Custom
+      || (value.themeId === ReaderThemeId.Image && value.backgroundImage.length === 0)) {
+      value.themeId = TextReadingSettings.THEME_DEFAULT;
+    }
+    value.pattern = value.themeId === ReaderThemeId.Image ? ReaderPattern.Image : ReaderPattern.None;
     return value;
   }
 
   static normalizeThemeId(value: string): string {
     if (typeof value !== 'string' || value.length === 0) return TextReadingSettings.THEME_DEFAULT;
-    if (value === ReaderThemeId.Custom) return value;
+    if (value === ReaderThemeId.Paper) return ReaderThemeId.Parchment;
+    if (value === ReaderThemeId.Black) return ReaderThemeId.Night;
+    if (value === ReaderThemeId.Custom || value === ReaderThemeId.Image) return value;
     return findThemePreset(value) !== null ? value : TextReadingSettings.THEME_DEFAULT;
   }
 
   static normalizePattern(value: string): string {
-    if (value === ReaderPattern.Paper || value === ReaderPattern.Cloth
-      || value === ReaderPattern.Image || value === ReaderPattern.None) {
+    if (value === ReaderPattern.Image || value === ReaderPattern.None) {
       return value;
     }
     return ReaderPattern.None;

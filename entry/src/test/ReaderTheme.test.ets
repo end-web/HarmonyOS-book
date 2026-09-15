@@ -86,9 +86,43 @@ export default function readerThemeTest() {
 
     it('rejects unknown patterns and theme ids', 0, () => {
       expect(TextReadingSettings.normalizePattern('bogus')).assertEqual(ReaderPattern.None);
-      expect(TextReadingSettings.normalizePattern(ReaderPattern.Cloth)).assertEqual(ReaderPattern.Cloth);
+      expect(TextReadingSettings.normalizePattern(ReaderPattern.Cloth)).assertEqual(ReaderPattern.None);
       expect(TextReadingSettings.normalizeThemeId('bogus')).assertEqual(TextReadingSettings.THEME_DEFAULT);
       expect(TextReadingSettings.normalizeThemeId(ReaderThemeId.Custom)).assertEqual(ReaderThemeId.Custom);
+      expect(TextReadingSettings.normalizeThemeId(ReaderThemeId.Paper)).assertEqual(ReaderThemeId.Parchment);
+      expect(TextReadingSettings.normalizeThemeId(ReaderThemeId.Black)).assertEqual(ReaderThemeId.Night);
+    });
+
+    it('migrates legacy image theme and preserves its overlay palette', 0, () => {
+      const legacy = TextReadingSettings.ofAll(21, 2.2, ReaderThemeId.Night,
+        '#FFFFFF', ReaderPattern.Image, '/data/bg.jpg', 0.62);
+      expect(legacy.themeId).assertEqual(ReaderThemeId.Image);
+      expect(legacy.customBackground).assertEqual('#1C1F22');
+      expect(legacy.overlayAlpha).assertEqual(0.62);
+      expect(resolvePalette(legacy.themeId, legacy.customBackground).isDark).assertTrue();
+      const preset = TextReadingSettings.ofAll(21, 2.2, ReaderThemeId.Paper,
+        legacy.customBackground, ReaderPattern.None, legacy.backgroundImage, legacy.overlayAlpha);
+      expect(preset.themeId).assertEqual(ReaderThemeId.Parchment);
+      expect(preset.pattern).assertEqual(ReaderPattern.None);
+      expect(preset.backgroundImage).assertEqual('/data/bg.jpg');
+      const restored = TextReadingSettings.ofAll(21, 2.2, ReaderThemeId.Image,
+        legacy.customBackground, ReaderPattern.None, preset.backgroundImage, preset.overlayAlpha);
+      expect(restored.pattern).assertEqual(ReaderPattern.Image);
+      expect(restored.overlayAlpha).assertEqual(0.62);
+    });
+
+    it('retires texture and custom color settings and handles missing images', 0, () => {
+      const texture = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.EyeCare,
+        '#FFFFFF', ReaderPattern.Paper, '', 0.35);
+      expect(texture.pattern).assertEqual(ReaderPattern.None);
+      expect(texture.themeId).assertEqual(ReaderThemeId.EyeCare);
+      const color = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.Custom,
+        '#101010', ReaderPattern.None, '', 0.35);
+      expect(color.themeId).assertEqual(TextReadingSettings.THEME_DEFAULT);
+      const missing = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.Image,
+        '#FFFFFF', ReaderPattern.Image, '', 0.35);
+      expect(missing.themeId).assertEqual(TextReadingSettings.THEME_DEFAULT);
+      expect(missing.pattern).assertEqual(ReaderPattern.None);
     });
 
     it('drops image pattern when no image path survived', 0, () => {
@@ -100,6 +134,7 @@ export default function readerThemeTest() {
       const withImage = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.Parchment,
         '#F5F2EA', ReaderPattern.Image, '/data/bg.jpg', 0.35);
       expect(withImage.pattern).assertEqual(ReaderPattern.Image);
+      expect(withImage.themeId).assertEqual(ReaderThemeId.Image);
     });
   });
 }

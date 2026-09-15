@@ -1,5 +1,5 @@
 import { HdsCompat } from '../utils/HdsCompat';
-import { AnimatorResult, LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
+import { curves, LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -72,7 +72,8 @@ const CATEGORY_NAV_ROW_HEIGHT: number = 48;
 const HOME_REFRESH_TRIGGER_DISTANCE: number = 96;
 // 内容位移为手指移动的一半：至少下拉约 192vp，再松手才刷新。
 const HOME_REFRESH_PULL_DOWN_RATIO: number = 0.5;
-const HOME_CAROUSEL_TRANSITION_DURATION: number = 650;
+// 临界阻尼不回弹；连续反向切换由原生弹簧继承当前速度。
+const HOME_CAROUSEL_TRANSITION_CURVE = curves.springMotion(0.32, 1);
 const HOME_CONTENT_TRANSITION_DURATION: number = 360;
 const HOME_CAROUSEL_SCROLL_FADE_DISTANCE: number = 64;
 const COLLAPSED_SEARCH_SIZE: number = 42;
@@ -308,8 +309,10 @@ export struct HomePage {
   @Local isRefreshing: boolean = false;
   @Local refreshPullOffset: number = 0;
   @Local contentEntered: boolean = true;
+  // 只提交动画终值，不在 ArkTS 帧回调中回写状态。
   @Local carouselExpansion: number = 1;
-  private carouselAnimator: AnimatorResult | null = null;
+  @Local carouselLayoutExpansion: number = 1;
+  @Local carouselTransitioning: boolean = false;
   private carouselAnimationSerial: number = 0;
   private contentEntranceTimer: number = -1;
 
@@ -391,6 +394,7 @@ export struct HomePage {
     this.lastSourceRevision = SourceDataService.getInvalidationCounter();
     this.selectedCategoryIndex = -1;
     this.carouselExpansion = 1;
+    this.carouselLayoutExpansion = 1;
     this.resetSearchCollapse();
     this.scrollContentToTop();
     this.revealCategoryTab(-1);
@@ -433,6 +437,7 @@ export struct HomePage {
       this.selectedCategoryIndex = -1;
       this.cancelCarouselAnimation();
       this.carouselExpansion = 1;
+      this.carouselLayoutExpansion = 1;
       await this.loadHomeBlocks();
     } else if (this.selectedCategoryIndex < 0) {
       await this.loadHomeBlocks(true);
@@ -552,6 +557,11 @@ export struct HomePage {
 
   private animateContentEntrance(): void {
     this.cancelContentEntrance();
+    if (this.carouselTransitioning) {
+      // 头部和书单已经整体移动，不再叠加一次书单入场。
+      this.contentEntered = true;
+      return;
+    }
     this.contentEntered = false;
     // 先提交新内容的起始帧；快速连续切换只保留最后一次入场。
     this.contentEntranceTimer = setTimeout(() => {
@@ -567,39 +577,40 @@ export struct HomePage {
     this.resetSearchCollapse();
     this.scrollContentToTop();
     this.revealCategoryTab(index, true);
-    this.animateContentEntrance();
     this.animateCarouselExpansion(index === -1 ? 1 : 0);
+    this.animateContentEntrance();
   }
 
   private cancelCarouselAnimation(): void {
     this.carouselAnimationSerial++;
-    this.carouselAnimator?.cancel();
-    this.carouselAnimator = null;
+    this.carouselTransitioning = false;
+    this.carouselLayoutExpansion = this.carouselExpansion;
   }
 
   private animateCarouselExpansion(target: number): void {
-    this.cancelCarouselAnimation();
-    if (Math.abs(this.carouselExpansion - target) < 0.001) {
+    // 分类之间切换时保留正在进行的收起动画及其完成回调。
+    if (this.carouselExpansion === target) return;
+    const serial: number = ++this.carouselAnimationSerial;
+    if (this.carouselFullHeight <= 0) {
       this.carouselExpansion = target;
+      this.carouselLayoutExpansion = target;
+      this.carouselTransitioning = false;
       return;
     }
-    const serial: number = this.carouselAnimationSerial;
-    // HDS bottomBuilder 的配置高度也需要逐帧同步；只给外层 height 做隐式动画会提前裁掉一截。
-    const animation: AnimatorResult = this.getUIContext().createAnimator({
-      duration: HOME_CAROUSEL_TRANSITION_DURATION,
-      easing: 'ease-in-out', delay: 0, fill: 'forwards', direction: 'normal',
-      iterations: 1, begin: this.carouselExpansion, end: target
-    });
-    this.carouselAnimator = animation;
-    animation.onFrame = (value: number): void => {
-      if (serial === this.carouselAnimationSerial) this.carouselExpansion = value;
-    };
-    animation.onFinish = (): void => {
-      if (serial !== this.carouselAnimationSerial) return;
+    // 动画期间保留完整滚动占位，HDS 标题栏和内部布局始终使用完整轮播高度。
+    // 仅 translate / opacity 参与动画；收起完成后一次性回收外层滚动占位。
+    this.carouselLayoutExpansion = 1;
+    this.carouselTransitioning = true;
+    this.getUIContext().animateTo({
+      curve: HOME_CAROUSEL_TRANSITION_CURVE,
+      onFinish: (): void => {
+        if (serial !== this.carouselAnimationSerial) return;
+        this.carouselLayoutExpansion = target;
+        this.carouselTransitioning = false;
+      }
+    }, (): void => {
       this.carouselExpansion = target;
-      this.carouselAnimator = null;
-    };
-    animation.play();
+    });
   }
 
   private showCategoryOverview(): void {
@@ -774,7 +785,7 @@ export struct HomePage {
 
   @Computed
   get carouselPanelHeight(): number {
-    return this.carouselExpansion * this.carouselFullHeight;
+    return this.carouselLayoutExpansion * this.carouselFullHeight;
   }
 
   @Computed
@@ -820,7 +831,7 @@ export struct HomePage {
   get homeTitleBarContent(): TitleBarContentOptions {
     const bottom: BottomBuilderParams = {
       builder: this.homeNavigationBottomBuilder,
-      height: this.carouselPanelHeight + CATEGORY_NAV_ROW_HEIGHT
+      height: this.carouselFullHeight + CATEGORY_NAV_ROW_HEIGHT
     };
     const content: TitleBarContentOptions = {
       title: { mainTitle: '' },
@@ -966,11 +977,19 @@ export struct HomePage {
       HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.emptyRefreshIndicator() }) {
           Scroll(this.headerScroller) {
-            this.buildHomeNavigation()
+            Column() {
+              this.buildHomeNavigation()
+            }
+            .width('100%')
+            .height(this.contentHeight + this.headerScrollRange)
+            .clip(false)
+            // 刷新位移独立于展开动画，避免覆盖原生弹簧的 translate。
+            .translate({ y: -this.refreshPullOffset })
           }
           .width('100%')
           .height('100%')
           .scrollBar(BarState.Off)
+          .enableScrollInteraction(!this.carouselTransitioning)
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .clip(false)
           .onDidScroll(() => this.syncHeaderScrollState())
@@ -979,7 +998,7 @@ export struct HomePage {
         .onOffsetChange((offset: number) => { this.refreshPullOffset = Math.max(0, offset); })
         .refreshOffset(HOME_REFRESH_TRIGGER_DISTANCE)
         .pullDownRatio(HOME_REFRESH_PULL_DOWN_RATIO)
-        .pullToRefresh(this.isAtContentTop)
+        .pullToRefresh(this.isAtContentTop && !this.carouselTransitioning)
         .width('100%')
         .height('100%')
         .clip(false)
@@ -1041,7 +1060,8 @@ export struct HomePage {
       Column() {
         Column()
           .width('100%')
-          .height(WindowUtils.getStatusBarHeightVp() + this.headerScrollRange + CATEGORY_NAV_ROW_HEIGHT)
+          .height(WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT +
+            this.carouselFullHeight + CATEGORY_NAV_ROW_HEIGHT)
 
         Stack({ alignContent: Alignment.Top }) {
           if (this.refreshPullOffset > 0) {
@@ -1083,9 +1103,10 @@ export struct HomePage {
     // 标题栏只响应吸顶后的内层滚动；外层原生移动整个 HDS，避免每帧裁剪、重建轮播。
     .bindToScrollable([this.contentScroller])
     .width('100%')
-    .height(this.contentHeight + this.headerScrollRange)
-    // 抵消 Refresh 对整个页面的下移，内容列表单独跟随下拉距离。
-    .translate({ y: -this.refreshPullOffset })
+    .height(this.contentHeight + SEARCH_FIELD_ROW_HEIGHT + this.carouselFullHeight)
+    .flexShrink(0)
+    // 整个 HDS（轮播、Tab、书单）等距移动，内部高度和标题栏配置不参与动画。
+    .translate({ y: (this.carouselExpansion - 1) * this.carouselFullHeight })
     .backgroundColor(Color.Transparent)
   }
 
@@ -1240,6 +1261,7 @@ export struct HomePage {
     .width('100%')
     .height(Math.max(1, this.contentHeight - WindowUtils.getStatusBarHeightVp() - CATEGORY_NAV_ROW_HEIGHT))
     .listDirection(Axis.Vertical)
+    .enableScrollInteraction(!this.carouselTransitioning)
     .nestedScroll({
       scrollForward: NestedScrollMode.PARENT_FIRST,
       scrollBackward: NestedScrollMode.SELF_FIRST
@@ -1247,9 +1269,8 @@ export struct HomePage {
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .cachedCount(5)
-    .translate({ y: this.refreshPullOffset })
+    .translate({ y: this.refreshPullOffset + (this.contentEntered ? 0 : 12) })
     .opacity(this.contentEntered ? 1 : 0)
-    .offset({ y: this.contentEntered ? 0 : 12 })
     .clip(false)
     .backgroundColor(Color.Transparent)
   }
@@ -1495,6 +1516,7 @@ export struct HomePage {
       label: category.name,
       cardColor: CATEGORY_CARD_COLORS[index % CATEGORY_CARD_COLORS.length],
       indexHint: index,
+      animateEntrance: !this.carouselTransitioning,
       onTap: () => this.switchCategoryByUrl(category.url)
     })
   }
@@ -1502,7 +1524,7 @@ export struct HomePage {
   @LocalBuilder
   buildHomeNavigationBottom() {
     Column() {
-      // 保留完整尺寸的轮播节点，只动画外层占位，避免切换时直接删除或压扁封面。
+      // 固定尺寸节点随整个导航移动，避免 HDS 在展开途中重新布局、裁掉封面。
       if (this.carouselFullHeight > 0) {
         Column() {
           Column() {
@@ -1511,6 +1533,7 @@ export struct HomePage {
             } else {
               HomeCoverCarousel({
                 books: this.carouselBooks,
+                active: this.selectedCategoryIndex === -1 && !this.carouselTransitioning && !this.isSearchCollapsed,
                 onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
               })
                 .padding({ left: AppSpace.Md, right: AppSpace.Md })
@@ -1518,16 +1541,19 @@ export struct HomePage {
           }
           .width('100%').height(this.carouselFullHeight)
           .flexShrink(0)
+          .opacity(this.carouselExpansion)
         }
         .width('100%')
-        .height(this.carouselPanelHeight)
+        .height(this.carouselFullHeight)
         .clip(true)
         .opacity(this.carouselViewportOpacity)
+        .visibility(!this.carouselTransitioning && this.carouselExpansion === 0 ? Visibility.Hidden : Visibility.Visible)
+        .enabled(this.selectedCategoryIndex === -1 && !this.carouselTransitioning && !this.isSearchCollapsed)
       }
       this.buildCategoryTags()
     }
     .width('100%')
-    .height(this.carouselPanelHeight + CATEGORY_NAV_ROW_HEIGHT)
+    .height(this.carouselFullHeight + CATEGORY_NAV_ROW_HEIGHT)
   }
 
   @Builder

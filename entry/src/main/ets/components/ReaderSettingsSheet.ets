@@ -1,7 +1,7 @@
 /**
  * ReaderSettingsSheet - 阅读设置面板
  *
- * 按鸿蒙分组卡片规范重排：顶部实时预览 + 四张设置卡（字号 / 行高 / 主题 / 背景）。
+ * 按鸿蒙分组卡片规范重排：顶部实时预览 + 字号 / 行高 / 翻页 / 主题设置卡。
  * 面板由父页面的原生 bindSheet 提供材质，内容文字跟随系统深浅模式。
  * 阅读纸张配色只影响正文与预览，不修改 App 的外观偏好。
  *
@@ -14,9 +14,7 @@ import {
   ReaderPattern,
   ReaderThemeId,
   ReaderThemePreset,
-  READER_THEME_PRESETS,
-  hexToHsv,
-  hsvToHex
+  READER_THEME_PRESETS
 } from '../model/ReaderTheme';
 import { ReaderBackground } from './ReaderBackground';
 
@@ -40,28 +38,6 @@ const LINE_HEIGHT_PRESETS: LineHeightPreset[] = [
   LineHeightPreset.of('宽松', 2.2)
 ];
 
-/** 背景图案选项 */
-class PatternOption {
-  id: string = ReaderPattern.None;
-  label: string = '';
-  icon: Resource = $r('sys.symbol.xmark');
-
-  static of(id: string, label: string, icon: Resource): PatternOption {
-    const option = new PatternOption();
-    option.id = id;
-    option.label = label;
-    option.icon = icon;
-    return option;
-  }
-}
-
-const PATTERN_OPTIONS: PatternOption[] = [
-  PatternOption.of(ReaderPattern.None, '无', $r('sys.symbol.xmark')),
-  PatternOption.of(ReaderPattern.Paper, '纸纹', $r('sys.symbol.doc_plaintext')),
-  PatternOption.of(ReaderPattern.Cloth, '布纹', $r('sys.symbol.grid')),
-  PatternOption.of(ReaderPattern.Image, '相册', $r('sys.symbol.picture'))
-];
-
 const PREVIEW_TEXT: string = '　　夜色像一层薄薄的墨，慢慢洇进窗棂。他合上书页，听见远处传来一声钟响，'
   + '于是想起许多年前的那个黄昏，也是这样的光，这样的静。';
 
@@ -72,7 +48,7 @@ const PREVIEW_TEXT: string = '　　夜色像一层薄薄的墨，慢慢洇进�
  */
 @ComponentV2
 struct ReaderSettingCard {
-  @Param title: string = '';
+  @Param title: ResourceStr = '';
   @BuilderParam content: () => void = this.emptyContent;
 
   @Builder
@@ -97,60 +73,90 @@ struct ReaderSettingCard {
   }
 }
 
+/** 分档按钮使用 @Param 观察选中态，避免 @Builder 按值参数停留在首次渲染。 */
+@ComponentV2
+struct ReaderSettingChip {
+  @Param label: string = '';
+  @Param selected: boolean = false;
+  @Event onSelect: () => void = () => {};
+
+  build() {
+    Text(this.label)
+      .fontSize(AppFont.Caption)
+      .fontColor(this.selected ? AppColor.OnBrand : $r('sys.color.font_primary'))
+      .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Normal)
+      .textAlign(TextAlign.Center)
+      .layoutWeight(1)
+      .height(34)
+      .borderRadius(AppRadius.Pill)
+      .backgroundColor(this.selected ? AppColor.Brand : AppColor.GlassSheetControlTint)
+      .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
+      .onClick(() => this.onSelect())
+  }
+}
+
+@ComponentV2
+struct ReaderThemeSwatch {
+  @Param preset: ReaderThemePreset = new ReaderThemePreset();
+  @Param selected: boolean = false;
+  @Event onSelect: () => void = () => {};
+
+  build() {
+    Column({ space: 6 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        Column()
+          .width(40)
+          .height(40)
+          .borderRadius(20)
+          .backgroundColor(this.preset.background)
+          .border({
+            width: this.selected ? 2 : 0.5,
+            color: this.selected ? AppColor.Brand : AppColor.GlassSheetStroke
+          })
+        if (this.selected) {
+          SymbolGlyph($r('sys.symbol.checkmark'))
+            .fontSize(17)
+            .fontColor([this.preset.isDark ? '#FFFFFF' : '#2A2724'])
+        }
+      }
+      .width(44)
+      .height(44)
+
+      Text(this.preset.label)
+        .fontSize(10)
+        .fontColor(this.selected ? AppColor.Brand : $r('sys.color.font_secondary'))
+        .maxLines(1)
+    }
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => this.onSelect())
+  }
+}
+
 @ComponentV2
 export struct ReaderSettingsSheet {
   @Param fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   @Param lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
   @Param themeId: string = ReaderThemeId.Parchment;
-  @Param customBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
   @Param pattern: string = ReaderPattern.None;
   @Param bgImagePath: string = '';
   @Param overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   @Param pageTurnMode: string = PageTurnMode.Cover;
+  @Param showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
   /** 由父页面依 themeId / customBackground 解析好的配色 */
   @Param palette: ReaderPalette = new ReaderPalette();
 
   @Event onFontSizeChange: (value: number, commit: boolean) => void = () => {};
   @Event onLineHeightChange: (value: number, commit: boolean) => void = () => {};
   @Event onThemeChange: (themeId: string) => void = () => {};
-  @Event onCustomBackgroundChange: (hex: string, commit: boolean) => void = () => {};
-  @Event onPatternChange: (pattern: string) => void = () => {};
   @Event onOverlayChange: (value: number, commit: boolean) => void = () => {};
   @Event onPageTurnModeChange: (mode: string) => void = () => {};
+  @Event onReadingStatusChange: (enabled: boolean) => void = () => {};
   /** 请求打开相册选图；由页面侧执行 picker + 落沙箱 */
   @Event onPickImage: () => void = () => {};
   @Event onResetDefaults: () => void = () => {};
   @Event onClose: () => void = () => {};
 
-  /** 自定义色滑杆状态：面板打开时由已存色值还原 */
-  @Local hue: number = 40;
-  @Local colorBrightness: number = 0.96;
-  @Local saturation: number = 0.04;
-
-  aboutToAppear(): void {
-    const hsv = hexToHsv(this.customBackground);
-    this.hue = hsv.h;
-    this.saturation = hsv.s;
-    this.colorBrightness = hsv.v;
-  }
-
-  /** 胶囊按钮：分档选择用（行高档位、背景图案） */
-  @Builder
-  chip(label: string, selected: boolean, onTap: () => void) {
-    Text(label)
-      .fontSize(AppFont.Caption)
-      .fontColor(selected ? AppColor.OnBrand : $r('sys.color.font_primary'))
-      .fontWeight(selected ? FontWeight.Medium : FontWeight.Normal)
-      .textAlign(TextAlign.Center)
-      .layoutWeight(1)
-      .height(34)
-      .borderRadius(AppRadius.Pill)
-      .backgroundColor(selected ? AppColor.Brand : AppColor.GlassSheetControlTint)
-      .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
-      .onClick(() => onTap())
-  }
-
-  /** 实时预览：真实字号、行高、底色与纹理，所见即所得 */
+  /** 实时预览：真实字号、行高、底色与图片，所见即所得 */
   @Builder
   buildPreview() {
     Stack() {
@@ -270,8 +276,10 @@ export struct ReaderSettingsSheet {
           ForEach(
             LINE_HEIGHT_PRESETS,
             (preset: LineHeightPreset) => {
-              this.chip(preset.label, this.isLineHeightPreset(preset.value), () => {
-                this.onLineHeightChange(preset.value, true);
+              ReaderSettingChip({
+                label: preset.label,
+                selected: this.isLineHeightPreset(preset.value),
+                onSelect: () => this.onLineHeightChange(preset.value, true)
               })
             },
             (preset: LineHeightPreset) => `lh-${preset.label}`
@@ -311,228 +319,114 @@ export struct ReaderSettingsSheet {
     }
   }
 
-  /** 主题色板：预设 5 个 + 自定义入口，选中打勾 */
+  /** 预设主题与自定义图片互斥，图片主题内保留换图和蒙层。 */
   @Builder
   buildThemeSection() {
-    ReaderSettingCard({ title: '阅读主题' }) {
-      Row({ space: AppSpace.Sm }) {
-        ForEach(
-          READER_THEME_PRESETS,
-          (preset: ReaderThemePreset) => {
-            this.swatch(preset.background, preset.label, this.themeId === preset.id,
-              preset.isDark, () => {
-                this.onThemeChange(preset.id);
+    ReaderSettingCard({ title: $r('app.string.reader_theme_title') }) {
+      Column({ space: AppSpace.Sm }) {
+        Row({ space: AppSpace.Sm }) {
+          ForEach(
+            READER_THEME_PRESETS,
+            (preset: ReaderThemePreset) => {
+              ReaderThemeSwatch({
+                preset: preset,
+                selected: this.themeId === preset.id,
+                onSelect: () => this.onThemeChange(preset.id)
               })
-          },
-          (preset: ReaderThemePreset) => `theme-${preset.id}`
-        )
-        // 自定义色入口：色块显示当前自定义色
-        this.swatch(this.customBackground, '自定义', this.themeId === ReaderThemeId.Custom,
-          this.palette.isDark, () => {
-            this.onThemeChange(ReaderThemeId.Custom);
-          })
+            },
+            (preset: ReaderThemePreset) => `theme-${preset.id}`
+          )
+          this.buildImageThemeSwatch()
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.SpaceBetween)
+
+        if (this.themeId === ReaderThemeId.Image) {
+          this.buildImageControls()
+        }
       }
       .width('100%')
-      .justifyContent(FlexAlign.SpaceBetween)
     }
   }
 
-  /** 单个色板：圆形色块 + 名称，选中态描边并打勾 */
   @Builder
-  swatch(color: string, label: string, selected: boolean, darkSwatch: boolean, onTap: () => void) {
+  buildImageThemeSwatch() {
     Column({ space: 6 }) {
       Stack({ alignContent: Alignment.Center }) {
-        Column()
-          .width(40)
-          .height(40)
-          .borderRadius(20)
-          .backgroundColor(color)
-          .border({
-            width: selected ? 2 : 0.5,
-            color: selected ? AppColor.Brand : AppColor.GlassSheetStroke
-          })
-        if (selected) {
-          SymbolGlyph($r('sys.symbol.checkmark'))
-            .fontSize(17)
-            .fontColor([darkSwatch ? '#FFFFFF' : '#2A2724'])
-        }
+        SymbolGlyph($r('sys.symbol.picture'))
+          .fontSize(20)
+          .fontColor([this.themeId === ReaderThemeId.Image ? AppColor.Brand : $r('sys.color.font_secondary')])
       }
-      .width(44)
-      .height(44)
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .backgroundColor(AppColor.GlassSheetControlTint)
+      .border({
+        width: this.themeId === ReaderThemeId.Image ? 2 : 0.5,
+        color: this.themeId === ReaderThemeId.Image ? AppColor.Brand : AppColor.GlassSheetStroke
+      })
+      .margin({ top: 2, bottom: 2 })
 
-      Text(label)
+      Text($r('app.string.reader_custom_image'))
         .fontSize(10)
-        .fontColor(selected ? AppColor.Brand : $r('sys.color.font_secondary'))
+        .fontColor(this.themeId === ReaderThemeId.Image ? AppColor.Brand : $r('sys.color.font_secondary'))
         .maxLines(1)
     }
     .alignItems(HorizontalAlign.Center)
-    .onClick(() => onTap())
-  }
-
-  /** 三个滑杆合成当前自定义色并回调 */
-  private emitCustomColor(commit: boolean): void {
-    this.onCustomBackgroundChange(hsvToHex(this.hue, this.saturation, this.colorBrightness), commit);
-  }
-
-  /** 自定义底色：色相 / 浓淡 / 明度三杆，实时出色值 */
-  @Builder
-  buildCustomColorSection() {
-    ReaderSettingCard({ title: '自定义底色' }) {
-      Column({ space: AppSpace.Xs }) {
-        // 当前色值预览条
-        Row({ space: AppSpace.Sm }) {
-          Column()
-            .width(56)
-            .height(28)
-            .borderRadius(AppRadius.Sm)
-            .backgroundColor(this.customBackground)
-            .border({ width: 0.5, color: AppColor.GlassSheetStroke })
-          Text(this.customBackground)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary'))
-          Blank()
-          if (this.themeId !== ReaderThemeId.Custom) {
-            Text('点击应用')
-              .fontSize(AppFont.Caption)
-              .fontColor(AppColor.Brand)
-              .fontWeight(FontWeight.Medium)
-              .onClick(() => {
-                this.onThemeChange(ReaderThemeId.Custom);
-              })
-          }
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
-
-        this.colorSlider('色相', this.hue, 0, 360, 1, (value: number, commit: boolean) => {
-          this.hue = Math.round(value);
-          this.emitCustomColor(commit);
-        })
-        this.colorSlider('浓淡', this.saturation * 100, 0, 100, 1, (value: number, commit: boolean) => {
-          this.saturation = value / 100;
-          this.emitCustomColor(commit);
-        })
-        this.colorSlider('明度', this.colorBrightness * 100, 0, 100, 1, (value: number, commit: boolean) => {
-          this.colorBrightness = value / 100;
-          this.emitCustomColor(commit);
-        })
-      }
-      .width('100%')
-    }
-  }
-
-  /** 带标签的紧凑滑杆，供自定义色三通道复用 */
-  @Builder
-  colorSlider(label: string, value: number, min: number, max: number, step: number,
-    onValue: (value: number, commit: boolean) => void) {
-    Row({ space: AppSpace.Sm }) {
-      Text(label)
-        .fontSize(AppFont.Caption)
-        .fontColor($r('sys.color.font_secondary'))
-        .width(30)
-      Slider({ value: value, min: min, max: max, step: step, style: SliderStyle.InSet })
-        .layoutWeight(1)
-        .height(32)
-        .blockColor(AppColor.OnBrand)
-        .trackColor($r('sys.color.comp_divider'))
-        .selectedColor(AppColor.Brand)
-        .trackThickness(4)
-        .onChange((v: number, mode: SliderChangeMode): void => {
-          onValue(v, mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
-        })
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-  }
-
-  /** 背景图案：四选一，选相册时额外露出蒙层浓度杆 */
-  @Builder
-  buildPatternSection() {
-    ReaderSettingCard({ title: '背景图案' }) {
-      Column({ space: AppSpace.Sm }) {
-        Row({ space: AppSpace.Xs }) {
-          ForEach(
-            PATTERN_OPTIONS,
-            (option: PatternOption) => {
-              this.patternChip(option)
-            },
-            (option: PatternOption) => `pattern-${option.id}`
-          )
-        }
-        .width('100%')
-
-        if (this.pattern === ReaderPattern.Image) {
-          Row({ space: AppSpace.Sm }) {
-            Text('蒙层')
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_secondary'))
-              .width(30)
-            Slider({
-              value: this.overlayAlpha * 100,
-              min: TextReadingSettings.OVERLAY_MIN * 100,
-              max: TextReadingSettings.OVERLAY_MAX * 100,
-              step: 1,
-              style: SliderStyle.InSet
-            })
-              .layoutWeight(1)
-              .height(32)
-              .blockColor(AppColor.OnBrand)
-              .trackColor($r('sys.color.comp_divider'))
-              .selectedColor(AppColor.Brand)
-              .trackThickness(4)
-              .onChange((value: number, mode: SliderChangeMode): void => {
-                this.onOverlayChange(value / 100,
-                  mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
-              })
-            Text(`${Math.round(this.overlayAlpha * 100)}%`)
-              .fontSize(AppFont.Caption)
-              .fontColor(AppColor.Brand)
-              .width(34)
-              .textAlign(TextAlign.End)
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Center)
-
-          Text('蒙层越浓，图片越淡，正文越清楚')
-            .fontSize(10)
-            .fontColor($r('sys.color.font_secondary'))
-            .width('100%')
-        }
-      }
-      .width('100%')
-    }
-  }
-
-  /** 图案胶囊：带图标；相册项点了先走选图 */
-  @Builder
-  patternChip(option: PatternOption) {
-    Column({ space: 2 }) {
-      SymbolGlyph(option.icon)
-        .fontSize(18)
-        .fontColor([this.pattern === option.id ? AppColor.OnBrand : $r('sys.color.font_primary')])
-      Text(option.label)
-        .fontSize(10)
-        .fontColor(this.pattern === option.id ? AppColor.OnBrand : $r('sys.color.font_primary'))
-    }
-    .layoutWeight(1)
-    .height(50)
-    .justifyContent(FlexAlign.Center)
-    .borderRadius(AppRadius.Md)
-    .backgroundColor(this.pattern === option.id
-      ? AppColor.Brand : AppColor.GlassSheetControlTint)
-    .animation({ duration: AppMotion.Fast, curve: AppCurve.Standard })
     .onClick(() => {
-      if (option.id === ReaderPattern.Image) {
-        // 已有图时直接切回图片模式，否则拉起相册
-        if (this.bgImagePath.length > 0 && this.pattern !== ReaderPattern.Image) {
-          this.onPatternChange(ReaderPattern.Image);
-        } else {
-          this.onPickImage();
-        }
+      if (this.bgImagePath.length > 0) {
+        this.onThemeChange(ReaderThemeId.Image);
       } else {
-        this.onPatternChange(option.id);
+        this.onPickImage();
       }
     })
+  }
+
+  @Builder
+  buildImageControls() {
+    Column({ space: AppSpace.Sm }) {
+      Button($r('app.string.reader_change_image'))
+        .fontSize(AppFont.Caption)
+        .fontColor(AppColor.Brand)
+        .backgroundColor(AppColor.GlassSheetControlTint)
+        .onClick(() => this.onPickImage())
+      Row({ space: AppSpace.Sm }) {
+        Text($r('app.string.reader_image_overlay'))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+          .width(30)
+        Slider({
+          value: this.overlayAlpha * 100,
+          min: TextReadingSettings.OVERLAY_MIN * 100,
+          max: TextReadingSettings.OVERLAY_MAX * 100,
+          step: 1,
+          style: SliderStyle.InSet
+        })
+          .layoutWeight(1)
+          .height(32)
+          .blockColor(AppColor.OnBrand)
+          .trackColor($r('sys.color.comp_divider'))
+          .selectedColor(AppColor.Brand)
+          .trackThickness(4)
+          .onChange((value: number, mode: SliderChangeMode): void => {
+            this.onOverlayChange(value / 100,
+              mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
+          })
+        Text(`${Math.round(this.overlayAlpha * 100)}%`)
+          .fontSize(AppFont.Caption)
+          .fontColor(AppColor.Brand)
+          .width(34)
+          .textAlign(TextAlign.End)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Text($r('app.string.reader_image_overlay_hint'))
+        .fontSize(10)
+        .fontColor($r('sys.color.font_secondary'))
+        .width('100%')
+    }
+    .width('100%')
   }
 
   /** 翻页模式：覆盖、仿真 */
@@ -540,14 +434,35 @@ export struct ReaderSettingsSheet {
   buildPageTurnModeSection() {
     ReaderSettingCard({ title: '翻页模式' }) {
       Row({ space: AppSpace.Xs }) {
-        this.chip('覆盖', this.pageTurnMode === PageTurnMode.Cover, () => {
-          this.onPageTurnModeChange(PageTurnMode.Cover);
+        ReaderSettingChip({
+          label: '覆盖',
+          selected: this.pageTurnMode === PageTurnMode.Cover,
+          onSelect: () => this.onPageTurnModeChange(PageTurnMode.Cover)
         })
-        this.chip('仿真', this.pageTurnMode === PageTurnMode.Simulation, () => {
-          this.onPageTurnModeChange(PageTurnMode.Simulation);
+        ReaderSettingChip({
+          label: '仿真',
+          selected: this.pageTurnMode === PageTurnMode.Simulation,
+          onSelect: () => this.onPageTurnModeChange(PageTurnMode.Simulation)
         })
       }
       .width('100%')
+    }
+  }
+
+  @Builder
+  buildReadingStatusSection() {
+    ReaderSettingCard({ title: $r('app.string.reader_footer_title') }) {
+      Row({ space: AppSpace.Sm }) {
+        Text($r('app.string.reader_show_battery_time'))
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary'))
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.showReadingStatus })
+          .selectedColor(AppColor.Brand)
+          .onChange((enabled: boolean): void => this.onReadingStatusChange(enabled))
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
     }
   }
 
@@ -588,8 +503,7 @@ export struct ReaderSettingsSheet {
           this.buildLineHeightSection()
           this.buildPageTurnModeSection()
           this.buildThemeSection()
-          this.buildCustomColorSection()
-          this.buildPatternSection()
+          this.buildReadingStatusSection()
         }
         .width('100%')
         .padding({

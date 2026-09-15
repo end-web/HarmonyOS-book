@@ -1,10 +1,8 @@
 /**
  * ReaderTheme - 阅读页主题与背景模型
  *
- * 提供三层背景能力：
- *   1. 预设主题（羊皮纸 / 护眼绿 / 纯白 / 夜间 / 纯黑）
- *   2. 自定义纯色底（用户调 HSV，正文色按亮度自动配对）
- *   3. 背景图案（程序化纸纹 / 布纹，或用户相册图 + 可调蒙层）
+ * 支持预设主题和自定义相册图片，图片使用保存的底色蒙层。
+ * Custom 与 Paper/Cloth 图案值仅供旧偏好迁移，不再提供设置入口。
  *
  * 正文色不让用户单独选：由底色亮度推导，保证任何底色下都有可读对比度。
  */
@@ -17,13 +15,14 @@ export enum ReaderPattern {
   Image = 'image'
 }
 
-/** 预设主题 id；Custom 表示走 customBackground */
+/** 预设与图片主题 id；Custom 仅供旧偏好迁移。 */
 export enum ReaderThemeId {
   Parchment = 'parchment',
   EyeCare = 'eyecare',
   Paper = 'paper',
   Night = 'night',
   Black = 'black',
+  Image = 'image',
   Custom = 'custom'
 }
 
@@ -90,9 +89,7 @@ export class ReaderThemePreset {
 export const READER_THEME_PRESETS: ReaderThemePreset[] = [
   ReaderThemePreset.of(ReaderThemeId.Parchment, '羊皮纸', '#F5F2EA', '#2D2925', '#6F675E', false),
   ReaderThemePreset.of(ReaderThemeId.EyeCare, '护眼绿', '#E3EDDF', '#28322A', '#5C6B5B', false),
-  ReaderThemePreset.of(ReaderThemeId.Paper, '纯白', '#FFFFFF', '#1F1F1F', '#6B6B6B', false),
-  ReaderThemePreset.of(ReaderThemeId.Night, '夜间', '#1C1F22', '#D6D3CD', '#8F8B84', true),
-  ReaderThemePreset.of(ReaderThemeId.Black, '纯黑', '#000000', '#B8B5AF', '#7A7772', true)
+  ReaderThemePreset.of(ReaderThemeId.Night, '夜间', '#1C1F22', '#D6D3CD', '#8F8B84', true)
 ];
 
 /** 把任意输入规整为 #RRGGBB；非法值回落到羊皮纸底色 */
@@ -156,11 +153,11 @@ export function paletteFromCustomColor(background: string): ReaderPalette {
 
 /**
  * 解析出当前应生效的配色。
- * 只有显式的 ReaderThemeId.Custom 才走自定义色；其余未知 id 视为脏数据，
+ * 图片主题与旧 Custom 使用保存的蒙层底色；其余未知 id 视为脏数据，
  * 回落到默认预设，而不是悄悄套用一个用户没选的自定义底色。
  */
 export function resolvePalette(themeId: string, customBackground: string): ReaderPalette {
-  if (themeId === ReaderThemeId.Custom) {
+  if (themeId === ReaderThemeId.Custom || themeId === ReaderThemeId.Image) {
     return paletteFromCustomColor(customBackground);
   }
   const preset = findThemePreset(themeId);
@@ -169,8 +166,7 @@ export function resolvePalette(themeId: string, customBackground: string): Reade
 }
 
 /**
- * HSV → #RRGGBB。设置页的色相/明度滑杆用它出色值，
- * 比直接给一排固定色块更接近"自定义"。
+ * HSV → #RRGGBB，保留用于颜色数据兼容。
  * h: 0~360, s: 0~1, v: 0~1
  */
 export function hsvToHex(h: number, s: number, v: number): string {

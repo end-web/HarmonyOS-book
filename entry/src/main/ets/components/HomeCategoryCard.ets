@@ -6,11 +6,16 @@ export struct HomeCategoryCard {
   @Param label: string = '';
   @Param cardColor: ResourceColor = Color.Transparent;
   @Param indexHint: number = 0;
+  @Param animateEntrance: boolean = true;
   @Event onTap: () => void = () => {};
   @Local entered: boolean = false;
 
   private reveal(): void {
     if (this.entered) return;
+    if (!this.animateEntrance) {
+      this.entered = true;
+      return;
+    }
     // 首屏逐项错开；后续懒加载行只区分左右列，避免越往下等待越久。
     const delay: number = (this.indexHint < 12 ? this.indexHint : this.indexHint % 2) * 45;
     this.getUIContext().animateTo({ duration: 420, delay: delay, curve: AppCurve.Decelerate }, () => {

@@ -68,7 +68,8 @@ export class AppMaterial {
   }
 
   private static material(key: string, fallback: uiMaterial.ImmersiveStyle,
-    shadow: boolean, interactive: boolean, invert: boolean = false): uiMaterial.Material {
+    shadow: boolean, interactive: boolean, invert: boolean = false,
+    fixedStyle: boolean = false): uiMaterial.Material {
     const appearanceKey: string = AppAppearance.current.material.toString() + ':' + AppAppearance.current.accent;
     if (appearanceKey !== AppMaterial.appearanceKey) {
       AppMaterial.cache.clear();
@@ -79,7 +80,7 @@ export class AppMaterial {
     const cached: uiMaterial.Material | undefined = AppMaterial.cache.get(key);
     if (cached !== undefined) return cached;
     const material: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-      style: AppMaterial.resolveStyle(fallback),
+      style: fixedStyle ? fallback : AppMaterial.resolveStyle(fallback),
       applyShadow: shadow,
       interactive: interactive,
       colorInvert: invert,
@@ -111,6 +112,14 @@ export class AppMaterial {
   }
   static get PlayerSheet(): uiMaterial.Material | undefined {
     return AppMaterial.Sheet;
+  }
+  /** 阅读弹层固定厚度，避免正文透出干扰设置项，不跟随外观厚度选项。 */
+  static get ReaderSheetThick(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
+    return AppMaterial.material('readerSheetThick', uiMaterial.ImmersiveStyle.THICK, true, false, false, true);
+  }
+  static get ReaderSheetBlur(): BlurStyle | undefined {
+    return PlatformCompat.immersiveMaterial ? undefined : BlurStyle.COMPONENT_THICK;
   }
   static get DialogUltraThick(): uiMaterial.Material | undefined {
     if (!PlatformCompat.immersiveMaterial) return undefined;
