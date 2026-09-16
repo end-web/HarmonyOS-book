@@ -1,3 +1,4 @@
+import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { LocalRuleSource } from '../model/LocalRuleSource';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { LocalRuleBrowseRoute, LocalRuleControl } from '../model/LocalRulePanel';
@@ -138,7 +139,7 @@ export struct RuleSourcePanelPage {
   }
 
   build() {
-    NavDestination() {
+    ProfileMenuDestination() {
       Column() {
         Row({ space: AppSpace.Xs }) {
           Button({ type: ButtonType.Circle }) {
@@ -212,7 +213,7 @@ export struct RuleSourcePanelPage {
       .width('100%').height('100%').backgroundColor($r('sys.color.background_primary'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
-    .hideTitleBar(true).systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+
   }
 
   @Builder

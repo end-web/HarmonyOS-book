@@ -1,3 +1,7 @@
+import { ReaderSpeechText } from '../components/ReaderSpeechText';
+import { ReaderSpeechSheet } from '../components/ReaderSpeechSheet';
+import { TextToSpeechService } from '../service/text/TextToSpeechService';
+import { TextToSpeechState } from '../model/TextToSpeechState';
 import { HdsCompat, CompatibleTabsModifier } from '../utils/HdsCompat';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { common } from '@kit.AbilityKit';
@@ -80,6 +84,12 @@ export struct ReaderPage {
   @Local readerBarVisible: boolean = false;
   @Local showChapterSheet: boolean = false;
   @Local showSettingsSheet: boolean = false;
+  @Local showSpeechSheet: boolean = false;
+  @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
+  @Local speechCanResume: boolean = false;
+  private followingSpeech: boolean = false;
+  private speechFollowChapter: number = -1;
+  private readonly speechListener = (): void => { this.followSpeechPosition(); };
   @Local chapterListOffsetFromCurrent: number = 0;
   @Local topSafeVp: number = WindowUtils.getStatusBarHeightVp();
   @Local bottomSafeVp: number = WindowUtils.getBottomSafeVp();
@@ -145,11 +155,13 @@ export struct ReaderPage {
     WindowUtils.setStatusBarLight(false);
     WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
     WindowUtils.refreshAvoidArea();
+    TextToSpeechService.getInstance().addListener(this.speechListener);
     this.initializeReader();
   }
 
   aboutToDisappear(): void {
     this.leaving = true;
+    TextToSpeechService.getInstance().removeListener(this.speechListener);
     WindowUtils.setReaderActive(false);
     this.completeOnlineTextTurn(false);
     this.onlineTextLoadSerial++;
@@ -243,6 +255,9 @@ export struct ReaderPage {
 
   private async resolveStartPosition(book: Book): Promise<TextReadingPosition> {
     if (!this.context) return TextReadingPosition.of(book.id, 0, '', 0, this.chapterTitle(0));
+    if (this.speechState.active && this.speechState.bookId === book.id) {
+      return TextReadingPosition.atChar(book.id, this.speechState.chapterIndex, '', this.speechState.charOffset, 0, this.speechState.chapterTitle);
+    }
     if (this.targetResourceIndex >= 0) {
       const target = this.clampResourceIndex(this.targetResourceIndex, book.chapters.length);
       return TextReadingPosition.atChar(book.id, target, this.targetDomPos, 0, 0, this.chapterTitle(target));
@@ -913,6 +928,11 @@ export struct ReaderPage {
     return page !== undefined ? page.text : '';
   }
 
+  private currentOnlineTextPageSource(): string {
+    const page = this.onlineTextPages[this.onlineTextPageIndex];
+    return page !== undefined ? this.onlineTextContent.substring(page.startOffset, page.endOffset) : '';
+  }
+
   private onlineTextPageLabel(): string {
     const preview = this.onlineTextTurnPreview;
     const total = Math.max(1, preview !== null ? preview.pages.length : this.onlineTextPages.length);
@@ -953,7 +973,7 @@ export struct ReaderPage {
   }
 
   private toggleReaderBar(): void {
-    if (this.showChapterSheet || this.showSettingsSheet) return;
+    if (this.showChapterSheet || this.showSettingsSheet || this.showSpeechSheet) return;
     if (this.readerBarVisible) {
       this.hideReaderBar();
     } else {
@@ -1067,7 +1087,61 @@ export struct ReaderPage {
       this.openChapterSheet();
     } else if (index === 2) {
       this.openSettingsSheet();
+    } else if (index === 3) {
+      this.openSpeechSheet();
     }
+  }
+
+  private async openSpeechSheet(): Promise<void> {
+    if (!this.isOnlineTextBook() || this.context === null || this.book === null) return;
+    this.showChapterSheet = false;
+    this.showSettingsSheet = false;
+    const speech = TextToSpeechService.getInstance();
+    try {
+      await speech.initialize(this.context);
+      if (this.leaving) return;
+      this.speechCanResume = speech.hasSavedPosition(this.book);
+      this.hideReaderBar();
+      this.showSpeechSheet = true;
+      speech.refreshVoices();
+    } catch (_error) { this.showToast($r('app.string.tts_engine_error')); }
+  }
+
+  private startSpeech(restore: boolean): void {
+    if (this.book === null) return;
+    const page = this.onlineTextPages[this.onlineTextPageIndex];
+    TextToSpeechService.getInstance().start(this.book, this.currentResourceIndex,
+      page !== undefined ? page.startOffset : 0, restore);
+    this.speechCanResume = true;
+  }
+
+  private async followSpeechPosition(): Promise<void> {
+    const state = this.speechState;
+    if (this.leaving || !state.active || !state.follow || state.bookId !== this.bookId ||
+      !state.playing || this.followingSpeech || this.onlineTextTurnPreview !== null) return;
+    const readOffset = Math.max(state.charOffset, state.highlightOffset);
+    if (state.chapterIndex !== this.currentResourceIndex) {
+      if (this.onlineTextLoading || this.speechFollowChapter === state.chapterIndex) return;
+      this.followingSpeech = true;
+      this.speechFollowChapter = state.chapterIndex;
+      try { await this.loadOnlineTextChapter(state.chapterIndex, readOffset, 0, false, false); }
+      finally { this.followingSpeech = false; this.speechFollowChapter = -1; }
+    }
+    if (this.leaving || !state.follow || state.chapterIndex !== this.currentResourceIndex) return;
+    const page = OnlineTextPaginator.pageIndexForOffset(this.onlineTextPages, readOffset);
+    if (page !== this.onlineTextPageIndex) {
+      this.onlineTextPageIndex = page;
+      this.updateOnlineTextPosition(true);
+    }
+  }
+
+  @Builder
+  private buildSpeechSheet(): void {
+    ReaderSpeechSheet({ state: this.speechState, bookId: this.bookId, canResume: this.speechCanResume,
+      bookTitle: this.book?.title ?? '', cover: this.book?.cover ?? '', chapterTitle: this.currentChapterTitle,
+      onStart: (restore: boolean): void => this.startSpeech(restore),
+      onClose: (): void => { this.showSpeechSheet = false; }
+    })
   }
 
   private floatingBarStyle(): HdsTabsFloatingStyle | undefined {
@@ -1090,6 +1164,18 @@ export struct ReaderPage {
         bgImagePath: this.bgImagePath,
         overlayAlpha: this.overlayAlpha
       })
+        // 每个弹层使用独立宿主；同一节点连续 bindSheet 会覆盖前一个绑定。
+        .bindSheet($$this.showSpeechSheet, this.buildSpeechSheet(), {
+          height: '82%', preferType: SheetType.BOTTOM, showClose: false,
+          backgroundColor: AppMaterial.SheetBackground,
+          maskColor: Color.Transparent,
+          blurStyle: AppMaterial.ReaderSheetBlur,
+          systemMaterial: AppMaterial.ReaderSheetThick,
+          onDisappear: (): void => {
+            this.showSpeechSheet = false;
+            if (!this.leaving) this.showReaderBar();
+          }
+        })
 
       if (!this.loading && !this.readerError) {
         HdsTabs({ controller: this.tabController }) {
@@ -1151,6 +1237,11 @@ export struct ReaderPage {
               // 占位 Tab
           }
           .tabBar(this.buildTabBar($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
+
+          if (this.isOnlineTextBook()) {
+            TabContent() { Column().width('100%').height('100%') }
+              .tabBar(this.buildTabBar($r('sys.symbol.speaker_wave_2'), $r('app.string.tts_title')))
+          }
         }
         .width('100%')
         .height('100%')
@@ -1239,13 +1330,15 @@ export struct ReaderPage {
         .alignItems(VerticalAlign.Center)
 
         Column() {
-          Text(this.currentOnlineTextPageContent())
-            .width('100%')
-            .fontSize(this.fontSize)
-            .fontColor(this.palette.primary)
-            .fontWeight(FontWeight.Normal)
-            .lineHeight(this.fontSize * this.lineHeight)
-            .textAlign(TextAlign.Start)
+          ReaderSpeechText({
+            text: this.currentOnlineTextPageContent(),
+            source: this.currentOnlineTextPageSource(),
+            sourceStart: this.onlineTextPages[this.onlineTextPageIndex]?.startOffset ?? 0,
+            state: this.speechState,
+            highlightEnabled: this.onlineTextTurnPreview === null && this.speechState.bookId === this.bookId &&
+              this.speechState.chapterIndex === this.currentResourceIndex,
+            fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette
+          })
         }
         .width('100%')
         .layoutWeight(1)

@@ -4,6 +4,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 @ComponentV2
 export struct ProfileMenuDestination {
   @Param pageBackground: ResourceColor = $r('sys.color.background_primary');
+  @Event onBackRequested: () => boolean = (): boolean => false;
   @BuilderParam content: () => void = this.emptyContent;
   @Local translateX: string = '0%';
 
@@ -17,6 +18,7 @@ export struct ProfileMenuDestination {
     }
     .hideTitleBar(true)
     .backgroundColor(this.pageBackground)
+    .onBackPressed(() => this.onBackRequested())
     .translate({ x: this.translateX })
     .customTransition((operation: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> => {
       const enteringFromRight = operation !== NavigationOperation.POP && isEnter;

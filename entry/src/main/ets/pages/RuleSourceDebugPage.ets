@@ -1,3 +1,4 @@
+import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { LocalRuleSource } from '../model/LocalRuleSource';
 import { LocalRuleDebugResult, LocalRuleDebugService } from '../service/rulesource/LocalRuleDebugService';
 import { LocalRuleDiagnostics } from '../service/rulesource/LocalRuleDiagnostics';
@@ -160,7 +161,7 @@ export struct RuleSourceDebugPage {
   }
 
   build() {
-    NavDestination() {
+    ProfileMenuDestination({ pageBackground: $r('sys.color.background_secondary') }) {
       Column() {
         // 顶部标题栏
         Row() {
@@ -287,9 +288,7 @@ export struct RuleSourceDebugPage {
       .backgroundColor($r('sys.color.background_secondary'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
-    .hideTitleBar(true)
-    .backgroundColor($r('sys.color.background_secondary'))
-    .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+
   }
 
   @Builder

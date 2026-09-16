@@ -1,3 +1,4 @@
+import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want, Configuration } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, AppStorageV2 } from '@kit.ArkUI';
@@ -413,6 +414,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   async onDestroy(): Promise<void> {
+    TextToSpeechService.getInstance().stop();
     this.isInForeground = false;
     this.startupPlaybackPending = false;
     try {
@@ -477,6 +479,7 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    TextToSpeechService.getInstance().setForeground(false);
     this.isInForeground = false;
     this.startupPlaybackPending = false;
     try {
@@ -512,6 +515,7 @@ export default class EntryAbility extends UIAbility {
    * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
+    TextToSpeechService.getInstance().setForeground(true);
     this.isInForeground = true;
     WindowUtils.refreshAvoidArea();
     try {

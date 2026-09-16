@@ -1,3 +1,4 @@
+import { PlaybackCoordinator } from './PlaybackCoordinator';
 import { avSession } from '@kit.AVSessionKit';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { image } from '@kit.ImageKit';
@@ -48,6 +49,7 @@ export class AVSessionService {
   private currentBook: Book | null = null;
   private currentChapter: Chapter | null = null;
   private currentMediaImage: string | image.PixelMap | undefined;
+  private metadataSerial: number = 0;
   private currentCastUrl: string = '';
   private currentProgressMs: number = 0;
   private currentDurationMs: number = 0;
@@ -81,7 +83,33 @@ export class AVSessionService {
     return AVSessionService.instance;
   }
 
+  private audioCallbacks: AVSessionCallbacks | null = null;
+
   setCallbacks(cbs: AVSessionCallbacks): void {
+    this.audioCallbacks = cbs;
+    if (!PlaybackCoordinator.speechActive) this.applyCallbacks(cbs);
+  }
+
+  setSpeechCallbacks(cbs: AVSessionCallbacks): void {
+    this.currentCastUrl = '';
+    this.metadataSerial++;
+    this.applyCallbacks(cbs);
+  }
+
+  endSpeechPlayback(): void {
+    if (!this.session || !PlaybackCoordinator.speechActive) return;
+    const state: avSession.AVPlaybackState = { state: avSession.PlaybackState.PLAYBACK_STATE_PAUSE };
+    this.session.setAVPlaybackState(state).catch((error: Error): void => {
+      this.logMediaCenterWarning('endSpeechPlayback', error);
+    });
+  }
+
+  restoreAudioCallbacks(): void {
+    this.metadataSerial++;
+    if (this.audioCallbacks) this.applyCallbacks(this.audioCallbacks);
+  }
+
+  private applyCallbacks(cbs: AVSessionCallbacks): void {
     this.onPlay = cbs.onPlay;
     this.onPause = cbs.onPause;
     this.onPlayNext = cbs.onPlayNext;
@@ -213,6 +241,7 @@ export class AVSessionService {
   }
 
   async updateLoopMode(mode: avSession.LoopMode): Promise<void> {
+    if (PlaybackCoordinator.speechActive) return;
     if (!await this.ensureReady() || !this.session) return;
     const playbackState: avSession.AVPlaybackState = { loopMode: mode };
     try {
@@ -233,7 +262,9 @@ export class AVSessionService {
     return time;
   }
 
-  async updateMetadata(book: Book, chapter: Chapter): Promise<void> {
+  async updateMetadata(book: Book, chapter: Chapter, speech: boolean = false): Promise<void> {
+    if (speech !== PlaybackCoordinator.speechActive) return;
+    const serial = ++this.metadataSerial;
     if (!await this.ensureReady() || !this.session) return;
     // mediaImage 只能传 PixelMap 或 http(s) URL;沙箱路径/rawfile 名称对 AVSession 服务不可读,
     // 必须先 decode 成 PixelMap,否则会触发 "get metaData failed"。
@@ -248,6 +279,7 @@ export class AVSessionService {
         hilog.warn(DOMAIN, TAG, 'updateMetadata cover decode failed, mediaImage=undefined');
       }
     }
+    if (serial !== this.metadataSerial || speech !== PlaybackCoordinator.speechActive) return;
     const previousAssetId = this.currentBook && this.currentChapter
       ? `${this.currentBook.id}_${this.currentChapter.id}` : '';
     const nextAssetId = `${book.id}_${chapter.id}`;
@@ -260,15 +292,17 @@ export class AVSessionService {
       title: chapter.title,
       artist: book.title,
       author: book.author,
-      duration: chapter.duration > 0 ? chapter.duration * 1000 : undefined,
-      mediaImage: mediaImage,
+
     };
+    if (chapter.duration > 0) metadata.duration = chapter.duration * 1000;
+    if (mediaImage !== undefined) metadata.mediaImage = mediaImage;
     try {
       await this.session.setAVMetadata(metadata);
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'setAVMetadata failed: %{public}s',
         e?.message ?? JSON.stringify(err));
+      if (serial !== this.metadataSerial || speech !== PlaybackCoordinator.speechActive) return;
       try {
         const fallback: avSession.AVMetadata = {
           assetId: `${book.id}_${chapter.id}`,
@@ -286,6 +320,7 @@ export class AVSessionService {
 
   /** AVPlayer prepared 后用真实 duration 刷新元数据,供胶囊/控制中心显示总时长 */
   async updateMetadataDuration(durationMs: number): Promise<void> {
+    if (PlaybackCoordinator.speechActive) return;
     if (!await this.ensureReady() || !this.session) return;
     if (!this.currentBook || !this.currentChapter) return;
     if (durationMs <= 0) return;
@@ -310,8 +345,10 @@ export class AVSessionService {
   }
 
   async updatePlaybackState(isPlaying: boolean, progressMs: number, speed: number,
-    durationMs: number, isFavorite: boolean = false): Promise<void> {
+    durationMs: number, isFavorite: boolean = false, speech: boolean = false): Promise<void> {
+    if (speech !== PlaybackCoordinator.speechActive) return;
     if (!await this.ensureReady() || !this.session) return;
+    if (speech !== PlaybackCoordinator.speechActive) return;
     this.currentProgressMs = progressMs;
     this.currentDurationMs = durationMs;
     let state: avSession.PlaybackState = avSession.PlaybackState.PLAYBACK_STATE_PAUSE;
@@ -325,9 +362,9 @@ export class AVSessionService {
         elapsedTime: progressMs,
         updateTime: Date.now()
       },
-      duration: durationMs > 0 ? durationMs : undefined,
       isFavorite: isFavorite
     };
+    if (durationMs > 0) playbackState.duration = durationMs;
     try {
       await this.session.setAVPlaybackState(playbackState);
     } catch (err) {
@@ -338,6 +375,7 @@ export class AVSessionService {
   }
 
   updateCastMediaSource(book: Book, chapter: Chapter, url: string): void {
+    if (PlaybackCoordinator.speechActive) return;
     if (!url.startsWith('http://') && !url.startsWith('https://')) return;
     if (this.currentBook && this.currentChapter
       && this.currentBook.id === book.id && this.currentChapter.id === chapter.id) {

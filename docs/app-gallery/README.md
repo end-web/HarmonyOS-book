@@ -13,10 +13,10 @@
 
 ## 安装包
 
-当前 GitHub 版本 `0.1.21` / `1000021`，包名 `com.huan.listenbook`，最低 HarmonyOS 6.0 / API 20，目标 API 24。沿用原包名与签名配置，保留升级安装和已有本地数据。
+当前 GitHub 版本 `0.1.22` / `1000022`，包名 `com.huan.listenbook`，最低 HarmonyOS 6.0 / API 20，目标 API 24。沿用原包名与签名配置，保留升级安装和已有本地数据。
 
-- `JianTing-v0.1.21.hap`：开发签名 HAP，用于获授权设备安装和 GitHub 分发；对应 SHA-256 文件与本机安装包位于 `artifacts/releases/v0.1.21/`。
-- `JianTing-v0.1.13-AppGallery.app`：上次生成的正式签名 APP 与上架素材保留在 `artifacts/releases/v0.1.13/`，不代表本次 GitHub 版本已提交 AppGallery。
+- `JianTing-v0.1.22.hap`：开发签名 HAP，用于获授权设备安装和 GitHub 分发；对应 SHA-256 文件与本机安装包位于 `artifacts/releases/v0.1.22/`。
+- `JianTing-v0.1.22-AppGallery.app`：本次正式签名邀测 APP 与上架素材位于 `artifacts/releases/v0.1.22/`，用于上传 AppGallery Connect 发起邀测；生成包不代表已提交平台。
 - 最新 HAP 通过 [GitHub Releases](https://github.com/end-web/HarmonyOS-book/releases/latest) 分发。
 
 ## 平台同步

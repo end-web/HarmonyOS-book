@@ -168,7 +168,6 @@ export class WindowUtils {
       const widthInches = screen.width / screen.xDPI;
       const heightInches = screen.height / screen.yDPI;
       const diagonalInches = Math.sqrt(widthInches * widthInches + heightInches * heightInches);
-      if (diagonalInches < 8.5) return 200;
       return diagonalInches <= 12 ? 250 : 300;
     } catch (_e) {
       // 屏幕信息不可用时按最高下限兜底，避免未知大屏使用过短的转场。

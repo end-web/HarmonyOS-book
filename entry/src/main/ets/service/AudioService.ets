@@ -1,3 +1,4 @@
+import { PlaybackCoordinator } from './PlaybackCoordinator';
 import { media } from '@kit.MediaKit';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { audio } from '@kit.AudioKit';
@@ -326,11 +327,11 @@ export class AudioService {
           try { p.setPlaybackRate(this.state.speed); } catch (_e) { /* 状态异常忽略 */ }
         }
         // 立即设置播放状态，让UI立即响应
-        this.state.isPlaying = !this.sleepPausePending && !this.pauseRequested;
+        this.state.isPlaying = !this.sleepPausePending && !this.pauseRequested && !PlaybackCoordinator.speechActive;
         if (this.state.isPlaying) p.play();
         else this.state.isLoading = false;
       } else if (newState === 'playing') {
-        if (this.sleepPausePending || this.pauseRequested) {
+        if (this.sleepPausePending || this.pauseRequested || PlaybackCoordinator.speechActive) {
           p.pause().catch((err: Error): void => {
             hilog.warn(DOMAIN, TAG, 'Pending pause failed: %{public}s', err.message);
           });
@@ -461,7 +462,7 @@ export class AudioService {
   }
 
   private handleInterrupt(event: audio.InterruptEvent): void {
-    if (this.pauseRequested || this.sleepPausePending) return;
+    if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
     if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
       if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE) {
         // 临时暂停（语音、电话、闹铃等）：标记为焦点暂停，等待系统后续下发 RESUME
@@ -509,10 +510,10 @@ export class AudioService {
   }
 
   private async resumeFromInterrupt(): Promise<void> {
-    if (this.pauseRequested || this.sleepPausePending) return;
+    if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
     try {
       const p = await this.ensurePlayer();
-      if (this.pauseRequested || this.sleepPausePending) return;
+      if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
       if (p.state === 'paused') {
         // 立即设置播放状态
         if (this.state) {
@@ -538,7 +539,7 @@ export class AudioService {
     this.pausedByExternalMedia = false;
     try {
       const p = await this.ensurePlayer();
-      if (this.pauseRequested || this.sleepPausePending) return;
+      if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
       if (p.state === 'paused') {
         if (this.state) {
           this.state.isPlaying = true;
@@ -703,6 +704,9 @@ export class AudioService {
    * - 不同书: await 当前进度落盘 → reset → 拿新书 PlayProgress 兜底 savedDurationMs → 装载
    */
   async playChapter(book: Book, chapter: Chapter, automatic: boolean = false): Promise<void> {
+    if (automatic && PlaybackCoordinator.speechActive) return;
+    if (!await PlaybackCoordinator.useAudio()) return;
+    AVSessionService.getInstance().restoreAudioCallbacks();
     if (!this.state || !this.context) {
       throw new Error('AudioService not bound');
     }
@@ -711,6 +715,7 @@ export class AudioService {
 
     // ★ 同书+同章节短路:不 reset,直接 seek(0) + play,避免重新嗅探 URL
     if (this.canReuseSameChapter(book, chapter)) {
+      AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.replaySameChapterFromStart();
       return;
     }
@@ -846,7 +851,7 @@ export class AudioService {
   }
 
   private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
-    if (!this.state || !this.context) return;
+    if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
     const myGen = ++this.playGen;
     // ★ 缓存命中→快路径,UI 不显示 loading 圈;否则常规路径,显示加载状态
     const fastPath = this.isFastSwitchPath(book, chapter);
@@ -1212,6 +1217,7 @@ export class AudioService {
   }
 
   async seek(ms: number): Promise<void> {
+    if (PlaybackCoordinator.speechActive) return;
     this.sleepPausePending = false;
     this.resumeAfterSleepChapter = false;
     this.chapterEndHandled = false;
@@ -1557,6 +1563,9 @@ export class AudioService {
    * - 同书+不同章 / 不同书: await 落盘 → reset → 装载 → prepared 后 seek
    */
   async playChapterAndSeek(book: Book, chapter: Chapter, seekMs: number, automatic: boolean = false): Promise<void> {
+    if (automatic && PlaybackCoordinator.speechActive) return;
+    if (!await PlaybackCoordinator.useAudio()) return;
+    AVSessionService.getInstance().restoreAudioCallbacks();
     if (!this.state || !this.context) {
       throw new Error('AudioService not bound');
     }
@@ -1564,6 +1573,7 @@ export class AudioService {
     this.cancelExternalMediaWatch();
     // ★ 同书+同章节+合理状态: 直接 seek,不 reset
     if (this.canReuseSameChapter(book, chapter)) {
+      AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.seekAndPlaySameChapter(seekMs);
       return;
     }
@@ -1640,6 +1650,14 @@ export class AudioService {
     }
   }
 
+  /** 朗读抢占时取消仍在解析的旧音源，防止稍后复活。 */
+  async suspendForSpeech(): Promise<void> {
+    this.playGen++;
+    this.isApplying = false;
+    await this.pause();
+    if (this.state) this.state.isLoading = false;
+  }
+
   /** 系统播控、耳机和卡片共用的暂停入口，重复指令保持暂停。 */
   async pause(): Promise<void> {
     this.pauseRequested = true;
@@ -1663,8 +1681,14 @@ export class AudioService {
     this.pauseRequested = false;
     this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
+    if (!await PlaybackCoordinator.useAudio()) return;
+    if (this.pauseRequested) return;
+    AVSessionService.getInstance().restoreAudioCallbacks();
+    if (this.state?.currentBook && this.state.currentChapter) {
+      AVSessionService.getInstance().updateMetadata(this.state.currentBook, this.state.currentChapter);
+    }
     if (await this.resumeAfterSleep()) return;
-    if (this.pauseRequested || this.isApplying || this.state?.isLoading) return;
+    if (PlaybackCoordinator.speechActive || this.pauseRequested || this.isApplying || this.state?.isLoading) return;
     if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped') {
       if (this.state && this.state.currentBook && this.state.currentChapter) {
         await this.resumeFromState();

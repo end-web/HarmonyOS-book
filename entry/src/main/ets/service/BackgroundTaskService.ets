@@ -44,12 +44,26 @@ export class BackgroundTaskService {
     }
   };
 
+  private static audioOwners: Set<string> = new Set();
+
+  static startSpeech(context: common.UIAbilityContext): Promise<void> {
+    BackgroundTaskService.audioOwners.add('speech');
+    return BackgroundTaskService.setMode(context, AUDIO_MODE, true);
+  }
+
+  static stopSpeech(context: common.UIAbilityContext): Promise<void> {
+    BackgroundTaskService.audioOwners.delete('speech');
+    return BackgroundTaskService.setMode(context, AUDIO_MODE, BackgroundTaskService.audioOwners.size > 0);
+  }
+
   static start(context: common.UIAbilityContext): Promise<void> {
+    BackgroundTaskService.audioOwners.add('audio');
     return BackgroundTaskService.setMode(context, AUDIO_MODE, true);
   }
 
   static stop(context: common.UIAbilityContext): Promise<void> {
-    return BackgroundTaskService.setMode(context, AUDIO_MODE, false);
+    BackgroundTaskService.audioOwners.delete('audio');
+    return BackgroundTaskService.setMode(context, AUDIO_MODE, BackgroundTaskService.audioOwners.size > 0);
   }
 
   static startDataTransfer(context: common.UIAbilityContext): Promise<void> {

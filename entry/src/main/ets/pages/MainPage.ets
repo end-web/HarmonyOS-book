@@ -1,3 +1,7 @@
+import { TextReaderRouteParams } from '../model/TextReading';
+import { SpeechMiniPlayer } from '../components/SpeechMiniPlayer';
+import { TextToSpeechService } from '../service/text/TextToSpeechService';
+import { TextToSpeechState } from '../model/TextToSpeechState';
 import { HdsCompat, CompatibleTabsModifier } from '../utils/HdsCompat';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { common } from '@kit.AbilityKit';
@@ -48,6 +52,7 @@ export struct MainPage {
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
   @Local miniBarCollapsed: boolean = false;
+  @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
   @Local viewportWidth: number = 0;
   @Local viewportHeight: number = 0;
   @Local bottomSafeVp: number = WindowUtils.getBottomSafeVp();
@@ -253,7 +258,17 @@ export struct MainPage {
    */
   @Builder
   miniBarBuilder(): void {
-    if (this.playerState.currentBook) {
+    if (this.speechState.active) {
+      SpeechMiniPlayer({ state: this.speechState, collapsed: this.miniBarCollapsed,
+        onOpen: (): void => {
+          if (PlatformCompat.floatingTabs && this.miniBarCollapsed) {
+            this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
+          } else {
+            this.navStack.pushPathByName('reader', TextReaderRouteParams.of(this.speechState.bookId));
+          }
+        }
+      })
+    } else if (this.playerState.currentBook) {
       MiniPlayer({
         playerState: this.playerState,
         collapsed: this.miniBarCollapsed,
@@ -289,7 +304,7 @@ export struct MainPage {
       // 智感握持:左右手自动跟手
       adaptToHandedness: true,
       // 迷你栏配置:HdsTabs 会自动管理折叠/展开
-      miniBar: this.playerState.currentBook ? {
+      miniBar: (this.speechState.active || this.playerState.currentBook) ? {
         miniBarBuilder: () => this.miniBarBuilder(),
         enableMiniBarBackground: true,
         enableMiniBarClip: true,
@@ -371,7 +386,7 @@ export struct MainPage {
       .backgroundColor(HomeTheme.BgNeutral)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      if (!PlatformCompat.floatingTabs && this.playerState.currentBook) {
+      if (!PlatformCompat.floatingTabs && (this.speechState.active || this.playerState.currentBook)) {
         Column() {
           this.miniBarBuilder()
         }

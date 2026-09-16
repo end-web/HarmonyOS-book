@@ -56,10 +56,18 @@ async function fixture(initialState = 'paused') {
   const session = {
     callbacks: null,
     setCallbacks(callbacks) { this.callbacks = callbacks; },
+    restoreAudioCallbacks() {}, async updateMetadata() {},
     async init() {}, async destroy() {}, async updateMetadataDuration() {}
   };
   const playbackStore = { setPlaying() {} };
+  const coordinatorModule = { exports: {} };
+  const coordinatorCode = ts.transpileModule(fs.readFileSync(
+    path.join(path.dirname(source), 'PlaybackCoordinator.ets'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  vm.runInNewContext(coordinatorCode, { module: coordinatorModule, exports: coordinatorModule.exports });
   const modules = {
+    './PlaybackCoordinator': coordinatorModule.exports,
     '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 } } },
     '@kit.AudioKit': { audio },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },

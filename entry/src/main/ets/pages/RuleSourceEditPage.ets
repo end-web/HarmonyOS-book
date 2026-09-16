@@ -1,3 +1,4 @@
+import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { LocalRuleSource, LocalRuleSearchRule, LocalRuleBookInfoRule, LocalRuleTocRule, LocalRuleContentRule } from '../model/LocalRuleSource';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleSourceCodec } from '../service/rulesource/LocalRuleSourceCodec';
@@ -269,7 +270,10 @@ export struct RuleSourceEditPage {
   }
 
   build() {
-    NavDestination() {
+    ProfileMenuDestination({
+      pageBackground: $r('sys.color.background_secondary'),
+      onBackRequested: (): boolean => this.requestBack()
+    }) {
       Stack() {
         Column() {
           // 顶部标题栏
@@ -403,10 +407,7 @@ export struct RuleSourceEditPage {
       .height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
-    .hideTitleBar(true)
-    .backgroundColor($r('sys.color.background_secondary'))
-    .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
-    .onBackPressed(() => this.requestBack())
+
   }
 
   @Builder

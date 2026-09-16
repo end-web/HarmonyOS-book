@@ -1318,7 +1318,7 @@ export struct RuleSourcePage {
                   .color(AppColor.Brand)
               } else {
                 SymbolGlyph($r('sys.symbol.bolt_fill'))
-                  .fontSize(20)
+                  .fontSize('20vp')
                   .fontColor([AppColor.Brand])
               }
             }
@@ -1334,7 +1334,7 @@ export struct RuleSourcePage {
 
           Button() {
             SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize(20)
+              .fontSize('20vp')
               .fontColor([AppColor.Brand])
           }
           .width(36)
@@ -1597,10 +1597,15 @@ export struct RuleSourcePage {
       Text($r('app.string.home_source_setting'))
         .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
       Text(this.homeSourceName || $r('app.string.home_source_unset'))
-        .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+        .fontSize(AppFont.Body).fontColor(AppColor.Brand)
         .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .textAlign(TextAlign.End)
-      SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('sys.color.font_tertiary')])
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize('24vp')
+        .width('24vp')
+        .height('24vp')
+        .id('rule-source-home-chevron')
+        .fontColor([$r('sys.color.font_tertiary')])
     }
     .width('100%').constraintSize({ minHeight: 56 }).padding(AppSpace.Md)
     .backgroundColor($r('sys.color.background_primary')).borderRadius(AppRadius.Md)
