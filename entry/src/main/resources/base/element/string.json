@@ -1390,6 +1390,17 @@
     {"name": "appearance_save_failed", "value": "外观设置保存失败，请重试"},
     {"name": "home_favorite_add", "value": "收藏"},
     {"name": "home_favorite_remove", "value": "取消收藏"},
-    {"name": "home_favorite_failed", "value": "收藏操作失败，请重试"}
+    {"name": "home_favorite_failed", "value": "收藏操作失败，请重试"},
+    {"name": "talebook_add", "value": "添加 Talebook NAS"},
+    {"name": "talebook_title", "value": "连接 Talebook"},
+    {"name": "talebook_hint", "value": "连接后添加阅读和听书来源。支持 EPUB、TXT 和已发布的有声书，可在书源的发现入口浏览书库。"},
+    {"name": "talebook_address", "value": "NAS 地址"},
+    {"name": "talebook_address_hint", "value": "http://nas.example.com:58080"},
+    {"name": "talebook_code", "value": "访问码"},
+    {"name": "talebook_code_hint", "value": "没有访问码可留空"},
+    {"name": "talebook_network_hint", "value": "仅 IPv6 的 NAS 需要手机网络支持 IPv6。HTTP 连接不会加密传输访问码。当前使用访问码访问书库，需要在 Talebook 中开放访客阅读权限。"},
+    {"name": "talebook_connect", "value": "验证并连接"},
+    {"name": "talebook_connecting", "value": "正在连接…"},
+    {"name": "talebook_connected", "value": "Talebook 已连接，可在发现中浏览书库"}
   ]
 }

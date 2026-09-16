@@ -121,6 +121,25 @@
   # TocItem
   url
   name
+  # Talebook NAS API JSON fields
+  err
+  msg
+  sys
+  version
+  total
+  book
+  manifest
+  edition
+  files
+  format
+  href
+  comments
+  img
+  book_id
+  chapter_count
+  number
+  duration_ms
+  audio_url
 
 # ─── 保留文件名（避免资源路径问题） ───
 # 注：-enable-filename-obfuscation 已启用，但 resources/rawfile 等资源引用

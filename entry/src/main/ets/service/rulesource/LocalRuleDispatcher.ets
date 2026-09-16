@@ -24,6 +24,8 @@ import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
 import { buffer } from '@kit.ArkTS';
+import { TalebookSourceIdentity } from './talebook/TalebookSourceIdentity';
+import { TalebookSourceAdapter } from './talebook/TalebookSourceAdapter';
 
 class LocalRuleSearchResult implements SearchResult {
   contentType: 'audio' | 'text' = 'text';
@@ -70,6 +72,9 @@ export class LocalRuleDispatcher {
   static async explore(source: LocalRuleSource, address: string, page: number = 1,
     variables: Record<string, string> = {}): Promise<LocalRuleExploreResult> {
     if (!source.enabledExplore || !source.canExecute()) throw new Error('书源未启用发现');
+    if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
+      return TalebookSourceAdapter.list(source, '', page);
+    }
     await LocalRuleDispatcher.prepareVariables(source, variables, address, '', page);
     const resolved = await LocalRuleScriptRuntime.resolveAddress(address, source, variables, '', page);
     const fetch = await LocalRuleHttpClient.fetch(source, resolved, variables, '', page);

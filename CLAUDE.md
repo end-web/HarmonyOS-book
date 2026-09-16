@@ -98,6 +98,16 @@
 - 光遇、书山主账号通过 `RuleSourceAccountService` 分发到各自原生账号服务；主会话与子源网站 Cookie 独立保存。
 - 当前只实现 Legado/Reader 的兼容子集，导入成功和批量搜索通过均不保证每个来源的完整内容链可用。
 
+## Talebook NAS 导入源
+
+- Talebook 外部 JSON 字段必须同步保留在 `obfuscation-rules.txt`，避免 Release 属性混淆破坏接口解析。
+
+- “书源 → 导入 → 添加 Talebook NAS”输入 HTTP(S) 根地址和可选访问码，验证 `/api/welcome` 与 `/api/user/info` 后添加阅读、听书两个来源；不包含任何预置 NAS 地址或访问码。来源以 `/#talebook-text`、`/#talebook-audio` 标记，由 `NativeRuleSourceDispatcher` 分发，发现列表沿用 `LocalRuleDispatcher` 入口。
+- 访问码只用于验证请求；`invited` Cookie 分别按来源和 origin 存入现有加密 Cookie 表，定义导出及备份不携带会话。来源的“登录”可更新过期会话；重新连接不改变已安装定义、启用/锁定状态。当前使用访问码和站点访客权限，不支持 Talebook 用户账号登录及验证码挑战。
+- 阅读通过 NAS 的 `/get/extract/{id}/` 获取 EPUB container、OPF spine 和文字正文，按 spine 顺序进入现有在线分页、缓存和进度链；不执行书内脚本、不加载外站资源。TXT 作为单章读取并沿用 HTTP 响应上限（4 Mi 字符），PDF、漫画和服务端格式转换不在本次范围。EPUB 图片和复杂排版不保留。
+- 听书读取已发布书单与 manifest，将章节 MP3 和来源 Cookie 交给现有播放/下载链。首页仍只允许选择听书源。请求保持同一 NAS，不使用 App 云 API 或 IPv4/IPv6 中转；仅 IPv6 的 NAS 要求设备网络可达。
+- 回归：`node scripts/test-talebook.cjs`（`DEVECO_HOME` 指向 IDE）；可使用 `--live` 加 `TALEBOOK_URL`、`TALEBOOK_CODE`、`TALEBOOK_KEYWORD` 验证授权 NAS，凭据仅从环境读取，不写文件。该主机测试不替代设备上的播放、恢复、下载及导出验证。
+
 ## 阅读与播放
 
 - 在线小说用 `OnlineTextPaginator` 分页，按章节标题或索引及 `charOffset` 恢复位置；切换字号和窗口尺寸后重新分页。阅读入口先恢复本地目录，缺失才联网并保存目录。章节正文有内存缓存、请求合并和相邻章节预取；已读和预读正文经 `OnlineTextContentCache` 写入 `cache/online_text_content`，按书源、书籍及章节地址隔离，重启后先读本地，缺失或损坏才联网。缓存随系统/用户清理失效，不代表已下载全书；单章缓存上限 8 MiB，写入失败不阻断阅读。

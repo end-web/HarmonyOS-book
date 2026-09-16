@@ -1,7 +1,7 @@
 import { HdsCompat } from '../utils/HdsCompat';
 import { CompatibleGridInsets } from '../utils/PlatformCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
-import { HdsNavDestination, HdsNavDestinationTitleMode } from '@kit.UIDesignKit';
+import { HdsNavDestination, HdsNavDestinationTitleMode, HideMode } from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
@@ -55,6 +55,7 @@ export struct SearchPage {
   @Local searchHistory: string[] = [];
   @Local historyTagsHeight: number = 84;
   @Local historyCollapseOffset: number = 0;
+  @Local searchCollapseOffset: number = 0;
   @Local recommendationBooks: Book[] = [];
   @Local recommendationsLoading: boolean = false;
 
@@ -80,6 +81,11 @@ export struct SearchPage {
     if (Math.abs(offset - this.historyCollapseOffset) > 0.5) {
       this.historyCollapseOffset = offset;
     }
+  }
+
+  private syncSearchCollapse(): void {
+    this.searchCollapseOffset = Math.max(0, Math.min(SEARCH_HEADER_HEIGHT,
+      this.resultScroller.currentOffset().yOffset));
   }
 
   aboutToAppear(): void {
@@ -136,6 +142,7 @@ export struct SearchPage {
   }
 
   private clearSearch(): void {
+    this.searchCollapseOffset = 0;
     this.searchGen++;
     this.searching = false;
     this.hasSearched = false;
@@ -306,6 +313,7 @@ export struct SearchPage {
     this.searchGen++;
     const gen = this.searchGen;
     this.searching = true;
+    this.searchCollapseOffset = 0;
     this.hasSearched = true;
     this.searchTab = 0;
     this.audioBooks = [];
@@ -794,6 +802,7 @@ export struct SearchPage {
       }, (book: Book) => book.id)
     }
     .columnsTemplate('1fr 1fr 1fr')
+    .onDidScroll(() => this.syncSearchCollapse())
     .columnsGap(AppSpace.Sm)
     .rowsGap(AppSpace.Md)
     .cachedCount(6)
@@ -893,6 +902,7 @@ export struct SearchPage {
     .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SEARCH_HEADER_HEIGHT +
       RESULT_TOOLBAR_HEIGHT + AppSpace.Sm)
     .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
+    .onDidScroll(() => this.syncSearchCollapse())
     .padding({
       left: AppSpace.Md,
       right: AppSpace.Md
@@ -941,6 +951,9 @@ export struct SearchPage {
     .padding({ left: AppSpace.Xs, right: AppSpace.Md })
     .alignItems(VerticalAlign.Center)
     .backgroundColor(Color.Transparent)
+    .translate({ y: -this.searchCollapseOffset })
+    .opacity(Math.max(0, Math.min(1, (SEARCH_HEADER_HEIGHT - this.searchCollapseOffset) / 24)))
+    .visibility(this.searchCollapseOffset >= SEARCH_HEADER_HEIGHT - 0.5 ? Visibility.Hidden : Visibility.Visible)
   }
 
   @Builder
@@ -1024,6 +1037,13 @@ export struct SearchPage {
     .titleMode(HdsNavDestinationTitleMode.MINI)
     .hideBackButton(true)
     .bindToScrollable(this.hasSearched ? [this.resultScroller] : [this.recommendationScroller])
+    .dynamicHideTitleBar({
+      hideTitleArea: this.hasSearched && this.visibleResultCount > 0,
+      hideBottomBuilder: false,
+      hideStatusBar: false,
+      mode: HideMode.SCROLL_UP_TO,
+      hideRatio: 1.0
+    })
     .systemBarStyle(
       { statusBarContentColor: WindowUtils.getSystemBarContentColor() },
       { statusBarContentColor: WindowUtils.getSystemBarContentColor() }

@@ -4,6 +4,8 @@ import { GuangYuSourceAdapter } from './guangyu/GuangYuSourceAdapter';
 import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
 import { ShuShanSourceAdapter } from './shushan/ShuShanSourceAdapter';
 import { ShuShanSourceIdentity } from './shushan/ShuShanSourceIdentity';
+import { TalebookSourceIdentity } from './talebook/TalebookSourceIdentity';
+import { TalebookSourceAdapter } from './talebook/TalebookSourceAdapter';
 
 /** 用户导入但由受控原生协议处理的聚合源统一分发入口。 */
 export class NativeRuleSourceDispatcher {
@@ -13,7 +15,7 @@ export class NativeRuleSourceDispatcher {
 
   static isSourceUrl(sourceUrl: string | undefined): boolean {
     return GuangYuSourceIdentity.isSourceUrl(sourceUrl) ||
-      ShuShanSourceIdentity.isSourceUrl(sourceUrl);
+      ShuShanSourceIdentity.isSourceUrl(sourceUrl) || TalebookSourceIdentity.isSourceUrl(sourceUrl);
   }
 
   static usesSingleContentHealthCheck(sourceUrl: string): boolean {
@@ -29,6 +31,9 @@ export class NativeRuleSourceDispatcher {
 
   static async search(source: BookSource, keyword: string,
     page: number = 1): Promise<SearchResult[]> {
+    if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
+      return source.enabled === false ? [] : TalebookSourceAdapter.search(source, keyword, page);
+    }
     if (GuangYuSourceIdentity.isSource(source)) {
       return GuangYuSourceAdapter.search(source, keyword, page);
     }
@@ -40,6 +45,9 @@ export class NativeRuleSourceDispatcher {
 
   static async searchForHealthCheck(source: BookSource, keyword: string,
     page: number = 1): Promise<SearchResult[]> {
+    if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
+      return TalebookSourceAdapter.search(source, keyword, page);
+    }
     if (GuangYuSourceIdentity.isSource(source)) {
       return GuangYuSourceAdapter.searchForHealthCheck(source, keyword, page);
     }
@@ -50,6 +58,7 @@ export class NativeRuleSourceDispatcher {
   }
 
   static async getBookInfo(sourceUrl: string, bookUrl: string): Promise<BookInfo | null> {
+    if (TalebookSourceIdentity.isSourceUrl(sourceUrl)) return TalebookSourceAdapter.info(sourceUrl, bookUrl);
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
       return GuangYuSourceAdapter.getBookInfo(bookUrl);
     }
@@ -60,6 +69,7 @@ export class NativeRuleSourceDispatcher {
   }
 
   static async getBookToc(sourceUrl: string, tocUrl: string): Promise<TocItem[]> {
+    if (TalebookSourceIdentity.isSourceUrl(sourceUrl)) return TalebookSourceAdapter.toc(sourceUrl, tocUrl);
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
       return GuangYuSourceAdapter.getBookToc(tocUrl);
     }
@@ -71,6 +81,7 @@ export class NativeRuleSourceDispatcher {
 
   static async resolveContent(sourceUrl: string,
     chapterUrl: string): Promise<LocalRuleContentResult> {
+    if (TalebookSourceIdentity.isSourceUrl(sourceUrl)) return TalebookSourceAdapter.content(sourceUrl, chapterUrl);
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
       return GuangYuSourceAdapter.resolveContent(chapterUrl);
     }
@@ -81,6 +92,9 @@ export class NativeRuleSourceDispatcher {
   }
 
   static async getAudioUrl(sourceUrl: string, chapterUrl: string): Promise<string> {
+    if (TalebookSourceIdentity.isSourceUrl(sourceUrl)) {
+      return (await TalebookSourceAdapter.content(sourceUrl, chapterUrl)).audioUrl;
+    }
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
       return GuangYuSourceAdapter.getAudioUrl(chapterUrl);
     }

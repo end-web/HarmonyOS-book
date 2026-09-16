@@ -13,6 +13,8 @@ import { TingYouSourceAdapter } from './rulesource/tingyou/TingYouSourceAdapter'
 import { TingYouSourceIdentity } from './rulesource/tingyou/TingYouSourceIdentity';
 import { LocalRulePanelService } from './rulesource/LocalRulePanelService';
 import { LocalRuleDiagnostics } from './rulesource/LocalRuleDiagnostics';
+import { TalebookSourceIdentity } from './rulesource/talebook/TalebookSourceIdentity';
+import { TalebookSourceAdapter } from './rulesource/talebook/TalebookSourceAdapter';
 
 export interface ExploreFetchResult {
   books: SearchResult[];
@@ -101,7 +103,15 @@ export class BookSourceService {
     }
 
     try {
-      if (NativeRuleSourceDispatcher.isSource(source)) {
+      if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
+        const results = await TalebookSourceAdapter.search(source, cleanKeyword);
+        if (results.length === 0) {
+          health.message = '搜索请求正常，当前关键词暂无匹配；可使用发现/阅读测试验证书库';
+        } else {
+          await BookSourceService.validateCandidate(source, results[0], source.isAudio() ? 'audio' : 'text');
+          health.message = `搜索、详情、目录与内容解析正常：${results[0].name}`;
+        }
+      } else if (NativeRuleSourceDispatcher.isSource(source)) {
         health.message = await BookSourceService.testNativeRuleSource(source, cleanKeyword);
       } else {
         health.message = await BookSourceService.testRuleSource(source, cleanKeyword);

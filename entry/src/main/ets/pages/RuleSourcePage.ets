@@ -27,6 +27,8 @@ import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { CharsetCodec } from '../utils/CharsetCodec';
 import { WindowUtils } from '../utils/WindowUtils';
 import { promptAction } from '@kit.ArkUI';
+import { TalebookConnectComponent } from '../components/TalebookConnectComponent';
+import { TalebookSourceIdentity } from '../service/rulesource/talebook/TalebookSourceIdentity';
 
 interface RuleSourceEditParams {
   sourceUrl: string;
@@ -87,6 +89,8 @@ export struct RuleSourcePage {
   @Local isBulkTesting: boolean = false;
   @Local isEditMode: boolean = false;
   @Local showImportPanel: boolean = false;
+  @Local showTalebook: boolean = false;
+  @Local talebookSourceUrl: string = '';
   @Local selectedSourceCount: number = 0;
   @Local selectionRevision: number = 0;
   @Local bulkTestTotal: number = 0;
@@ -879,6 +883,7 @@ export struct RuleSourcePage {
   }
 
   private canOpenSourceLogin(source: LocalRuleSource): boolean {
+    if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) return true;
     if (RuleSourceChildService.supports(source.bookSourceUrl)) return false;
     return source.loginUrl.trim().toLowerCase().startsWith('https://');
   }
@@ -904,6 +909,11 @@ export struct RuleSourcePage {
 
   private openSourceLogin(source: LocalRuleSource): void {
     if (this.busySourceUrl.length > 0 || this.isImporting || this.isBulkTesting) return;
+    if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
+      this.talebookSourceUrl = source.bookSourceUrl;
+      this.showTalebook = true;
+      return;
+    }
     if (!this.canOpenSourceLogin(source)) return;
     const route = RuleSourceLoginRouteParams.of(
       source.bookSourceUrl, source.bookSourceName, source.loginUrl);
@@ -1249,6 +1259,28 @@ export struct RuleSourcePage {
     .padding({ bottom: Math.max(this.safeBottom, RULE_SOURCE_MIN_BOTTOM_INSET) })
     .backgroundColor($r('sys.color.background_secondary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .bindSheet($$this.showTalebook, this.buildTalebookConnection(), {
+      height: SheetSize.LARGE,
+      showClose: true,
+      onWillDismiss: (action: DismissSheetAction): void => {
+        if (!this.isImporting) action.dismiss();
+      }
+    })
+  }
+
+  @Builder
+  buildTalebookConnection() {
+    TalebookConnectComponent({
+      sourceUrl: this.talebookSourceUrl,
+      onBusy: (busy: boolean): void => { this.isImporting = busy; },
+      onConnected: (): void => {
+        this.showTalebook = false;
+        this.showImportPanel = false;
+        SourceDataService.invalidateLocalSources();
+        this.loadSources(false);
+        this.showToast($r('app.string.talebook_connected'));
+      }
+    })
   }
 
   @Builder
@@ -1867,6 +1899,11 @@ export struct RuleSourcePage {
   @Builder
   buildImportSection() {
     Column({ space: AppSpace.Sm }) {
+      Button($r('app.string.talebook_add'), { type: ButtonType.Normal })
+        .width('100%').height(44).fontColor(AppColor.Brand).backgroundColor(AppColor.BrandSoft)
+        .borderRadius(AppRadius.Sm)
+        .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+        .onClick(() => { this.talebookSourceUrl = ''; this.showTalebook = true; })
       Column({ space: 2 }) {
         Text($r('app.string.rule_source_import_title'))
           .fontSize(AppFont.BodyL)
