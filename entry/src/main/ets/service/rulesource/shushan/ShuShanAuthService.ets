@@ -39,7 +39,7 @@ export class ShuShanAuthService {
     try {
       const session = await LocalRuleSourceRepository.getSession(SHU_SHAN_SOURCE_URL);
       if (session !== undefined && ShuShanAuthService.isValidApiKey(session.token)) {
-        state.loggedIn = true;
+        state.loggedIn = await LocalRuleSourceRepository.getLoginStatus(SHU_SHAN_SOURCE_URL) !== 'expired';
         state.accountLabel = session.accountLabel;
       }
     } catch (_error) {

@@ -119,8 +119,23 @@ export class WindowUtils {
   }
 
   /** 深浅色模式变更时调用（EntryAbility.onConfigurationUpdate），重新刷新当前状态栏字色 */
+  private static readerColorListeners: Set<() => void> = new Set();
+
+  static isDarkMode(): boolean {
+    return WindowUtils.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+  }
+
+  static addReaderColorListener(listener: () => void): void {
+    WindowUtils.readerColorListeners.add(listener);
+  }
+
+  static removeReaderColorListener(listener: () => void): void {
+    WindowUtils.readerColorListeners.delete(listener);
+  }
+
   static updateColorMode(colorMode: ConfigurationConstant.ColorMode): void {
     WindowUtils.colorMode = colorMode;
+    WindowUtils.readerColorListeners.forEach((listener: () => void): void => listener());
     WindowUtils.applySystemBarContent().catch(() => { /* ignore */ });
   }
 

@@ -60,6 +60,18 @@
             "actions": [
               "ohos.want.action.home"
             ]
+          },
+          {
+            // 系统“使用其他应用打开”：通过 type 匹配 JSON，并声明 FileOpen 功能。
+            "actions": ["ohos.want.action.viewData"],
+            "uris": [
+              { "scheme": "file", "type": "general.json", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "application/json", "linkFeature": "FileOpen" },
+              { "scheme": "file", "type": "text/json", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "general.json", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "application/json", "linkFeature": "FileOpen" },
+              { "scheme": "content", "type": "text/json", "linkFeature": "FileOpen" }
+            ]
           }
         ]
       }

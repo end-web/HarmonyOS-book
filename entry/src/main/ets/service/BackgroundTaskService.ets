@@ -95,6 +95,8 @@ export class BackgroundTaskService {
   }
 
   private static setMode(context: common.UIAbilityContext, mode: string, enabled: boolean): Promise<void> {
+    hilog.info(DOMAIN, TAG, 'mode request mode=%{public}s enabled=%{public}s running=%{public}s owners=%{public}s',
+      mode, String(enabled), String(BackgroundTaskService.running), Array.from(BackgroundTaskService.audioOwners).join(','));
     BackgroundTaskService.context = context;
     BackgroundTaskService.bindListeners();
     if (enabled) {
@@ -173,6 +175,7 @@ export class BackgroundTaskService {
         if (!BackgroundTaskService.running) return;
         try {
           await backgroundTaskManager.stopBackgroundRunning(context);
+          hilog.info(DOMAIN, TAG, 'stopBackgroundRunning ok');
         } catch (err) {
           const e = err as Error;
           hilog.warn(DOMAIN, TAG, 'stopBackgroundRunning: %{public}s',

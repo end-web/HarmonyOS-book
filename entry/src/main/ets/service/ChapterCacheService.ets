@@ -1,3 +1,4 @@
+import { PreferenceService } from './PreferenceService';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { http } from '@kit.NetworkKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -210,8 +211,8 @@ export class ChapterCacheService {
 
   preloadAudioChapters(book: Book, currentIndex: number): void {
     if (!book.sourceUrl || PRE_DOWNLOAD_FORWARD <= 0) return;
-    const start = Math.max(0, currentIndex - PRE_DOWNLOAD_BACKWARD);
-    const end = Math.min(book.chapters.length - 1, currentIndex + PRE_DOWNLOAD_FORWARD);
+    const start = Math.max(0, currentIndex - (PreferenceService.chapterStep(book) < 0 ? PRE_DOWNLOAD_FORWARD : PRE_DOWNLOAD_BACKWARD));
+    const end = Math.min(book.chapters.length - 1, currentIndex + (PreferenceService.chapterStep(book) < 0 ? PRE_DOWNLOAD_BACKWARD : PRE_DOWNLOAD_FORWARD));
     for (let i = start; i <= end; i++) {
       if (i === currentIndex) continue;
       const ch = book.chapters[i];

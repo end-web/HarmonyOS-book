@@ -110,6 +110,10 @@ struct Index {
   }
 
   private handleWidgetRoute(target: string, bookId: string): void {
+    if (target === 'ruleSourceImport') {
+      this.navStack.pushPathByName('ruleSources', bookId, false);
+      return;
+    }
     if (target === 'resume') {
       // 软拉起:对齐控制中心交互——只把应用拉到前台,
       // 用户停留在哪个页就保留哪个页,不强制跳到 PlayerPage。
@@ -307,9 +311,8 @@ struct Index {
         SettingsPage({ navStack: this.navStack })
       }
     } else if (name === 'ruleSources') {
-      ProfileMenuDestination({ pageBackground: $r('sys.color.background_secondary') }) {
-        RuleSourcePage({ navStack: this.navStack })
-      }
+      // RuleSourcePage 自带 ProfileMenuDestination：页内多级视图需拦截侧滑返回
+      RuleSourcePage({ navStack: this.navStack, importFileUri: typeof param === 'string' ? param : '' })
     } else if (name === 'ruleSourceAccount') {
       ProfileMenuDestination() {
         RuleSourceAccountPage({ navStack: this.navStack, sourceUrl: String(param) })

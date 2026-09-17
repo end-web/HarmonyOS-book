@@ -1,4 +1,4 @@
-import { HomeBlockSection, SearchResult } from '../../model/BookSource';
+import { HomeBlockSection } from '../../model/BookSource';
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { BookSourceService } from '../BookSourceService';
 import { PreferenceService } from '../PreferenceService';
@@ -16,20 +16,21 @@ export class HomeSourceCategory {
   }
 }
 
-/** 首页只使用用户选择的已启用听书源，复用现有导入源发现链路。 */
+/** 首页使用用户选择的已启用小说或听书发现源，复用现有导入源发现链路。 */
 export class HomeSourceService {
   static isEligible(source: LocalRuleSource): boolean {
-    return source.enabled && source.isAudio() && source.canExecute() &&
+    return source.enabled && (source.isAudio() || source.isText()) && source.canExecute() &&
+      HomeSourceService.hasHomeContent(source) &&
       !source.bookSourceUrl.startsWith('builtin://');
   }
 
   static async getSources(): Promise<LocalRuleSource[]> {
     const sources = await SourceDataService.getSources();
-    const audioSources: LocalRuleSource[] = [];
+    const eligibleSources: LocalRuleSource[] = [];
     for (const source of sources) {
-      if (source instanceof LocalRuleSource && HomeSourceService.isEligible(source)) audioSources.push(source);
+      if (source instanceof LocalRuleSource && HomeSourceService.isEligible(source)) eligibleSources.push(source);
     }
-    return audioSources;
+    return eligibleSources;
   }
 
   static selectAvailable(sources: LocalRuleSource[], preferredUrl: string): LocalRuleSource | undefined {
@@ -46,7 +47,7 @@ export class HomeSourceService {
   static async setSelectedSource(sourceUrl: string): Promise<void> {
     const sources = await HomeSourceService.getSources();
     if (!sources.some((source: LocalRuleSource): boolean => source.bookSourceUrl === sourceUrl)) {
-      throw new Error('首页源必须是已启用的听书源');
+      throw new Error('首页源必须已启用且支持发现');
     }
     await PreferenceService.setHomeSourceUrl(sourceUrl);
   }
@@ -69,10 +70,6 @@ export class HomeSourceService {
     return categories;
   }
 
-  static audioBooks(books: SearchResult[]): SearchResult[] {
-    return books.filter((book: SearchResult): boolean => book.contentType !== 'text');
-  }
-
   static async getHomeBlocks(source: LocalRuleSource,
     categories: HomeSourceCategory[]): Promise<HomeBlockSection[]> {
     if (TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
@@ -90,7 +87,7 @@ export class HomeSourceService {
       };
       try {
         const result = await BookSourceService.getExploreBooksByUrl(source, category.url, 1);
-        block.books = HomeSourceService.audioBooks(result.books).slice(0, 12);
+        block.books = result.books.slice(0, 12);
         completed++;
       } catch (error) {
         failed = true;

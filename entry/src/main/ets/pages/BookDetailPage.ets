@@ -20,7 +20,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { ChapterListItem, ChapterBadge, mapChapterBadge } from '../components/ChapterListItem';
 import { ChapterLoadingSkeleton } from '../components/ChapterLoadingSkeleton';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
-import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
+import { TextReaderRouteParams, TextReadingPosition, EVT_READER_JUMP_CHAPTER, ReaderJumpChapterEvent } from '../model/TextReading';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 import { OneShotTransitionIds } from '../utils/OneShotTransition';
 import { CoverImage } from '../components/CoverImage';
@@ -45,6 +45,7 @@ export struct BookDetailPage {
   @Local debugInfo: string = '';
   /** 节目搜索关键词。 */
   @Local chapterQuery: string = '';
+  @Local chaptersDescending: boolean = false;
   @Local downloadTick: number = 0;
   @Local chapterDownloadTick: number = 0;
   /** 章节列表滚动位置 vs 当前章节的偏离(vp);用来决定是否显示"回到当前章节"浮动按钮 */
@@ -214,6 +215,11 @@ export struct BookDetailPage {
       return;
     }
     if (b) {
+      if (b.id.startsWith('import_') && b.chapters.length === 0) {
+        b.chapters = await DataService.getChaptersForBook(b.id);
+      }
+      await PreferenceService.applyTocOrder(b);
+      this.chaptersDescending = PreferenceService.chapterStep(b) < 0;
       if (b.contentType === 'text') {
         await this.loadTextBook(b);
         return;
@@ -447,7 +453,8 @@ export struct BookDetailPage {
   }
 
   private scrollToCurrentChapter(): void {
-    this.scrollChapterListToIndex(this.currentChapterIndex());
+    const current = this.book?.chapters[this.currentChapterIndex()];
+    this.scrollChapterListToIndex(this.displayedChapters.findIndex((chapter: Chapter): boolean => chapter.id === current?.id));
   }
 
   /** "回到当前章节"按钮:居中滚到当前章节 */
@@ -469,7 +476,7 @@ export struct BookDetailPage {
    * 修正长列表按平均行高估算导致的 ScrollAlign.CENTER 偏差(原先单次定位时灵时不灵)。
    */
   private scrollChapterListToIndex(idx: number): void {
-    if (idx <= 0) return;
+    if (idx < 0) return;
     setTimeout(() => {
       try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
       setTimeout(() => {
@@ -481,7 +488,10 @@ export struct BookDetailPage {
   /** 过滤后的章节展示数组（Repeat 入参）。返回新引用以触发 @ReusableV2 行重渲染。 */
   private refreshDisplayedChapters(list: Chapter[]): void {
     // 浅拷贝一份，保证 Repeat 通过数组引用变化重算每行（badge/进度/播放态）
-    this.displayedChapters = list.slice();
+    const source = this.book?.chapters ?? list;
+    const query = this.chapterQuery.trim().toLowerCase();
+    const filtered = source.filter((chapter: Chapter): boolean => chapter.title.toLowerCase().includes(query));
+    this.displayedChapters = this.chaptersDescending ? filtered.reverse() : filtered;
   }
 
   /** 按关键词过滤章节。空关键词回到完整列表，再推送展示数组给 Repeat。 */
@@ -699,8 +709,25 @@ export struct BookDetailPage {
     if (chapter) {
       resourceIndex = DataService.resolveChapterIndex(this.book, chapter.id, chapter.title);
     }
-    const params = TextReaderRouteParams.of(this.book.id, resourceIndex);
     SearchCache.put(this.book);
+    // 阅读页已在栈内（从阅读页进详情）：返回原阅读页，选中章节时再跳章，避免重开丢失进度。
+    const names = this.navStack.getAllPathName();
+    for (let index = names.length - 2; index >= 0; index--) {
+      if (names[index] !== 'reader') continue;
+      // getParamByIndex 返回 unknown：按栈内 reader 路由参数断言后再校验类型与书目
+      const param = this.navStack.getParamByIndex(index) as TextReaderRouteParams | undefined;
+      if (param instanceof TextReaderRouteParams && param.bookId === this.book.id) {
+        this.navStack.popToIndex(index);
+        if (resourceIndex >= 0) {
+          const event = new ReaderJumpChapterEvent();
+          event.bookId = this.book.id;
+          event.resourceIndex = resourceIndex;
+          emitter.emit(EVT_READER_JUMP_CHAPTER, { data: event });
+        }
+        return;
+      }
+    }
+    const params = TextReaderRouteParams.of(this.book.id, resourceIndex);
     this.navStack.pushPathByName('reader', params);
   }
 
@@ -718,7 +745,7 @@ export struct BookDetailPage {
       resumeProgressMs = this.lastHistory.progressMs;
     }
     if (!target) {
-      target = this.book.chapters[0];
+      target = PreferenceService.orderedChapters(this.book)[0];
     }
     if (!target) {
       this.isStartingPlay = false;
@@ -1211,8 +1238,21 @@ export struct BookDetailPage {
           LoadingProgress().width(16).height(16).color(AppColor.Brand).margin({ left: AppSpace.Xs })
         }
         Blank()
-        SymbolGlyph($r('sys.symbol.list_bullet'))
-          .fontSize(18).fontColor([$r('sys.color.font_tertiary')])
+        Button(this.chaptersDescending ? $r('app.string.chapter_order_desc') : $r('app.string.chapter_order_asc'))
+          .fontSize(AppFont.Caption)
+          .fontColor(AppColor.Brand)
+          .backgroundColor(Color.Transparent)
+          .onClick((): void => {
+            this.chaptersDescending = !this.chaptersDescending;
+            if (this.book) {
+              this.book.chaptersDescending = this.chaptersDescending;
+              PreferenceService.saveTocOrder(this.book.id, this.chaptersDescending).catch((): void => {
+                this.getUIContext().getPromptAction().showToast({ message: $r('app.string.chapter_order_save_failed') });
+              });
+            }
+            this.applyChapterFilter();
+            this.chapterListScroller.scrollToIndex(0, false);
+          })
       }
       .width('100%')
       .padding({
@@ -1225,14 +1265,17 @@ export struct BookDetailPage {
       // 有章节时显示目录搜索。
       if (this.book!.chapters.length > 0) {
         Search({ value: this.chapterQuery, placeholder: this.book!.contentType === 'text' ? '搜索章节' : '搜索节目' })
-          .height(38)
-          .margin({ left: this.horizontalPadding(), right: this.horizontalPadding(), bottom: AppSpace.Sm })
-          .backgroundColor($r('sys.color.comp_background_tertiary'))
-          .borderRadius(AppRadius.Lg)
           .onChange((v: string) => {
             this.chapterQuery = v;
             this.applyChapterFilter();
           })
+          .fontColor($r('sys.color.font_primary'))
+          .placeholderColor($r('sys.color.font_tertiary'))
+          .searchIcon({ size: 18, color: $r('sys.color.font_secondary') })
+          .height(40)
+          .borderRadius(AppRadius.Lg)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          .margin({ left: this.horizontalPadding(), right: this.horizontalPadding(), bottom: AppSpace.Xs })
       }
 
       // 章节列表
@@ -1303,7 +1346,8 @@ export struct BookDetailPage {
           .onScrollIndex((firstIndex: number, lastIndex: number) => {
             // 用首尾可见 index 与当前章节 index 计算偏离
             // 行高约 64vp(BodyL+Caption+上下 14 padding),用 (center - idx) * 64 估算
-            const idx = this.currentChapterIndex();
+            const current = this.book?.chapters[this.currentChapterIndex()];
+            const idx = this.displayedChapters.findIndex((chapter: Chapter): boolean => chapter.id === current?.id);
             if (idx < 0) return;
             const center = (firstIndex + lastIndex) / 2;
             this.listOffsetFromCurrent = (center - idx) * 64;
@@ -1406,7 +1450,7 @@ export struct BookDetailPage {
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           } else if (this.book!.chapters.length > 0) {
-            Text(this.book!.chapters[0].title)
+            Text(PreferenceService.orderedChapters(this.book!)[0].title)
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
               .maxLines(1)

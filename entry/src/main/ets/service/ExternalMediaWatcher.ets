@@ -43,6 +43,7 @@ export class ExternalMediaWatcher {
       return;
     }
     this.armed = true;
+    hilog.info(DOMAIN, TAG, 'watch armed timeoutMs=%{public}d', ExternalMediaWatcher.TIMEOUT_MS);
     this.callback = cb;
     this.hadExternalMedia = false;
     // 立即拍一次快照,把当前是否有外部 MEDIA 的状态记下来。
@@ -57,12 +58,14 @@ export class ExternalMediaWatcher {
         e?.message ?? JSON.stringify(err));
     }
     this.timeoutTimer = setTimeout(() => {
+      hilog.info(DOMAIN, TAG, 'watch expired hadExternalMedia=%{public}s', String(this.hadExternalMedia));
       this.disarm();
     }, ExternalMediaWatcher.TIMEOUT_MS);
   }
 
   disarm(): void {
     if (!this.armed) return;
+    hilog.info(DOMAIN, TAG, 'watch disarmed');
     this.armed = false;
     try {
       this.streamMgr?.off('audioRendererChange', this.listener);
@@ -103,6 +106,7 @@ export class ExternalMediaWatcher {
       return;
     }
     if (this.hadExternalMedia) {
+      hilog.info(DOMAIN, TAG, 'external media gone, request resume');
       const cb = this.callback;
       this.disarm();
       if (cb) cb();

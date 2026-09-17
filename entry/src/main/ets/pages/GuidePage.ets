@@ -27,6 +27,14 @@ class GuideGroup {
 
 /** 使用说明内容:每一条都对应代码里真实存在的交互 */
 const GUIDE_GROUPS: GuideGroup[] = [
+  new GuideGroup('source', $r('app.string.guide_group_source'), [
+    new GuideItem('source-import', $r('app.string.guide_source_import_action'),
+      $r('app.string.guide_source_import_desc')),
+    new GuideItem('source-test', $r('app.string.guide_source_test_action'),
+      $r('app.string.guide_source_test_desc')),
+    new GuideItem('source-login', $r('app.string.guide_source_login_action'),
+      $r('app.string.guide_source_login_desc')),
+  ]),
   new GuideGroup('home', $r('app.string.guide_group_home'), [
     new GuideItem('home-search', $r('app.string.guide_home_search_action'),
       $r('app.string.guide_home_search_desc')),
@@ -72,14 +80,10 @@ const GUIDE_GROUPS: GuideGroup[] = [
       $r('app.string.guide_reader_toolbar_desc')),
     new GuideItem('reader-settings', $r('app.string.guide_reader_settings_action'),
       $r('app.string.guide_reader_settings_desc')),
-  ]),
-  new GuideGroup('source', $r('app.string.guide_group_source'), [
-    new GuideItem('source-import', $r('app.string.guide_source_import_action'),
-      $r('app.string.guide_source_import_desc')),
-    new GuideItem('source-test', $r('app.string.guide_source_test_action'),
-      $r('app.string.guide_source_test_desc')),
-    new GuideItem('source-login', $r('app.string.guide_source_login_action'),
-      $r('app.string.guide_source_login_desc')),
+    new GuideItem('reader-theme', $r('app.string.guide_reader_theme_action'),
+      $r('app.string.guide_reader_theme_desc')),
+    new GuideItem('reader-speech', $r('app.string.guide_reader_speech_action'),
+      $r('app.string.guide_reader_speech_desc')),
   ]),
   new GuideGroup('mini-player', $r('app.string.guide_group_mini_player'), [
     new GuideItem('mini-cover-progress', $r('app.string.guide_mini_cover_action'),

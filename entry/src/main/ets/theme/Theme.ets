@@ -113,6 +113,11 @@ export class AppMaterial {
   static get PlayerSheet(): uiMaterial.Material | undefined {
     return AppMaterial.Sheet;
   }
+  /** 阅读页底部悬浮胶囊栏：固定薄光感材质 + 柔和投影，同官方浮动 Tab 视觉。 */
+  static get ReaderBar(): uiMaterial.Material | undefined {
+    if (!PlatformCompat.immersiveMaterial) return undefined;
+    return AppMaterial.material('readerBar', uiMaterial.ImmersiveStyle.THIN, true, false, false, true);
+  }
   /** 阅读弹层固定厚度，避免正文透出干扰设置项，不跟随外观厚度选项。 */
   static get ReaderSheetThick(): uiMaterial.Material | undefined {
     if (!PlatformCompat.immersiveMaterial) return undefined;
@@ -149,8 +154,9 @@ export class AppMaterial {
   }
 
   static modifier(material: uiMaterial.Material | undefined,
-    fallbackColor: ResourceColor = AppColor.GlassControlFallback): CompatibleMaterialModifier {
-    return new CompatibleMaterialModifier(material, fallbackColor, AppMaterial.fallbackBlur);
+    fallbackColor: ResourceColor = AppColor.GlassControlFallback,
+    fallbackShadow: ShadowOptions | undefined = undefined): CompatibleMaterialModifier {
+    return new CompatibleMaterialModifier(material, fallbackColor, AppMaterial.fallbackBlur, fallbackShadow);
   }
 
   static selectModifier(): CompatibleSelectMaterialModifier {
@@ -164,11 +170,14 @@ class CompatibleMaterialModifier implements AttributeModifier<CommonAttribute> {
   private material: uiMaterial.Material | undefined;
   private fallbackColor: ResourceColor;
   private blur: BlurStyle;
+  private fallbackShadow: ShadowOptions | undefined;
 
-  constructor(material: uiMaterial.Material | undefined, fallbackColor: ResourceColor, blur: BlurStyle) {
+  constructor(material: uiMaterial.Material | undefined, fallbackColor: ResourceColor, blur: BlurStyle,
+    fallbackShadow: ShadowOptions | undefined = undefined) {
     this.material = material;
     this.fallbackColor = fallbackColor;
     this.blur = blur;
+    this.fallbackShadow = fallbackShadow;
   }
 
   applyNormalAttribute(instance: CommonAttribute): void {
@@ -176,6 +185,9 @@ class CompatibleMaterialModifier implements AttributeModifier<CommonAttribute> {
       instance.systemMaterial(this.material);
     } else {
       instance.backgroundColor(this.fallbackColor).backgroundBlurStyle(this.blur);
+      if (this.fallbackShadow !== undefined) {
+        instance.shadow(this.fallbackShadow);
+      }
     }
   }
 }

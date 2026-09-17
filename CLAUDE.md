@@ -4,6 +4,8 @@
 
 本文描述当前代码，页面行为见 [docs/APP_UI.md](docs/APP_UI.md)，开发约束见 [AGENTS.md](AGENTS.md)，服务端使用见 [server/README.md](server/README.md)。
 
+面向书源作者的格式、规则语法与完整示例见 [docs/BOOK_SOURCE_RULES.md](docs/BOOK_SOURCE_RULES.md)。
+
 ## 技术基线
 
 - 最低 HarmonyOS 6.0 / API 20；`compatibleSdkVersion = 6.0.0(20)`，目标 HarmonyOS 6.1.1 / API 24，`targetSdkVersion = 6.1.1(24)`。主工程 default / release 与 QuickJS HAR 的最低版本一致。
@@ -11,7 +13,7 @@
 - 编译使用经确认的 Release SDK；当前配套为 DevEco Studio 26.0.0.821，编译版本与目标/最低版本分开管理。上传前检查 APP 内所有 HAP 的 `apiReleaseType = Release`，QuickJS HAR 也需用正式工具链重建。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.18`、`versionCode = 1000018`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.23`、`versionCode = 1000023`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -20,7 +22,7 @@
 
 | 页面 / 流程 | 服务入口 | 数据 |
 |---|---|---|
-| 首页推荐、分类、更多 | `HomePage` → `HomeSourceService` / `BlockMorePage` → `BookSourceService` | 已选择且启用的听书源，选择保存在本地偏好中 |
+| 首页推荐、分类、更多 | `HomePage` → `HomeSourceService` / `BlockMorePage` → `BookSourceService` | 已选择、启用且支持发现的小说或有声书源，选择保存在本地偏好中 |
 | 搜索和搜索推荐 | `SearchPage` → `SourceDataService` → `BookSourceService` | 已启用且具备搜索规则的导入源、`SearchCache`、本地搜索历史 |
 | 详情、目录 | `BookDetailPage` → `BookSourceService` → 对应分发器 | `Book`、`Chapter`、书籍索引和按书拆分的目录缓存 |
 | 小说阅读 | `ReaderPage` → `BookSourceService`、`OnlineTextPaginator` | 章节正文缓存、字符位置、阅读设置 |
@@ -28,8 +30,10 @@
 | 书源管理 | `RuleSourcePage` → 导入解析器、仓库、批量测试器 | 加密 `rule_sources.db` |
 | 主账号、子源、网页登录 | `RuleSourceAccountPage` / `RuleSourceChildrenPage` / `RuleSourceLoginPage` | 来源主会话、按来源和站点隔离的 Cookie |
 | 书架、记录、未收藏历史 | `FavoritePage` / `ReadingStatsPage` / `UnfavoritedHistoryPage` → `PreferenceService`、`StatsService` | 收藏、收听历史、累计统计和播放位置 |
-| 本地音频导入 | `ImportPage` → `DataService` | 音频文件或音频 ZIP、书籍信息和沙箱文件 |
+| 本地文件导入 | `ImportPage` → `LocalBookImportService` / `DataService` | 音频、TXT/EPUB/HTML/HTM、ZIP，独立目录及沙箱正文 |
 | 系统备份、跨设备续播 | `AppBackupService`、`ContinuationService` | 白名单备份快照、最小播放迁移载荷 |
+
+章节顺序以 PreferenceService 的每书偏好为准，展示目录、播放/朗读上下章及自动续章、阅读跨章和后续章节下载统一跟随；保留原始章节索引和已保存进度。
 
 主导航是 `Index` + `NavPathStack`，`MainPage` 承载“首页 / 书架 / 记录 / 我的”。搜索、详情、阅读、播放器、导入、下载和书源管理使用独立路由。
 
@@ -64,7 +68,7 @@
 
 ### 导入与测试
 
-- 支持本地 `.json`、粘贴 JSON、数组或常见列表外壳、HTTP(S) 导入地址；单次最多 1000 个来源，导入正文上限 10 MiB，单源落库上限 512 KiB。
+- 支持本地 `.json`、粘贴 JSON、数组或常见列表外壳、HTTP(S) 导入地址；单次最多 1000 个来源，导入正文上限 10 MiB，单源落库上限 512 KiB。系统“使用其他应用打开”通过 `viewData` + JSON `type` + `FileOpen` 匹配简听，冷启动及 `onNewWant` 均路由至现有书源导入流程。
 - 接收结构化规则和 `@{...}` 紧凑规则，保存来源类型、登录定义、`jsLib`、变量和规则字段。
 - `LocalRuleSourceCodec` 将编辑字段合并回原始定义，保留扩展字段及未改动的紧凑规则；编辑器提供发现、登录、完整 JSON 校验与单源导出，保存后清理来源列表缓存。
 - 书源管理支持分组筛选与维护、批量分组与导出、搜索和发现独立启停、置顶及手动排序。逗号、中文逗号、中点或竖线分隔的多组定义按独立组名筛选，重命名或删除一组保留其他组。锁定状态在数据库事务中保护编辑、重导、分组、启停和删除；测试、置顶、排序与解锁仍可执行。批量操作和全局分组变更跳过锁定来源，重导保留已有本机管理状态。
@@ -87,13 +91,13 @@
 - `source.getVariable/setVariable`、`source.get/put`、有期限的 `cache` 和登录信息/请求头存入加密 `rule_source_script_state`。同来源脚本串行提交状态，失败脚本不提交；不同来源隔离，网络重放不会重复累加持久化状态。
 - 会话 helper 包括登录信息/请求头 Map、按键读取和更新登录信息、移除登录状态，以及保留对象/数字/布尔值的 `source`、`cache` 和任务变量读写。`getLoginHeaderMap()` 对已过期或临近过期的 Bearer JWT 返回空；设备标识和浏览器别名仍通过既有受限动作提供，不暴露新的平台对象。
 - JS 章节地址由 `LocalRuleChapterRequest` 延迟至打开章节时执行；稳定章节 URL 携带有界元素上下文，支持重新进入后的请求重建和时效签名刷新。
-- `LocalRulePanelService` 解析通用发现与登录表单、嵌套分组及选项标签/值；纯脚本分类入口执行动作，返回书单地址时进入列表，搜索或按钮动作先提交输入规则。登录按钮可调用 `loginUrl` 中的函数，网页动作进入 HTTPS 登录路由。`ruleExplore` 通过现有导入源分发器执行，缺少必要规则时回退搜索规则；听友分类兼容本站完整 URL、相对路径与分页模板。首页通过 `HomeSourceService` 读取所选听书源的分类和推荐；不自动触发发现面板中的登录、按钮等交互动作。
+- `LocalRulePanelService` 解析通用发现与登录表单、嵌套分组及选项标签/值；纯脚本分类入口执行动作，返回书单地址时进入列表，搜索或按钮动作先提交输入规则。登录按钮可调用 `loginUrl` 中的函数，网页动作进入 HTTPS 登录路由。`ruleExplore` 通过现有导入源分发器执行，缺少必要规则时回退搜索规则；听友分类兼容本站完整 URL、相对路径与分页模板。首页通过 `HomeSourceService` 读取所选小说或有声书源的分类和推荐；不自动触发发现面板中的登录、按钮等交互动作。
 - 聚合脚本的公共函数在独立 QuickJS 全局上下文中声明，支持 `this.helper()`，不同执行之间不共享函数。JSON 字段脚本提供可读取属性的 `result`，同时保留 `JSON.parse(result)` 兼容；带非空自定义 `type` 的 `data:` 返回原始字节的十六进制文本，普通 `data:` 仍返回解码文本，`type: request` 仍须显式声明网络请求。
 - `LocalRuleDebugService` 提供真实阶段及全链路调试、取消检查和脱敏诊断。`concurrentRate` 兼容空值/0（不限流）、正整数（请求间隔毫秒）、负整数（同时请求数）和次数/毫秒窗口；无法识别的可选配置仅记诊断，不阻断请求，并发名额在请求结束后释放。声明式 `session` 可将当前 URL 查询参数映射为 Cookie、生成稳定设备 Cookie 并设置 Referer，状态仍按来源和目标站点隔离。
 - 普通 DOM 宿主只解析已下载 HTML；显式 `webView` 使用独立隐私 ArkWeb 渲染网站脚本，主文档由原生响应提供，避免重复提交 POST。限制 128 个资源请求、16 个站点、5 次导航和总时限，退出清空网页会话。`webJs` 在 QuickJS 中通过有序动作读取活动 DOM、输入、点击、分发事件、提交表单、滚动及 HTTP(S) 跳转；同一次动作重放不会重复操作页面，跨页面元素句柄失效。支持有预算的定时回调和 Promise/async 返回值，单次等待最多 10 秒，网页操作和取快照均受总时限约束。`bodyJs` 仍只转换当前响应。外来脚本不会被传给 ArkWeb 执行，也没有网页到平台的 JS 桥。
 - Android/Java 数据兼容类包括集合与排序/迭代、Pattern/Matcher、精确 BigInteger/Long、JSONObject/JSONArray、字符集/Base64、内存字节流、GZIP/zlib、CRC32、URI/URL、日期格式、MessageDigest/Mac/Cipher、RSA KeyFactory/Signature 与编码密钥规格。`Java.type`、`Packages`、`importClass/importPackage` 和 `JavaImporter` 只解析显式注册的类；内存流不等于文件访问。每类按已实现的方法执行，未实现的类或操作明确报错，不通过空实现伪装成功。漫画不在当前适配范围内。
 - 网页音频嗅探使用资源 URL 和 audio/video/source 节点，并应用 `sourceRegex`。音频规则返回的 URL 选项拆分为实际播放地址与请求头；错误文字不能作为相对音频地址报告成功。
-- `RuleSourceLoginPage` 提供 HTTPS 隐私 WebView，不暴露平台桥接；站点 Cookie 按 `source_url + origin` 回写加密数据库，普通网站登录完成时执行配置的登录检查，等待式登录则将 HTML 返回原脚本继续处理。登录页与网页渲染通过 `LocalRuleWebSession` 互斥使用隐私 Cookie，退出时清空 Web 会话。
+- `RuleSourceLoginPage` 提供 HTTPS 隐私 WebView，不暴露平台桥接；Web 挂载后恢复 Cookie，再加载网站，恢复失败不继续无会话加载。站点 Cookie 按 `source_url + origin` 回写加密数据库，读取失败不覆盖旧值；普通网站登录完成时执行配置的登录检查，等待式登录则将 HTML 返回原脚本继续处理。登录页与网页渲染通过 `LocalRuleWebSession` 互斥使用隐私 Cookie，退出时先完成回写，再清空并释放 Web 会话。
 - `java.startBrowserAwait()` 通过 `LocalRuleBrowserLoginCoordinator` 打开可见 HTTPS 登录页，等待用户完成后返回 HTML，再继续原脚本。带 HTML 或脚本的 `java.showBrowser()` 先执行有界网页渲染/DOM 动作，再展示结果等待完成；只传地址时沿用普通打开浏览器行为。等待任务最多一个、默认 120 秒，HTML 输入输出上限 512 KiB；取消、超时或关闭页面会结束等待并释放网页会话。脚本字符串不直接注入网页平台环境，Cookie 写回完成后才恢复等待方。
 - 光遇、书山主账号通过 `RuleSourceAccountService` 分发到各自原生账号服务；主会话与子源网站 Cookie 独立保存。
 - 当前只实现 Legado/Reader 的兼容子集，导入成功和批量搜索通过均不保证每个来源的完整内容链可用。
@@ -112,7 +116,7 @@
 
 - 在线小说用 `OnlineTextPaginator` 分页，按章节标题或索引及 `charOffset` 恢复位置；切换字号和窗口尺寸后重新分页。阅读入口先恢复本地目录，缺失才联网并保存目录。章节正文有内存缓存、请求合并和相邻章节预取；已读和预读正文经 `OnlineTextContentCache` 写入 `cache/online_text_content`，按书源、书籍及章节地址隔离，重启后先读本地，缺失或损坏才联网。缓存随系统/用户清理失效，不代表已下载全书；单章缓存上限 8 MiB，写入失败不阻断阅读。
 - 分页前为每个非空正文段落统一添加两个全角空格，测量与显示共用排版文本；页起止偏移映射回清洗后的原文，新增缩进不改变阅读进度的字符坐标。跨页续行不补缩进，正文段落不做启发式合并。
-- `ReaderPage` 还保留已有 EPUB 路径的 ReaderKit 分支及 `EpubReaderComponent`；当前 `ImportPage` 只导入音频和音频 ZIP，没有完整的本地 EPUB 导入、独立电子书库或书签管理入口。
+- `ReaderPage` 还保留已有 EPUB 路径的 ReaderKit 分支及 `EpubReaderComponent`；`ImportPage` 已支持音频、TXT/EPUB/HTML/HTM 与 ZIP 批量导入；新导入电子书转为文字章节使用现有阅读器，尚无书签管理入口。
 - 阅读页始终隐藏系统状态栏，默认隐藏“详情 / 章节 / 设置”悬浮栏；工具栏与弹层覆盖正文，不改变分页视口。离开阅读路由恢复系统栏，返回时再次隐藏。阅读设置包括字号、行高、翻页方式、羊皮纸／护眼绿／夜间主题和自定义图片主题，支持更换图片及调整蒙层；旧纯白、纯黑、纹理与自定义色设置按兼容规则迁移。页脚默认显示电量与时间，开关独立持久化，不触发重新分页；阅读设置和章节弹层使用固定厚材质及旧系统厚磨砂回退。
 - AVPlayer 负责播放、音频焦点和续播，`AVSessionService` 对接系统倍速、上下集和收藏，后台任务维持收听。
 - 耳机摘戴通过 AVPlayer 的 `audioOutputDeviceChangeWithInfo` 与 AVSession 播控适配：旧输出设备不可用时暂停并取消焦点自动恢复，加载完成也保持暂停；支持佩戴检测的耳机/系统下发 `play` 后按原进度续播。重复 `play`/`pause` 保持各自语义，设备重新连接本身不触发播放。
@@ -198,3 +202,10 @@ scripts/                HAR 构建与图标工具
 华为账号入口当前由 `ENABLE_HW_LOGIN = false` 关闭，模块中的 `client_id` 仍为占位配置。不要将它描述为已上线登录功能。
 
 产品或交互变化直接更新现行文档；已失效的一次性计划和修复说明删除，历史由 Git 保留。
+
+### 本地导入容量与格式
+
+- 音频支持 MP3/M4A/FLAC/WAV/OGG/AAC，电子书支持 TXT/EPUB/HTML/HTM；ZIP 中音频自然排序成书，电子书逐本入架。每次文件选择上限 500，可继续追加。
+- 单 ZIP 处理上限 32 GiB、解压内容 64 GiB，包内最多 100000 个文件/目录、50000 个可导入文件；单书最多 50000 章/集。导入前校验剩余空间并保留 256 MiB，多 ZIP 顺序解压并逐包清理。容量为代码上限，不代表已做同等体积设备压力验证。
+- TXT 最大 256 MiB，64 KiB 流式解码 UTF-8/UTF-16/GB18030，识别章节标题并限制正文片段长度；HTML/HTM 最大 32 MiB，EPUB 最大 512 MiB、解压内容最多 2 GiB，使用系统 BookParser 按 spine 提取文字。
+- 新导入目录存 filesDir/imported_toc，偏好索引只存书籍元数据；正文存 filesDir/ebooks。读取本地正文限定本书路径，不依赖网络书源；删书同时清理目录和正文。ZIP 音频直接移动入库，大于 500 集时不逐集探测时长，播放后补齐。

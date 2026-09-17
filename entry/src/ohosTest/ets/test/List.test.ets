@@ -1,3 +1,4 @@
+import localBookImportTest from './LocalBookImport.test';
 import abilityTest from './Ability.test';
 import shuShanContentCryptoTest from './ShuShanContentCrypto.test';
 import localRuleFeaturesTest from '../../../test/LocalRuleFeatures.test';
@@ -14,6 +15,7 @@ import localRuleManagementIntegrationTest from './LocalRuleManagementIntegration
 import localRuleBrowserLoginCoordinatorTests from '../../../test/LocalRuleBrowserLoginCoordinator.test';
 
 export default function testsuite() {
+  localBookImportTest();
   abilityTest();
   shuShanContentCryptoTest();
   localRuleFeaturesTest();

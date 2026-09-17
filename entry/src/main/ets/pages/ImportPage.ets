@@ -1,3 +1,4 @@
+import { LocalBookImportService, LocalImportFile } from '../service/LocalBookImportService';
 import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
@@ -13,13 +14,22 @@ import { WindowUtils } from '../utils/WindowUtils';
 export const EVT_SWITCH_TAB = 'app.nav.switchTab';
 const TAB_INDEX_FAVORITE = 1;
 
-interface PickedFile {
-  uri: string;
-  name: string;
-  ext: string;
-}
+class PickedFile extends LocalImportFile {}
 
-const AUDIO_EXTS: string[] = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac'];
+class ImportFileDataSource implements IDataSource {
+  private files: PickedFile[] = [];
+  private listeners: DataChangeListener[] = [];
+  totalCount(): number { return this.files.length; }
+  getData(index: number): PickedFile { return this.files[index]; }
+  setFiles(files: PickedFile[]): void {
+    this.files = files;
+    this.listeners.forEach((listener: DataChangeListener): void => listener.onDataReloaded());
+  }
+  registerDataChangeListener(listener: DataChangeListener): void { this.listeners.push(listener); }
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    this.listeners = this.listeners.filter((value: DataChangeListener): boolean => value !== listener);
+  }
+}
 
 @ComponentV2
 export struct ImportPage {
@@ -33,26 +43,35 @@ export struct ImportPage {
   @Local progressText: string = '';
 
   private context: common.UIAbilityContext | null = null;
+  private importedCount: number = 0;
+  private importFailures: string[] = [];
+  private fileDataSource: ImportFileDataSource = new ImportFileDataSource();
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
   private async pickFiles(): Promise<void> {
+    if (this.importing) return;
     try {
       const opt = new picker.DocumentSelectOptions();
-      opt.maxSelectNumber = 50;
-      opt.fileSuffixFilters = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac', '.zip'];
+      opt.maxSelectNumber = 500;
+      opt.fileSuffixFilters = ['音频、电子书、ZIP|.mp3,.m4a,.flac,.wav,.ogg,.aac,.txt,.epub,.html,.htm,.zip'];
       const dp = new picker.DocumentViewPicker(this.context!);
       const uris = await dp.select(opt);
       if (!uris || uris.length === 0) return;
-      const files: PickedFile[] = [];
+      const files: PickedFile[] = this.pickedFiles.slice();
       for (const uri of uris) {
         const name = this.extractFileName(uri);
         const ext = this.extractExt(uri);
-        files.push({ uri, name, ext });
+        if (!files.some((file: PickedFile): boolean => file.uri === uri)) {
+          const file = new PickedFile();
+          file.uri = uri; file.name = name; file.ext = ext;
+          files.push(file);
+        }
       }
       this.pickedFiles = files;
+      this.fileDataSource.setFiles(files);
       if (files.length === 1 && !this.bookTitle) {
         this.bookTitle = files[0].name;
       }
@@ -62,6 +81,7 @@ export struct ImportPage {
   }
 
   private async pickCover(): Promise<void> {
+    if (this.importing) return;
     try {
       const opt = new photoAccessHelper.PhotoSelectOptions();
       opt.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
@@ -106,7 +126,7 @@ export struct ImportPage {
   }
 
   private isAudioExt(ext: string): boolean {
-    return AUDIO_EXTS.includes(ext);
+    return LocalBookImportService.AUDIO_EXTS.includes(ext);
   }
 
   /**
@@ -151,8 +171,11 @@ export struct ImportPage {
   private async expandZip(pf: PickedFile, extractRoot: string): Promise<PickedFile[]> {
     const stamp = Date.now().toString() + '_' + Math.floor(Math.random() * 1000);
     const cachedZip = `${extractRoot}/_src_${stamp}.zip`;
-    const outDir = `${extractRoot}/${pf.name}_${stamp}`;
+    const outDir = `${extractRoot}/unpacked_${stamp}`;
 
+    const compressedSize = await LocalBookImportService.fileSize(pf.uri);
+    if (compressedSize > LocalBookImportService.MAX_ARCHIVE_BYTES) throw new Error('ZIP 超过 32 GiB');
+    await LocalBookImportService.requireSpace(this.context!, compressedSize);
     // 把 content uri 的 zip 复制到沙箱；try/finally 确保异常时也关闭 fd，避免泄漏
     let sf: fileIo.File | null = null;
     let df: fileIo.File | null = null;
@@ -168,6 +191,9 @@ export struct ImportPage {
       if (df) { try { await fileIo.close(df); } catch (_e) { /* ignore */ } }
     }
 
+    const originalSize = await zlib.getOriginalSize(cachedZip);
+    if (originalSize > LocalBookImportService.MAX_EXPANDED_BYTES) throw new Error('ZIP 解压内容超过 64 GiB');
+    await LocalBookImportService.requireSpace(this.context!, originalSize);
     this.progressText = `解压 ${pf.name}.zip`;
     await new Promise<void>((resolve, reject) => {
       zlib.decompressFile(cachedZip, outDir, {}, (err) => {
@@ -178,113 +204,126 @@ export struct ImportPage {
     try { await fileIo.unlink(cachedZip); } catch (_e) { /* ignore */ }
 
     const collected: PickedFile[] = [];
-    this.walkDir(outDir, collected);
+    await this.walkDir(outDir, collected);
     return collected;
   }
 
   /**
    * 递归遍历目录，把音频/小说文件收集为 PickedFile（uri 用沙箱绝对路径，AVPlayer/fileIo 都能识别）。
    */
-  private walkDir(dir: string, out: PickedFile[]): void {
-    let entries: string[] = [];
-    try {
-      entries = fileIo.listFileSync(dir);
-    } catch (_e) {
-      return;
-    }
-    for (const name of entries) {
-      const full = `${dir}/${name}`;
-      let isDir = false;
-      try {
-        isDir = fileIo.statSync(full).isDirectory();
-      } catch (_e) {
-        continue;
-      }
-      if (isDir) {
-        this.walkDir(full, out);
-        continue;
-      }
-      const dot = name.lastIndexOf('.');
-      if (dot <= 0) continue;
-      const ext = name.substring(dot).toLowerCase();
-      const base = name.substring(0, dot);
-      if (this.isAudioExt(ext)) {
-        out.push({ uri: full, name: base, ext });
+  private async walkDir(root: string, out: PickedFile[]): Promise<void> {
+    const pending: string[] = [root];
+    let entriesCount = 0;
+    while (pending.length > 0) {
+      const dir = pending.pop();
+      if (!dir) continue;
+      const entries = await fileIo.listFile(dir);
+      for (const name of entries) {
+        if (++entriesCount > 100000) throw new Error('ZIP 超过 100000 个文件或目录');
+        const full = `${dir}/${name}`;
+        const stat = await fileIo.lstat(full);
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) { pending.push(full); continue; }
+        const dot = name.lastIndexOf('.');
+        if (dot <= 0) continue;
+        const ext = name.substring(dot).toLowerCase();
+        if (this.isAudioExt(ext) || LocalBookImportService.TEXT_EXTS.includes(ext)) {
+          if (out.length >= LocalBookImportService.MAX_CHAPTERS) throw new Error('ZIP 超过 50000 个可导入文件');
+          const file = new PickedFile();
+          file.uri = full; file.name = name.substring(0, dot); file.ext = ext;
+          out.push(file);
+        }
       }
     }
   }
 
-  private async doImport(): Promise<void> {
-    if (this.pickedFiles.length === 0 || !this.bookTitle) return;
-    this.importing = true;
-    this.progressText = '准备中...';
-    const bookId = 'import_' + Date.now().toString();
-    const extractRoot = `${this.context!.cacheDir}/import_extract_${bookId}`;
-    let needCleanup = false;
-
+  private async saveImported(book: Book): Promise<void> {
+    await DataService.addImportedBook(book);
+    this.importedCount++;
     try {
-      // 1. 展开所有 zip
-      const expanded: PickedFile[] = [];
-      for (const pf of this.pickedFiles) {
-        if (pf.ext === '.zip') {
-          if (!needCleanup) {
-            await fileIo.mkdir(extractRoot, true);
-            needCleanup = true;
-          }
-          try {
-            const inner = await this.expandZip(pf, extractRoot);
-            if (inner.length === 0) {
-              this.progressText = `${pf.name}.zip 内未发现可导入文件`;
-            }
-            expanded.push(...inner);
-          } catch (e) {
-            this.progressText = `解压失败: ${pf.name}.zip`;
-            console.error('Unzip failed:', pf.name, e);
-          }
-        } else {
-          expanded.push(pf);
-        }
-      }
+      if (!await PreferenceService.isFavorite(book.id)) await PreferenceService.toggleFavorite(book.id);
+    } catch (_error) { this.importFailures.push(`${book.title}: 已保存，加入书架失败`); }
+  }
 
-      if (expanded.length === 0) {
-        this.importing = false;
-        this.progressText = '没有可导入的文件';
-        return;
-      }
-
-      // 2. 按集数自然排序
-      expanded.sort((a, b) => this.naturalCompare(a.name, b.name));
-
-      const audioFiles = expanded.filter(f => this.isAudioExt(f.ext));
-      if (audioFiles.length === 0) {
-        this.importing = false;
-        this.progressText = '没有可导入的音频文件';
-        return;
-      }
-
-      const dir = this.context!.filesDir + '/audio/' + bookId;
-      await fileIo.mkdir(dir, true);
-      const book = await this.importAudioBook(bookId, dir, audioFiles);
-      await DataService.addImportedBook(book);
-      await PreferenceService.toggleFavorite(book.id);
-
-      this.importing = false;
-      this.progressText = '';
-      this.importDone = true;
+  private async importGroup(files: PickedFile[], title: string, batchId: string,
+    extractRoot: string): Promise<number> {
+    files.sort((a: PickedFile, b: PickedFile): number => this.naturalCompare(a.name, b.name));
+    let imported = 0;
+    const audio = files.filter((file: PickedFile): boolean => this.isAudioExt(file.ext));
+    if (audio.length > LocalBookImportService.MAX_CHAPTERS) throw new Error('单本音频超过 50000 集');
+    if (audio.length > 0) {
+      const id = `${batchId}_audio`;
+      const directory = `${this.context!.filesDir}/audio/${id}`;
+      await fileIo.mkdir(directory, true);
       try {
-        this.getUIContext().getPromptAction().showToast({ message: '导入成功，已加入书架', duration: 1800 });
-      } catch (_e) { /* ignore */ }
-      emitter.emit(EVT_SWITCH_TAB, { data: { index: TAB_INDEX_FAVORITE } });
-      this.navStack.pop();
-    } catch (err) {
-      this.importing = false;
-      this.progressText = '导入失败: ' + (err as Error).message;
-      console.error('Import failed:', err);
-    } finally {
-      if (needCleanup) {
-        try { await fileIo.rmdir(extractRoot); } catch (_e) { /* ignore */ }
+        const book = await this.importAudioBook(id, directory, audio, extractRoot);
+        book.title = title || audio[0].name;
+        await this.saveImported(book);
+        imported++;
+      } catch (error) {
+        try { await fileIo.rmdir(directory); } catch (_cleanup) { /* 保留错误 */ }
+        this.importFailures.push(error instanceof Error ? error.message : String(error));
       }
     }
+    const ebooks = files.filter((file: PickedFile): boolean => LocalBookImportService.TEXT_EXTS.includes(file.ext));
+    for (let index = 0; index < ebooks.length; index++) {
+      const file = ebooks[index];
+      try {
+        const book = await LocalBookImportService.importBook(this.context!, file, `${batchId}_text_${index}`,
+          files.length === 1 ? title : '', this.bookAuthor, this.coverPath,
+          (progress: string): void => { this.progressText = progress; });
+        await this.saveImported(book);
+        imported++;
+      } catch (error) {
+        this.importFailures.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return imported;
+  }
+
+  private async doImport(): Promise<void> {
+    if (this.importing || this.pickedFiles.length === 0 || this.context === null) return;
+    this.importing = true;
+    this.importedCount = 0;
+    this.importFailures = [];
+    const batchId = 'import_' + Date.now().toString();
+    const extractRoot = `${this.context.cacheDir}/import_extract_${batchId}`;
+    let imported = 0;
+    const failures = this.importFailures;
+    try {
+      const direct = this.pickedFiles.filter((file: PickedFile): boolean => file.ext !== '.zip');
+      if (direct.length > 0) {
+        try { imported += await this.importGroup(direct, this.bookTitle, batchId, extractRoot); }
+        catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
+      }
+      const archives = this.pickedFiles.filter((file: PickedFile): boolean => file.ext === '.zip');
+      for (let index = 0; index < archives.length; index++) {
+        try {
+          await fileIo.mkdir(extractRoot, true);
+          const files = await this.expandZip(archives[index], extractRoot);
+          if (files.length === 0) throw new Error('压缩包中没有支持的音频或电子书');
+          imported += await this.importGroup(files,
+            archives.length === 1 && direct.length === 0 ? this.bookTitle || archives[index].name : archives[index].name,
+            `${batchId}_zip_${index}`, extractRoot);
+        } catch (error) {
+          failures.push(`${archives[index].name}: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          try { await fileIo.rmdir(extractRoot); } catch (_cleanup) { /* 无残留目录 */ }
+        }
+      }
+      imported = this.importedCount;
+      this.importDone = imported > 0;
+      if (failures.length > 0) {
+        this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_partial_result').id,
+          imported, failures.join('\n'));
+      } else if (imported > 0) {
+        this.getUIContext().getPromptAction().showToast({ message: $r('app.string.import_success') });
+        emitter.emit(EVT_SWITCH_TAB, { data: { index: TAB_INDEX_FAVORITE } });
+        this.navStack.pop();
+      } else {
+        this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_no_files').id);
+      }
+    } finally { this.importing = false; }
   }
 
   private async probeAudioDuration(path: string): Promise<number> {
@@ -312,23 +351,20 @@ export struct ImportPage {
     }
   }
 
-  private async importAudioBook(bookId: string, sandboxDir: string, files: PickedFile[]): Promise<Book> {
+  private async importAudioBook(bookId: string, sandboxDir: string, files: PickedFile[], extractRoot: string): Promise<Book> {
     const chapters: Chapter[] = [];
     for (let i = 0; i < files.length; i++) {
       const pf = files[i];
       this.progressText = `导入音频 ${i + 1}/${files.length}`;
       const destName = (i + 1) + pf.ext;
       const destPath = sandboxDir + '/' + destName;
-      try {
-        const srcFile = await fileIo.open(pf.uri, fileIo.OpenMode.READ_ONLY);
-        const dstFile = await fileIo.open(destPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
-        await fileIo.copyFile(srcFile.fd, dstFile.fd);
-        await fileIo.close(srcFile);
-        await fileIo.close(dstFile);
-      } catch (e) {
-        continue;
+      if (pf.uri.startsWith(extractRoot + '/')) {
+        await fileIo.moveFile(pf.uri, destPath);
+      } else {
+        await LocalBookImportService.requireSpace(this.context!, await LocalBookImportService.fileSize(pf.uri));
+        await LocalBookImportService.copyFile(pf.uri, destPath);
       }
-      const durationSec = await this.probeAudioDuration(destPath);
+      const durationSec = files.length <= 500 ? await this.probeAudioDuration(destPath) : 0;
       const src: AudioSource = { type: 'file', value: destPath };
       chapters.push({ id: bookId + '-c' + (i + 1), index: i + 1, title: pf.name, duration: durationSec, source: src });
     }
@@ -348,6 +384,7 @@ export struct ImportPage {
           SymbolGlyph($r('sys.symbol.chevron_left'))
             .fontSize(24)
             .fontColor([$r('sys.color.font_primary')])
+            .enabled(!this.importing)
             .onClick(() => this.navStack.pop())
           Text('本地导入')
             .fontSize(AppFont.Title)
@@ -405,21 +442,23 @@ export struct ImportPage {
             Text('点击选择文件')
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
-            Text('音频:mp3/m4a/flac/wav/ogg/aac  打包:zip')
+            Text($r('app.string.import_supported_formats'))
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
-            Text('支持选 .zip 自动解压；多文件按集数自然排序')
+            Text($r('app.string.import_limits_hint'))
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
           }
           .justifyContent(FlexAlign.Center)
           .width('100%')
-          .height(140)
+          .constraintSize({ minHeight: 180 })
         } else {
           Column({ space: 0 }) {
-            ForEach(this.pickedFiles, (pf: PickedFile, idx: number) => {
+            List() {
+            LazyForEach(this.fileDataSource, (pf: PickedFile) => {
+              ListItem() {
               Row({ space: AppSpace.Sm }) {
-                Text((idx + 1).toString())
+                Text((this.pickedFiles.indexOf(pf) + 1).toString())
                   .fontSize(AppFont.Caption)
                   .fontColor($r('sys.color.font_tertiary'))
                   .width(24)
@@ -432,10 +471,14 @@ export struct ImportPage {
               }
               .width('100%')
               .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Xs, bottom: AppSpace.Xs })
+              }
             }, (pf: PickedFile) => pf.uri)
+            }
+            .height(Math.min(300, this.pickedFiles.length * 48))
+            .width('100%')
 
             Row({ space: AppSpace.Sm }) {
-              Text('重新选择')
+              Text($r('app.string.import_add_files'))
                 .fontSize(AppFont.Body)
                 .fontColor(AppColor.Brand)
                 .onClick(() => this.pickFiles())
@@ -533,7 +576,7 @@ export struct ImportPage {
         .fontColor($r('sys.color.font_tertiary'))
 
       Column({ space: AppSpace.Sm }) {
-        TextInput({ placeholder: '书名（必填）', text: this.bookTitle!! })
+        TextInput({ placeholder: $r('app.string.import_title_optional'), text: this.bookTitle!! })
           .height(44)
           .backgroundColor($r('sys.color.comp_background_primary'))
           .borderRadius(AppRadius.Md)
@@ -553,13 +596,15 @@ export struct ImportPage {
   @Builder
   buildActionBar() {
     Column() {
-      if (this.importing && this.progressText) {
-        Text(this.progressText)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .margin({ bottom: AppSpace.Sm })
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      if (this.progressText) {
+        Scroll() {
+          Text(this.progressText)
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+            .width('100%')
+        }
+        .constraintSize({ maxHeight: this.importing ? 48 : 160 })
+        .margin({ bottom: AppSpace.Sm })
       }
       Stack() {
         // 视觉内容独立绘制，避免原生 Button 禁用时同步淡化文字。
@@ -598,7 +643,7 @@ export struct ImportPage {
   }
 
   private canImport(): boolean {
-    return this.pickedFiles.length > 0 && this.bookTitle.length > 0;
+    return this.pickedFiles.length > 0;
   }
 
   private importColorChannel(hex: string, offset: number): number {

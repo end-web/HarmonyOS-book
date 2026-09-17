@@ -90,7 +90,7 @@ Import capability messages and test status are diagnostic, not a blanket enablem
 
 Local rule scripts must run through `LocalRuleScriptRuntime` → `LocalRuleQuickJsRuntime` in a taskpool, with independent contexts, native interrupt timeout, heap/stack/pending-job/input/output budgets, and guaranteed release. Do not expose unrestricted QuickJS APIs, direct `fetch`/XHR/WebSocket, platform objects, files, or databases. The local-rule ArkWeb host parses already-downloaded HTML. Source website login uses the routed HTTPS-only incognito page with no platform bridge; cookies must be copied into the encrypted source+origin store before the Web session is cleared.
 
-Online novels use `OnlineTextPaginator` and local reading preferences. ReaderKit handles the existing EPUB-path branch; `ImportPage` currently imports audio files and audio ZIPs, not a complete local EPUB library workflow.
+Online novels use `OnlineTextPaginator` and local reading preferences. ReaderKit handles the existing EPUB-path branch; `ImportPage` imports audio, TXT, EPUB, HTML/HTM and ZIP bundles. Imported ebooks are converted into bounded local text chapters for the existing paginator and speech service; original EPUB images/layout are not preserved. Local chapter catalogs live in durable filesDir/imported_toc rather than Preferences.
 
 The optional `server/` project is not registered or configurable as an App content source. Do not reintroduce an App API-base setting without an explicit product decision.
 

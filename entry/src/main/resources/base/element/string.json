@@ -1,5 +1,25 @@
 {
   "string": [
+    {"name": "profile_wechat_title", "value": "微信公众号"},
+    {"name": "profile_wechat_desc", "value": "关注「简听好运来」获取最新更新计划"},
+    {"name": "profile_wechat_name", "value": "简听好运来"},
+    {"name": "profile_wechat_copy", "value": "复制名称"},
+    {"name": "profile_wechat_copied", "value": "公众号名称已复制"},
+    {"name": "profile_wechat_copy_failed", "value": "复制失败，请重试"},
+    {"name": "guide_reader_theme_action", "value": "开启「跟随系统深浅色」"},
+    {"name": "guide_reader_theme_desc", "value": "夜间自动用深色，白天恢复已选背景图片或主题。"},
+    {"name": "guide_reader_speech_action", "value": "底栏 → 朗读"},
+    {"name": "guide_reader_speech_desc", "value": "从当前页或上次位置开始，可调倍速和正文跟随。"},
+
+    {"name": "import_supported_formats", "value": "音频：MP3/M4A/FLAC/WAV/OGG/AAC；电子书：TXT/EPUB/HTML/HTM；打包：ZIP"},
+    {"name": "import_limits_hint", "value": "每次可选 500 个文件，可继续添加。ZIP ≤32 GiB，解压 ≤64 GiB；每书 ≤50000 章/集。电子书逐本入架，音频按集数排序。"},
+    {"name": "import_title_optional", "value": "书名（选填，默认使用文件名）"},
+    {"name": "import_add_files", "value": "继续添加"},
+    {"name": "import_partial_result", "value": "已导入 %d 本，以下文件未完成：\n%s"},
+    {"name": "import_success", "value": "导入成功，已加入书架"},
+    {"name": "import_no_files", "value": "没有可导入的文件"},
+
+    { "name": "chapter_order_save_failed", "value": "章节顺序保存失败，请重试" },
     {"name": "reader_footer_title", "value": "页脚显示"},
     {"name": "reader_show_battery_time", "value": "显示电量和时间"},
     {"name": "reader_battery_level", "value": "电量 %s"},
@@ -32,13 +52,13 @@
     {"name": "record_stats_read_failed", "value": "统计读取失败，点击重试"},
     {"name": "record_stats_equivalent_books", "value": "相当于读完 %d 本书"},
     {"name": "home_source_setting", "value": "首页源"},
-    {"name": "home_source_setting_hint", "value": "选择一个听书源，首页推荐和分类将使用该源的内容。仅显示已启用的听书源。"},
+    {"name": "home_source_setting_hint", "value": "选择已启用且有发现内容的小说或有声书源，用于首页推荐和分类。"},
     {"name": "home_source_unset", "value": "未设置"},
     {"name": "home_source_saved", "value": "已设为首页源"},
     {"name": "home_source_current", "value": "当前首页源"},
-    {"name": "home_source_no_audio", "value": "暂无可选听书源，请先导入并启用听书源"},
+    {"name": "home_source_no_audio", "value": "暂无可选发现源，请先导入并启用支持发现的小说或有声书源"},
     {"name": "home_source_no_discovery", "value": "该源未提供首页内容或未启用发现，可继续使用搜索"},
-    {"name": "home_source_empty", "value": "当前首页源暂无内容，可下拉刷新或在书源管理中更换首页源"},
+    {"name": "home_source_empty", "value": "当前首页源暂无内容，可下拉刷新或在首页顶部更换书源"},
     {"name": "home_source_load_failed", "value": "首页内容加载失败，请下拉重试或在书源管理中更换首页源"},
     {"name": "home_recommendations", "value": "精品推荐"},
     {"name": "home_carousel_open", "value": "打开书籍详情"},
@@ -582,15 +602,15 @@
     },
     {
       "name": "guide_home_search_desc",
-      "value": "搜索书名或作者，进入独立结果页"
+      "value": "输入书名或作者，选择搜索结果。"
     },
     {
       "name": "guide_home_refresh_action",
-      "value": "首页顶部回到最上方后下拉"
+      "value": "下拉首页"
     },
     {
       "name": "guide_home_refresh_desc",
-      "value": "刷新推荐和分类内容；搜索页不参与下拉刷新"
+      "value": "刷新推荐和分类。"
     },
     {
       "name": "guide_home_top_action",
@@ -598,7 +618,7 @@
     },
     {
       "name": "guide_home_top_desc",
-      "value": "快速回到首页顶部，不会重新加载数据"
+      "value": "快速回到顶部。"
     },
     {
       "name": "guide_group_common",
@@ -610,7 +630,7 @@
     },
     {
       "name": "guide_common_top_desc",
-      "value": "快速回到当前页面顶部"
+      "value": "快速回到当前页面顶部。"
     },
     {
       "name": "guide_group_favorite",
@@ -622,7 +642,7 @@
     },
     {
       "name": "guide_favorite_open_desc",
-      "value": "直接进入正文，并恢复上次阅读位置"
+      "value": "继续上次阅读。"
     },
     {
       "name": "guide_favorite_refresh_action",
@@ -630,7 +650,7 @@
     },
     {
       "name": "guide_favorite_refresh_desc",
-      "value": "从书源刷新在线书籍的最新数据"
+      "value": "查看书籍更新。"
     },
     {
       "name": "guide_favorite_remove_action",
@@ -638,7 +658,7 @@
     },
     {
       "name": "guide_favorite_remove_desc",
-      "value": "移出书架，可选择是否删除本地文件"
+      "value": "移出书架，按需删除本地文件。"
     },
     {
       "name": "guide_group_record",
@@ -646,11 +666,11 @@
     },
     {
       "name": "guide_record_select_action",
-      "value": "长按任一条记录，或点击顶部「编辑」"
+      "value": "长按记录或点击「编辑」"
     },
     {
       "name": "guide_record_select_desc",
-      "value": "进入多选模式，可全选、批量删除或取消"
+      "value": "勾选记录后批量删除。"
     },
     {
       "name": "guide_record_play_action",
@@ -658,7 +678,7 @@
     },
     {
       "name": "guide_record_play_desc",
-      "value": "从这本书上次的章节和进度继续播放"
+      "value": "继续上次收听。"
     },
     {
       "name": "guide_group_player",
@@ -670,7 +690,7 @@
     },
     {
       "name": "guide_player_chapter_desc",
-      "value": "选择章节；播放进度会按书籍和章节分别保存"
+      "value": "选择要播放的章节。"
     },
     {
       "name": "guide_player_speed_action",
@@ -678,15 +698,15 @@
     },
     {
       "name": "guide_player_speed_desc",
-      "value": "拖动选择 0.5x 至 3.0x；长按恢复 1.0x"
+      "value": "调整为 0.5–3 倍速，长按恢复原速。"
     },
     {
       "name": "guide_player_sleep_action",
-      "value": "点击「定时」并选择时长"
+      "value": "点击「定时」"
     },
     {
       "name": "guide_player_sleep_desc",
-      "value": "支持 15/30/45/60 分钟；开启章节结束后停止可避免在章中暂停，长按可取消"
+      "value": "按分钟或章节设置停止，也可输入自定义数值；长按取消。"
     },
     {
       "name": "guide_player_skip_action",
@@ -694,7 +714,7 @@
     },
     {
       "name": "guide_player_skip_desc",
-      "value": "设置片头和片尾秒数；长按清除跳过设置"
+      "value": "设置片头、片尾时长，长按清除。"
     },
     {
       "name": "guide_player_cast_action",
@@ -702,7 +722,7 @@
     },
     {
       "name": "guide_player_cast_desc",
-      "value": "将在线音频交给系统设备选择器；本地导入内容暂不支持"
+      "value": "选择设备播放在线音频。"
     },
     {
       "name": "guide_group_reader",
@@ -710,11 +730,11 @@
     },
     {
       "name": "guide_reader_open_action",
-      "value": "点击正文左侧或右侧区域"
+      "value": "点击正文两侧或滑动"
     },
     {
       "name": "guide_reader_open_desc",
-      "value": "切换上一页或下一页；阅读页会避让状态栏和手势区"
+      "value": "向前或向后翻页，顶部 10% 区域留给下拉状态栏。"
     },
     {
       "name": "guide_reader_toolbar_action",
@@ -722,7 +742,7 @@
     },
     {
       "name": "guide_reader_toolbar_desc",
-      "value": "显示或隐藏详情、章节和设置悬浮栏"
+      "value": "打开或收起底栏，再选择章节、设置或朗读。"
     },
     {
       "name": "guide_reader_settings_action",
@@ -730,7 +750,7 @@
     },
     {
       "name": "guide_reader_settings_desc",
-      "value": "调整字号、行高、翻页方式、阅读主题、自定义图片和蒙层，设置会自动保存"
+      "value": "调整字号、行距、四边边距、翻页方式和背景，自动保存。"
     },
     {
       "name": "guide_group_source",
@@ -738,43 +758,43 @@
     },
     {
       "name": "guide_source_import_action",
-      "value": "我的 → 书源 → 点击加号"
+      "value": "我的 → 书源管理 → 加号"
     },
     {
       "name": "guide_source_import_desc",
-      "value": "可选择本地 JSON、粘贴 JSON 或输入 HTTP(S) 地址导入规则书源"
+      "value": "选择 JSON 文件、粘贴内容或输入书源链接。"
     },
     {
       "name": "guide_source_test_action",
-      "value": "导入后点击书源测试"
+      "value": "选择书源并测试"
     },
     {
       "name": "guide_source_test_desc",
-      "value": "先确认书源兼容并测试搜索；关闭「参与搜索」不会影响已有收藏解析"
+      "value": "测试搜索或发现/阅读，通过后启用书源。"
     },
     {
       "name": "guide_source_login_action",
-      "value": "点击主账号或子源「登录」"
+      "value": "需要账号时点击「登录」"
     },
     {
       "name": "guide_source_login_desc",
-      "value": "登录信息按书源和站点隔离保存在设备本地，删除书源时一并清除"
+      "value": "按书源提示完成登录。"
     },
     {
       "name": "guide_mini_cover_action",
-      "value": "播放时查看底部小圆封面"
+      "value": "查看封面外圈"
     },
     {
       "name": "guide_mini_cover_desc",
-      "value": "封面保持静止，外圈展示当前集收听进度，切换章节后重新计算"
+      "value": "外圈显示当前章节进度。"
     },
     {
       "name": "guide_mini_expand_action",
-      "value": "点击折叠态小封面"
+      "value": "点击底部小封面"
     },
     {
       "name": "guide_mini_expand_desc",
-      "value": "展开迷你播放栏；展开后点击标题区域进入播放页"
+      "value": "展开播放栏，点击标题进入播放页。"
     },
     {
       "name": "guide_group_system_media",
@@ -786,7 +806,7 @@
     },
     {
       "name": "guide_system_media_open_desc",
-      "value": "可控制上一集、下一集、收藏和倍速"
+      "value": "控制播放、切换章节或收藏。"
     },
     {
       "name": "guide_system_speed_action",
@@ -794,11 +814,11 @@
     },
     {
       "name": "guide_system_speed_desc",
-      "value": "选择播放倍速，结果会同步到 App 播放页；系统卡片不再显示循环模式"
+      "value": "选择播放倍速。"
     },
     {
       "name": "guide_footer",
-      "value": "部分操作带轻震反馈，更多用法会持续补充"
+      "value": "遇到问题，可在「我的」加入简听交流群。"
     },
     {
       "name": "rule_source_title",
@@ -1434,6 +1454,22 @@
     {"name": "tts_save_error", "value": "朗读进度保存失败，请检查可用存储空间。"},
     {"name": "tts_online_only", "value": "当前仅支持在线小说正文朗读。"},
     {"name": "tts_mini_label", "value": "正在朗读"},
-    {"name": "tts_follow_position", "value": "回到朗读位置"}
+    {"name": "tts_follow_position", "value": "回到朗读位置"},
+    {"name": "chapter_order_asc", "value": "正序"},
+    {"name": "chapter_order_desc", "value": "倒序"},
+    {"name": "reader_search_chapters", "value": "搜索章节"},
+    {"name": "reader_no_matching_chapters", "value": "无匹配章节"},
+    {"name": "reader_follow_system", "value": "跟随系统深浅色"},
+    {"name": "reader_vertical_turn", "value": "连续滚动"},
+    {"name": "reader_scroll_retry", "value": "章节加载失败，点击重试"},
+    {"name": "reader_margins", "value": "正文边距（vp）"},
+    {"name": "reader_margin_left", "value": "左"},
+    {"name": "reader_margin_right", "value": "右"},
+    {"name": "reader_margin_top", "value": "上"},
+    {"name": "reader_margin_bottom", "value": "下"},
+    {"name": "source_login_valid", "value": "已登录"},
+    {"name": "source_login_expired", "value": "已过期"},
+    {"name": "source_login_none", "value": "未登录"},
+    {"name": "rule_source_login_no_session", "value": "未获取到登录会话，请完成网页登录后再保存"}
   ]
 }

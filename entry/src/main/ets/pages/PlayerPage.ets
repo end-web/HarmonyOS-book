@@ -349,9 +349,10 @@ export struct PlayerPage {
     }
     // 独立 KV 为权威:贴回 skip,纠正冷启动缓存书壳可能丢失的跳过头尾
     await PreferenceService.applySkipConfig(b);
+    await PreferenceService.applyTocOrder(b);
     if (this.isLeaving) return;
     this.book = b;
-    this.chapterDataSource.setChapters(b.chapters);
+    this.chapterDataSource.setChapters(PreferenceService.orderedChapters(b));
     if (current && this.isSameBook(current, b)
       && current.chapters.length < b.chapters.length) {
       this.playerState.currentBook = b;
@@ -451,7 +452,7 @@ export struct PlayerPage {
     const hydrated = await this.hydrateBookChapters(book);
     if (this.isLeaving || hydrated.chapters.length === 0) return;
     this.book = hydrated;
-    this.chapterDataSource.setChapters(hydrated.chapters);
+    this.chapterDataSource.setChapters(PreferenceService.orderedChapters(hydrated));
     this.scrollToCurrentChapter();
   }
 
@@ -507,8 +508,9 @@ export struct PlayerPage {
   private async playPrev(): Promise<void> {
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
-    if (idx > 0) {
-      const ch = this.book.chapters[idx - 1];
+    const target = idx - PreferenceService.chapterStep(this.book);
+    if (idx >= 0 && target >= 0 && target < this.book.chapters.length) {
+      const ch = this.book.chapters[target];
       // AudioService 内部会查缓存/解析 URL，这里不用再做
       await AudioService.getInstance().playChapterFromSavedProgress(this.book, ch);
     }
@@ -517,8 +519,9 @@ export struct PlayerPage {
   private async playNext(): Promise<void> {
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
-    if (idx >= 0 && idx < this.book.chapters.length - 1) {
-      const ch = this.book.chapters[idx + 1];
+    const target = idx + PreferenceService.chapterStep(this.book);
+    if (idx >= 0 && target >= 0 && target < this.book.chapters.length) {
+      const ch = this.book.chapters[target];
       await AudioService.getInstance().playChapter(this.book, ch);
     }
   }
@@ -652,7 +655,7 @@ export struct PlayerPage {
     this.listOffsetFromCurrent = 0;
     this.chapterSearchKeyword = '';
     if (!this.book) return;
-    this.chapterDataSource.setChapters(this.book.chapters);
+    this.chapterDataSource.setChapters(PreferenceService.orderedChapters(this.book));
     if (this.book.chapters.length === 0) {
       this.reloadEmptyChapterList(this.book);
     }
@@ -665,11 +668,11 @@ export struct PlayerPage {
     if (!this.book) return;
     const kw = keyword.trim().toLowerCase();
     if (!kw) {
-      this.chapterDataSource.setChapters(this.book.chapters);
+      this.chapterDataSource.setChapters(PreferenceService.orderedChapters(this.book));
       this.scrollToCurrentChapter();
       return;
     }
-    const filtered = this.book.chapters.filter((c) => c.title.toLowerCase().includes(kw));
+    const filtered = PreferenceService.orderedChapters(this.book).filter((c) => c.title.toLowerCase().includes(kw));
     this.chapterDataSource.setChapters(filtered);
     // 过滤结果重置滚动到顶部
     setTimeout(() => {
@@ -680,7 +683,7 @@ export struct PlayerPage {
   private scrollToCurrentChapter(): void {
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
-    this.scrollChapterListToIndex(idx);
+    this.scrollChapterListToIndex(this.book ? PreferenceService.chapterDisplayIndex(this.book, idx) : idx);
   }
 
   /**
@@ -1449,7 +1452,7 @@ export struct PlayerPage {
       const idx = this.currentChapterIndex();
       if (idx < 0) return;
       const center = (firstIndex + lastIndex) / 2;
-      this.listOffsetFromCurrent = (center - idx) * 64;
+      this.listOffsetFromCurrent = (center - (this.book ? PreferenceService.chapterDisplayIndex(this.book, idx) : idx)) * 64;
     })
   }
 
@@ -1795,16 +1798,16 @@ export struct PlayerPage {
       totalDuration: b.totalDuration, chapterCount: b.chapterCount,
       rating: b.rating, tags: b.tags, chapters: b.chapters,
       bookUrl: b.bookUrl, sourceUrl: b.sourceUrl,
+      contentType: b.contentType, completed: b.completed, chaptersDescending: b.chaptersDescending,
       variables: b.variables, skipIntro: intro, skipOutro: outro
     };
     this.book = cloned;
+    AudioService.getInstance().applySkipConfigNow(cloned.id, intro, outro);
     // 独立 KV 落盘(权威来源):冷启动恢复不依赖缓存书索引,避免走 legacy/persistUnsafe 兜底时丢 skip
     await PreferenceService.saveSkipConfig(cloned.id, intro, outro);
     await DataService.upsertCachedBook(cloned);
     SearchCache.put(cloned);
-    if (this.playerState.currentBook?.id === b.id) {
-      this.playerState.currentBook = cloned;
-    }
+
   }
 
   @Builder

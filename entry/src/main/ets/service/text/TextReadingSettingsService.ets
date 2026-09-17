@@ -55,8 +55,19 @@ export class TextReadingSettingsService {
     const pageTurnMode = typeof savedPageTurnMode === 'string' ? savedPageTurnMode : TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
     const showReadingStatus = typeof savedReadingStatus === 'boolean' ? savedReadingStatus :
       TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
-    return TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
+    const result = TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
       pageTurnMode, showReadingStatus);
+    result.followSystemTheme = store.getSync('follow_system_theme', false) === true;
+    const marginLeft = store.getSync('marginLeft', 16);
+    result.marginLeft = TextReadingSettings.normalizeMargin(typeof marginLeft === 'number' ? marginLeft : 16, 16);
+    const marginRight = store.getSync('marginRight', 16);
+    result.marginRight = TextReadingSettings.normalizeMargin(typeof marginRight === 'number' ? marginRight : 16, 16);
+    const marginTop = store.getSync('marginTop', 12);
+    result.marginTop = TextReadingSettings.normalizeMargin(typeof marginTop === 'number' ? marginTop : 12, 12,
+      TextReadingSettings.MARGIN_MAX_LIMIT);
+    const marginBottom = store.getSync('marginBottom', 12);
+    result.marginBottom = TextReadingSettings.normalizeMargin(typeof marginBottom === 'number' ? marginBottom : 12, 12);
+    return result;
   }
 
   static async save(context: common.Context, settings: TextReadingSettings): Promise<void> {
@@ -72,6 +83,12 @@ export class TextReadingSettingsService {
     store.putSync(KEY_OVERLAY_ALPHA, TextReadingSettings.normalizeOverlay(settings.overlayAlpha));
     store.putSync(KEY_PAGE_TURN_MODE, TextReadingSettings.normalizePageTurnMode(settings.pageTurnMode));
     store.putSync(KEY_SHOW_READING_STATUS, settings.showReadingStatus);
+    store.putSync('follow_system_theme', settings.followSystemTheme);
+    store.putSync('marginLeft', TextReadingSettings.normalizeMargin(settings.marginLeft, 16));
+    store.putSync('marginRight', TextReadingSettings.normalizeMargin(settings.marginRight, 16));
+    store.putSync('marginTop', TextReadingSettings.normalizeMargin(settings.marginTop, 12,
+      TextReadingSettings.MARGIN_MAX_LIMIT));
+    store.putSync('marginBottom', TextReadingSettings.normalizeMargin(settings.marginBottom, 12));
     await store.flush();
   }
 }

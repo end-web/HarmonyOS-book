@@ -81,6 +81,12 @@ export class LocalRuleHttpClient {
       } finally {
         permit.release();
       }
+      if (response.statusCode === 401) {
+        const status = await LocalRuleSourceRepository.getLoginStatus(source.bookSourceUrl);
+        if (status === 'valid' || status === 'saved') {
+          await LocalRuleSourceRepository.expireLogin(source.bookSourceUrl);
+        }
+      }
       if (source.enabledCookieJar && response.statusCode > 0) {
         try {
           await LocalRuleHttpClient.captureCookies(source, plan.url, response.headers);

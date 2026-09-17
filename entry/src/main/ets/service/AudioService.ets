@@ -5,7 +5,7 @@ import { audio } from '@kit.AudioKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { emitter } from '@kit.BasicServicesKit';
+import { emitter, BusinessError } from '@kit.BasicServicesKit';
 import { avSession } from '@kit.AVSessionKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { BookSource } from '../model/BookSource';
@@ -63,6 +63,23 @@ export class AudioService {
   private sleepPausePending: boolean = false;
   /** 手动、系统播控或耳机摘下要求暂停；加载完成和迟到的焦点事件不得覆盖。 */
   private pauseRequested: boolean = false;
+  private pauseSource: string = 'none';
+  private foreground: boolean = true;
+
+  /** 只记录状态和位置，不记录书名、音频地址或请求凭据。 */
+  private tracePlayback(event: string): void {
+    hilog.info(DOMAIN, TAG,
+      'playback event=%{public}s state=%{public}s foreground=%{public}s pos=%{public}d gen=%{public}d pause=%{public}s source=%{public}s focus=%{public}s external=%{public}s sleep=%{public}s loading=%{public}s bg=%{public}s',
+      event, this.player?.state ?? 'none', String(this.foreground), this.state?.progressMs ?? 0,
+      this.playGen, String(this.pauseRequested), this.pauseSource, String(this.pausedByFocus),
+      String(this.pausedByExternalMedia), String(this.sleepPausePending), String(this.state?.isLoading ?? false),
+      String(BackgroundTaskService.isRunning()));
+  }
+
+  setForeground(foreground: boolean): void {
+    this.foreground = foreground;
+    this.tracePlayback(foreground ? 'foreground' : 'background');
+  }
   private resumeAfterSleepChapter: boolean = false;
   private isApplying: boolean = false;
   private currentFile: fileIo.File | null = null;
@@ -231,7 +248,7 @@ export class AudioService {
           hilog.warn(DOMAIN, TAG, 'Session play failed: %{public}s', err.message);
         });
       },
-      onPause: () => { this.pause(); },
+      onPause: () => { this.pause('avsession'); },
       onPlayNext: () => { this.playNext(); },
       onPlayPrevious: () => { this.playPrevious(); },
       onFastForward: (ms: number) => { this.seekBy(ms); },
@@ -240,7 +257,7 @@ export class AudioService {
       onSetSpeed: (speed: number) => { this.setSpeed(speed); },
       onSetLoopMode: (mode: avSession.LoopMode) => { this.setPlayMode(this.fromAVSessionLoopMode(mode)); },
       onCollection: () => { this.toggleFavoriteFromSession(); },
-      onCastConnected: () => { this.pause(); }
+      onCastConnected: () => { this.pause('cast'); }
     };
     AVSessionService.getInstance().setCallbacks(cbs);
     AVSessionService.getInstance().init(this.context).catch((err: Error) => {
@@ -283,7 +300,8 @@ export class AudioService {
       return this.player;
     }
     const p = await media.createAVPlayer();
-    p.on('stateChange', (newState: media.AVPlayerState) => {
+    p.on('stateChange', (newState: media.AVPlayerState, reason: media.StateChangeReason) => {
+      this.tracePlayback(`state:${newState}:reason=${reason}`);
       if (!this.state) return;
       if (newState === 'initialized') {
         // 听书内容声明为 AUDIOBOOK 流,系统据此挂载低功耗音频渲染器:
@@ -411,8 +429,9 @@ export class AudioService {
         this.lastPersistAt = now;
       }
     });
-    p.on('error', (err: object) => {
-      const e = err as Error;
+    p.on('error', (err: BusinessError) => {
+      const e = err;
+      this.tracePlayback(`error:code=${err.code}`);
       hilog.error(DOMAIN, TAG, 'AVPlayer error: %{public}s',
         e && e.message ? e.message : JSON.stringify(err));
       if (!this.state) return;
@@ -436,24 +455,35 @@ export class AudioService {
         this.autoRetryChapterId = ch.id;
         this.autoRetryAt = Date.now();
         hilog.warn(DOMAIN, TAG, 'AVPlayer error with resolved URL, auto re-resolve chapter: %{public}s', ch.title);
-        this.playChapter(book, ch, true).catch((err2: Error): void => {
+        const resumeMs = this.state.progressMs;
+        this.tracePlayback('retry:resolved-url');
+        this.playChapterAndSeek(book, ch, resumeMs, true).catch((err2: Error): void => {
           hilog.warn(DOMAIN, TAG, 'auto retry playChapter failed: %{public}s',
             err2 && err2.message ? err2.message : JSON.stringify(err2));
         });
         return;
       }
       this.stopTick();
+      PlaybackStore.getInstance().setPlaying(false);
+      this.syncPlaybackState();
+      if (this.context) BackgroundTaskService.stop(this.context);
     });
     p.on('audioInterrupt', (event: audio.InterruptEvent) => {
       this.handleInterrupt(event);
     });
+    p.on('bufferingUpdate', (type: media.BufferingInfoType, value: number): void => {
+      if (type === media.BufferingInfoType.BUFFERING_START || type === media.BufferingInfoType.BUFFERING_END) {
+        this.tracePlayback(`buffering:type=${type}:value=${value}`);
+      }
+    });
     // API 11：包括支持佩戴检测的耳机双耳摘下，以及蓝牙断开/有线耳机拔出。
     // 新设备可用仅表示路由变化；戴上续播交给耳机/系统通过 AVSession 下发 play。
     p.on('audioOutputDeviceChangeWithInfo', (info: audio.AudioStreamDeviceChangeInfo): void => {
+      this.tracePlayback(`output-device:reason=${info.changeReason}`);
       if (this.player !== p
         || info.changeReason !== audio.AudioStreamDeviceChangeReason.REASON_OLD_DEVICE_UNAVAILABLE) return;
       hilog.info(DOMAIN, TAG, 'Audio output unavailable, pause playback');
-      this.pause();
+      this.pause('output-device-unavailable');
     });
     // 焦点模式不在这里设——AVPlayer 刚 createAVPlayer 完是 idle 状态,
     // setter 会被鸿蒙拒绝(Operate Not Permit)。改在 stateChange 'prepared' 里设。
@@ -462,6 +492,7 @@ export class AudioService {
   }
 
   private handleInterrupt(event: audio.InterruptEvent): void {
+    this.tracePlayback(`interrupt:type=${event.eventType}:force=${event.forceType}:hint=${event.hintType}:autoResume=${this.autoResume}`);
     if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
     if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
       if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE) {
@@ -510,6 +541,7 @@ export class AudioService {
   }
 
   private async resumeFromInterrupt(): Promise<void> {
+    this.tracePlayback('resume:focus');
     if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
     try {
       const p = await this.ensurePlayer();
@@ -535,6 +567,7 @@ export class AudioService {
    * 若用户在等待期间已经手动操作过(toggle/pause/play/playChapter),pausedByExternalMedia 已被清零,直接返回。
    */
   private async resumeAfterExternalMedia(): Promise<void> {
+    this.tracePlayback('resume:external-media');
     if (!this.pausedByExternalMedia || !this.autoResume || this.pauseRequested || this.sleepPausePending) return;
     this.pausedByExternalMedia = false;
     try {
@@ -853,6 +886,7 @@ export class AudioService {
   private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
     if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
     const myGen = ++this.playGen;
+    this.tracePlayback('chapter-load');
     // ★ 缓存命中→快路径,UI 不显示 loading 圈;否则常规路径,显示加载状态
     const fastPath = this.isFastSwitchPath(book, chapter);
     // 快路径不需要 WebView 嗅探，不调 cancelPending——避免把预加载正在跑的嗅探取消掉，
@@ -933,10 +967,9 @@ export class AudioService {
       if (myGen !== this.playGen) {
         return;
       }
-      if (seekMs > 0) {
-        this.pendingSeek = seekMs;
-        this.resumeTargetMs = seekMs;
-      }
+      const startMs = Math.max(seekMs, Math.max(0, book.skipIntro ?? 0) * 1000);
+      this.pendingSeek = startMs;
+      this.resumeTargetMs = startMs;
       const loaded = await this.applySource(p, chapter.source, audioHeaders);
       if (!loaded) {
         // 装载失败(缓存文件被系统清理/URL 失效等),立即清 loading 并提示,
@@ -1316,7 +1349,7 @@ export class AudioService {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return 0;
     const book = this.state.currentBook;
     const index = this.findChapterIndex(book, this.state.currentChapter);
-    return index < 0 ? 0 : Math.min(999, book.chapters.length - index);
+    return index < 0 ? 0 : Math.min(999, PreferenceService.chapterStep(book) < 0 ? index + 1 : book.chapters.length - index);
   }
 
   setSleepChapters(count: number): boolean {
@@ -1329,7 +1362,7 @@ export class AudioService {
     this.state.sleepMode = SleepMode.Chapters;
     this.state.sleepChapterCount = count;
     this.state.sleepChaptersRemaining = count;
-    this.state.sleepTargetTitle = book.chapters[index + count - 1].title;
+    this.state.sleepTargetTitle = book.chapters[index + (count - 1) * PreferenceService.chapterStep(book)].title;
     return true;
   }
 
@@ -1378,7 +1411,10 @@ export class AudioService {
 
   private prepareSleepForPlayback(book: Book, chapter: Chapter, automatic: boolean): void {
     if (!this.state) return;
-    if (!automatic) this.pauseRequested = false;
+    if (!automatic) {
+      this.pauseRequested = false;
+      this.pauseSource = 'none';
+    }
     this.pausedByFocus = false;
     const changed = this.state.currentBook?.id !== book.id || this.state.currentChapter?.id !== chapter.id;
     if (!automatic && changed && (this.state.sleepMode === SleepMode.Chapters || this.state.sleepWaitingForChapter)) {
@@ -1391,6 +1427,7 @@ export class AudioService {
 
   /** 自然结束与跳过片尾共用入口，一章只能结算一次，先停止再决定是否续播。 */
   private handleChapterEnd(): void {
+    this.tracePlayback('chapter-end');
     if (!this.state || this.state.isLoading || this.isApplying || this.chapterEndHandled || this.pauseRequested) return;
     this.chapterEndHandled = true;
     this.updateSleepTimer(true);
@@ -1410,6 +1447,7 @@ export class AudioService {
   }
 
   private finishSleep(atChapterEnd: boolean): void {
+    this.tracePlayback(`sleep-stop:chapterEnd=${atChapterEnd}`);
     this.cancelSleepTimer();
     this.sleepPausePending = true;
     this.resumeAfterSleepChapter = atChapterEnd;
@@ -1464,6 +1502,7 @@ export class AudioService {
       try { this.player.off('timeUpdate'); } catch (_e) { /* ignore */ }
       try { this.player.off('error'); } catch (_e) { /* ignore */ }
       try { this.player.off('audioInterrupt'); } catch (_e) { /* ignore */ }
+      try { this.player.off('bufferingUpdate'); } catch (_e) { /* ignore */ }
       try { this.player.off('audioOutputDeviceChangeWithInfo'); } catch (_e) { /* ignore */ }
       await this.player.release();
       this.player = null;
@@ -1534,6 +1573,29 @@ export class AudioService {
     }
   }
 
+  /** 设置完成即调整当前章节；已越过片头时不回退，加载期间更新待跳转位置。 */
+  applySkipConfigNow(bookId: string, intro: number, outro: number): void {
+    if (!this.state || this.state.currentBook?.id !== bookId) return;
+    this.state.currentBook.skipIntro = Math.max(0, intro);
+    this.state.currentBook.skipOutro = Math.max(0, outro);
+    const p = this.player;
+    const progress = p && (p.state === 'playing' || p.state === 'paused' || p.state === 'prepared') ?
+      Math.max(this.state.progressMs, p.currentTime) : this.state.progressMs;
+    const introMs = Math.max(0, intro) * 1000;
+    const duration = p && p.duration > 0 ? p.duration : this.state.durationMs;
+    if (progress < introMs && (duration <= 0 || introMs < duration)) {
+      this.state.progressMs = introMs;
+      this.resumeTargetMs = introMs;
+      if (p && (p.state === 'playing' || p.state === 'paused' || p.state === 'prepared')) {
+        p.seek(introMs, media.SeekMode.SEEK_PREV_SYNC);
+        this.syncPlaybackState();
+      } else {
+        this.pendingSeek = Math.max(this.pendingSeek, introMs);
+      }
+    }
+    this.checkSkipOutro(Math.max(progress, this.state.progressMs));
+  }
+
   private autoPlayNext(): void {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const mode = this.state.sleepMode === SleepMode.Chapters ? PlayMode.Sequence : this.state.playMode;
@@ -1546,13 +1608,14 @@ export class AudioService {
       this.playChapterAndSeek(this.state.currentBook, chapters[idx], 0, true);
       return;
     }
-    if (idx < chapters.length - 1) {
-      this.playChapter(this.state.currentBook, chapters[idx + 1], true);
+    const next = idx + PreferenceService.chapterStep(this.state.currentBook);
+    if (next >= 0 && next < chapters.length) {
+      this.playChapter(this.state.currentBook, chapters[next], true);
       return;
     }
     if (mode === PlayMode.ListLoop && chapters.length > 0) {
       // 列表循环:回到第一集
-      this.playChapter(this.state.currentBook, chapters[0], true);
+      this.playChapter(this.state.currentBook, PreferenceService.orderedChapters(this.state.currentBook)[0], true);
     }
     // 顺序播放:停在最后一集
   }
@@ -1633,10 +1696,11 @@ export class AudioService {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const chapters = this.state.currentBook.chapters;
     const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
-    if (idx >= 0 && idx < chapters.length - 1) {
-      await this.playChapter(this.state.currentBook, chapters[idx + 1]);
+    const next = idx + PreferenceService.chapterStep(this.state.currentBook);
+    if (idx >= 0 && next >= 0 && next < chapters.length) {
+      await this.playChapter(this.state.currentBook, chapters[next]);
     } else if (this.state.playMode === PlayMode.ListLoop && chapters.length > 0) {
-      await this.playChapter(this.state.currentBook, chapters[0]);
+      await this.playChapter(this.state.currentBook, PreferenceService.orderedChapters(this.state.currentBook)[0]);
     }
   }
 
@@ -1645,8 +1709,9 @@ export class AudioService {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const chapters = this.state.currentBook.chapters;
     const idx = this.findChapterIndex(this.state.currentBook, this.state.currentChapter);
-    if (idx > 0) {
-      await this.playChapterFromSavedProgress(this.state.currentBook, chapters[idx - 1]);
+    const previous = idx - PreferenceService.chapterStep(this.state.currentBook);
+    if (idx >= 0 && previous >= 0 && previous < chapters.length) {
+      await this.playChapterFromSavedProgress(this.state.currentBook, chapters[previous]);
     }
   }
 
@@ -1654,12 +1719,14 @@ export class AudioService {
   async suspendForSpeech(): Promise<void> {
     this.playGen++;
     this.isApplying = false;
-    await this.pause();
+    await this.pause('speech');
     if (this.state) this.state.isLoading = false;
   }
 
   /** 系统播控、耳机和卡片共用的暂停入口，重复指令保持暂停。 */
-  async pause(): Promise<void> {
+  async pause(source: string = 'user'): Promise<void> {
+    this.pauseSource = source;
+    this.tracePlayback('pause-request');
     this.pauseRequested = true;
     this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
@@ -1678,6 +1745,8 @@ export class AudioService {
 
   /** 系统播控、耳机和卡片共用的播放入口；重复 play 不切换为暂停或重载音源。 */
   async play(): Promise<void> {
+    this.tracePlayback('play-request');
+    this.pauseSource = 'none';
     this.pauseRequested = false;
     this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
@@ -1689,7 +1758,9 @@ export class AudioService {
     }
     if (await this.resumeAfterSleep()) return;
     if (PlaybackCoordinator.speechActive || this.pauseRequested || this.isApplying || this.state?.isLoading) return;
-    if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped') {
+    if (this.player?.state === 'released') this.player = null;
+    if (!this.player || this.player.state === 'idle' || this.player.state === 'stopped'
+      || this.player.state === 'error') {
       if (this.state && this.state.currentBook && this.state.currentChapter) {
         await this.resumeFromState();
       }

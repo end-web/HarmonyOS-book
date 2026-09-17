@@ -76,7 +76,7 @@ struct ReaderSettingCard {
 /** 分档按钮使用 @Param 观察选中态，避免 @Builder 按值参数停留在首次渲染。 */
 @ComponentV2
 struct ReaderSettingChip {
-  @Param label: string = '';
+  @Param label: ResourceStr = '';
   @Param selected: boolean = false;
   @Event onSelect: () => void = () => {};
 
@@ -133,7 +133,36 @@ struct ReaderThemeSwatch {
 }
 
 @ComponentV2
+struct ReaderMarginSlider {
+  @Param label: ResourceStr = '';
+  @Param value: number = 16;
+  @Param max: number = 64;
+  @Event onChange: (value: number, commit: boolean) => void = () => {};
+
+  build() {
+    Row({ space: AppSpace.Sm }) {
+      Text(this.label).fontSize(AppFont.Caption).width(36).fontColor($r('sys.color.font_primary'))
+      Slider({ value: this.value, min: 0, max: this.max, step: 1 })
+        .layoutWeight(1).selectedColor(AppColor.Brand)
+        .onChange((next: number, mode: SliderChangeMode): void => {
+          this.onChange(next, mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
+        })
+      Text(`${this.value}`).width(36).fontColor(AppColor.Brand).fontSize(AppFont.Caption)
+    }.width('100%')
+  }
+}
+
+@ComponentV2
 export struct ReaderSettingsSheet {
+  @Param followSystemTheme: boolean = false;
+  @Param marginLeft: number = 16;
+  @Param marginRight: number = 16;
+  @Param marginTop: number = 12;
+  @Param marginBottom: number = 12;
+  /** 上边距滑杆上限：由阅读页按视口高度一半传入 */
+  @Param marginTopMax: number = 64;
+  @Event onFollowSystemChange: (enabled: boolean) => void = () => {};
+  @Event onMarginChange: (edge: string, value: number, commit: boolean) => void = () => {};
   @Param fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   @Param lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
   @Param themeId: string = ReaderThemeId.Parchment;
@@ -324,13 +353,20 @@ export struct ReaderSettingsSheet {
   buildThemeSection() {
     ReaderSettingCard({ title: $r('app.string.reader_theme_title') }) {
       Column({ space: AppSpace.Sm }) {
+        Row() {
+          Text($r('app.string.reader_follow_system')).layoutWeight(1)
+            .fontColor($r('sys.color.font_primary'))
+          Toggle({ type: ToggleType.Switch, isOn: this.followSystemTheme })
+            .selectedColor(AppColor.Brand)
+            .onChange((enabled: boolean): void => this.onFollowSystemChange(enabled))
+        }.width('100%')
         Row({ space: AppSpace.Sm }) {
           ForEach(
             READER_THEME_PRESETS,
             (preset: ReaderThemePreset) => {
               ReaderThemeSwatch({
                 preset: preset,
-                selected: this.themeId === preset.id,
+                selected: !this.followSystemTheme && this.themeId === preset.id,
                 onSelect: () => this.onThemeChange(preset.id)
               })
             },
@@ -444,8 +480,37 @@ export struct ReaderSettingsSheet {
           selected: this.pageTurnMode === PageTurnMode.Simulation,
           onSelect: () => this.onPageTurnModeChange(PageTurnMode.Simulation)
         })
+        ReaderSettingChip({
+          label: $r('app.string.reader_vertical_turn'),
+          selected: this.pageTurnMode === PageTurnMode.Vertical,
+          onSelect: () => this.onPageTurnModeChange(PageTurnMode.Vertical)
+        })
       }
       .width('100%')
+    }
+  }
+
+  @Builder
+  buildMarginSection() {
+    ReaderSettingCard({ title: $r('app.string.reader_margins') }) {
+      Column() {
+        ReaderMarginSlider({
+          label: $r('app.string.reader_margin_left'), value: this.marginLeft,
+          onChange: (value: number, commit: boolean): void => this.onMarginChange('left', value, commit)
+        })
+        ReaderMarginSlider({
+          label: $r('app.string.reader_margin_right'), value: this.marginRight,
+          onChange: (value: number, commit: boolean): void => this.onMarginChange('right', value, commit)
+        })
+        ReaderMarginSlider({
+          label: $r('app.string.reader_margin_top'), value: this.marginTop, max: this.marginTopMax,
+          onChange: (value: number, commit: boolean): void => this.onMarginChange('top', value, commit)
+        })
+        ReaderMarginSlider({
+          label: $r('app.string.reader_margin_bottom'), value: this.marginBottom,
+          onChange: (value: number, commit: boolean): void => this.onMarginChange('bottom', value, commit)
+        })
+      }.width('100%')
     }
   }
 
@@ -503,6 +568,7 @@ export struct ReaderSettingsSheet {
           this.buildLineHeightSection()
           this.buildPageTurnModeSection()
           this.buildThemeSection()
+          this.buildMarginSection()
           this.buildReadingStatusSection()
         }
         .width('100%')

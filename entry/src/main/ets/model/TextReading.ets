@@ -49,7 +49,9 @@ export enum PageTurnMode {
   /** 仿真翻页 */
   Simulation = 'simulation',
   /** 滑动翻页 */
-  Slide = 'slide'
+  Slide = 'slide',
+  /** 连续滚动正文；保留旧存储值以兼容已保存的设置。 */
+  Vertical = 'vertical'
 }
 
 export class TextReadingSettings {
@@ -67,6 +69,20 @@ export class TextReadingSettings {
   static readonly CUSTOM_BACKGROUND_DEFAULT: string = '#F5F2EA';
   static readonly PAGE_TURN_MODE_DEFAULT: string = PageTurnMode.Cover;
   static readonly SHOW_READING_STATUS_DEFAULT: boolean = true;
+  /** 边距持久化宽松上限：上边距允许随屏幕高度放大到视口一半，其余边保持 UI 上限。 */
+  static readonly MARGIN_MAX_LIMIT: number = 512;
+  /** 常规边距 UI 上限（左右/下） */
+  static readonly MARGIN_UI_MAX: number = 64;
+
+  followSystemTheme: boolean = false;
+  marginLeft: number = 16;
+  marginRight: number = 16;
+  marginTop: number = 12;
+  marginBottom: number = 12;
+
+  static normalizeMargin(value: number, fallback: number, max: number = TextReadingSettings.MARGIN_UI_MAX): number {
+    return Number.isFinite(value) ? Math.round(Math.max(0, Math.min(max, value))) : fallback;
+  }
 
   fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
@@ -153,7 +169,7 @@ export class TextReadingSettings {
   }
 
   static normalizePageTurnMode(value?: string): string {
-    if (value === PageTurnMode.Cover || value === PageTurnMode.Simulation || value === PageTurnMode.Slide) {
+    if (value === PageTurnMode.Cover || value === PageTurnMode.Simulation || value === PageTurnMode.Slide || value === PageTurnMode.Vertical) {
       return value;
     }
     return TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
@@ -172,6 +188,15 @@ export class TextReaderRouteParams {
     value.domPos = domPos;
     return value;
   }
+}
+
+/** 详情页复用栈内阅读页时请求跳章的事件 */
+export const EVT_READER_JUMP_CHAPTER: string = 'app.reader.jumpChapter';
+
+/** EVT_READER_JUMP_CHAPTER 的事件负载 */
+export class ReaderJumpChapterEvent {
+  bookId: string = '';
+  resourceIndex: number = -1;
 }
 
 export class TextSourceError extends Error {

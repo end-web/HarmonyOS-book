@@ -29,6 +29,7 @@ export struct ReaderPageTurnComponent {
   private anchor: number = 0.5;
   private released: boolean = false;
   private commitOnRelease: boolean = false;
+  private touchBlocked: boolean = false;
 
   @Monitor('mode', 'revision')
   onReaderChanged(): void {
@@ -97,23 +98,39 @@ export struct ReaderPageTurnComponent {
     }
   }
 
+  private handleTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down) {
+      const touch = event.touches[0];
+      // 整段手势沿用落点判定，避免从状态栏下拉到正文后触发翻页。
+      this.touchBlocked = touch === undefined || touch.y < this.pageHeight * 0.1;
+    } else if (event.type === TouchType.Cancel) {
+      this.touchBlocked = true;
+      this.handlePanCancel();
+    }
+  }
+
   private handlePanStart(event: GestureEvent): void {
     const finger = event.fingerList[0];
-    this.beginTurn(event.offsetX < 0, false, finger !== undefined ? finger.localY : this.pageHeight / 2);
+    if (this.touchBlocked || finger === undefined ||
+      finger.localY - event.offsetY < this.pageHeight * 0.1) return;
+    this.beginTurn((this.mode === PageTurnMode.Vertical ? event.offsetY : event.offsetX) < 0, false, finger !== undefined ? finger.localY : this.pageHeight / 2);
     this.handlePanUpdate(event);
   }
 
   private handlePanUpdate(event: GestureEvent): void {
     if (this.phase !== 'preparing' && this.phase !== 'dragging') return;
-    const distance = this.forward ? -event.offsetX : event.offsetX;
-    this.progress = Math.max(0, Math.min(1, distance / Math.max(1, this.pageWidth)));
+    const offset = this.mode === PageTurnMode.Vertical ? event.offsetY : event.offsetX;
+    const distance = this.forward ? -offset : offset;
+    const size = this.mode === PageTurnMode.Vertical ? this.pageHeight : this.pageWidth;
+    this.progress = Math.max(0, Math.min(1, distance / Math.max(1, size)));
     if (this.phase === 'dragging') this.drawFrame(this.progress);
   }
 
   private handlePanEnd(event: GestureEvent): void {
     if (this.phase !== 'preparing' && this.phase !== 'dragging') return;
     this.handlePanUpdate(event);
-    const velocity = this.forward ? -event.velocityX : event.velocityX;
+    const speed = this.mode === PageTurnMode.Vertical ? event.velocityY : event.velocityX;
+    const velocity = this.forward ? -speed : speed;
     this.released = true;
     this.commitOnRelease = velocity > 650 || (velocity > -650 && this.progress >= 0.28);
     if (this.phase === 'dragging') this.settle(this.commitOnRelease);
@@ -126,9 +143,9 @@ export struct ReaderPageTurnComponent {
   }
 
   private handleTap(event: GestureEvent): void {
-    if (this.phase !== 'idle') return;
+    if (this.phase !== 'idle' || this.touchBlocked) return;
     const finger = event.fingerList[0];
-    if (finger === undefined) return;
+    if (finger === undefined || finger.localY < this.pageHeight * 0.1) return;
     if (finger.localX < this.pageWidth * 0.3) {
       this.beginTurn(false, true, finger.localY);
     } else if (finger.localX > this.pageWidth * 0.7) {
@@ -188,6 +205,14 @@ export struct ReaderPageTurnComponent {
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, w, h);
     ctx.save();
+    if (this.mode === PageTurnMode.Vertical) {
+      ctx.translate(0, (this.forward ? -1 : 1) * h * p);
+      ctx.fillStyle = this.paperColor;
+      ctx.fillRect(0, 0, w, h);
+      if (this.snapshotImage !== null) ctx.drawImage(this.snapshotImage, 0, 0, w, h);
+      ctx.restore();
+      return;
+    }
     if (!this.forward) {
       ctx.translate(w, 0);
       ctx.scale(-1, 1);
@@ -287,8 +312,9 @@ export struct ReaderPageTurnComponent {
       this.pageWidth = size.width;
       this.pageHeight = size.height;
     })
+    .onTouch((event: TouchEvent): void => this.handleTouch(event))
     .gesture(GestureGroup(GestureMode.Exclusive,
-      PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 8 })
+      PanGesture({ fingers: 1, direction: this.mode === PageTurnMode.Vertical ? PanDirection.Vertical : PanDirection.Horizontal, distance: 8 })
         .onActionStart((event: GestureEvent): void => this.handlePanStart(event))
         .onActionUpdate((event: GestureEvent): void => this.handlePanUpdate(event))
         .onActionEnd((event: GestureEvent): void => this.handlePanEnd(event))

@@ -3,6 +3,9 @@ import {
   GuangYuAuthResult,
   GuangYuAuthService
 } from './guangyu/GuangYuAuthService';
+import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
+import { GUANG_YU_SOURCE_URL } from './guangyu/GuangYuSourceIdentity';
+import { SHU_SHAN_SOURCE_URL } from './shushan/ShuShanSourceIdentity';
 import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
 import {
   ShuShanAccountState,
@@ -13,6 +16,7 @@ import { ShuShanSourceIdentity } from './shushan/ShuShanSourceIdentity';
 
 export class RuleSourceAccountState {
   loggedIn: boolean = false;
+  expired: boolean = false;
   accountLabel: string = '';
 }
 
@@ -57,11 +61,15 @@ export class RuleSourceAccountService {
   static async getState(sourceUrl: string): Promise<RuleSourceAccountState> {
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
       const state: GuangYuAccountState = await GuangYuAuthService.getState();
-      return RuleSourceAccountService.mapState(state.loggedIn, state.accountLabel);
+      return RuleSourceAccountService.mapState(state.loggedIn, state.accountLabel,
+        await LocalRuleSourceRepository.getLoginStatus(GuangYuSourceIdentity.isSourceUrl(sourceUrl) ?
+          GUANG_YU_SOURCE_URL : SHU_SHAN_SOURCE_URL) === 'expired');
     }
     if (ShuShanSourceIdentity.isSourceUrl(sourceUrl)) {
       const state: ShuShanAccountState = await ShuShanAuthService.getState();
-      return RuleSourceAccountService.mapState(state.loggedIn, state.accountLabel);
+      return RuleSourceAccountService.mapState(state.loggedIn, state.accountLabel,
+        await LocalRuleSourceRepository.getLoginStatus(GuangYuSourceIdentity.isSourceUrl(sourceUrl) ?
+          GUANG_YU_SOURCE_URL : SHU_SHAN_SOURCE_URL) === 'expired');
     }
     throw new Error('当前书源不支持账号登录');
   }
@@ -101,9 +109,10 @@ export class RuleSourceAccountService {
     return '';
   }
 
-  private static mapState(loggedIn: boolean, accountLabel: string): RuleSourceAccountState {
+  private static mapState(loggedIn: boolean, accountLabel: string, expired: boolean): RuleSourceAccountState {
     const state = new RuleSourceAccountState();
     state.loggedIn = loggedIn;
+    state.expired = expired;
     state.accountLabel = accountLabel;
     return state;
   }

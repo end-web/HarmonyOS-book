@@ -1,3 +1,4 @@
+import { DataService } from './DataService';
 /** 用户导入规则源的统一内容门面。 */
 import { AudioSource, Book, Chapter } from '../model/Book';
 import { BookInfo, BookSource, HomeBlockSection, SearchResult, TocItem } from '../model/BookSource';
@@ -544,6 +545,10 @@ export class BookSourceService {
 
   static async getTextChapterContent(book: Book, chapterUrl: string,
     title: string, chapterVariables?: Record<string, string>): Promise<TextChapterContent> {
+    if (book.id.startsWith('import_') && book.contentType === 'text' && book.sourceUrl.length === 0) {
+      const content = await DataService.readImportedText(book, chapterUrl);
+      return TextChapterContent.of(title, content, chapterUrl);
+    }
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
     const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
     if (localSource === undefined || (!usesNativeAdapter && !localSource.isText()) ||

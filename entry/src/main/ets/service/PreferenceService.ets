@@ -1,7 +1,7 @@
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
-import { Book } from '../model/Book';
+import { Book, Chapter } from '../model/Book';
 import { AppAppearance } from '../model/AppAppearance';
 
 /** 书架收藏变化事件:加入/移出书架后触发,书架页据此自动刷新 */
@@ -43,6 +43,9 @@ const MAX_CHAPTER_PROGRESS_PER_BOOK = 200;
 /** 每本书独立的跳过头尾设置,key = `${KEY_SKIP_PREFIX}${bookId}`。
  *  独立小 KV,不再搭车缓存书索引——避免冷启动走 legacy/persistUnsafe 兜底分支时把 skip 丢掉。 */
 const KEY_SKIP_PREFIX = 'skip_v1_';
+/** 每本书独立的目录顺序(倒序)开关,key = `${KEY_TOC_ORDER_PREFIX}${bookId}`。
+ *  与跳过头尾同思路:独立小 KV 作为权威来源,倒序时写 true,正序删 key 保持 store 干净。 */
+const KEY_TOC_ORDER_PREFIX = 'toc_order_v1_';
 /** 华为账号登录身份标识(UnionID/OpenID),JSON 持久化 */
 const KEY_HW_ACCOUNT = 'hw_account_v1';
 
@@ -473,6 +476,7 @@ export class PreferenceService {
    */
   static async applySkipConfig(book: Book | null | undefined): Promise<void> {
     if (!book || !book.id) return;
+    await PreferenceService.applyTocOrder(book);
     const cfg = await PreferenceService.getSkipConfig(book.id);
     if (cfg) {
       book.skipIntro = cfg.skipIntro;
@@ -486,6 +490,53 @@ export class PreferenceService {
     if (bi > 0 || bo > 0) {
       await PreferenceService.saveSkipConfig(book.id, bi, bo);
     }
+  }
+
+  private static tocOrderMemo: Map<string, boolean> = new Map();
+
+  /** 原始章节索引保持稳定；展示和导航统一读取本书的排序偏好。 */
+  static chapterStep(book: Book): number {
+    return (PreferenceService.tocOrderMemo.get(book.id) ?? book.chaptersDescending ?? false) ? -1 : 1;
+  }
+
+  static orderedChapters(book: Book): Chapter[] {
+    const chapters = book.chapters.slice();
+    return PreferenceService.chapterStep(book) < 0 ? chapters.reverse() : chapters;
+  }
+
+  static chapterDisplayIndex(book: Book, index: number): number {
+    if (index < 0) return -1;
+    return PreferenceService.chapterStep(book) < 0 ? book.chapters.length - 1 - index : index;
+  }
+
+  /** 读取本书的目录顺序;默认正序。 */
+  static async getTocOrder(bookId: string): Promise<boolean> {
+    if (!bookId) return false;
+    const memo = PreferenceService.tocOrderMemo.get(bookId);
+    if (memo !== undefined) return memo;
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_TOC_ORDER_PREFIX + bookId, false) as boolean;
+    PreferenceService.tocOrderMemo.set(bookId, raw === true);
+    return raw === true;
+  }
+
+  /** 保存本书的目录顺序;正序视为清除。 */
+  static async saveTocOrder(bookId: string, descending: boolean): Promise<void> {
+    if (!bookId) return;
+    PreferenceService.tocOrderMemo.set(bookId, descending);
+    const s = await PreferenceService.ensureStore();
+    if (descending) {
+      await s.put(KEY_TOC_ORDER_PREFIX + bookId, true);
+    } else {
+      await s.delete(KEY_TOC_ORDER_PREFIX + bookId);
+    }
+    await s.flush();
+  }
+
+  /** 把独立存储里的目录顺序贴回 book 对象;详情页/播放页/阅读页载入书时调用。 */
+  static async applyTocOrder(book: Book | null | undefined): Promise<void> {
+    if (!book || !book.id) return;
+    book.chaptersDescending = await PreferenceService.getTocOrder(book.id);
   }
 
   static async getColorMode(): Promise<number> {

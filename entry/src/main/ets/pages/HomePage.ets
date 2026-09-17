@@ -384,7 +384,7 @@ export struct HomePage {
   }
 
   private isFeaturedFavorite(r: SearchResult): boolean {
-    return this.favoriteIds.includes(BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name));
+    return this.favoriteIds.includes(this.homeBookId(r));
   }
 
   private async toggleFeaturedFavorite(r: SearchResult): Promise<void> {
@@ -689,7 +689,7 @@ export struct HomePage {
         const page: ExploreFetchResult = await BookSourceService.getExploreBooksByUrl(source, nextUrl, pageNumber);
         if (generation !== this.homeGen) return;
         let added: number = 0;
-        for (const item of HomeSourceService.audioBooks(page.books)) {
+        for (const item of page.books) {
           if (seen.has(item.bookUrl)) continue;
           seen.add(item.bookUrl);
           books.push(this.homeBookFromResult(item));
@@ -730,16 +730,21 @@ export struct HomePage {
     return selected && selected.url === cat.url;
   }
 
+  private homeBookId(r: SearchResult): string {
+    return r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl || '', r.bookUrl || r.name) :
+      BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name);
+  }
+
   private homeBookFromResult(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
     const book: Book = {
-      id: BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
+      id: this.homeBookId(r),
       title: r.name,
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: r.kind || '有声书',
-      contentType: 'audio',
+      category: r.kind || (r.contentType === 'text' ? '小说' : '有声书'),
+      contentType: r.contentType ?? 'audio',
       intro: r.intro || '',
       totalDuration: 0,
       chapterCount: 0,
@@ -769,7 +774,7 @@ export struct HomePage {
     for (const block of ordered) {
       for (const book of block.books) {
         const key = `${book.sourceUrl}#${book.bookUrl}`;
-        if (book.contentType === 'text' || !book.bookUrl || !book.coverUrl.startsWith('http') || seen.has(key)) continue;
+        if (!book.bookUrl || !book.coverUrl.startsWith('http') || seen.has(key)) continue;
         seen.add(key);
         books.push(book);
         if (books.length === 6) return books;

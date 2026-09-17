@@ -66,6 +66,20 @@ async function fixture(initialState = 'paused') {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText;
   vm.runInNewContext(coordinatorCode, { module: coordinatorModule, exports: coordinatorModule.exports });
+  const prefModule = { exports: {} };
+  const prefCode = ts.transpileModule(fs.readFileSync(
+    path.join(path.dirname(source), 'PreferenceService.ets'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  vm.runInNewContext(prefCode, { module: prefModule, exports: prefModule.exports,
+    require: () => ({ ConfigurationConstant: { ColorMode: { COLOR_MODE_NOT_SET: -1 } } }) });
+  const preference = prefModule.exports.PreferenceService;
+  const preferenceValues = new Map();
+  preference.ensureStore = async () => ({
+    get: async (key, fallback) => preferenceValues.get(key) ?? fallback,
+    put: async (key, value) => preferenceValues.set(key, value),
+    delete: async key => preferenceValues.delete(key), flush: async () => {}
+  });
   const modules = {
     './PlaybackCoordinator': coordinatorModule.exports,
     '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 } } },
@@ -75,12 +89,14 @@ async function fixture(initialState = 'paused') {
     '@kit.AVSessionKit': { avSession: {} },
     '@kit.CoreFileKit': { fileIo: {} },
     '../utils/PlatformCompat': { PlatformCompat: {} },
-    '../model/PlayerState': { SleepMode: { Off: 0, Chapters: 2 } },
+    '../model/PlayerState': { SleepMode: { Off: 0, Chapters: 2 }, PlayMode: { Sequence: 0, SingleLoop: 1, ListLoop: 2 } },
     './ExternalMediaWatcher': { ExternalMediaWatcher: Watcher },
     './AVSessionService': { AVSessionService: { getInstance: () => session } },
     './PlaybackStore': { PlaybackStore: { getInstance: () => playbackStore } },
-    './BackgroundTaskService': { BackgroundTaskService: { async start() {}, async stop() {} } },
-    './DataService': { DataService: { async upsertCachedBook() {} } },
+    './BackgroundTaskService': { BackgroundTaskService: { async start() {}, async stop() {}, isRunning() { return true; } } },
+    './DataService': { DataService: { async upsertCachedBook() {},
+      resolveChapterIndex: (book, id) => book.chapters.findIndex(ch => ch.id === id) } },
+    './PreferenceService': { PreferenceService: preference },
     './WidgetUpdater': { WidgetUpdater: { async optimisticSetPlaying() {} } }
   };
   const module = { exports: {} };
@@ -103,7 +119,7 @@ async function fixture(initialState = 'paused') {
   service.stopTick = () => {};
   service.initAVSession();
   await service.ensurePlayer();
-  return { service, player, state, session, savedPositions, events };
+  return { service, player, state, session, savedPositions, events, preference };
 }
 
 let passed = 0;
@@ -114,6 +130,37 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('manual play recovers an errored player at the saved position', async () => {
+    const f = await fixture('error');
+    let resumedAt = -1;
+    f.service.resumeFromState = async () => { resumedAt = f.state.progressMs; };
+    await f.service.play();
+    assert.equal(resumedAt, 42000);
+  });
+  await check('resolved URL errors retry at the interrupted position', async () => {
+    const f = await fixture('playing');
+    f.state.currentChapter.source = { type: 'url', value: 'https://example.invalid/audio' };
+    f.state.currentChapter.originSourceValue = 'https://example.invalid/chapter';
+    let retry = null;
+    f.service.playChapterAndSeek = async (_book, _chapter, position, automatic) => { retry = { position, automatic }; };
+    f.player.state = 'error';
+    f.player.emit('error', { code: 5400103, message: 'simulated failure' });
+    await flush();
+    assert.deepEqual(retry, { position: 42000, automatic: true });
+  });
+  await check('explicit pause prevents automatic URL-error recovery', async () => {
+    const f = await fixture('playing');
+    f.state.currentChapter.source = { type: 'url', value: 'https://example.invalid/audio' };
+    f.state.currentChapter.originSourceValue = 'https://example.invalid/chapter';
+    let retries = 0;
+    f.service.playChapterAndSeek = async () => { retries++; };
+    await f.service.pause();
+    f.player.state = 'error';
+    f.player.emit('error', { code: 5400103, message: 'simulated failure' });
+    await flush();
+    assert.equal(retries, 0);
+    assert.equal(f.state.isPlaying, false);
+  });
   await check('session play/pause are idempotent and preserve the current position', async () => {
     const f = await fixture();
     f.session.callbacks.onPlay();
@@ -207,6 +254,75 @@ async function check(name, test) {
     const f = await fixture();
     await f.service.release();
     assert.equal(f.events.has('audioOutputDeviceChangeWithInfo'), false);
+  });
+  await check('saving intro 10s at 2s immediately seeks, including paused playback', async () => {
+    for (const mode of ['playing', 'paused']) {
+      const f = await fixture(mode);
+      f.state.progressMs = f.player.currentTime = 2000;
+      f.service.applySkipConfigNow('book-1', 10, 0);
+      assert.deepEqual(f.player.seeks, [10000]);
+      assert.equal(f.state.progressMs, 10000);
+      assert.equal(f.player.state, mode);
+    }
+  });
+  await check('saving intro 10s at 11s never rewinds and other books are untouched', async () => {
+    const f = await fixture('playing');
+    f.state.progressMs = f.player.currentTime = 11000;
+    f.service.applySkipConfigNow('book-1', 10, 0);
+    f.service.applySkipConfigNow('other-book', 30, 0);
+    assert.deepEqual(f.player.seeks, []);
+    assert.equal(f.state.progressMs, 11000);
+    assert.equal(f.state.currentBook.skipIntro, 10);
+  });
+  await check('saving outro inside the current tail triggers chapter completion immediately', async () => {
+    const f = await fixture('playing');
+    f.state.progressMs = f.player.currentTime = 175000;
+    let completed = 0;
+    f.service.handleChapterEnd = () => completed++;
+    f.service.applySkipConfigNow('book-1', 0, 10);
+    assert.equal(completed, 1);
+    assert.deepEqual(f.player.seeks, []);
+  });
+  await check('intro saved during loading updates the pending seek', async () => {
+    const f = await fixture('initialized');
+    f.state.progressMs = 2000;
+    f.service.applySkipConfigNow('book-1', 10, 0);
+    assert.equal(f.service.pendingSeek, 10000);
+    assert.deepEqual(f.player.seeks, []);
+  });
+  await check('book order persists independently and all playback directions follow it', async () => {
+    const f = await fixture('playing');
+    const book = f.state.currentBook;
+    book.chapters = ['a', 'b', 'c'].map(id => ({ id, title: id }));
+    f.state.currentChapter = book.chapters[1];
+    await f.preference.saveTocOrder(book.id, true);
+    f.preference.tocOrderMemo.clear();
+    await f.preference.applyTocOrder(book);
+    assert.equal(book.chaptersDescending, true);
+    assert.equal(f.preference.orderedChapters(book).map(ch => ch.id).join(','), 'c,b,a');
+    assert.equal(book.chapters.map(ch => ch.id).join(','), 'a,b,c');
+    assert.equal(f.preference.chapterStep({ id: 'other' }), 1);
+    const played = [];
+    f.service.playChapter = async (_book, chapter) => played.push(chapter.id);
+    f.service.playChapterFromSavedProgress = f.service.playChapter;
+    await f.service.playNext();
+    await f.service.playPrevious();
+    f.service.autoPlayNext();
+    assert.deepEqual(played, ['a', 'c', 'a']);
+    assert.equal(f.service.getAvailableSleepChapters(), 2);
+    assert.equal(f.service.setSleepChapters(2), true);
+    assert.equal(f.state.sleepTargetTitle, 'a');
+    f.state.sleepMode = 0;
+    f.state.currentChapter = book.chapters[0];
+    await f.service.playNext();
+    assert.equal(played.length, 3);
+    f.state.playMode = 2;
+    await f.service.playNext();
+    assert.equal(played.at(-1), 'c');
+    await f.preference.saveTocOrder(book.id, false);
+    assert.equal(f.preference.chapterStep(book), 1);
+    await f.service.playNext();
+    assert.equal(played.at(-1), 'b');
   });
   console.log(`${passed} audio command checks passed`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

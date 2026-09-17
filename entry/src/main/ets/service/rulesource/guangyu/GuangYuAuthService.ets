@@ -40,7 +40,7 @@ export class GuangYuAuthService {
     try {
       const session = await LocalRuleSourceRepository.getSession(GUANG_YU_SOURCE_URL);
       if (session !== undefined && GuangYuAuthService.isValidToken(session.token)) {
-        state.loggedIn = true;
+        state.loggedIn = await LocalRuleSourceRepository.getLoginStatus(GUANG_YU_SOURCE_URL) !== 'expired';
         state.accountLabel = session.accountLabel;
       }
     } catch (_error) {

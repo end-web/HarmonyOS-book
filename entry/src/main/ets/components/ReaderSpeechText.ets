@@ -44,6 +44,8 @@ export struct ReaderSpeechText {
     .fontColor(this.palette.primary)
     .fontWeight(FontWeight.Normal)
     .lineHeight(this.fontSize * this.lineHeight)
-    .textAlign(TextAlign.Start)
+    .textAlign(TextAlign.JUSTIFY)
+    .wordBreak(WordBreak.BREAK_WORD)
+    .lineBreakStrategy(LineBreakStrategy.GREEDY)
   }
 }

@@ -43,6 +43,8 @@ export struct RuleSourceLoginPage {
   private cancellationTask: Promise<void> | undefined = undefined;
   private requestCancelled: boolean = false;
   private initialDocumentServed: boolean = false;
+  private storedCookies: RuleSourceWebCookieSnapshot[] = [];
+  private cookiesRestored: boolean = false;
 
   aboutToAppear(): void {
     this.pageAlive = true;
@@ -65,10 +67,7 @@ export struct RuleSourceLoginPage {
         return;
       }
       const snapshots = this.snapshotCookies();
-      this.releaseWebCookies();
-      LocalRuleWebSession.release(this.webSessionLease);
-      this.webSessionLease = 0;
-      this.persistOnDisappear(snapshots);
+      this.persistOnDisappear(snapshots).finally((): void => this.stopAndRelease());
     }
   }
 
@@ -89,14 +88,15 @@ export struct RuleSourceLoginPage {
         this.webSessionLease = 0;
         return;
       }
-      this.releaseWebCookies();
       const loginUrls = this.loginUrls();
       for (const loginUrl of loginUrls) {
         const cookieHeader = await LocalRuleHttpClient.getStoredCookieHeader(
           this.route.sourceUrl, loginUrl);
         if (!this.pageAlive || this.requestCancelled || this.leaving || this.webSessionLease === 0) return;
-        this.injectCookies(loginUrl, cookieHeader);
-        this.rememberUrl(loginUrl);
+        const snapshot = new RuleSourceWebCookieSnapshot();
+        snapshot.url = loginUrl;
+        snapshot.cookieHeader = cookieHeader;
+        this.storedCookies.push(snapshot);
       }
       this.currentUrl = this.route.loginUrl;
       this.currentOrigin = LocalRuleHttpClient.requestOrigin(this.route.loginUrl);
@@ -104,6 +104,28 @@ export struct RuleSourceLoginPage {
       this.loading = true;
     } catch (_error) {
       if (!this.pageAlive || this.leaving) return;
+      this.showToast($r('app.string.rule_source_login_prepare_failed'));
+      LocalRuleBrowserLoginCoordinator.reject(this.route.requestId, '网页登录准备失败');
+      this.navStack.pop();
+    }
+  }
+
+  private restoreWebSession(): void {
+    if (!this.pageAlive || this.leaving || this.requestCancelled || this.webSessionLease === 0) return;
+    try {
+      // 隐私 Cookie 容器须在 Web 挂载后写入，首个站点请求必须等待恢复完成。
+      this.releaseWebCookies();
+      this.controller.clearSslCache();
+      this.controller.setCustomUserAgent(RULE_LOGIN_USER_AGENT);
+      for (const snapshot of this.storedCookies) {
+        this.injectCookies(snapshot.url, snapshot.cookieHeader);
+        this.rememberUrl(snapshot.url);
+      }
+      this.cookiesRestored = true;
+      this.storedCookies = [];
+      this.controller.loadUrl(this.route.loginUrl);
+    } catch (_error) {
+      this.cookiesRestored = false;
       this.showToast($r('app.string.rule_source_login_prepare_failed'));
       LocalRuleBrowserLoginCoordinator.reject(this.route.requestId, '网页登录准备失败');
       this.navStack.pop();
@@ -133,11 +155,7 @@ export struct RuleSourceLoginPage {
     for (const rawPair of pairs) {
       const pair = rawPair.trim();
       if (pair.length === 0 || pair.indexOf('=') <= 0) continue;
-      try {
-        webview.WebCookieManager.configCookieSync(url, `${pair}; Path=/; Secure`, true, true);
-      } catch (_error) {
-        // 单个失效 Cookie 不阻断其余登录态恢复。
-      }
+      webview.WebCookieManager.configCookieSync(url, `${pair}; Path=/; Secure`, true, true);
     }
   }
 
@@ -155,14 +173,15 @@ export struct RuleSourceLoginPage {
 
   private snapshotCookies(): RuleSourceWebCookieSnapshot[] {
     const snapshots: RuleSourceWebCookieSnapshot[] = [];
-    if (this.webSessionLease === 0) return snapshots;
+    if (this.webSessionLease === 0 || !this.cookiesRestored) return snapshots;
     for (const url of this.visitedUrls) {
       const snapshot = new RuleSourceWebCookieSnapshot();
       snapshot.url = url;
       try {
         snapshot.cookieHeader = webview.WebCookieManager.fetchCookieSync(url, true) || '';
       } catch (_error) {
-        snapshot.cookieHeader = '';
+        // 读取失败不是退出登录，不能用空值覆盖已持久化的会话。
+        continue;
       }
       snapshots.push(snapshot);
     }
@@ -228,8 +247,11 @@ export struct RuleSourceLoginPage {
     const snapshots = this.snapshotCookies();
     try {
       const awaitingScript = this.route.requestId.length > 0;
-      if (awaitingScript) await this.persistSnapshotsStrict(snapshots);
-      else await this.persistSnapshots(snapshots);
+      await this.persistSnapshotsStrict(snapshots);
+      if (!awaitingScript && this.cookieHeaders(snapshots).length === 0) {
+        this.showToast($r('app.string.rule_source_login_no_session'));
+        return;
+      }
       let awaitedHtml = '';
       if (awaitingScript) {
         if (this.requestCancelled || !LocalRuleBrowserLoginCoordinator.isPending(this.route.requestId)) return;
@@ -246,8 +268,10 @@ export struct RuleSourceLoginPage {
       } else if (!awaitingScript) {
         const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
         if (source !== undefined && source.loginCheckJs.trim()) {
-          const content = await this.controller.runJavaScript('document.documentElement ? document.documentElement.outerHTML : ""');
+          const content = await this.readBoundedPageHtml();
           await LocalRulePanelService.checkLogin(source, content, {}, this.currentUrl);
+        } else {
+          await LocalRuleSourceRepository.setLoginStatus(this.route.sourceUrl, 'saved');
         }
       }
       this.leaving = true;
@@ -470,16 +494,11 @@ export struct RuleSourceLoginPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Stack({ alignContent: Alignment.Center }) {
-          Web({ src: this.route.loginUrl, controller: this.controller, incognitoMode: true })
+          Web({ src: '', controller: this.controller, incognitoMode: true })
             .width('100%')
             .height('100%')
             .onControllerAttached((): void => {
-              try {
-                this.controller.clearSslCache();
-                this.controller.setCustomUserAgent(RULE_LOGIN_USER_AGENT);
-              } catch (_error) {
-                // 使用 ArkWeb 默认 UA 继续加载。
-              }
+              this.restoreWebSession();
             })
             .javaScriptAccess(true)
             .domStorageAccess(true)

@@ -172,6 +172,13 @@ export class DataService {
 
   /** 读取某本书的本地章节目录(瞬时,无网络)。没有则返回空数组。 */
   static async getChaptersForBook(id: string): Promise<Chapter[]> {
+    if (id.startsWith('import_') && DataService.ctx) {
+      const imported = await DataService.readFileSafe(`${DataService.ctx.filesDir}/imported_toc/${id}.json`);
+      if (imported.ok && imported.json) {
+        const chapters: Chapter[] = JSON.parse(imported.json);
+        return chapters;
+      }
+    }
     await DataService.ensureStorageMigrated();
     let read = await DataService.readFileSafe(DataService.tocPath(id));
     if (!read.existed || !read.ok || !read.json) {
@@ -401,7 +408,10 @@ export class DataService {
   static async getBookById(_context: common.Context, id: string): Promise<Book | undefined> {
     const local = await DataService.load();
     const fromLocal = local.find((b) => b.id === id);
-    if (fromLocal) return fromLocal;
+    if (fromLocal) {
+      if (fromLocal.chapters.length === 0) fromLocal.chapters = await DataService.getChaptersForBook(id);
+      return fromLocal;
+    }
     const cached = await DataService.loadCachedBooks();
     const book = cached.find((b) => b.id === id);
     if (!book) return undefined;
@@ -427,8 +437,12 @@ export class DataService {
   }
 
   static async addImportedBook(book: Book): Promise<void> {
+    if (!DataService.ctx) throw new Error('本地存储尚未初始化');
+    const directory = `${DataService.ctx.filesDir}/imported_toc`;
+    await fileIo.mkdir(directory, true);
+    await DataService.atomicWrite(`${directory}/${book.id}.json`, JSON.stringify(book.chapters));
     const list = await DataService.getImportedBooks();
-    list.unshift(book);
+    list.unshift(DataService.slimBook(book));
     await PreferenceService.saveImportedBooks(JSON.stringify(list));
     DataService.cache = list;
   }
@@ -438,6 +452,22 @@ export class DataService {
     const filtered = list.filter((b) => b.id !== bookId);
     await PreferenceService.saveImportedBooks(JSON.stringify(filtered));
     DataService.cache = filtered;
+    if (DataService.ctx && /^import_[A-Za-z0-9_]+$/.test(bookId)) {
+      for (const directory of ['audio', 'ebooks']) {
+        try { await fileIo.rmdir(`${DataService.ctx.filesDir}/${directory}/${bookId}`); } catch (_error) { /* 文件可能已删除 */ }
+      }
+      try { await fileIo.unlink(`${DataService.ctx.filesDir}/imported_toc/${bookId}.json`); } catch (_error) { /* 旧书无独立目录 */ }
+    }
+  }
+
+  static async readImportedText(book: Book, chapterUrl: string): Promise<string> {
+    if (!DataService.ctx || !/^import_[A-Za-z0-9_]+$/.test(book.id) || book.sourceUrl.length > 0) {
+      throw new Error('本地电子书不可用');
+    }
+    const root = `${DataService.ctx.filesDir}/ebooks/${book.id}/`;
+    const filename = chapterUrl.substring(root.length);
+    if (!chapterUrl.startsWith(root) || !/^[0-9]+\.txt$/.test(filename)) throw new Error('无效的本地章节路径');
+    return fileIo.readText(chapterUrl);
   }
 
   /** 把搜索 / 在线源的书写入缓存池(去重,新数据覆盖旧的;最多 200 本)。索引存壳,章节存 sidecar。 */

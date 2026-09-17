@@ -460,6 +460,9 @@ export class GuangYuApiClient {
         GuangYuApiClient.preferredHostIndex = (hostIndex + 1) % hostCount;
         continue;
       }
+      if (response.statusCode === 401) {
+        await LocalRuleSourceRepository.expireLogin(GUANG_YU_SOURCE_URL);
+      }
       if (response.statusCode >= 500 && response.statusCode <= 599) {
         lastFailure = `HTTP ${response.statusCode}`;
         GuangYuApiClient.preferredHostIndex = (hostIndex + 1) % hostCount;
@@ -479,6 +482,9 @@ export class GuangYuApiClient {
         return root;
       } catch (error) {
         if (error instanceof GuangYuApiBusinessError) {
+          if (error.code === 401 || /登录.*(失效|过期)|请.*登录/.test(error.message)) {
+            await LocalRuleSourceRepository.expireLogin(GUANG_YU_SOURCE_URL);
+          }
           hilog.warn(0x11, 'GuangYuApi',
             'business error host=%{public}s path=%{public}s code=%{public}d msg=%{public}s',
             host, path, error.code, GuangYuApiClient.safeDiagnosticMessage(error.message));

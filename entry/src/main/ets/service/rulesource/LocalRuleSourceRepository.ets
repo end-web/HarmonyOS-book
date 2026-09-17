@@ -15,6 +15,7 @@ const DATABASE_NAME = 'rule_sources.db';
 const TABLE_NAME = 'rule_sources';
 const SESSION_TABLE_NAME = 'rule_source_sessions';
 const COOKIE_TABLE_NAME = 'rule_source_cookies';
+const LOGIN_TABLE_NAME = 'rule_source_login_status';
 const STATE_TABLE_NAME = 'rule_source_script_state';
 const GROUP_TABLE_NAME = 'rule_source_groups';
 const MAX_SOURCE_JSON_BYTES = 512 * 1024;
@@ -91,6 +92,44 @@ export class LocalRuleSourceRepository {
 
   static isInitialized(): boolean {
     return LocalRuleSourceRepository.store !== null;
+  }
+
+  private static loginRevision: number = 0;
+
+  static getLoginRevision(): number { return LocalRuleSourceRepository.loginRevision; }
+
+  static async getLoginStatus(sourceUrl: string): Promise<string> {
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const rows = await store.querySql(`SELECT status FROM ${LOGIN_TABLE_NAME} WHERE source_url = ?`, [sourceUrl]);
+    try { return rows.goToFirstRow() ? rows.getString(0) : ''; }
+    finally { rows.close(); }
+  }
+
+  static async listLoginStatuses(): Promise<Map<string, string>> {
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const rows = await store.querySql(`SELECT source_url, status FROM ${LOGIN_TABLE_NAME}`);
+    const result = new Map<string, string>();
+    try {
+      while (rows.goToNextRow()) result.set(rows.getString(0), rows.getString(1));
+    } finally { rows.close(); }
+    return result;
+  }
+
+  static async setLoginStatus(sourceUrl: string, status: string): Promise<void> {
+    const store = await LocalRuleSourceRepository.ensureStore();
+    const values: relationalStore.ValuesBucket = {
+      source_url: LocalRuleSourceRepository.requireSourceUrl(sourceUrl),
+      status: status, updated_at: Date.now()
+    };
+    await store.insert(LOGIN_TABLE_NAME, values, relationalStore.ConflictResolution.ON_CONFLICT_REPLACE);
+    LocalRuleSourceRepository.loginRevision++;
+  }
+
+  static async expireLogin(sourceUrl: string): Promise<void> {
+    const previous = await LocalRuleSourceRepository.getLoginStatus(sourceUrl);
+    if (previous !== 'expired' && previous !== 'signedOut') {
+      await LocalRuleSourceRepository.setLoginStatus(sourceUrl, 'expired');
+    }
   }
 
   static async readScriptState(sourceUrl: string): Promise<string> {
@@ -233,6 +272,7 @@ export class LocalRuleSourceRepository {
     if (rowId < 0) throw new Error(`书源会话写入失败：${sourceUrl}`);
     session.sourceUrl = sourceUrl;
     session.updatedAt = updatedAt;
+    await LocalRuleSourceRepository.setLoginStatus(sourceUrl, token.length > 0 ? 'valid' : 'signedOut');
   }
 
   static async clearSession(sourceUrl: string): Promise<void> {
@@ -241,6 +281,7 @@ export class LocalRuleSourceRepository {
     const predicates = new relationalStore.RdbPredicates(SESSION_TABLE_NAME);
     predicates.equalTo('source_url', normalizedUrl);
     await store.delete(predicates);
+    await LocalRuleSourceRepository.setLoginStatus(normalizedUrl, 'signedOut');
   }
 
   static async listCookies(sourceUrl: string): Promise<LocalRuleSourceCookie[]> {
@@ -655,6 +696,9 @@ export class LocalRuleSourceRepository {
         sourcePredicates.in('source_url', batchValues);
         await transaction.delete(sessionPredicates);
         await transaction.delete(cookiePredicates);
+        const loginPredicates = new relationalStore.RdbPredicates(LOGIN_TABLE_NAME);
+        loginPredicates.in('source_url', batchValues);
+        await transaction.delete(loginPredicates);
         const statePredicates = new relationalStore.RdbPredicates(STATE_TABLE_NAME);
         statePredicates.in('source_url', batchValues);
         await transaction.delete(statePredicates);
@@ -689,6 +733,12 @@ export class LocalRuleSourceRepository {
     await store.execute(CREATE_TABLE_SQL);
     await store.execute(CREATE_SESSION_TABLE_SQL);
     await store.execute(CREATE_COOKIE_TABLE_SQL);
+    await store.execute(`CREATE TABLE IF NOT EXISTS ${LOGIN_TABLE_NAME} (` +
+      'source_url TEXT PRIMARY KEY NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL)');
+    await store.execute(`INSERT OR IGNORE INTO ${LOGIN_TABLE_NAME} (source_url, status, updated_at) ` +
+      `SELECT source_url, 'valid', updated_at FROM ${SESSION_TABLE_NAME} WHERE token <> ''`);
+    await store.execute(`INSERT OR IGNORE INTO ${LOGIN_TABLE_NAME} (source_url, status, updated_at) ` +
+      `SELECT source_url, 'saved', updated_at FROM ${COOKIE_TABLE_NAME} WHERE cookie_header <> ''`);
     await store.execute(`CREATE TABLE IF NOT EXISTS ${STATE_TABLE_NAME} (` +
       'source_url TEXT PRIMARY KEY NOT NULL, state_json TEXT NOT NULL)');
     await store.execute(`CREATE TABLE IF NOT EXISTS ${GROUP_TABLE_NAME} (` +

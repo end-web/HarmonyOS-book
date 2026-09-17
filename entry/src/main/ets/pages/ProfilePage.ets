@@ -4,7 +4,7 @@ import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import { common, sendableContextManager, Want } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
 
 class ProfileItem {
   icon: Resource;
@@ -168,8 +168,9 @@ export struct ProfilePage {
               this.buildAccountCard()
             }
             this.buildSourceGroup()
-            this.buildGroup('我的内容', CONTENT_ITEMS)
-            this.buildGroup('系统', SYSTEM_ITEMS)
+            this.buildGroup(CONTENT_ITEMS)
+            this.buildGroup(SYSTEM_ITEMS)
+            this.buildWechatCard()
           }
           .width('100%')
           .padding({
@@ -233,6 +234,45 @@ export struct ProfilePage {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
+  private async copyWechatName(): Promise<void> {
+    try {
+      const name = this.getUIContext().getHostContext()?.resourceManager.getStringSync($r('app.string.profile_wechat_name').id);
+      if (!name) return;
+      await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, name));
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copied') });
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copy_failed') });
+    }
+  }
+
+  @Builder
+  buildWechatCard(): void {
+    Row({ space: AppSpace.Sm }) {
+      Column({ space: 4 }) {
+        Text($r('app.string.profile_wechat_title'))
+          .fontSize(AppFont.BodyL)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+        Text($r('app.string.profile_wechat_desc'))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Button($r('app.string.profile_wechat_copy'), { type: ButtonType.Capsule })
+        .fontSize(AppFont.Caption)
+        .fontColor(AppColor.OnBrand)
+        .backgroundColor(AppColor.Brand)
+        .height(36)
+        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+        .onClick((): void => { this.copyWechatName(); })
+    }
+    .width('100%')
+    .padding(AppSpace.Md)
+    .backgroundColor($r('sys.color.comp_background_primary'))
+    .borderRadius(AppRadius.Lg)
+  }
+
   @Builder
   buildAccountCard() {
     Row({ space: AppSpace.Md }) {
@@ -294,11 +334,6 @@ export struct ProfilePage {
   @Builder
   buildSourceGroup() {
     Column() {
-      Text($r('app.string.settings_content_source_group'))
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_tertiary'))
-        .padding({ left: AppSpace.Sm, bottom: AppSpace.Xs })
-
       Row({ space: AppSpace.Sm }) {
         Stack() {
           SymbolGlyph($r('sys.symbol.bookshelf'))
@@ -346,13 +381,8 @@ export struct ProfilePage {
   }
 
   @Builder
-  buildGroup(title: string, items: ProfileItem[]) {
+  buildGroup(items: ProfileItem[]) {
     Column() {
-      Text(title)
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_tertiary'))
-        .padding({ left: AppSpace.Sm, bottom: AppSpace.Xs })
-
       Column() {
         ForEach(items, (item: ProfileItem, index: number) => {
           this.buildRow(item)

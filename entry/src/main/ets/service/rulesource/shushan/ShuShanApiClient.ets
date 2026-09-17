@@ -304,6 +304,7 @@ export class ShuShanApiClient {
     const lower = clean.toLowerCase();
     if (lower.includes('api密钥') || lower.includes('密钥格式无效') ||
       lower.includes('用户不存在') || lower.includes('请先登录')) {
+      await LocalRuleSourceRepository.expireLogin(SHU_SHAN_SOURCE_URL);
       throw new ShuShanApiBusinessError(401, '书山聚合登录已失效，请重新登录');
     }
 
@@ -371,6 +372,7 @@ export class ShuShanApiClient {
         continue;
       }
       if (response.statusCode === 401 || response.statusCode === 403) {
+        await LocalRuleSourceRepository.expireLogin(SHU_SHAN_SOURCE_URL);
         throw new ShuShanApiBusinessError(response.statusCode,
           '书山聚合需要登录或登录已失效');
       }

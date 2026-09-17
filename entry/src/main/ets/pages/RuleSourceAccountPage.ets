@@ -18,6 +18,7 @@ export struct RuleSourceAccountPage {
   @Local email: string = '';
   @Local password: string = '';
   @Local loggedIn: boolean = false;
+  @Local expired: boolean = false;
   @Local accountLabel: string = '';
   @Local isLoading: boolean = true;
   @Local isLoggingIn: boolean = false;
@@ -48,6 +49,7 @@ export struct RuleSourceAccountPage {
     try {
       const state: RuleSourceAccountState = await RuleSourceAccountService.getState(this.sourceUrl);
       this.loggedIn = state.loggedIn;
+      this.expired = state.expired;
       this.accountLabel = state.accountLabel;
     } catch (_error) {
       this.loggedIn = false;
@@ -87,6 +89,7 @@ export struct RuleSourceAccountPage {
         return;
       }
       this.loggedIn = true;
+      this.expired = false;
       this.accountLabel = result.accountLabel.length > 0 ? result.accountLabel : email;
       this.email = '';
       this.showToast(result.message.length > 0
@@ -104,6 +107,7 @@ export struct RuleSourceAccountPage {
     this.isLoggingOut = true;
     try {
       await RuleSourceAccountService.logout(this.sourceUrl);
+      this.expired = false;
       this.loggedIn = false;
       this.accountLabel = '';
       this.email = '';
@@ -237,7 +241,7 @@ export struct RuleSourceAccountPage {
       Column({ space: AppSpace.Xxs }) {
         Text(this.loggedIn
           ? $r('app.string.rule_source_account_logged_in')
-          : $r('app.string.rule_source_account_logged_out'))
+          : this.expired ? $r('app.string.source_login_expired') : $r('app.string.rule_source_account_logged_out'))
           .fontSize(AppFont.BodyL)
           .fontColor(this.loggedIn ? ACCOUNT_SUCCESS : $r('sys.color.font_primary'))
           .fontWeight(FontWeight.Medium)

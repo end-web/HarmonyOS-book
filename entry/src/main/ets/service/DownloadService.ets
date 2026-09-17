@@ -1,3 +1,4 @@
+import { PreferenceService } from './PreferenceService';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -132,20 +133,25 @@ export class DownloadService {
 
   async downloadBook(book: Book): Promise<number> {
     await DownloadNotificationService.requestPermission();
-    return this.enqueueChapters(book, book.chapters);
+    await PreferenceService.applyTocOrder(book);
+    return this.enqueueChapters(book, PreferenceService.orderedChapters(book));
   }
 
   async downloadNextChapters(book: Book, startIndex: number, count: number): Promise<number> {
     await DownloadNotificationService.requestPermission();
-    const safeStart = Math.max(0, Math.min(startIndex, Math.max(0, book.chapters.length - 1)));
+    await PreferenceService.applyTocOrder(book);
+    const ordered = PreferenceService.orderedChapters(book);
+    const originalStart = Math.max(0, Math.min(startIndex, Math.max(0, book.chapters.length - 1)));
+    const safeStart = PreferenceService.chapterDisplayIndex(book, originalStart);
     const safeEnd = Math.min(book.chapters.length, safeStart + Math.max(1, count));
-    return this.enqueueChapters(book, book.chapters.slice(safeStart, safeEnd));
+    return this.enqueueChapters(book, ordered.slice(safeStart, safeEnd));
   }
 
   async downloadIncremental(book: Book): Promise<number> {
     await DownloadNotificationService.requestPermission();
     const refreshed = await this.refreshBookToc(book);
-    return this.enqueueChapters(refreshed, refreshed.chapters);
+    await PreferenceService.applyTocOrder(refreshed);
+    return this.enqueueChapters(refreshed, PreferenceService.orderedChapters(refreshed));
   }
 
   async downloadChapter(book: Book, chapter: Chapter): Promise<number> {

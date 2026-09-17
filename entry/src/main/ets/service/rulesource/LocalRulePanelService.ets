@@ -154,11 +154,18 @@ export class LocalRulePanelService {
 
   static async checkLogin(source: LocalRuleSource, content: string,
     variables: Record<string, string> = {}, baseUrl: string = source.bookSourceUrl): Promise<void> {
-    if (!source.loginCheckJs.trim()) return;
+    if (!source.loginCheckJs.trim()) {
+      await LocalRuleSourceRepository.setLoginStatus(source.bookSourceUrl, 'saved');
+      return;
+    }
     const check = LocalRuleScriptRuntime.standaloneCode(source.loginCheckJs) || source.loginCheckJs;
     const checked = await LocalRuleScriptRuntime.evaluate(content, baseUrl,
       LocalRulePanelService.loginLibrary(source) + check, source, variables, content);
-    if (checked.trim().toLowerCase() === 'false') throw new Error('书源登录检查未通过');
+    if (checked.trim().toLowerCase() === 'false') {
+      await LocalRuleSourceRepository.expireLogin(source.bookSourceUrl);
+      throw new Error('书源登录已过期，请重新登录');
+    }
+    await LocalRuleSourceRepository.setLoginStatus(source.bookSourceUrl, 'valid');
   }
 
   private static loginLibrary(source: LocalRuleSource): string {

@@ -21,12 +21,11 @@ import {
 } from '../service/rulesource/RuleSourceAccountService';
 import { RuleSourceChildService } from '../service/rulesource/RuleSourceChildService';
 import { SourceDataService } from '../service/SourceDataService';
-import { PreferenceService } from '../service/PreferenceService';
-import { HomeSourceService } from '../service/rulesource/HomeSourceService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { CharsetCodec } from '../utils/CharsetCodec';
 import { WindowUtils } from '../utils/WindowUtils';
 import { promptAction } from '@kit.ArkUI';
+import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { TalebookConnectComponent } from '../components/TalebookConnectComponent';
 import { TalebookSourceIdentity } from '../service/rulesource/talebook/TalebookSourceIdentity';
 
@@ -80,6 +79,8 @@ class RuleSourceDataSource implements IDataSource {
 @ComponentV2
 export struct RuleSourcePage {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Param importFileUri: string = '';
+  private externalImportConsumed: boolean = false;
   @Local importJson: string = '';
   @Local searchKeyword: string = '';
   @Local sourceCount: number = 0;
@@ -101,11 +102,6 @@ export struct RuleSourcePage {
   @Local loadFailed: boolean = false;
   @Local busySourceUrl: string = '';
   @Local managementView: string = '';
-  @Local homeSourceUrl: string = '';
-  @Local homeSourceName: string = '';
-  @Local homeSourceCount: number = 0;
-  @Local savingHomeSource: boolean = false;
-  private homeSourceDataSource: RuleSourceDataSource = new RuleSourceDataSource();
   @Local sourceGroups: string[] = [];
   @Local selectedGroup: string = '';
   @Local statusFilter: number = 0;
@@ -131,6 +127,29 @@ export struct RuleSourcePage {
   private changingSourceUrls: Set<string> = new Set();
   private dataSource: RuleSourceDataSource = new RuleSourceDataSource();
   private allSources: LocalRuleSource[] = [];
+  @Local loginStatuses: Map<string, string> = new Map();
+  private loginRevision: number = -1;
+
+  private async refreshLoginStatuses(): Promise<void> {
+    const revision = LocalRuleSourceRepository.getLoginRevision();
+    const statuses = await LocalRuleSourceRepository.listLoginStatuses();
+    for (const source of this.allSources) {
+      if (RuleSourceAccountService.supports(source.bookSourceUrl)) {
+        const state = await RuleSourceAccountService.getState(source.bookSourceUrl);
+        if (state.loggedIn) statuses.set(source.bookSourceUrl, 'valid');
+        else if (state.expired) statuses.set(source.bookSourceUrl, 'expired');
+      }
+    }
+    this.loginStatuses = statuses;
+    this.loginRevision = revision;
+  }
+
+  private sourceLoginLabel(source: LocalRuleSource): Resource {
+    const status = this.loginStatuses.get(source.bookSourceUrl) ?? '';
+    if (status === 'valid' || status === 'saved') return $r('app.string.source_login_valid');
+    if (status === 'expired') return $r('app.string.source_login_expired');
+    return $r('app.string.source_login_none');
+  }
   private filteredSources: LocalRuleSource[] = [];
   private lastInvalidationCounter: number = 0;
   private refreshCheckTimer: number = -1;
@@ -154,6 +173,9 @@ export struct RuleSourcePage {
 
   private startRefreshCheck(): void {
     this.refreshCheckTimer = setInterval(() => {
+      if (this.loginRevision !== LocalRuleSourceRepository.getLoginRevision()) {
+        this.refreshLoginStatuses().catch((): void => {});
+      }
       const currentCounter = SourceDataService.getInvalidationCounter();
       if (currentCounter !== this.lastInvalidationCounter) {
         this.lastInvalidationCounter = currentCounter;
@@ -182,20 +204,25 @@ export struct RuleSourcePage {
       this.allSources = sources;
       this.sourceGroups = await LocalRuleSourceRepository.listGroups();
       this.sourceCount = sources.length;
-      await this.updateHomeSources();
+      await this.refreshLoginStatuses();
       if (sources.length === 0) this.showImportPanel = true;
       this.applyFilters();
       this.loadFailed = false;
+      if (this.importFileUri.length > 0 && !this.externalImportConsumed) {
+        this.externalImportConsumed = true;
+        this.isImporting = true;
+        this.showImportPanel = true;
+        try {
+          const content = await this.readLocalJson(this.importFileUri);
+          if (content !== undefined) await this.persistImportContent(content);
+        } finally { this.isImporting = false; }
+      }
     } catch (_error) {
       this.sourceCount = 0;
       this.filteredSourceCount = 0;
       this.allSources = [];
       this.filteredSources = [];
       this.dataSource.setSources([]);
-      this.homeSourceUrl = '';
-      this.homeSourceName = '';
-      this.homeSourceCount = 0;
-      this.homeSourceDataSource.setSources([]);
       this.loadFailed = true;
     } finally {
       this.isLoading = false;
@@ -298,29 +325,21 @@ export struct RuleSourcePage {
     this.groupDraft = '';
   }
 
-  private async updateHomeSources(): Promise<void> {
-    const sources = this.allSources.filter((source: LocalRuleSource): boolean => HomeSourceService.isEligible(source));
-    const selected = HomeSourceService.selectAvailable(sources, await PreferenceService.getHomeSourceUrl());
-    this.homeSourceUrl = selected?.bookSourceUrl ?? '';
-    this.homeSourceName = selected?.bookSourceName ?? '';
-    this.homeSourceCount = sources.length;
-    this.homeSourceDataSource.setSources(sources);
-  }
-
-  private async selectHomeSource(source: LocalRuleSource): Promise<void> {
-    if (this.savingHomeSource) return;
-    this.savingHomeSource = true;
-    try {
-      await HomeSourceService.setSelectedSource(source.bookSourceUrl);
-      this.homeSourceUrl = source.bookSourceUrl;
-      this.homeSourceName = source.bookSourceName;
-      this.showToast($r('app.string.home_source_saved'));
-    } catch (_error) {
-      this.showToast($r('app.string.rule_source_operation_failed'));
-      await this.loadSources(false);
-    } finally {
-      this.savingHomeSource = false;
+  /** 页内多级视图逐级返回：管理视图 → 编辑模式 → 导入面板，全部收起后才退出路由。 */
+  private requestBack(): boolean {
+    if (this.managementView.length > 0) {
+      this.closeManagement();
+      return true;
     }
+    if (this.isEditMode) {
+      this.toggleEditMode();
+      return true;
+    }
+    if (this.showImportPanel) {
+      this.showImportPanel = false;
+      return true;
+    }
+    return false;
   }
 
   private async openManagement(view: string): Promise<void> {
@@ -508,8 +527,13 @@ export struct RuleSourcePage {
     if (this.isEditMode) this.showImportPanel = false;
   }
 
+  private sourceListScroller: Scroller = new Scroller();
+
   private toggleImportPanel(): void {
     this.showImportPanel = !this.showImportPanel;
+    if (this.showImportPanel) {
+      setTimeout((): void => this.sourceListScroller.scrollToIndex(0, false), 0);
+    }
     if (this.showImportPanel && this.isEditMode) {
       this.isEditMode = false;
       this.resetSelection();
@@ -920,6 +944,16 @@ export struct RuleSourcePage {
     this.navStack.pushPathByName('ruleSourceLogin', route);
   }
 
+  private openLoginEntry(source: LocalRuleSource): void {
+    if (RuleSourceAccountService.supports(source.bookSourceUrl)) {
+      this.openMainAccount(source);
+    } else if (source.loginUi.length > 0) {
+      this.navStack.pushPathByName('ruleSourceLoginPanel', source.bookSourceUrl);
+    } else {
+      this.openSourceLogin(source);
+    }
+  }
+
   private openSourceChildren(source: LocalRuleSource): void {
     if (this.busySourceUrl.length > 0 || this.isImporting || this.isBulkTesting) return;
     if (!RuleSourceChildService.supports(source.bookSourceUrl)) return;
@@ -1166,6 +1200,16 @@ export struct RuleSourcePage {
   }
 
   build() {
+    ProfileMenuDestination({
+      pageBackground: $r('sys.color.background_secondary'),
+      onBackRequested: (): boolean => this.requestBack()
+    }) {
+      this.buildBody()
+    }
+  }
+
+  @Builder
+  buildBody() {
     Column() {
       this.buildHeader()
 
@@ -1185,12 +1229,7 @@ export struct RuleSourcePage {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        List({ space: AppSpace.Sm }) {
-          if (!this.loadFailed && !this.isEditMode) {
-            ListItem() {
-              this.buildHomeSourceEntry()
-            }
-          }
+        List({ space: AppSpace.Sm, scroller: this.sourceListScroller }) {
           if (this.showImportPanel) {
             ListItem() {
               this.buildImportSection()
@@ -1296,8 +1335,7 @@ export struct RuleSourcePage {
         .height(44)
         .borderRadius(AppRadius.Pill)
         .onClick(() => {
-          if (this.managementView.length > 0) this.closeManagement();
-          else this.navStack.pop();
+          if (!this.requestBack()) this.navStack.pop();
         })
 
         Text(this.managementTitle())
@@ -1575,9 +1613,7 @@ export struct RuleSourcePage {
 
   @Builder
   buildManagementBody() {
-    if (this.managementView === 'homeSource') {
-      this.buildHomeSourceManager()
-    } else if (this.managementView === 'groups') {
+    if (this.managementView === 'groups') {
       this.buildGroupManager()
     } else if (this.managementView === 'groupAssign') {
       this.buildGroupAssignment()
@@ -1588,72 +1624,6 @@ export struct RuleSourcePage {
     } else if (this.managementView === 'tls') {
       this.buildTlsManager()
     }
-  }
-
-  @Builder
-  buildHomeSourceEntry() {
-    Row({ space: AppSpace.Sm }) {
-      SymbolGlyph($r('sys.symbol.house_fill')).fontSize(22).fontColor([AppColor.Brand])
-      Text($r('app.string.home_source_setting'))
-        .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
-      Text(this.homeSourceName || $r('app.string.home_source_unset'))
-        .fontSize(AppFont.Body).fontColor(AppColor.Brand)
-        .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        .textAlign(TextAlign.End)
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize('24vp')
-        .width('24vp')
-        .height('24vp')
-        .id('rule-source-home-chevron')
-        .fontColor([$r('sys.color.font_tertiary')])
-    }
-    .width('100%').constraintSize({ minHeight: 56 }).padding(AppSpace.Md)
-    .backgroundColor($r('sys.color.background_primary')).borderRadius(AppRadius.Md)
-    .onClick(() => this.openManagement('homeSource'))
-  }
-
-  @Builder
-  buildHomeSourceManager() {
-    List({ space: AppSpace.Sm }) {
-      ListItem() {
-        Text($r('app.string.home_source_setting_hint'))
-          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
-          .width('100%').padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
-      }
-      if (this.homeSourceCount === 0) {
-        ListItem() {
-          Text($r('app.string.home_source_no_audio'))
-            .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary'))
-            .width('100%').padding(AppSpace.Md).textAlign(TextAlign.Center)
-        }
-      }
-      LazyForEach(this.homeSourceDataSource, (source: LocalRuleSource) => {
-        ListItem() {
-          Row({ space: AppSpace.Sm }) {
-            Column({ space: AppSpace.Xs }) {
-              Text(source.bookSourceName).fontSize(AppFont.Body)
-                .fontColor($r('sys.color.font_primary')).maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text(HomeSourceService.hasHomeContent(source) ? source.bookSourceUrl :
-                $r('app.string.home_source_no_discovery'))
-                .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
-                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-            }
-            .layoutWeight(1).alignItems(HorizontalAlign.Start)
-            if (this.homeSourceUrl === source.bookSourceUrl) {
-              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(22).fontColor([AppColor.Brand])
-                .accessibilityText($r('app.string.home_source_current'))
-            }
-          }
-          .width('100%').constraintSize({ minHeight: 72 }).padding(AppSpace.Md)
-          .backgroundColor($r('sys.color.background_primary')).borderRadius(AppRadius.Md)
-          .enabled(!this.savingHomeSource)
-          .onClick(() => this.selectHomeSource(source))
-        }
-      }, (source: LocalRuleSource) => source.bookSourceUrl)
-    }
-    .width('100%').layoutWeight(1).padding({ left: AppSpace.Md, right: AppSpace.Md })
-    .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
   }
 
   @Builder
@@ -2261,7 +2231,8 @@ export struct RuleSourcePage {
       .alignItems(VerticalAlign.Center)
 
       if (!this.isEditMode) {
-        if (source.exploreUrl.length > 0 || source.loginUi.length > 0) {
+        if (source.exploreUrl.length > 0 || source.loginUi.length > 0 ||
+          RuleSourceAccountService.supports(source.bookSourceUrl) || this.canOpenSourceLogin(source)) {
           Row({ space: AppSpace.Xs }) {
             if (source.exploreUrl.length > 0) {
               Button($r('app.string.rule_source_explore'), { type: ButtonType.Normal })
@@ -2270,12 +2241,13 @@ export struct RuleSourcePage {
                 .enabled(source.enabledExplore && !this.isBulkTesting && !this.isImporting)
                 .onClick(() => this.navStack.pushPathByName('ruleSourceExplore', source.bookSourceUrl))
             }
-            if (source.loginUi.length > 0) {
-              Button($r('app.string.rule_source_login_panel'), { type: ButtonType.Normal })
+            if (source.loginUi.length > 0 || RuleSourceAccountService.supports(source.bookSourceUrl) ||
+              this.canOpenSourceLogin(source)) {
+              Button(this.sourceLoginLabel(source), { type: ButtonType.Normal })
                 .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
                 .backgroundColor($r('sys.color.comp_background_secondary')).fontColor(AppColor.Brand)
-                .enabled(!this.isBulkTesting && !this.isImporting)
-                .onClick(() => this.navStack.pushPathByName('ruleSourceLoginPanel', source.bookSourceUrl))
+                .enabled(!this.isBulkTesting && !this.isImporting && this.busySourceUrl.length === 0)
+                .onClick(() => this.openLoginEntry(source))
             }
           }.width('100%')
         }
@@ -2343,28 +2315,6 @@ export struct RuleSourcePage {
           .accessibilityText($r('app.string.rule_source_test_action'))
           .onClick(() => this.testSource(source))
 
-          if (RuleSourceAccountService.supports(source.bookSourceUrl)) {
-            Button() {
-              Row({ space: AppSpace.Xxs }) {
-                SymbolGlyph($r('sys.symbol.person_fill'))
-                  .fontSize(16)
-                  .fontColor([AppColor.Brand])
-                Text($r('app.string.rule_source_account_action'))
-                  .fontSize(AppFont.Caption)
-                  .fontColor(AppColor.Brand)
-              }
-              .justifyContent(FlexAlign.Center)
-            }
-            .layoutWeight(1)
-            .height(36)
-            .constraintSize({ minWidth: 0 })
-            .backgroundColor($r('sys.color.background_secondary'))
-            .borderRadius(AppRadius.Sm)
-            .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-            .accessibilityText($r('app.string.rule_source_account_action'))
-            .onClick(() => this.openMainAccount(source))
-          }
-
           if (RuleSourceChildService.supports(source.bookSourceUrl)) {
             Button() {
               Row({ space: AppSpace.Xxs }) {
@@ -2385,26 +2335,6 @@ export struct RuleSourcePage {
             .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
             .accessibilityText($r('app.string.rule_source_child_action'))
             .onClick(() => this.openSourceChildren(source))
-          } else if (this.canOpenSourceLogin(source)) {
-            Button() {
-              Row({ space: AppSpace.Xxs }) {
-                SymbolGlyph($r('sys.symbol.person_fill'))
-                  .fontSize(16)
-                  .fontColor([AppColor.Brand])
-                Text($r('app.string.rule_source_login_action'))
-                  .fontSize(AppFont.Caption)
-                  .fontColor(AppColor.Brand)
-              }
-              .justifyContent(FlexAlign.Center)
-            }
-            .layoutWeight(1)
-            .height(36)
-            .constraintSize({ minWidth: 0 })
-            .backgroundColor($r('sys.color.background_secondary'))
-            .borderRadius(AppRadius.Sm)
-            .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-            .accessibilityText($r('app.string.rule_source_login_action'))
-            .onClick(() => this.openSourceLogin(source))
           }
 
           Button() {

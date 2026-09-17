@@ -450,14 +450,6 @@ export struct MainPage {
 
   private playNext(): void {
     if (!this.playerState.currentBook || !this.playerState.currentChapter) return;
-    const chapters = this.playerState.currentBook.chapters;
-    const idx = DataService.resolveChapterIndex(
-      this.playerState.currentBook,
-      this.playerState.currentChapter.id,
-      this.playerState.currentChapter.title
-    );
-    if (idx >= 0 && idx < chapters.length - 1) {
-      AudioService.getInstance().playChapter(this.playerState.currentBook, chapters[idx + 1]);
-    }
+    AudioService.getInstance().playNext();
   }
 }

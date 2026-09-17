@@ -262,6 +262,7 @@ export class TextToSpeechService {
     this.state.error = '';
     try {
       await this.initialize(context);
+      await PreferenceService.applyTocOrder(book);
       if (!this.valid(ticket)) return;
       this.book = book;
       this.state.bookId = book.id;
@@ -340,7 +341,7 @@ export class TextToSpeechService {
 
   async moveChapter(delta: number): Promise<void> {
     if (this.book === null) return;
-    const target = this.state.chapterIndex + delta;
+    const target = this.state.chapterIndex + delta * PreferenceService.chapterStep(this.book);
     if (target < 0 || target >= this.book.chapters.length) return;
     await this.start(this.book, target, 0);
   }
@@ -462,7 +463,7 @@ export class TextToSpeechService {
       this.state.contentLength = content.length;
       this.segmentIndex = SpeechTextSegmenter.indexAt(this.segments, offset);
       this.speakNext(ticket);
-      this.prefetch(book, index + 1, ticket);
+      this.prefetch(book, index + PreferenceService.chapterStep(book), ticket);
     } catch (error) {
       if (this.valid(ticket)) this.fail(error instanceof Error ? error : new Error(String(error)), true);
     }
@@ -485,7 +486,7 @@ export class TextToSpeechService {
   }
 
   private async prefetch(book: Book, index: number, ticket: number): Promise<void> {
-    if (index >= book.chapters.length) return;
+    if (index < 0 || index >= book.chapters.length) return;
     try {
       const content = await this.fetchChapter(book, index);
       if (!this.valid(ticket)) return;
@@ -504,10 +505,11 @@ export class TextToSpeechService {
     if (this.segmentIndex >= this.segments.length) {
       this.state.charOffset = this.state.contentLength;
       this.savePosition(true);
-      if (this.state.stopAtChapterEnd || this.state.chapterIndex + 1 >= this.book.chapters.length) {
+      const next = this.state.chapterIndex + PreferenceService.chapterStep(this.book);
+      if (this.state.stopAtChapterEnd || next < 0 || next >= this.book.chapters.length) {
         this.pause(); this.setSleep(0); return;
       }
-      this.loadChapter(this.state.chapterIndex + 1, 0, ticket);
+      this.loadChapter(next, 0, ticket);
       return;
     }
     const segment = this.segments[this.segmentIndex];

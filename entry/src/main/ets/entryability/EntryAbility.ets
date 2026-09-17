@@ -331,6 +331,17 @@ export default class EntryAbility extends UIAbility {
 
   private consumeRouteWant(want: Want): void {
     const action = want.action ?? '';
+    const uri = want.uri ?? '';
+    const type = (want.type ?? '').toLowerCase();
+    if ((action === 'ohos.want.action.viewData' || action === 'ohos.want.action.sendData') &&
+      (uri.startsWith('file://') || uri.startsWith('content://')) &&
+      (type === 'application/json' || type === 'text/json' || type === 'general.json' ||
+        /\.json(?:[?#]|$)/i.test(uri))) {
+      const route: WidgetRoute = { target: 'ruleSourceImport', bookId: uri, ts: Date.now() };
+      AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
+      emitter.emit(EVT_WIDGET_ROUTE, { data: { target: route.target, bookId: uri, ts: route.ts } });
+      return;
+    }
     if (action === 'readerKitVerify') {
       // ReaderKit 验证功能已禁用（需要 HMS Core ReaderService 依赖）
       hilog.warn(DOMAIN, TAG, 'readerKitVerify action ignored: ReaderKit dependency disabled');
@@ -371,7 +382,7 @@ export default class EntryAbility extends UIAbility {
           hilog.warn(DOMAIN, TAG, 'optimistic pause push failed: %{public}s', err?.message ?? '');
         });
         AudioService.getInstance().whenReady().then(() => {
-          return AudioService.getInstance().pause();
+          return AudioService.getInstance().pause('widget');
         }).catch((err: Error) => {
           hilog.error(DOMAIN, TAG, 'callee pause failed: %{public}s', err?.message ?? JSON.stringify(err));
         });
@@ -479,6 +490,7 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    AudioService.getInstance().setForeground(false);
     TextToSpeechService.getInstance().setForeground(false);
     this.isInForeground = false;
     this.startupPlaybackPending = false;
@@ -515,6 +527,9 @@ export default class EntryAbility extends UIAbility {
    * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
+    // 系统颜色可能在后台改变，阅读器独立跟随系统时也需要重新取值。
+    if (this.context.config.colorMode !== undefined) WindowUtils.updateColorMode(this.context.config.colorMode);
+    AudioService.getInstance().setForeground(true);
     TextToSpeechService.getInstance().setForeground(true);
     this.isInForeground = true;
     WindowUtils.refreshAvoidArea();
