@@ -1,9 +1,11 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { emitter } from '@kit.BasicServicesKit';
 import { TextReadingPosition } from '../../model/TextReading';
 
 const STORE_NAME: string = 'online_text_reading_progress';
 const KEY_PREFIX: string = 'position_';
+export const EVT_TEXT_READING_PROGRESS_CHANGED: string = 'app.text.reading.progress.changed';
 
 export class TextReadingProgressService {
   private static store: preferences.Preferences | null = null;
@@ -49,6 +51,7 @@ export class TextReadingProgressService {
     const store = TextReadingProgressService.store;
     if (store === null || !position.bookId) return;
     store.putSync(TextReadingProgressService.key(position.bookId), JSON.stringify(position));
+    emitter.emit(EVT_TEXT_READING_PROGRESS_CHANGED);
     await store.flush();
   }
 
@@ -57,6 +60,7 @@ export class TextReadingProgressService {
     const store = TextReadingProgressService.store;
     if (store === null) return;
     store.deleteSync(TextReadingProgressService.key(bookId));
+    emitter.emit(EVT_TEXT_READING_PROGRESS_CHANGED);
     await store.flush();
   }
 

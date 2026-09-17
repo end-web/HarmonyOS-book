@@ -25,7 +25,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 import { DownloadService } from '../service/DownloadService';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
-import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
+import { TextReadingProgressService, EVT_TEXT_READING_PROGRESS_CHANGED } from '../service/text/TextReadingProgressService';
 
 const BOOKSHELF_COVER_RATIO: number = 0.75;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
@@ -115,7 +115,7 @@ export struct FavoritePage {
   @Local missingFavoriteCount: number = 0;
   @Local viewMode: number = 0; // 0=网格，1=列表
   @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
-  @Local textProgressMap: Record<string, TextReadingPosition> = {};
+  @Local textProgressMap: Map<string, TextReadingPosition> = new Map();
   @Param visible: boolean = false;
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
@@ -128,6 +128,8 @@ export struct FavoritePage {
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
   /** 加入/移出书架后重新拉书清单。 */
   private favoritesChangedHandler: () => void = () => { this.loadFavorites(); };
+  private textProgressLoadSerial: number = 0;
+  private textProgressChangedHandler: () => void = () => { this.refreshTextProgress(); };
 
   @Computed
   get shelfAudioCount(): number {
@@ -192,12 +194,15 @@ export struct FavoritePage {
     this.loadFavorites();
     emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
     emitter.on(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
+    emitter.on(EVT_TEXT_READING_PROGRESS_CHANGED, this.textProgressChangedHandler);
     this.onScrollerReady(this.listScroller);
   }
 
   aboutToDisappear(): void {
     emitter.off(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
     emitter.off(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
+    emitter.off(EVT_TEXT_READING_PROGRESS_CHANGED, this.textProgressChangedHandler);
+    this.textProgressLoadSerial++;
   }
 
   @Monitor('visible')
@@ -297,18 +302,30 @@ export struct FavoritePage {
 
     // 预算每本书的最新章节序号，避免 build / click 反复解析，也兼容章节 ID 已变化的旧进度。
     const idxMap = await this.buildChapterIndexMap(books, map);
-    const textProgress: Record<string, TextReadingPosition> = {};
-    for (const book of books) {
-      if (book.contentType !== 'text' || !this.context) continue;
-      const position = await TextReadingProgressService.get(this.context, book.id);
-      if (position) textProgress[book.id] = position;
-    }
     this.favoriteBooks = books;
-    this.textProgressMap = textProgress;
+    await this.refreshTextProgress();
     this.bookDataSource.setBooks(this.filteredBooks(books));
     this.historyMap = map;
     this.chapterIdxMap = idxMap;
     this.loading = false;
+  }
+
+  /** 阅读器覆盖书架时 Tab 不变；由保存事件更新进度，避免重新加载书单。 */
+  private async refreshTextProgress(): Promise<void> {
+    const context = this.context;
+    if (context === null) return;
+    const serial = ++this.textProgressLoadSerial;
+    const textProgress = new Map<string, TextReadingPosition>();
+    try {
+      for (const book of this.favoriteBooks) {
+        if (book.contentType !== 'text') continue;
+        const position = await TextReadingProgressService.get(context, book.id);
+        if (position) textProgress.set(book.id, position);
+      }
+      if (serial === this.textProgressLoadSerial) this.textProgressMap = textProgress;
+    } catch (_e) {
+      // 读取失败保留已有展示，后续保存或刷新时重试。
+    }
   }
 
   private createMissingFavoriteBook(id: string, chapterTitle: string): Book {
@@ -560,7 +577,7 @@ export struct FavoritePage {
       return '缓存缺失 · 重新搜索后加入';
     }
     if (book.contentType === 'text') {
-      const position = this.textProgressMap[book.id];
+      const position = this.textProgressMap.get(book.id);
       const chapterCount = this.getChapterCount(book);
       if (position && chapterCount > 0) {
         return `${Math.min(position.resourceIndex + 1, chapterCount)}/${chapterCount} 章`;
