@@ -21,7 +21,7 @@ export struct AboutPage {
     });
   }
 
-  private toast(msg: string): void {
+  private toast(msg: ResourceStr): void {
     this.getUIContext().getPromptAction().showToast({ message: msg, duration: 2000 });
   }
 
@@ -144,48 +144,6 @@ export struct AboutPage {
 
         Column() {
           Row() {
-            Text('作者')
-              .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_secondary'))
-            Blank()
-            Text('ylwang')
-              .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_secondary'))
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-
-          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-          Row() {
-            Text('框架')
-              .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_secondary'))
-            Blank()
-            Text($r('app.string.about_platform'))
-              .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_secondary'))
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-
-          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-          Row() {
-            Text('SDK')
-              .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_secondary'))
-            Blank()
-            Text($r('app.string.about_sdk'))
-              .fontSize(AppFont.BodyL)
-              .fontColor($r('sys.color.font_secondary'))
-          }
-          .width('100%')
-          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
-
-          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-          Row() {
             Text('检查更新')
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
@@ -214,6 +172,35 @@ export struct AboutPage {
           Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
 
           Row() {
+            Text($r('app.string.about_open_source'))
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_secondary'))
+            Blank()
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(16)
+              .fontColor([$r('sys.color.font_tertiary')])
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+          .onClick(() => this.navStack.pushPathByName('openSource', ''))
+
+          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+          Row() {
+            Text($r('app.string.about_compliance_title'))
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_secondary'))
+            Blank()
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(16)
+              .fontColor([$r('sys.color.font_tertiary')])
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
+          .onClick(() => this.navStack.pushPathByName('compliance', ''))
+
+          Divider().color('#F0F0F0').margin({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row() {
             Text('隐私政策')
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_secondary'))
@@ -235,6 +222,7 @@ export struct AboutPage {
           .fontColor($r('sys.color.font_tertiary'))
           .textAlign(TextAlign.Center)
           .width('100%')
+          .margin({ top: -(AppSpace.Lg - AppSpace.Md) })
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center)

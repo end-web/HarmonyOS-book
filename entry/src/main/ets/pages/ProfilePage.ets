@@ -3,20 +3,24 @@ import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Them
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
-import { common, sendableContextManager, Want } from '@kit.AbilityKit';
+import { common } from '@kit.AbilityKit';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
+import { CommunityGroupService } from '../service/CommunityGroupService';
 
 class ProfileItem {
   icon: Resource;
   label: ResourceStr;
   id: string;
   iconBg: ResourceColor;
+  /** 行尾附加文案,如交流群号;为空时不占位 */
+  trailing: string;
 
-  constructor(icon: Resource, label: ResourceStr, id: string, iconBg: ResourceColor) {
+  constructor(icon: Resource, label: ResourceStr, id: string, iconBg: ResourceColor, trailing: string = '') {
     this.icon = icon;
     this.label = label;
     this.id = id;
     this.iconBg = iconBg;
+    this.trailing = trailing;
   }
 }
 
@@ -29,14 +33,9 @@ const SYSTEM_ITEMS: ProfileItem[] = [
   new ProfileItem($r('sys.symbol.gearshape'), '设置', 'settings', '#8E8E93'),
   new ProfileItem($r('sys.symbol.questionmark_circle'), '使用说明', 'guide', '#5AC8FA'),
   new ProfileItem($r('sys.symbol.info_circle'), '关于', 'about', '#0A59F7'),
-  new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community', AppColor.Brand)
+  new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community',
+    AppColor.Brand, CommunityGroupService.GROUP_NUMBER)
 ];
-
-const COMMUNITY_GROUP_URL: string = 'https://qun.qq.com/universal-share/share?ac=1'
-  + '&authKey=1pWjvoTkmo3Fk%2FBmECPutUxD3VHJlWqTVCpY1IoOfg8%2FEKjDUgydIFLt%2FOo9B67c'
-  + '&busi_data=eyJncm91cENvZGUiOiIxMDY0MjAyOTMzIiwidG9rZW4iOiJKZVB5N0NRV1N3VFhOYmhVanVCdUtQZk9US2tGTTZwMC9EZkc1UWxPazBNYStxOXFmcDAwM2lFYjVtRjVmaWhLIiwidWluIjoiMTEzMjMwOTM4MCJ9'
-  + '&data=a1oLJEYrqdKba2Vp4RvxW0zYyBqaMVR92iMcbgjVqWfvk2Y04zoNKhF4Wc7QKy6CUquDpD2g8yEiAIC7n3b9Ig'
-  + '&svctype=4&tempid=h5_group_info';
 const ROW_INDENT: number = AppSpace.Md;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
 
@@ -126,22 +125,10 @@ export struct ProfilePage {
   }
 
   private async openCommunityGroup(): Promise<void> {
-    try {
-      const hostContext = this.getUIContext().getHostContext();
-      if (hostContext === undefined) {
-        throw new Error('UIAbilityContext is unavailable');
-      }
-      const context = sendableContextManager.convertToUIAbilityContext(
-        sendableContextManager.convertFromContext(hostContext));
-      const want: Want = {
-        action: 'ohos.want.action.viewData',
-        entities: ['entity.system.browsable'],
-        uri: COMMUNITY_GROUP_URL
-      };
-      await context.startAbility(want);
-    } catch (_error) {
+    const opened = await CommunityGroupService.open(this.getUIContext().getHostContext());
+    if (!opened) {
       this.getUIContext().getPromptAction().showToast({
-        message: $r('app.string.profile_community_open_failed'),
+        message: $r('app.string.community_group_open_failed'),
         duration: 2000
       });
     }
@@ -419,6 +406,12 @@ export struct ProfilePage {
         .fontSize(AppFont.BodyL)
         .fontColor($r('sys.color.font_primary'))
         .layoutWeight(1)
+
+      if (item.trailing.length > 0) {
+        Text(item.trailing)
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
 
       SymbolGlyph($r('sys.symbol.chevron_right'))
         .fontSize(24)

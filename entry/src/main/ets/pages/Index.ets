@@ -11,6 +11,8 @@ import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
 import { UnfavoritedHistoryPage } from './UnfavoritedHistoryPage';
 import { PrivacyPage } from './PrivacyPage';
+import { CompliancePage } from './CompliancePage';
+import { OpenSourcePage } from './OpenSourcePage';
 import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
 import { ReaderPage } from './ReaderPage';
@@ -374,6 +376,14 @@ struct Index {
     } else if (name === 'privacy') {
       ProfileMenuDestination() {
         PrivacyPage({ navStack: this.navStack })
+      }
+    } else if (name === 'compliance') {
+      ProfileMenuDestination() {
+        CompliancePage({ navStack: this.navStack })
+      }
+    } else if (name === 'openSource') {
+      ProfileMenuDestination() {
+        OpenSourcePage({ navStack: this.navStack })
       }
     } else if (name === 'blockMore') {
       NavDestination() {
