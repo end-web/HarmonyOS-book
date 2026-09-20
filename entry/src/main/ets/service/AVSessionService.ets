@@ -135,9 +135,9 @@ export class AVSessionService {
     try {
       this.session = await avSession.createAVSession(context, 'ListenBook', 'audio');
       this.registerCommands();
-      await this.configureMediaCenter();
-      await this.configureUrlCasting();
       await this.session.activate();
+      this.configureMediaCenter();
+      this.configureUrlCasting();
       await this.setupLaunchAbility(context);
     } catch (err) {
       const e = err as Error;
@@ -266,24 +266,16 @@ export class AVSessionService {
     if (speech !== PlaybackCoordinator.speechActive) return;
     const serial = ++this.metadataSerial;
     if (!await this.ensureReady() || !this.session) return;
-    // mediaImage 只能传 PixelMap 或 http(s) URL;沙箱路径/rawfile 名称对 AVSession 服务不可读,
-    // 必须先 decode 成 PixelMap,否则会触发 "get metaData failed"。
-    let mediaImage: string | image.PixelMap | undefined;
-    if (book.cover) {
-      const pixelMap = await this.loadCover(book.cover);
-      if (pixelMap) {
-        mediaImage = pixelMap;
-      } else if (book.cover.startsWith('http://') || book.cover.startsWith('https://')) {
-        mediaImage = book.cover;
-      } else {
-        hilog.warn(DOMAIN, TAG, 'updateMetadata cover decode failed, mediaImage=undefined');
-      }
-    }
     if (serial !== this.metadataSerial || speech !== PlaybackCoordinator.speechActive) return;
+    // 文字先发布，不让系统或应用的封面网络请求阻塞新书显示。
+    const mediaImage: image.PixelMap | undefined = this.coverCache.get(book.cover);
     const previousAssetId = this.currentBook && this.currentChapter
       ? `${this.currentBook.id}_${this.currentChapter.id}` : '';
     const nextAssetId = `${book.id}_${chapter.id}`;
-    if (previousAssetId !== nextAssetId) this.currentCastUrl = '';
+    if (previousAssetId !== nextAssetId) {
+      this.currentCastUrl = '';
+      this.currentDurationMs = 0;
+    }
     this.currentBook = book;
     this.currentChapter = chapter;
     this.currentMediaImage = mediaImage;
@@ -316,6 +308,18 @@ export class AVSessionService {
           e2?.message ?? JSON.stringify(err2));
       }
     }
+    if (!book.cover || serial !== this.metadataSerial) return;
+    const pixelMap = await this.loadCover(book.cover);
+    if (pixelMap === null || serial !== this.metadataSerial || speech !== PlaybackCoordinator.speechActive || !this.session) return;
+    this.currentMediaImage = pixelMap;
+    metadata.mediaImage = pixelMap;
+    if (this.currentDurationMs > 0) metadata.duration = this.currentDurationMs;
+    try {
+      await this.session.setAVMetadata(metadata);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'cover metadata update failed: %{public}s', String(error));
+    }
+
   }
 
   /** AVPlayer prepared 后用真实 duration 刷新元数据,供胶囊/控制中心显示总时长 */

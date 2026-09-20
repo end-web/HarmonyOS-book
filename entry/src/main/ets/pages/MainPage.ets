@@ -48,6 +48,8 @@ const TAB_RESTORE_HEIGHT_GROWTH: number = 80;
 @ComponentV2
 export struct MainPage {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Event onBackHandlerChange: (handler: (() => boolean) | undefined) => void = () => {};
+  private homeBackHandler: (() => boolean) | undefined = undefined;
   @Local currentTab: number = 0;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
@@ -78,6 +80,9 @@ export struct MainPage {
     };
 
   aboutToAppear(): void {
+    this.onBackHandlerChange((): boolean => {
+      return this.currentTab === 0 && (this.homeBackHandler?.() ?? false);
+    });
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     AudioService.getInstance().bind(this.playerState, this.context);
     this.restoreLastPlayed();
@@ -94,6 +99,7 @@ export struct MainPage {
   }
 
   aboutToDisappear(): void {
+    this.onBackHandlerChange(undefined);
     this.cancelLayoutTimers();
     WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     emitter.off(EVT_SWITCH_TAB, this.switchTabHandler);
@@ -322,6 +328,9 @@ export struct MainPage {
       HdsTabs({ controller: this.tabController }) {
         TabContent() {
           HomePage({
+            onBackHandlerChange: (handler: (() => boolean) | undefined): void => {
+              this.homeBackHandler = handler;
+            },
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
             onSearchTap: () => this.navStack.pushPathByName('search', null),
             onBlockMore: (block: HomeBlockSection) => this.openBlockMore(block),

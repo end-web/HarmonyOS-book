@@ -795,7 +795,7 @@ export class PreferenceService {
   static async getPreloadChapters(): Promise<number> {
     const s = await PreferenceService.ensureStore();
     const count = await s.get(KEY_PRELOAD_CHAPTERS, 1) as number;
-    if (count === 0 || count === 1 || count === 3 || count === 5 || count === 10) {
+    if (Number.isInteger(count) && count >= 0 && count <= 50) {
       return count;
     }
     return 1;
@@ -803,7 +803,7 @@ export class PreferenceService {
 
   static async setPreloadChapters(count: number): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    await s.put(KEY_PRELOAD_CHAPTERS, count);
+    await s.put(KEY_PRELOAD_CHAPTERS, Number.isFinite(count) ? Math.max(0, Math.min(50, Math.round(count))) : 1);
     await s.flush();
   }
 
@@ -951,7 +951,8 @@ export class PreferenceService {
     await s.put(KEY_AUDIO_INTERRUPT_MODE, snapshot.audioInterruptMode);
     await s.put(KEY_AUDIO_AUTO_RESUME, snapshot.audioAutoResume);
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
-    await s.put(KEY_PRELOAD_CHAPTERS, snapshot.preloadChapters);
+    await s.put(KEY_PRELOAD_CHAPTERS, Number.isFinite(snapshot.preloadChapters) ?
+      Math.max(0, Math.min(50, Math.round(snapshot.preloadChapters))) : 1);
     await s.flush();
     AppAppearance.current.material = material;
     AppAppearance.current.accent = accent;

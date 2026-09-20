@@ -73,7 +73,7 @@ export class ChapterCacheService {
   }
 
   setPreloadCount(forward: number, backward: number = 0): void {
-    PRE_DOWNLOAD_FORWARD = forward;
+    PRE_DOWNLOAD_FORWARD = Number.isFinite(forward) ? Math.max(0, Math.min(50, Math.round(forward))) : 1;
     PRE_DOWNLOAD_BACKWARD = backward;
     if (forward <= 0) {
       // 不预加载时丢弃尚未开始的 URL 解析任务；正在执行的请求自然结束。

@@ -1,7 +1,9 @@
 import { HdsCompat } from '../utils/HdsCompat';
-import { CompatibleGridInsets } from '../utils/PlatformCompat';
+import { CompatibleGridInsets, PlatformCompat } from '../utils/PlatformCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
-import { HdsNavDestination, HdsNavDestinationTitleMode, HideMode } from '@kit.UIDesignKit';
+import {
+  HdsNavDestination, HdsNavDestinationTitleMode, HideMode, BottomBuilderParams, BuilderOptions, TitleBarContentOptions
+} from '@kit.UIDesignKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppCurve, AppFont, AppMaterial, AppMotion, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
@@ -30,7 +32,8 @@ const SEARCH_HEADER_HEIGHT: number = 56;
 const SEARCH_TITLE_CONTROL_HEIGHT: number = 44;
 const RESULT_TOOLBAR_HEIGHT: number = 48;
 const HISTORY_HEADING_HEIGHT: number = 52;
-const SEARCH_FOCUS_DELAY_MS: number = 320;
+// onShown 在当前导航中先于系统滑入动画触发；450ms 转场期间不读取整份书源或执行推荐规则。
+const SEARCH_ENTRY_SETTLE_MS: number = 500;
 const SEARCH_RECOMMENDATION_COUNT: number = 5;
 const SEARCH_RECOMMENDATION_SOURCE_LIMIT: number = 6;
 const SEARCH_RECOMMENDATION_BATCH_SIZE: number = 3;
@@ -57,7 +60,7 @@ export struct SearchPage {
   @Local historyCollapseOffset: number = 0;
   @Local searchCollapseOffset: number = 0;
   @Local recommendationBooks: Book[] = [];
-  @Local recommendationsLoading: boolean = false;
+  @Local recommendationsLoading: boolean = true;
 
   private resultDataSource: BookDataSource = new BookDataSource();
   private searchController: SearchController = new SearchController();
@@ -65,9 +68,32 @@ export struct SearchPage {
   private recommendationScroller: Scroller = new Scroller();
   private searchGen: number = 0;
   private recommendationGen: number = 0;
-  private focusTimerId: number = -1;
-  private initialFocusRequested: boolean = false;
+  private recommendationTimerId: number = -1;
+  private pageShown: boolean = false;
+  private recommendationsStarted: boolean = false;
+  private recommendationsLoaded: boolean = false;
   private leavingPage: boolean = false;
+  private readonly searchTitleBarBuilder: CustomBuilder = (): void => this.buildSearchTitleBar();
+
+  @Computed
+  get searchTitleBarContent(): TitleBarContentOptions {
+    const bottom: BottomBuilderParams = {
+      // 历史从空态加载、切换结果工具栏时，必须让 HDS 重建并恢复自定义区可见性。
+      builder: (): void => this.buildSearchNavigationBottom(),
+      height: this.hasSearched ? RESULT_TOOLBAR_HEIGHT : this.historyPanelHeight
+    };
+    const content: TitleBarContentOptions = {
+      title: { mainTitle: '' },
+      stackBuilder: this.searchTitleBarBuilder,
+      bottomBuilder: bottom
+    };
+    if (PlatformCompat.supports(26)) {
+      // 仅保留输入框；bottomBuilder 初始高度为 0，不能冻结其透明代理节点。
+      const titleBuilder: BuilderOptions = { builder: this.searchTitleBarBuilder, updated: false };
+      content.stackBuilderContent = titleBuilder;
+    }
+    return content;
+  }
 
   @Computed
   get historyPanelHeight(): number {
@@ -93,7 +119,6 @@ export struct SearchPage {
     CoverPrefetcher.init();
     BookCard.resetAnimations();
     this.loadSearchHistory();
-    this.loadRecommendations();
   }
 
   aboutToDisappear(): void {
@@ -103,9 +128,21 @@ export struct SearchPage {
   private stopPendingSearchUpdates(): void {
     if (this.leavingPage) return;
     this.leavingPage = true;
+    this.pageShown = false;
     this.searchGen++;
-    this.recommendationGen++;
-    this.cancelSearchFocus();
+    this.cancelRecommendations();
+  }
+
+  private handlePageShown(): void {
+    if (this.leavingPage) return;
+    this.pageShown = true;
+    this.scheduleRecommendations();
+  }
+
+  private handlePageHidden(): void {
+    this.pageShown = false;
+    this.cancelRecommendations();
+    this.searchController.stopEditing();
   }
 
   private async loadSearchHistory(): Promise<void> {
@@ -117,28 +154,23 @@ export struct SearchPage {
     }
   }
 
-  private scheduleSearchFocus(): void {
-    if (this.initialFocusRequested || this.leavingPage) {
-      return;
-    }
-    this.initialFocusRequested = true;
-    this.focusTimerId = setTimeout((): void => {
-      this.focusTimerId = -1;
-      if (this.leavingPage) return;
-      try {
-        this.getUIContext().getFocusController().requestFocus('search-page-input');
-      } catch (_e) {
-        // 页面已离开或输入框尚未挂载时忽略，用户仍可点击输入框聚焦。
-      }
-    }, SEARCH_FOCUS_DELAY_MS);
+  private scheduleRecommendations(): void {
+    if (!this.pageShown || this.leavingPage || this.hasSearched || this.recommendationsLoaded ||
+      this.recommendationsStarted || this.recommendationTimerId >= 0) return;
+    this.recommendationTimerId = setTimeout((): void => {
+      this.recommendationTimerId = -1;
+      if (!this.pageShown || this.leavingPage || this.hasSearched) return;
+      this.loadRecommendations();
+    }, SEARCH_ENTRY_SETTLE_MS);
   }
 
-  private cancelSearchFocus(): void {
-    if (this.focusTimerId < 0) {
-      return;
+  private cancelRecommendations(): void {
+    if (this.recommendationTimerId >= 0) {
+      clearTimeout(this.recommendationTimerId);
+      this.recommendationTimerId = -1;
     }
-    clearTimeout(this.focusTimerId);
-    this.focusTimerId = -1;
+    this.recommendationGen++;
+    this.recommendationsStarted = false;
   }
 
   private clearSearch(): void {
@@ -153,6 +185,7 @@ export struct SearchPage {
     this.textCount = 0;
     this.visibleResultCount = 0;
     this.resultDataSource.clear();
+    this.scheduleRecommendations();
   }
 
   private submitHistoryKeyword(keyword: string): void {
@@ -170,6 +203,7 @@ export struct SearchPage {
   }
 
   private async loadRecommendations(): Promise<void> {
+    this.recommendationsStarted = true;
     this.recommendationGen++;
     const generation = this.recommendationGen;
     this.recommendationsLoading = true;
@@ -202,7 +236,11 @@ export struct SearchPage {
       hilog.warn(DOMAIN, TAG, 'load recommendations failed: %{public}s', String(error));
       if (generation === this.recommendationGen) this.recommendationBooks = [];
     } finally {
-      if (generation === this.recommendationGen) this.recommendationsLoading = false;
+      if (generation === this.recommendationGen) {
+        this.recommendationsStarted = false;
+        this.recommendationsLoaded = true;
+        this.recommendationsLoading = false;
+      }
     }
   }
 
@@ -304,6 +342,7 @@ export struct SearchPage {
       return;
     }
     this.keyword = keyword;
+    this.cancelRecommendations();
     PreferenceService.addSearchHistory(keyword).catch((e: Error) => {
       hilog.warn(DOMAIN, TAG, 'save search history failed: %{public}s', e.message);
     });
@@ -938,7 +977,6 @@ export struct SearchPage {
         .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
         .id('search-page-input')
         .focusable(true)
-        .onAppear(() => this.scheduleSearchFocus())
         .onSubmit(() => this.doSearch())
         .onChange((value: string) => {
           if (this.leavingPage) return;
@@ -1011,15 +1049,7 @@ export struct SearchPage {
     }
     .titleBar({
       avoidLayoutSafeArea: true,
-      content: {
-        title: { mainTitle: '' },
-        stackBuilder: (): void => this.buildSearchTitleBar(),
-        bottomBuilder: {
-          builder: (): void => this.buildSearchNavigationBottom(),
-          height: this.hasSearched ? RESULT_TOOLBAR_HEIGHT :
-            (this.searchHistory.length > 0 ? this.historyPanelHeight : 0)
-        }
-      },
+      content: this.searchTitleBarContent,
       // 与首页一致：透明初态，内容上滑后由系统绘制沉浸渐变模糊。
       style: {
         scrollEffectOpts: {
@@ -1050,7 +1080,9 @@ export struct SearchPage {
     )
     .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.BOTTOM])
     .backgroundColor(HomeTheme.BgNeutral)
-    .onWillHide(() => this.cancelSearchFocus())
+    .onShown(() => this.handlePageShown())
+    .onWillHide(() => this.handlePageHidden())
+    .onHidden(() => this.handlePageHidden())
     .onWillDisappear(() => {
       // 在退场开始前停止回写，避免推荐、搜索及键盘与返回动画争抢布局。
       this.stopPendingSearchUpdates();

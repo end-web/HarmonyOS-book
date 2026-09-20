@@ -1,3 +1,4 @@
+import { ImmersiveOptionTabs } from './ImmersiveOptionTabs';
 import { AppAppearance } from '../model/AppAppearance';
 import { PreferenceService } from '../service/PreferenceService';
 import { AppColor, AppFont, AppMaterial, AppRadius, AppSpace } from '../theme/Theme';
@@ -21,12 +22,9 @@ class AccentChoice {
 }
 
 const MATERIAL_CHOICES: MaterialChoice[] = [
-  new MaterialChoice(0, $r('app.string.appearance_material_default')),
-  new MaterialChoice(1, $r('app.string.appearance_material_ultra_thin')),
-  new MaterialChoice(2, $r('app.string.appearance_material_thin')),
-  new MaterialChoice(3, $r('app.string.appearance_material_regular')),
-  new MaterialChoice(4, $r('app.string.appearance_material_thick')),
-  new MaterialChoice(5, $r('app.string.appearance_material_ultra_thick'))
+  new MaterialChoice(2, $r('app.string.appearance_material_strong')),
+  new MaterialChoice(3, $r('app.string.appearance_material_balanced')),
+  new MaterialChoice(4, $r('app.string.appearance_material_weak'))
 ];
 
 const ACCENT_CHOICES: AccentChoice[] = [
@@ -42,7 +40,6 @@ const ACCENT_CHOICES: AccentChoice[] = [
 @ComponentV2
 export struct AppearanceSettingsComponent {
   @Local appearance: AppAppearance = AppAppearance.current;
-  @Local showMaterial: boolean = false;
   @Local showAccent: boolean = false;
   @Local customHex: string = '';
   @Local colorInvalid: boolean = false;
@@ -92,37 +89,6 @@ export struct AppearanceSettingsComponent {
   }
 
   @Builder
-  materialSheet() {
-    Column({ space: AppSpace.Xs }) {
-      Text($r('app.string.appearance_material_hint'))
-        .fontSize(AppFont.Caption)
-        .fontColor($r('sys.color.font_secondary'))
-        .width('100%')
-        .padding({ bottom: AppSpace.Xs })
-      ForEach(MATERIAL_CHOICES, (choice: MaterialChoice) => {
-        Row() {
-          Text(choice.label)
-            .fontSize(AppFont.BodyL)
-            .fontColor(this.appearance.material === choice.value ? AppColor.Brand : $r('sys.color.font_primary'))
-            .layoutWeight(1)
-          if (this.appearance.material === choice.value) {
-            SymbolGlyph($r('sys.symbol.checkmark')).fontSize(20).fontColor([AppColor.Brand])
-          }
-        }
-        .width('100%')
-        .padding(AppSpace.Sm)
-        .constraintSize({ minHeight: 48 })
-        .borderRadius(AppRadius.Md)
-        .backgroundColor(this.appearance.material === choice.value ? AppColor.BrandSoft : Color.Transparent)
-        .enabled(!this.saving)
-        .onClick(() => this.applyMaterial(choice.value))
-      }, (choice: MaterialChoice) => choice.value.toString())
-    }
-    .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, bottom: AppSpace.Lg })
-  }
-
-  @Builder
   accentSheet() {
     Column({ space: AppSpace.Md }) {
       Text($r('app.string.appearance_accent_hint'))
@@ -144,6 +110,8 @@ export struct AppearanceSettingsComponent {
           }
           .width('30%')
           .padding({ top: AppSpace.Xs, bottom: AppSpace.Sm })
+          .borderRadius(AppRadius.Lg)
+          .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveThin))
           .enabled(!this.saving)
           .onClick(() => this.applyAccent(choice.color))
         }, (choice: AccentChoice) => choice.color || 'default')
@@ -181,20 +149,12 @@ export struct AppearanceSettingsComponent {
       Row({ space: AppSpace.Sm }) {
         Text($r('app.string.appearance_material')).fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary')).layoutWeight(1)
-        Text(MATERIAL_CHOICES[this.appearance.material].label).fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_secondary'))
-        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('sys.color.font_tertiary')])
-      }
-      .width('100%').padding(AppSpace.Md).constraintSize({ minHeight: 56 })
-      .onClick(() => { this.showMaterial = true; })
-      .bindSheet($$this.showMaterial, this.materialSheet(), {
-        height: SheetSize.FIT_CONTENT,
-        preferType: SheetType.BOTTOM,
-        title: { title: $r('app.string.appearance_material') },
-        backgroundColor: AppMaterial.SheetBackground,
-        blurStyle: AppMaterial.SheetBlur,
-        systemMaterial: AppMaterial.Sheet
-      })
+        ImmersiveOptionTabs({
+          labels: MATERIAL_CHOICES.map((choice: MaterialChoice): ResourceStr => choice.label),
+          selected: MATERIAL_CHOICES.findIndex((choice: MaterialChoice): boolean => choice.value === this.appearance.material),
+          onSelect: (index: number): void => { this.applyMaterial(MATERIAL_CHOICES[index].value); }
+        })
+      }.width('100%').padding(AppSpace.Md)
       this.divider()
       Row({ space: AppSpace.Sm }) {
         Text($r('app.string.appearance_accent')).fontSize(AppFont.BodyL)

@@ -15,6 +15,7 @@ interface SafeAreaInsets {
 export class WindowUtils {
   private static topPx: number = 0;
   private static bottomPx: number = 0;
+  private static systemBottomPx: number = 0;
   private static density: number = 3.25;
   private static mainWindow: window.Window | null = null;
   private static safeAreaListeners: Array<(topVp: number, bottomVp: number) => void> = [];
@@ -26,23 +27,35 @@ export class WindowUtils {
   /** 最近一次页面请求的状态栏诉求：true=强制白字(深色背景页)，false=跟随系统 */
   private static forceLight: boolean = false;
   private static readerActive: boolean = false;
+  private static readerStatusBarVisible: boolean = true;
+  private static readerStatusBarLight: boolean = false;
+  private static readerTopPx: number = 0;
   private static readerStatusBarUpdate: Promise<void> = Promise.resolve();
 
   /** 由阅读路由的显示/隐藏生命周期控制，覆盖跳转详情后返回的场景。 */
   static setReaderActive(active: boolean): void {
     if (WindowUtils.readerActive === active) return;
+    WindowUtils.readerTopPx = active ? WindowUtils.topPx : 0;
     WindowUtils.readerActive = active;
     // 首次绘制前就使用阅读安全区，不等待系统栏动画或异步回调。
     WindowUtils.refreshAvoidArea();
     WindowUtils.updateReaderStatusBar();
   }
 
+  static setReaderStatusBarVisible(visible: boolean): void {
+    if (WindowUtils.readerStatusBarVisible === visible) return;
+    WindowUtils.readerStatusBarVisible = visible;
+    if (WindowUtils.readerActive) WindowUtils.updateReaderStatusBar();
+  }
+
   private static updateReaderStatusBar(): void {
-    // 只在进出阅读路由时切换系统栏，工具栏和翻页不改变正文视口。
+    // 显隐只作用于系统状态栏，阅读安全区不随它收缩。
     WindowUtils.readerStatusBarUpdate = WindowUtils.readerStatusBarUpdate.then(async (): Promise<void> => {
       const win = WindowUtils.mainWindow;
       if (win === null) return;
-      await win.setSpecificSystemBarEnabled('status', !WindowUtils.readerActive, false);
+      await win.setSpecificSystemBarEnabled('status',
+        !WindowUtils.readerActive || WindowUtils.readerStatusBarVisible, false);
+      await WindowUtils.applySystemBarContent();
       WindowUtils.refreshAvoidArea();
     }).catch((): void => {
       // 窗口销毁或切换期间忽略失败，下次页面切换重新应用。
@@ -112,8 +125,14 @@ export class WindowUtils {
     await WindowUtils.applySystemBarContent();
   }
 
+  static async setReaderStatusBarLight(isLight: boolean): Promise<void> {
+    WindowUtils.readerStatusBarLight = isLight;
+    if (WindowUtils.readerActive) await WindowUtils.applySystemBarContent();
+  }
+
   /** 与 HDS/Navigation 页面级状态栏样式保持同一套深浅色判断。 */
   static getSystemBarContentColor(): string {
+    if (WindowUtils.readerActive) return WindowUtils.readerStatusBarLight ? '#FFFFFFFF' : '#FF000000';
     const isDark = WindowUtils.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
     return WindowUtils.forceLight || isDark ? '#FFFFFFFF' : '#FF000000';
   }
@@ -155,6 +174,11 @@ export class WindowUtils {
   static getBottomSafeVp(): number {
     const measuredVp = WindowUtils.bottomPx / WindowUtils.density;
     return Math.max(measuredVp, WindowUtils.FALLBACK_BOTTOM_SAFE_VP);
+  }
+
+  /** TYPE_SYSTEM 底部分量：大于 0 说明是三键导航等实体底栏，需要完整避让。 */
+  static getSystemBottomVp(): number {
+    return WindowUtils.systemBottomPx / WindowUtils.density;
   }
 
   static getSafeAreaInsets(): SafeAreaInsets {
@@ -286,12 +310,19 @@ export class WindowUtils {
       let nextBottomPx: number = 0;
       if (systemArea !== null) {
         WindowUtils.topPx = systemArea.topRect.height;
+        WindowUtils.systemBottomPx = systemArea.bottomRect.height;
         if (WindowUtils.readerActive && win.getWindowStatus() === window.WindowStatusType.FULL_SCREEN) {
           const cutoutArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_CUTOUT);
-          if (cutoutArea !== null) {
-            // 临时拉出系统栏也不压缩正文；小窗仍使用实际系统避让区。
-            WindowUtils.topPx = cutoutArea.topRect.height;
+          // API 22 起直接取不受显隐影响的安全区；API 20–21 保留本次阅读已测得的高度。
+          if (PlatformCompat.supports(22)) {
+            try {
+              WindowUtils.readerTopPx = win.getWindowAvoidAreaIgnoringVisibility(
+                window.AvoidAreaType.TYPE_SYSTEM).topRect.height;
+            } catch (_e) { /* use the measured inset below */ }
           }
+          WindowUtils.readerTopPx = Math.max(WindowUtils.readerTopPx,
+            systemArea.topRect.height, cutoutArea?.topRect.height ?? 0);
+          WindowUtils.topPx = WindowUtils.readerTopPx;
         }
         nextBottomPx = Math.max(nextBottomPx, systemArea.bottomRect.height);
         hasBottomArea = true;

@@ -1,3 +1,4 @@
+import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -96,6 +97,7 @@ export struct PlayerPage {
   @Local book: Book | null = null;
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
+  @Local chapterGridVisible: boolean = true;
   @Local showSleepSheet: boolean = false;
   @Local sleepSheetMode: SleepMode = SleepMode.Duration;
   @Local sleepCustomVisible: boolean = false;
@@ -681,6 +683,7 @@ export struct PlayerPage {
   }
 
   private scrollToCurrentChapter(): void {
+    if (this.chapterGridVisible) return;
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
     this.scrollChapterListToIndex(this.book ? PreferenceService.chapterDisplayIndex(this.book, idx) : idx);
@@ -750,7 +753,10 @@ export struct PlayerPage {
       : this.getUIContext().getHostContext()!.resourceManager.getStringSync($r('app.string.player_sleep').id);
   }
 
+  private sleepSheetDismissUntil: number = 0;
+
   private openSleepSheet(): void {
+    if (this.showSleepSheet || Date.now() < this.sleepSheetDismissUntil) return;
     if (this.sleepActive()) {
       this.sleepSheetMode = this.playerState.sleepMode;
       this.sleepSmartStopDraft = this.playerState.sleepSmartStop;
@@ -1206,7 +1212,7 @@ export struct PlayerPage {
       .height(44)
         .onClick(() => this.openChapterList())
         .bindSheet($$this.showChapterList, this.buildChapterSheet(), {
-          height: '55%',
+          height: '80%',
           preferType: SheetType.BOTTOM,
           showClose: false,
           dragBar: true,
@@ -1267,6 +1273,9 @@ export struct PlayerPage {
         }
         .width(22)
         .height(22)
+        if (this.sleepActive()) {
+          Text(this.sleepLabel()).fontSize(10).fontColor(AppColor.Brand).maxLines(1)
+        }
       }
       .width(this.isCompactPlayer() ? 56 : 64)
       .alignItems(HorizontalAlign.Center)
@@ -1282,7 +1291,12 @@ export struct PlayerPage {
         backgroundColor: AppMaterial.SheetBackground,
         blurStyle: AppMaterial.SheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
-        onDisappear: () => { this.showSleepSheet = false; }
+        onWillDisappear: (): void => { this.sleepSheetDismissUntil = Date.now() + 400; },
+        onWillDismiss: (action: DismissSheetAction): void => {
+          this.sleepSheetDismissUntil = Date.now() + 400;
+          this.showSleepSheet = false;
+          action.dismiss();
+        }
       })
       .gesture(LongPressGesture().onAction(() => {
         if (this.sleepActive()) {
@@ -1341,11 +1355,16 @@ export struct PlayerPage {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column({ space: AppSpace.Sm }) {
       Row() {
-        Text('章节列表')
+        Text(this.book?.title ?? '')
           .fontSize(AppFont.Title)
           .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Bold)
-        Blank()
+          .fontWeight(FontWeight.Bold).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        Button($r('app.string.chapter_total_switch', this.book?.chapters.length ?? 0))
+          .fontSize(AppFont.Caption).fontColor(AppColor.Brand).backgroundColor(Color.Transparent)
+          .onClick((): void => {
+            this.chapterGridVisible = !this.chapterGridVisible;
+            if (!this.chapterGridVisible) this.applyChapterFilter(this.chapterSearchKeyword);
+          })
         SymbolGlyph($r('sys.symbol.xmark'))
           .fontSize(20)
           .fontColor([$r('sys.color.font_secondary')])
@@ -1365,13 +1384,22 @@ export struct PlayerPage {
         .backgroundColor($r('sys.color.comp_background_tertiary'))
         .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
 
-      this.buildChapterItems()
+      if (this.chapterGridVisible) {
+        ChapterSegmentGrid({
+          chapters: this.book?.chapters ?? [], currentId: this.playerState.currentChapter?.id ?? '',
+          keyword: this.chapterSearchKeyword, descending: this.book?.chaptersDescending ?? false,
+          onSelect: (chapter: Chapter): void => { this.selectChapter(chapter); },
+          onLongPress: (chapter: Chapter): void => this.handleChapterDownloadLongPress(chapter)
+        }).layoutWeight(1)
+      } else {
+        this.buildChapterItems()
+      }
       }
       .width('100%')
       .height('100%')
 
       // "回到当前章节"浮动按钮:列表滚远时显示
-      if (this.shouldShowJumpButton()) {
+      if (!this.chapterGridVisible && this.shouldShowJumpButton()) {
         Row({ space: AppSpace.Xs }) {
           SymbolGlyph($r('sys.symbol.scope'))
             .fontSize(16)

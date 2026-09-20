@@ -12,15 +12,15 @@ class ProfileItem {
   label: ResourceStr;
   id: string;
   iconBg: ResourceColor;
-  /** 行尾附加文案,如交流群号;为空时不占位 */
-  trailing: string;
+  /** 副标题,如公众号说明、群号;空时不占位 */
+  subtitle: ResourceStr;
 
-  constructor(icon: Resource, label: ResourceStr, id: string, iconBg: ResourceColor, trailing: string = '') {
+  constructor(icon: Resource, label: ResourceStr, id: string, iconBg: ResourceColor, subtitle: ResourceStr = '') {
     this.icon = icon;
     this.label = label;
     this.id = id;
     this.iconBg = iconBg;
-    this.trailing = trailing;
+    this.subtitle = subtitle;
   }
 }
 
@@ -32,9 +32,14 @@ const CONTENT_ITEMS: ProfileItem[] = [
 const SYSTEM_ITEMS: ProfileItem[] = [
   new ProfileItem($r('sys.symbol.gearshape'), '设置', 'settings', '#8E8E93'),
   new ProfileItem($r('sys.symbol.questionmark_circle'), '使用说明', 'guide', '#5AC8FA'),
-  new ProfileItem($r('sys.symbol.info_circle'), '关于', 'about', '#0A59F7'),
+  new ProfileItem($r('sys.symbol.info_circle'), '关于', 'about', '#0A59F7')
+];
+
+const SUPPORT_ITEMS: ProfileItem[] = [
+  new ProfileItem($r('sys.symbol.qrcode'), $r('app.string.profile_wechat_title'), 'wechat',
+    '#07C160', $r('app.string.profile_wechat_desc')),
   new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community',
-    AppColor.Brand, CommunityGroupService.GROUP_NUMBER)
+    AppColor.Brand, $r('app.string.about_community_group_number'))
 ];
 const ROW_INDENT: number = AppSpace.Md;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
@@ -119,8 +124,24 @@ export struct ProfilePage {
       this.navStack.pushPathByName('guide', '');
     } else if (id === 'about') {
       this.navStack.pushPathByName('about', '');
+    } else if (id === 'wechat') {
+      this.copyWechatName();
     } else if (id === 'community') {
       this.openCommunityGroup();
+    }
+  }
+
+  private copyWechatName(): void {
+    try {
+      const name = this.getUIContext().getHostContext()?.resourceManager.getStringSync($r('app.string.profile_wechat_name').id);
+      if (!name) return;
+      pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, name)).then(() => {
+        this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copied') });
+      }).catch(() => {
+        this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copy_failed') });
+      });
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copy_failed') });
     }
   }
 
@@ -157,7 +178,7 @@ export struct ProfilePage {
             this.buildSourceGroup()
             this.buildGroup(CONTENT_ITEMS)
             this.buildGroup(SYSTEM_ITEMS)
-            this.buildWechatCard()
+            this.buildGroup(SUPPORT_ITEMS, '支持与联系')
           }
           .width('100%')
           .padding({
@@ -219,45 +240,6 @@ export struct ProfilePage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-  }
-
-  private async copyWechatName(): Promise<void> {
-    try {
-      const name = this.getUIContext().getHostContext()?.resourceManager.getStringSync($r('app.string.profile_wechat_name').id);
-      if (!name) return;
-      await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, name));
-      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copied') });
-    } catch (_error) {
-      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.profile_wechat_copy_failed') });
-    }
-  }
-
-  @Builder
-  buildWechatCard(): void {
-    Row({ space: AppSpace.Sm }) {
-      Column({ space: 4 }) {
-        Text($r('app.string.profile_wechat_title'))
-          .fontSize(AppFont.BodyL)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.font_primary'))
-        Text($r('app.string.profile_wechat_desc'))
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_secondary'))
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-      Button($r('app.string.profile_wechat_copy'), { type: ButtonType.Capsule })
-        .fontSize(AppFont.Caption)
-        .fontColor(AppColor.OnBrand)
-        .backgroundColor(AppColor.Brand)
-        .height(36)
-        .padding({ left: AppSpace.Md, right: AppSpace.Md })
-        .onClick((): void => { this.copyWechatName(); })
-    }
-    .width('100%')
-    .padding(AppSpace.Md)
-    .backgroundColor($r('sys.color.comp_background_primary'))
-    .borderRadius(AppRadius.Lg)
   }
 
   @Builder
@@ -368,8 +350,15 @@ export struct ProfilePage {
   }
 
   @Builder
-  buildGroup(items: ProfileItem[]) {
+  buildGroup(items: ProfileItem[], title: string = '') {
     Column() {
+      if (title.length > 0) {
+        Text(title)
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_tertiary'))
+          .padding({ left: AppSpace.Sm, bottom: AppSpace.Xs })
+      }
+
       Column() {
         ForEach(items, (item: ProfileItem, index: number) => {
           this.buildRow(item)
@@ -402,16 +391,20 @@ export struct ProfilePage {
       .backgroundColor(item.iconBg)
       .borderRadius(7)
 
-      Text(item.label)
-        .fontSize(AppFont.BodyL)
-        .fontColor($r('sys.color.font_primary'))
-        .layoutWeight(1)
-
-      if (item.trailing.length > 0) {
-        Text(item.trailing)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_tertiary'))
+      Column({ space: 2 }) {
+        Text(item.label)
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+        if (typeof item.subtitle !== 'string' || item.subtitle.length > 0) {
+          Text(item.subtitle)
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
       }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
 
       SymbolGlyph($r('sys.symbol.chevron_right'))
         .fontSize(24)

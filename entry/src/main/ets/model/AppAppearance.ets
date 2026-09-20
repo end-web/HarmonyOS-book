@@ -10,13 +10,15 @@ export class AppAppearance {
     return AppAppearance.singleton;
   }
 
-  /** 0 为各控件默认材质，1–5 对应超薄至超厚。 */
-  @Trace material: number = 0;
+  /** 2 强、3 均衡、4 弱；兼容旧超薄/超厚偏好。 */
+  @Trace material: number = 3;
   /** 空字符串表示使用随深浅模式变化的默认品牌色。 */
   @Trace accent: string = '';
 
   static normalizeMaterial(value: number): number {
-    return Number.isInteger(value) && value >= 0 && value <= 5 ? value : 0;
+    if (value === 1 || value === 2) return 2;
+    if (value === 4 || value === 5) return 4;
+    return 3;
   }
 
   static normalizeAccent(value: string): string {

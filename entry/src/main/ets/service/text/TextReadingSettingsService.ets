@@ -13,6 +13,7 @@ const KEY_BACKGROUND_IMAGE: string = 'background_image';
 const KEY_OVERLAY_ALPHA: string = 'overlay_alpha';
 const KEY_PAGE_TURN_MODE: string = 'page_turn_mode';
 const KEY_SHOW_READING_STATUS: string = 'show_reading_status';
+const KEY_ALWAYS_SHOW_STATUS_BAR: string = 'always_show_status_bar';
 
 export class TextReadingSettingsService {
   private static store: preferences.Preferences | null = null;
@@ -57,6 +58,9 @@ export class TextReadingSettingsService {
       TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
     const result = TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
       pageTurnMode, showReadingStatus);
+    const statusBar = store.getSync(KEY_ALWAYS_SHOW_STATUS_BAR, TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT);
+    result.alwaysShowStatusBar = typeof statusBar === 'boolean' ? statusBar :
+      TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
     result.followSystemTheme = store.getSync('follow_system_theme', false) === true;
     const marginLeft = store.getSync('marginLeft', 16);
     result.marginLeft = TextReadingSettings.normalizeMargin(typeof marginLeft === 'number' ? marginLeft : 16, 16);
@@ -83,6 +87,7 @@ export class TextReadingSettingsService {
     store.putSync(KEY_OVERLAY_ALPHA, TextReadingSettings.normalizeOverlay(settings.overlayAlpha));
     store.putSync(KEY_PAGE_TURN_MODE, TextReadingSettings.normalizePageTurnMode(settings.pageTurnMode));
     store.putSync(KEY_SHOW_READING_STATUS, settings.showReadingStatus);
+    store.putSync(KEY_ALWAYS_SHOW_STATUS_BAR, settings.alwaysShowStatusBar);
     store.putSync('follow_system_theme', settings.followSystemTheme);
     store.putSync('marginLeft', TextReadingSettings.normalizeMargin(settings.marginLeft, 16));
     store.putSync('marginRight', TextReadingSettings.normalizeMargin(settings.marginRight, 16));

@@ -1,3 +1,4 @@
+import { AVSessionService } from '../service/AVSessionService';
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want, Configuration } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -108,6 +109,7 @@ export default class EntryAbility extends UIAbility {
     const startTime = Date.now();
     hilog.info(DOMAIN, TAG, 'initServicesCore: start');
 
+    AVSessionService.getInstance().init(this.context);
     await PreferenceService.init(this.context);
     await LocalRuleTlsTrustStore.init(this.context).catch((error: Error): void => {
       hilog.warn(DOMAIN, TAG, 'TLS trust store unavailable: %{public}s', error.message);
@@ -280,6 +282,7 @@ export default class EntryAbility extends UIAbility {
         await PreferenceService.applySkipConfig(book);
         state.currentBook = book;
         state.currentChapter = chapter;
+        AVSessionService.getInstance().updateMetadata(book, chapter);
         audioService.prewarmBookSource(book);
         state.progressMs = last.progressMs;
         state.durationMs = last.durationMs ?? 0;
@@ -490,6 +493,7 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    emitter.emit('app.reader.background');
     AudioService.getInstance().setForeground(false);
     TextToSpeechService.getInstance().setForeground(false);
     this.isInForeground = false;

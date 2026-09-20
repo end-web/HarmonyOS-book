@@ -1,8 +1,8 @@
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
-import { vibrator } from '@kit.SensorServiceKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import {
   AppColor,
@@ -106,9 +106,6 @@ export struct FavoritePage {
   @Local historyMap: Record<string, PlayHistoryItem> = {};
   @Local chapterIdxMap: Record<string, number> = {};
   @Local loading: boolean = true;
-  @Local dragging: boolean = false;
-  @Local trashHover: boolean = false;
-  @Local draggingBookId: string = '';
   @Local isRefreshing: boolean = false;
   @Local resolvingTocId: string = '';
   @Local refreshProgress: string = '';
@@ -117,6 +114,9 @@ export struct FavoritePage {
   @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
   @Local textProgressMap: Map<string, TextReadingPosition> = new Map();
   @Param visible: boolean = false;
+  @Local showBookActions: boolean = false;
+  @Local removingBook: boolean = false;
+
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
   @Event onGotoStore: () => void = () => {};
@@ -764,59 +764,35 @@ export struct FavoritePage {
     }
   }
 
-  private confirmDelete(book: Book): void {
-    if (this.isMissingCachedBook(book)) {
-      this.confirmRemoveMissingFavorite(book);
-      return;
-    }
-    const isLocal = book.id.startsWith('import_');
-    const prompt = this.getUIContext().getPromptAction();
-    if (isLocal) {
-      prompt.showDialog({
-        title: '移除书籍',
-        message: `"${book.title}"是本地导入的书籍`,
-        buttons: [
-          { text: '取消', color: '#8F8F8F' },
-          { text: '仅移除书架', color: '#333333' },
-          { text: '删除本地文件', color: '#FF4444' }
-        ]
-      }).then((result) => {
-        if (result.index === 1) {
-          this.doRemove(book.id, false);
-        } else if (result.index === 2) {
-          this.doRemove(book.id, true);
-        }
-      }).catch(() => { /* ignore */ });
-    } else {
-      prompt.showDialog({
-        title: '移除书籍',
-        message: `确认从书架移除"${book.title}"？`,
-        buttons: [
-          { text: '取消', color: '#8F8F8F' },
-          { text: '移除', color: '#FF4444' }
-        ]
-      }).then((result) => {
-        if (result.index === 1) {
-          this.doRemove(book.id, false);
-        }
-      }).catch(() => { /* ignore */ });
-    }
+  private async removeActionBook(book: Book, deleteFiles: boolean): Promise<void> {
+    if (this.removingBook) return;
+    this.removingBook = true;
+    try { await this.doRemove(book.id, deleteFiles); }
+    finally { this.removingBook = false; }
   }
 
-  private confirmRemoveMissingFavorite(book: Book): void {
-    const prompt = this.getUIContext().getPromptAction();
-    prompt.showDialog({
-      title: '移除失效收藏',
-      message: `确认从书架移除"${book.title}"？收藏记录还在，但本地缓存快照缺失。`,
-      buttons: [
-        { text: '取消', color: '#8F8F8F' },
-        { text: '移除', color: '#FF4444' }
-      ]
-    }).then((result) => {
-      if (result.index === 1) {
-        this.doRemove(book.id, false);
-      }
-    }).catch(() => { /* ignore */ });
+  private bookMenuOptions(): ContextMenuOptions {
+    const options: ContextMenuOptions = {
+      preview: MenuPreviewMode.NONE,
+      backgroundColor: AppMaterial.SheetBackground,
+      backgroundBlurStyle: AppMaterial.SheetBlur,
+      onAppear: (): void => { this.showBookActions = true; },
+      onDisappear: (): void => { this.showBookActions = false; }
+    };
+    if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    return options;
+  }
+
+  @Builder
+  bookActions(book: Book) {
+    Menu() {
+      MenuItem({ content: $r('app.string.shelf_delete_only') })
+        .contentFontColor(AppColor.Brand)
+        .onClick((): void => { this.removeActionBook(book, false); })
+      MenuItem({ content: $r('app.string.shelf_delete_local') })
+        .contentFontColor($r('sys.color.ohos_id_color_warning'))
+        .onClick((): void => { this.removeActionBook(book, true); })
+    }
   }
 
   private async doRemove(bookId: string, deleteFiles: boolean): Promise<void> {
@@ -990,19 +966,12 @@ export struct FavoritePage {
       .height('100%')
       .backgroundColor(Color.Transparent)
 
-      // 拖动删除浮层（自己居中）
-      Column() {
-        this.buildTrashZone()
-      }
-      .width('100%')
-      .height('100%')
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .hitTestBehavior(HitTestMode.Transparent)
+
     }
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
   }
 
   @Builder
@@ -1068,53 +1037,6 @@ export struct FavoritePage {
   }
 
   @Builder
-  buildTrashZone() {
-    Column() {
-      SymbolGlyph($r('sys.symbol.trash_fill'))
-        .fontSize(this.trashHover ? 28 : 22)
-        .fontColor([Color.White])
-    }
-    .width(this.trashHover ? 64 : 52)
-    .height(this.trashHover ? 64 : 52)
-    .borderRadius(this.trashHover ? 32 : 26)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(this.trashHover ? '#FF3B30' : '#E64545')
-    .shadow({ radius: 16, color: '#55000000', offsetY: 4 })
-    .scale({ x: this.dragging ? 1 : 0.5, y: this.dragging ? 1 : 0.5 })
-    .opacity(this.dragging ? 1 : 0)
-    .animation({ duration: 250, curve: Curve.FastOutSlowIn })
-    .allowDrop([])
-    .onDragEnter(() => {
-      this.trashHover = true;
-      // 进入删除区:轻震一下,让用户知道"放手就会删"
-      try {
-        vibrator.startVibration(
-          { type: 'time', duration: 30 },
-          { id: 0, usage: 'touch' }
-        ).catch((_e: object) => { /* 无震动器或权限被关 */ });
-      } catch (_e) { /* 同步异常忽略 */ }
-    })
-    .onDragLeave(() => { this.trashHover = false; })
-    .onDrop(() => {
-      const id = this.draggingBookId;
-      this.trashHover = false;
-      this.dragging = false;
-      this.draggingBookId = '';
-      if (id) {
-        // 松手震一下,作为"删除即将触发"的确认
-        try {
-          vibrator.startVibration(
-            { type: 'time', duration: 60 },
-            { id: 0, usage: 'touch' }
-          ).catch((_e: object) => { /* 无震动器或权限被关 */ });
-        } catch (_e) { /* 同步异常忽略 */ }
-        const book = this.favoriteBooks.find(b => b.id === id);
-        if (book) this.confirmDelete(book);
-      }
-    })
-  }
-
-  @Builder
   buildBookTile(book: Book) {
     Column({ space: AppSpace.Xs }) {
       Stack({ alignContent: Alignment.TopStart }) {
@@ -1167,6 +1089,7 @@ export struct FavoritePage {
         } else {
           // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
           Image($r('app.media.app_icon_legacy'))
+            .draggable(false)
             .width('100%')
             .aspectRatio(BOOKSHELF_COVER_RATIO)
             .borderRadius(AppRadius.Md)
@@ -1178,6 +1101,8 @@ export struct FavoritePage {
       .borderRadius(AppRadius.Md)
       .clip(true)
       .shadow({ radius: 4, color: '#1A000000', offsetY: 1 })
+      // 展示子树不参与触摸命中，封面/占位图的原生长按不能抢走书卡菜单。
+      .hitTestBehavior(HitTestMode.None)
 
       Text(book.title)
         .fontSize(AppFont.Body)
@@ -1193,42 +1118,11 @@ export struct FavoritePage {
         .width('100%')
         .copyOption(CopyOptions.None)
     }
-    .scale(this.draggingBookId === book.id ? { x: 0.92, y: 0.92 } : { x: 1, y: 1 })
-    .opacity(this.draggingBookId === book.id ? 0.4 : 1)
-    .animation(this.dragging ? { duration: 200, curve: Curve.FastOutSlowIn } : null)
-    .onDragStart(() => {
-      this.draggingBookId = book.id;
-      this.dragging = true;
-      return { builder: (): void => this.buildDragPreview(book) };
+    .draggable(false)
+    .bindContextMenu(this.bookActions(book), ResponseType.LongPress, this.bookMenuOptions())
+    .onClick((): void => {
+      if (!this.showBookActions && !this.resolvingTocId) this.handleBookTap(book);
     })
-    .onDragEnd(() => {
-      setTimeout(() => {
-        this.dragging = false;
-        this.trashHover = false;
-        this.draggingBookId = '';
-      }, 100);
-    })
-    .onClick(() => {
-      if (!this.dragging && !this.resolvingTocId) {
-        this.handleBookTap(book);
-      }
-    })
-  }
-
-  @Builder
-  buildDragPreview(book: Book) {
-    Column() {
-      Text(book.title ? book.title.substring(0, 2) : '?')
-        .fontSize(24)
-        .fontColor(Color.White)
-        .fontWeight(FontWeight.Bold)
-    }
-    .width(70)
-    .height(70)
-    .borderRadius(35)
-    .backgroundColor(AppColor.Brand)
-    .justifyContent(FlexAlign.Center)
-    .shadow({ radius: 8, color: '#44000000', offsetY: 3 })
   }
 
   @Builder
@@ -1290,6 +1184,7 @@ export struct FavoritePage {
         }
         this.buildTypeBadge(true, book.contentType === 'text')
       }
+      .hitTestBehavior(HitTestMode.None)
 
       Column({ space: 4 }) {
         Text(book.title)
@@ -1317,25 +1212,10 @@ export struct FavoritePage {
     }
     .width('100%')
     .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
-    .scale(this.draggingBookId === book.id ? { x: 0.92, y: 0.92 } : { x: 1, y: 1 })
-    .opacity(this.draggingBookId === book.id ? 0.4 : 1)
-    .animation(this.dragging ? { duration: 200, curve: Curve.FastOutSlowIn } : null)
-    .onDragStart(() => {
-      this.draggingBookId = book.id;
-      this.dragging = true;
-      return { builder: (): void => this.buildDragPreview(book) };
-    })
-    .onDragEnd(() => {
-      setTimeout(() => {
-        this.dragging = false;
-        this.trashHover = false;
-        this.draggingBookId = '';
-      }, 100);
-    })
-    .onClick(() => {
-      if (!this.dragging && !this.resolvingTocId) {
-        this.handleBookTap(book);
-      }
+    .draggable(false)
+    .bindContextMenu(this.bookActions(book), ResponseType.LongPress, this.bookMenuOptions())
+    .onClick((): void => {
+      if (!this.showBookActions && !this.resolvingTocId) this.handleBookTap(book);
     })
   }
 

@@ -336,6 +336,7 @@ export struct HomePage {
   @Event onBlockMore: (block: HomeBlockSection) => void = () => {};
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   @Event onSearchTap: () => void = () => {};
+  @Event onBackHandlerChange: (handler: (() => boolean) | undefined) => void = () => {};
   /** 分类入口点击:跳到分类书单页(复用 blockMore 路由) */
   @Event onCategoryTap: (sourceUrl: string, sourceName: string, title: string, url: string) => void = () => {};
 
@@ -356,6 +357,11 @@ export struct HomePage {
   private readonly homeNavigationBottomBuilder: CustomBuilder = (): void => this.buildHomeNavigationBottom();
 
   aboutToAppear(): void {
+    this.onBackHandlerChange((): boolean => {
+      if (this.selectedCategoryIndex === -1) return false;
+      this.switchCategory(-1);
+      return true;
+    });
     hilog.info(DOMAIN, TAG, 'HomePage aboutToAppear');
     CoverPrefetcher.init();
     this.lastSourceRevision = SourceDataService.getInvalidationCounter();
@@ -368,6 +374,7 @@ export struct HomePage {
   }
 
   aboutToDisappear(): void {
+    this.onBackHandlerChange(undefined);
     this.cancelContentEntrance();
     this.cancelCarouselAnimation();
     emitter.off(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);

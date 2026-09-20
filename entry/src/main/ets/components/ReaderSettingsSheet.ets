@@ -1,3 +1,4 @@
+import { ImmersiveOptionTabs } from './ImmersiveOptionTabs';
 /**
  * ReaderSettingsSheet - 阅读设置面板
  *
@@ -49,6 +50,7 @@ const PREVIEW_TEXT: string = '　　夜色像一层薄薄的墨，慢慢洇进�
 @ComponentV2
 struct ReaderSettingCard {
   @Param title: ResourceStr = '';
+  @Param inline: boolean = false;
   @BuilderParam content: () => void = this.emptyContent;
 
   @Builder
@@ -57,12 +59,22 @@ struct ReaderSettingCard {
 
   build() {
     Column({ space: AppSpace.Sm }) {
+      if (this.inline) {
+        Row({ space: AppSpace.Sm }) {
+          Text(this.title)
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_primary'))
+            .layoutWeight(1)
+          this.content()
+        }.width('100%').alignItems(VerticalAlign.Center)
+      } else {
       Text(this.title)
         .fontSize(AppFont.Caption)
         .fontColor($r('sys.color.font_secondary'))
         .fontWeight(FontWeight.Medium)
         .width('100%')
       this.content()
+      }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -122,7 +134,7 @@ struct ReaderThemeSwatch {
       .width(44)
       .height(44)
 
-      Text(this.preset.label)
+      Text(this.preset.id === ReaderThemeId.Black ? $r('app.string.reader_pure_black') : this.preset.label)
         .fontSize(10)
         .fontColor(this.selected ? AppColor.Brand : $r('sys.color.font_secondary'))
         .maxLines(1)
@@ -139,14 +151,33 @@ struct ReaderMarginSlider {
   @Param max: number = 64;
   @Event onChange: (value: number, commit: boolean) => void = () => {};
 
+  @Builder
+  stepper(icon: Resource, enabled: boolean, delta: number) {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph(icon)
+        .fontSize(16)
+        .fontColor([$r('sys.color.font_primary')])
+    }
+    .width(34)
+    .height(34)
+    .backgroundColor(AppColor.GlassSheetControlTint)
+    .enabled(enabled)
+    .opacity(enabled ? 1 : 0.4)
+    .onClick((): void => {
+      this.onChange(Math.max(0, Math.min(this.max, this.value + delta)), true);
+    })
+  }
+
   build() {
     Row({ space: AppSpace.Sm }) {
       Text(this.label).fontSize(AppFont.Caption).width(36).fontColor($r('sys.color.font_primary'))
+      this.stepper($r('sys.symbol.minus'), this.value > 0, -1)
       Slider({ value: this.value, min: 0, max: this.max, step: 1 })
         .layoutWeight(1).selectedColor(AppColor.Brand)
         .onChange((next: number, mode: SliderChangeMode): void => {
           this.onChange(next, mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
         })
+      this.stepper($r('sys.symbol.plus'), this.value < this.max, 1)
       Text(`${this.value}`).width(36).fontColor(AppColor.Brand).fontSize(AppFont.Caption)
     }.width('100%')
   }
@@ -171,6 +202,7 @@ export struct ReaderSettingsSheet {
   @Param overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   @Param pageTurnMode: string = PageTurnMode.Cover;
   @Param showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
+  @Param alwaysShowStatusBar: boolean = TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
   /** 由父页面依 themeId / customBackground 解析好的配色 */
   @Param palette: ReaderPalette = new ReaderPalette();
 
@@ -180,6 +212,7 @@ export struct ReaderSettingsSheet {
   @Event onOverlayChange: (value: number, commit: boolean) => void = () => {};
   @Event onPageTurnModeChange: (mode: string) => void = () => {};
   @Event onReadingStatusChange: (enabled: boolean) => void = () => {};
+  @Event onStatusBarChange: (enabled: boolean) => void = () => {};
   /** 请求打开相册选图；由页面侧执行 picker + 落沙箱 */
   @Event onPickImage: () => void = () => {};
   @Event onResetDefaults: () => void = () => {};
@@ -468,25 +501,14 @@ export struct ReaderSettingsSheet {
   /** 翻页模式：覆盖、仿真 */
   @Builder
   buildPageTurnModeSection() {
-    ReaderSettingCard({ title: '翻页模式' }) {
-      Row({ space: AppSpace.Xs }) {
-        ReaderSettingChip({
-          label: '覆盖',
-          selected: this.pageTurnMode === PageTurnMode.Cover,
-          onSelect: () => this.onPageTurnModeChange(PageTurnMode.Cover)
-        })
-        ReaderSettingChip({
-          label: '仿真',
-          selected: this.pageTurnMode === PageTurnMode.Simulation,
-          onSelect: () => this.onPageTurnModeChange(PageTurnMode.Simulation)
-        })
-        ReaderSettingChip({
-          label: $r('app.string.reader_vertical_turn'),
-          selected: this.pageTurnMode === PageTurnMode.Vertical,
-          onSelect: () => this.onPageTurnModeChange(PageTurnMode.Vertical)
-        })
-      }
-      .width('100%')
+    ReaderSettingCard({ title: $r('app.string.reader_turn_title'), inline: true }) {
+      ImmersiveOptionTabs({
+        labels: [$r('app.string.reader_turn_none'), $r('app.string.reader_turn_cover'),
+          $r('app.string.reader_turn_simulation'), $r('app.string.reader_vertical_turn')],
+        selected: ['none', 'cover', 'simulation', 'vertical'].indexOf(this.pageTurnMode),
+        onSelect: (index: number): void => this.onPageTurnModeChange(
+          [PageTurnMode.None, PageTurnMode.Cover, PageTurnMode.Simulation, PageTurnMode.Vertical][index])
+      })
     }
   }
 
@@ -511,6 +533,23 @@ export struct ReaderSettingsSheet {
           onChange: (value: number, commit: boolean): void => this.onMarginChange('bottom', value, commit)
         })
       }.width('100%')
+    }
+  }
+
+  @Builder
+  buildStatusBarSection() {
+    ReaderSettingCard({ title: $r('app.string.reader_status_bar_title') }) {
+      Row({ space: AppSpace.Sm }) {
+        Column({ space: AppSpace.Xxs }) {
+          Text($r('app.string.reader_status_bar_always'))
+            .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+          Text($r('app.string.reader_status_bar_hint'))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+        Toggle({ type: ToggleType.Switch, isOn: this.alwaysShowStatusBar })
+          .selectedColor(AppColor.Brand)
+          .onChange((enabled: boolean): void => this.onStatusBarChange(enabled))
+      }.width('100%').alignItems(VerticalAlign.Center)
     }
   }
 
@@ -569,6 +608,7 @@ export struct ReaderSettingsSheet {
           this.buildPageTurnModeSection()
           this.buildThemeSection()
           this.buildMarginSection()
+          this.buildStatusBarSection()
           this.buildReadingStatusSection()
         }
         .width('100%')

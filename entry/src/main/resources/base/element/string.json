@@ -21,6 +21,10 @@
 
     { "name": "chapter_order_save_failed", "value": "章节顺序保存失败，请重试" },
     {"name": "reader_footer_title", "value": "页脚显示"},
+    {"name": "reader_status_bar_title", "value": "状态栏"},
+    {"name": "reader_status_bar_always", "value": "始终显示状态栏"},
+    {"name": "reader_status_bar_hint", "value": "关闭后跟随底部工具栏显示或隐藏"},
+    {"name": "settings_preload_input_hint", "value": "0–50"},
     {"name": "reader_show_battery_time", "value": "显示电量和时间"},
     {"name": "reader_battery_level", "value": "电量 %s"},
     {
@@ -1488,6 +1492,23 @@
     {"name": "source_login_valid", "value": "已登录"},
     {"name": "source_login_expired", "value": "已过期"},
     {"name": "source_login_none", "value": "未登录"},
-    {"name": "rule_source_login_no_session", "value": "未获取到登录会话，请完成网页登录后再保存"}
+    {"name": "rule_source_login_no_session", "value": "未获取到登录会话，请完成网页登录后再保存"},
+    {"name": "reader_pure_black", "value": "纯黑"},
+    {"name": "reader_turn_title", "value": "翻页效果"},
+    {"name": "reader_turn_none", "value": "无效果"},
+    {"name": "reader_turn_cover", "value": "覆盖"},
+    {"name": "reader_turn_simulation", "value": "仿真"},
+    {"name": "appearance_material_strong", "value": "强"},
+    {"name": "appearance_material_balanced", "value": "均衡"},
+    {"name": "appearance_material_weak", "value": "弱"},
+    {"name": "settings_preload_custom", "value": "预缓存章节数"},
+    {"name": "settings_preload_range", "value": "请输入 0–50 章，0 为关闭预缓存"},
+    {"name": "shelf_delete_only", "value": "仅删除书架"},
+    {"name": "shelf_delete_local", "value": "删除书架及本地"},
+    {"name": "chapter_segment_all", "value": "全部章节"},
+    {"name": "settings_preload_custom_tab", "value": "自定义"},
+    {"name": "chapter_grid_empty", "value": "暂无匹配章节"},
+    {"name": "chapter_total_switch", "value": "共 %d 集 · 切换"},
+    {"name": "chapter_total_switch_text", "value": "共 %d 章 · 切换"}
   ]
 }

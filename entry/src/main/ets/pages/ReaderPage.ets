@@ -30,6 +30,7 @@ import { ReaderBackground } from '../components/ReaderBackground';
 import { ReaderContinuousComponent } from '../components/ReaderContinuousComponent';
 import { ReaderPageTurnComponent } from '../components/ReaderPageTurnComponent';
 import { ReaderSettingsSheet } from '../components/ReaderSettingsSheet';
+import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
 import { ReaderStatusIndicator } from '../components/ReaderStatusIndicator';
 import { DataService } from '../service/DataService';
 import { BookSourceService } from '../service/BookSourceService';
@@ -51,6 +52,8 @@ const READER_LOG_DOMAIN: number = 0x0000;
 const READER_LOG_TAG: string = 'ReaderPage';
 const READER_FLOATING_BOTTOM: number = 4;
 const READER_MIN_SAFE_BOTTOM: number = 8;
+/** 手势/悬浮小白条的最大正文避让：只需让过悬浮条本体，不占完整手势区。 */
+const READER_GESTURE_SAFE_MAX: number = 16;
 // 与首页 HdsTabs barFloatingStyle 官方沉浸栏同款视觉参数。
 const READER_BAR_HEIGHT: number = 56;
 const READER_BAR_MASK_HEIGHT: number = 92;
@@ -58,7 +61,6 @@ const READER_BAR_SIDE_MARGIN: number = 12;
 const READER_CHAPTER_ROW_HEIGHT: number = 64;
 const READER_CHAPTER_JUMP_DISTANCE: number = 200;
 const READER_TEXT_HORIZONTAL_PADDING: number = 24;
-const READER_TEXT_VERTICAL_PADDING: number = 12;
 const READER_TEXT_HEADER_HEIGHT: number = 36;
 const READER_TEXT_FOOTER_HEIGHT: number = 24;
 const READER_TEXT_LAYOUT_GUARD: number = 4;
@@ -95,7 +97,7 @@ export struct ReaderPage {
   private readonly readerColorListener = (): void => {
     if (this.followSystemTheme && !this.leaving) {
       this.refreshPalette();
-      this.applyReadingSettings();
+      this.applyReadingSettings(false);
     }
   };
   @Local themeId: string = TextReadingSettings.THEME_DEFAULT;
@@ -105,6 +107,7 @@ export struct ReaderPage {
   @Local overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   @Local pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
   @Local showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
+  @Local alwaysShowStatusBar: boolean = TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
   /** 由 themeId / customBackground 解析出的当前配色；所有阅读色都从这里取 */
   @Local palette: ReaderPalette = resolvePalette(TextReadingSettings.THEME_DEFAULT,
     TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT);
@@ -112,6 +115,7 @@ export struct ReaderPage {
   @Local jumpingResourceIndex: number = -1;
   @Local readerBarVisible: boolean = false;
   @Local showChapterSheet: boolean = false;
+  @Local chapterSegmented: boolean = true;
   @Local showSettingsSheet: boolean = false;
   @Local showSpeechSheet: boolean = false;
   @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
@@ -132,6 +136,7 @@ export struct ReaderPage {
   @Local onlineTextTurnPreview: ReaderOnlineTextTurnPreview | null = null;
   private onlineTextTurnSerial: number = 0;
   private onlineTextTurnLoading: boolean = false;
+  private onlineTextTurnConfirmed: boolean = false;
   private currentPosition: TextReadingPosition | null = null;
   private context: common.UIAbilityContext | null = null;
   private leaving: boolean = false;
@@ -166,20 +171,28 @@ export struct ReaderPage {
   private onlineTextLoadSerial: number = 0;
   private readerViewportWidthVp: number = 0;
   private readerViewportHeightVp: number = 0;
+  private readerTextWidthVp: number = 0;
+  private readerTextHeightVp: number = 0;
   private readerSettingsRefreshTimerId: number = -1;
   private safeAreaChangeHandler: (topVp: number, bottomVp: number) => void =
     (topVp: number, bottomVp: number): void => {
-      const changed = Math.abs(this.topSafeVp - topVp) >= 0.1 ||
-        Math.abs(this.bottomSafeVp - bottomVp) >= 0.1;
-      if (!changed) return;
+      const topChanged = Math.abs(this.topSafeVp - topVp) >= 0.1;
+      const bottomChanged = Math.abs(this.bottomSafeVp - bottomVp) >= 0.1;
       this.topSafeVp = topVp;
       this.bottomSafeVp = bottomVp;
-      this.scheduleReaderSettingsRefresh();
+      if (topChanged || bottomChanged) this.scheduleReaderSettingsRefresh();
     };
 
+  private backgroundHandler = (): void => {
+    this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
+    this.saveProgress();
+  };
+
   aboutToAppear(): void {
+    emitter.on('app.reader.background', this.backgroundHandler);
     this.leaving = false;
     this.readerBarVisible = false;
+    this.syncReaderStatusBar();
     WindowUtils.setReaderActive(true);
     this.showChapterSheet = false;
     this.showSettingsSheet = false;
@@ -194,11 +207,12 @@ export struct ReaderPage {
   }
 
   aboutToDisappear(): void {
+    emitter.off('app.reader.background', this.backgroundHandler);
+    this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     this.leaving = true;
     emitter.off(EVT_READER_JUMP_CHAPTER, this.jumpChapterHandler);
     TextToSpeechService.getInstance().removeListener(this.speechListener);
     WindowUtils.setReaderActive(false);
-    this.completeOnlineTextTurn(false);
     this.onlineTextLoadSerial++;
     this.cancelReaderSettingsRefresh();
     this.saveProgress();
@@ -387,15 +401,10 @@ export struct ReaderPage {
       this.currentChapterTitle = this.chapterTitle(resourceIndex);
       this.loading = false;
       this.readerError = '';
-      if (this.pageTurnMode === PageTurnMode.Vertical) {
-        const offset = charOffset > 0 ? Math.min(charOffset, content.length) : pages[nextPageIndex].startOffset;
-        this.currentPosition = TextReadingPosition.atChar(currentBook.id, resourceIndex, '', offset,
-          nextPageIndex, this.currentChapterTitle);
-        this.continuousRevision++;
-        this.saveProgress();
-      } else {
-        this.updateOnlineTextPosition(true);
-      }
+      const offset = !openLastPage && charOffset > 0 ? Math.min(charOffset, content.length) :
+        pages[nextPageIndex].startOffset;
+      this.updateOnlineTextPosition(true, offset);
+      if (this.pageTurnMode === PageTurnMode.Vertical) this.continuousRevision++;
       this.prefetchAdjacentOnlineTextChapters(resourceIndex);
       return true;
     } catch (e) {
@@ -474,18 +483,20 @@ export struct ReaderPage {
       this.readerViewportWidthVp : currentDisplay.width / density;
     const viewportHeightVp = this.readerViewportHeightVp > 0 ?
       this.readerViewportHeightVp : currentDisplay.height / density;
-    const contentWidthVp = Math.max(80,
-      viewportWidthVp - this.marginLeft - this.marginRight);
-    const reservedHeightVp = this.topSafeVp + this.bottomSafeVp +
+    const contentWidthVp = this.readerTextWidthVp > 0 ? this.readerTextWidthVp :
+      Math.max(80, viewportWidthVp - this.marginLeft - this.marginRight);
+    const reservedHeightVp = this.topSafeVp + this.readerBottomInsetVp() +
       this.marginTop + this.marginBottom + READER_TEXT_HEADER_HEIGHT +
       READER_TEXT_FOOTER_HEIGHT + READER_TEXT_LAYOUT_GUARD;
-    const contentHeightVp = Math.max(80, viewportHeightVp - reservedHeightVp);
+    const contentHeightVp = this.readerTextHeightVp > 0 ?
+      Math.max(1, this.readerTextHeightVp - READER_TEXT_LAYOUT_GUARD) :
+      Math.max(80, viewportHeightVp - reservedHeightVp);
     return OnlineTextPaginator.paginate(content, contentWidthVp * density,
       contentHeightVp * density, this.fontSize * scaledDensity, this.lineHeight);
   }
 
   private currentOnlineTextCharOffset(): number {
-    if (this.pageTurnMode === PageTurnMode.Vertical && this.currentPosition !== null) {
+    if (this.currentPosition !== null && this.currentPosition.resourceIndex === this.currentResourceIndex) {
       return this.currentPosition.charOffset;
     }
     const page = this.onlineTextPages[this.onlineTextPageIndex];
@@ -494,15 +505,26 @@ export struct ReaderPage {
     return position !== null ? position.charOffset : 0;
   }
 
+  private handleReaderTextSizeChange(size: SizeOptions): void {
+    if (typeof size.width !== 'number' || typeof size.height !== 'number' ||
+      size.width <= 0 || size.height <= 0) return;
+    if (Math.abs(this.readerTextWidthVp - size.width) < 0.5 &&
+      Math.abs(this.readerTextHeightVp - size.height) < 0.5) return;
+    this.readerTextWidthVp = size.width;
+    this.readerTextHeightVp = size.height;
+    this.scheduleReaderSettingsRefresh();
+  }
+
   private repaginateOnlineText(): void {
-    this.completeOnlineTextTurn(false);
+    this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     if (!this.isOnlineTextBook() || this.onlineTextContent.length === 0) return;
     const charOffset = this.currentOnlineTextCharOffset();
     const pages = this.paginateOnlineTextContent(this.onlineTextContent);
     this.onlineTextPages = pages;
     this.onlineTextPageIndex = OnlineTextPaginator.pageIndexForOffset(pages, charOffset);
+    // 窗口/安全区变化只改变分页；保留已确认字符，避免恢复视口后逐次回退。
+    this.updateOnlineTextPosition(false, charOffset);
     if (this.pageTurnMode === PageTurnMode.Vertical) this.continuousRevision++;
-    else this.updateOnlineTextPosition(false);
   }
 
   private updateContinuousPosition(chapterIndex: number, offset: number, content: string, persist: boolean): void {
@@ -519,12 +541,13 @@ export struct ReaderPage {
     if (persist) this.saveProgress();
   }
 
-  private updateOnlineTextPosition(persist: boolean): void {
+  private updateOnlineTextPosition(persist: boolean, charOffset: number = -1): void {
     const currentBook = this.book;
     const page = this.onlineTextPages[this.onlineTextPageIndex];
     if (currentBook === null || page === undefined) return;
     this.currentPosition = TextReadingPosition.atChar(
-      currentBook.id, this.currentResourceIndex, '', page.startOffset,
+      currentBook.id, this.currentResourceIndex, '',
+      charOffset >= 0 ? Math.min(charOffset, this.onlineTextContent.length) : page.startOffset,
       this.onlineTextPageIndex, this.currentChapterTitle);
     if (persist) this.saveProgress();
   }
@@ -645,6 +668,8 @@ export struct ReaderPage {
       this.overlayAlpha = settings.overlayAlpha;
       this.pageTurnMode = settings.pageTurnMode;
       this.showReadingStatus = settings.showReadingStatus;
+      this.alwaysShowStatusBar = settings.alwaysShowStatusBar;
+      this.syncReaderStatusBar();
       this.updateMarginTopMax();
       this.refreshPalette();
     } catch (e) {
@@ -670,6 +695,8 @@ export struct ReaderPage {
     this.overlayAlpha = TextReadingSettings.OVERLAY_DEFAULT;
     this.pageTurnMode = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
     this.showReadingStatus = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
+    this.alwaysShowStatusBar = TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
+    this.syncReaderStatusBar();
     this.refreshPalette();
   }
 
@@ -685,7 +712,7 @@ export struct ReaderPage {
       (this.systemNightOverride ? ReaderThemeId.Night : daytimeTheme) : this.themeId;
     this.palette = resolvePalette(effectiveTheme, this.customBackground);
     // 深色底配白字状态栏，浅色底配黑字
-    WindowUtils.setStatusBarLight(this.palette.isDark).catch((_e: Error): void => {});
+    WindowUtils.setReaderStatusBarLight(this.palette.isDark).catch((_e: Error): void => {});
   }
 
   private saveReadingSettings(): void {
@@ -694,6 +721,7 @@ export struct ReaderPage {
     const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
       this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
     settings.followSystemTheme = this.followSystemTheme;
+    settings.alwaysShowStatusBar = this.alwaysShowStatusBar;
     settings.marginLeft = this.marginLeft;
     settings.marginRight = this.marginRight;
     settings.marginTop = this.marginTop;
@@ -707,7 +735,7 @@ export struct ReaderPage {
     const currentDisplay = display.getDefaultDisplaySync();
     const scaledDensity = currentDisplay.scaledDensity > 0 ? currentDisplay.scaledDensity : 1;
     const density = currentDisplay.densityPixels > 0 ? currentDisplay.densityPixels : 1;
-    const verticalSafePx = (this.topSafeVp + this.bottomSafeVp +
+    const verticalSafePx = (this.topSafeVp + this.readerBottomInsetVp() +
       READER_TEXT_FOOTER_HEIGHT + this.marginTop + this.marginBottom) * density;
     const pageConfig: readerCore.ReaderSetting = {
       fontName: '系统字体',
@@ -728,10 +756,10 @@ export struct ReaderPage {
     return pageConfig;
   }
 
-  private applyReadingSettings(): void {
+  private applyReadingSettings(reflow: boolean = true): void {
     try {
       if (this.isOnlineTextBook()) {
-        this.repaginateOnlineText();
+        if (reflow) this.repaginateOnlineText();
         return;
       }
       const pageConfig = this.createReaderSetting();
@@ -766,7 +794,7 @@ export struct ReaderPage {
     this.themeId = TextReadingSettings.normalizeThemeId(themeId);
     this.backgroundPattern = this.themeId === ReaderThemeId.Image ? ReaderPattern.Image : ReaderPattern.None;
     this.refreshPalette();
-    this.applyReadingSettings();
+    this.applyReadingSettings(false);
     this.saveReadingSettings();
   }
 
@@ -776,11 +804,11 @@ export struct ReaderPage {
   }
 
   private handlePageTurnModeChange(mode: string): void {
-    this.completeOnlineTextTurn(false);
+    this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     const offset = this.currentOnlineTextCharOffset();
     this.pageTurnMode = TextReadingSettings.normalizePageTurnMode(mode);
     this.onlineTextPageIndex = OnlineTextPaginator.pageIndexForOffset(this.onlineTextPages, offset);
-    if (this.pageTurnMode !== PageTurnMode.Vertical) this.updateOnlineTextPosition(true);
+    this.updateOnlineTextPosition(true, offset);
     this.saveReadingSettings();
   }
 
@@ -830,10 +858,11 @@ export struct ReaderPage {
       this.themeId = ReaderThemeId.Image;
       this.backgroundPattern = ReaderPattern.Image;
       this.refreshPalette();
-      this.applyReadingSettings();
+      this.applyReadingSettings(false);
       const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
         this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
       settings.followSystemTheme = this.followSystemTheme;
+      settings.alwaysShowStatusBar = this.alwaysShowStatusBar;
       settings.marginLeft = this.marginLeft;
       settings.marginRight = this.marginRight;
       settings.marginTop = this.marginTop;
@@ -1037,6 +1066,7 @@ export struct ReaderPage {
 
   private completeOnlineTextTurn(commit: boolean): void {
     const preview = this.onlineTextTurnPreview;
+    this.onlineTextTurnConfirmed = false;
     this.onlineTextTurnSerial++;
     this.onlineTextTurnPreview = null;
     if (this.onlineTextTurnLoading) {
@@ -1082,7 +1112,7 @@ export struct ReaderPage {
   private onlineTextTurnRevision(): string {
     return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:` +
       `${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.overlayAlpha}:` +
-      `${this.topSafeVp}:${this.bottomSafeVp}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}`;
+      `${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}`;
   }
 
   private showToast(message: ResourceStr): void {
@@ -1098,6 +1128,12 @@ export struct ReaderPage {
       normal: new SymbolGlyphModifier(icon).fontSize(24).fontColor([this.palette.primary]),
       selected: new SymbolGlyphModifier(icon).fontSize(24).fontColor([this.palette.primary])
     }, label).labelStyle({ unselectedColor: this.palette.primary, selectedColor: this.palette.primary });
+  }
+
+  /** 正文底部避让：三键导航等实体底栏完整避让；手势/悬浮小白条只留最小间隙。 */
+  private readerBottomInsetVp(): number {
+    if (WindowUtils.getSystemBottomVp() > 0) return this.bottomSafeVp;
+    return Math.max(READER_MIN_SAFE_BOTTOM, Math.min(this.bottomSafeVp, READER_GESTURE_SAFE_MAX));
   }
 
   private readerFloatingStyle(): HdsTabsFloatingStyle | undefined {
@@ -1153,10 +1189,18 @@ export struct ReaderPage {
 
   private hideReaderBar(): void {
     this.readerBarVisible = false;
+    this.syncReaderStatusBar();
   }
 
   private showReaderBar(): void {
-    if (!this.leaving) this.readerBarVisible = true;
+    if (!this.leaving) {
+      this.readerBarVisible = true;
+      this.syncReaderStatusBar();
+    }
+  }
+
+  private syncReaderStatusBar(): void {
+    WindowUtils.setReaderStatusBarVisible(this.alwaysShowStatusBar || this.readerBarVisible);
   }
 
   private openBookDetail(): void {
@@ -1216,22 +1260,25 @@ export struct ReaderPage {
     const chapters = this.book ? PreferenceService.orderedChapters(this.book) : [];
     this.chapterDataSource.setChapters(chapters.filter((chapter: Chapter): boolean =>
       chapter.title.toLowerCase().includes(keyword)));
-    this.chapterListScroller.scrollToIndex(0, false);
+    if (!this.chapterSegmented) this.chapterListScroller.scrollToIndex(0, false);
   }
 
   private scrollChapterListToCurrent(): void {
+    if (this.chapterSegmented) return;
     if (this.chapterQuery.length > 0) this.filterReaderChapters('');
     const currentBook = this.book;
     if (currentBook === null || currentBook.chapters.length === 0) return;
     const index = PreferenceService.chapterDisplayIndex(currentBook,
       this.clampResourceIndex(this.currentResourceIndex, currentBook.chapters.length));
     setTimeout((): void => {
+      if (this.chapterSegmented || !this.showChapterSheet) return;
       try {
         this.chapterListScroller.scrollToIndex(index, false, ScrollAlign.CENTER);
       } catch (_e) {
         return;
       }
       setTimeout((): void => {
+        if (this.chapterSegmented || !this.showChapterSheet) return;
         try {
           this.chapterListScroller.scrollToIndex(index, false, ScrollAlign.CENTER);
         } catch (_e) {
@@ -1247,7 +1294,7 @@ export struct ReaderPage {
   }
 
   private shouldShowChapterJumpButton(): boolean {
-    return Math.abs(this.chapterListOffsetFromCurrent) > READER_CHAPTER_JUMP_DISTANCE;
+    return !this.chapterSegmented && Math.abs(this.chapterListOffsetFromCurrent) > READER_CHAPTER_JUMP_DISTANCE;
   }
 
   private handleReaderTabClick(index: number): void {
@@ -1369,12 +1416,12 @@ export struct ReaderPage {
                   .padding({
                     left: this.marginLeft, right: this.marginRight,
                     top: this.topSafeVp + this.marginTop,
-                    bottom: this.bottomSafeVp + READER_TEXT_FOOTER_HEIGHT + this.marginBottom
+                    bottom: this.readerBottomInsetVp() + READER_TEXT_FOOTER_HEIGHT + this.marginBottom
                   })
                 if (this.showReadingStatus) {
                   ReaderStatusIndicator({ color: this.palette.secondary })
                     .height(READER_TEXT_FOOTER_HEIGHT)
-                    .margin({ bottom: this.bottomSafeVp + READER_TEXT_VERTICAL_PADDING })
+                    .margin({ bottom: this.readerBottomInsetVp() + this.marginBottom })
                 }
               }
 
@@ -1402,6 +1449,12 @@ export struct ReaderPage {
           }
         })
       }
+
+      // 固定在顶部；align 只控制组件内部，不能覆盖父 Stack 的底部对齐。
+      Column()
+        .width('100%').height(this.topSafeVp)
+        .backgroundColor(this.palette.background)
+        .position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None)
 
       if (this.loading) {
         this.buildLoadingState()
@@ -1496,6 +1549,7 @@ export struct ReaderPage {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
         .clip(true)
+        .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => this.handleReaderTextSizeChange(size))
 
         Row({ space: AppSpace.Sm }) {
           Text(this.book !== null ? `${this.onlineTextChapterIndex() + 1}/${this.book.chapters.length}` : '')
@@ -1524,8 +1578,8 @@ export struct ReaderPage {
       .padding({
         left: this.marginLeft,
         right: this.marginRight,
-        top: this.topSafeVp + this.marginTop,
-        bottom: this.bottomSafeVp + this.marginBottom
+        top: this.marginTop,
+        bottom: this.marginBottom
       })
 
     }
@@ -1545,6 +1599,7 @@ export struct ReaderPage {
           paperColor: this.palette.background,
           pageContent: (): void => this.buildOnlineTextPage(),
           onPrepare: (forward: boolean): Promise<boolean> => this.prepareOnlineTextTurn(forward),
+          onConfirm: (): void => { this.onlineTextTurnConfirmed = true; },
           onComplete: (commit: boolean): void => this.completeOnlineTextTurn(commit),
           onCenterTap: (): void => this.toggleReaderBar()
         })
@@ -1570,6 +1625,7 @@ export struct ReaderPage {
     }
     .width('100%')
     .height('100%')
+    .padding({ top: this.topSafeVp, bottom: this.readerBottomInsetVp() })
   }
 
   @Builder
@@ -1582,6 +1638,13 @@ export struct ReaderPage {
           .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
         Blank()
+        Button($r('app.string.chapter_total_switch_text', this.book?.chapters.length ?? 0))
+          .fontSize(AppFont.Caption).fontColor(AppColor.Brand).backgroundColor(Color.Transparent)
+          .onClick((): void => {
+            this.chapterSegmented = !this.chapterSegmented;
+            this.chapterListOffsetFromCurrent = 0;
+            if (!this.chapterSegmented && this.chapterQuery.length === 0) this.scrollChapterListToCurrent();
+          })
         SymbolGlyph($r('sys.symbol.xmark'))
           .fontSize(20)
           .fontColor([$r('sys.color.font_secondary')])
@@ -1599,6 +1662,15 @@ export struct ReaderPage {
         .borderRadius(AppRadius.Lg)
         .backgroundColor($r('sys.color.comp_background_tertiary'))
         .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
+      if (this.chapterSegmented) {
+        ChapterSegmentGrid({
+          chapters: this.book?.chapters ?? [],
+          currentId: this.book?.chapters[this.currentResourceIndex]?.id ?? '',
+          keyword: this.chapterQuery,
+          descending: this.book?.chaptersDescending ?? false,
+          onSelect: (chapter: Chapter): void => { this.selectChapter(chapter); }
+        }).layoutWeight(1)
+      } else {
       if (this.chapterDataSource.totalCount() === 0) {
         Text($r('app.string.reader_no_matching_chapters'))
           .fontColor($r('sys.color.font_secondary'))
@@ -1657,6 +1729,7 @@ export struct ReaderPage {
           (centerIndex - (this.book ? PreferenceService.chapterDisplayIndex(this.book, this.currentResourceIndex) : 0)) * READER_CHAPTER_ROW_HEIGHT;
       })
       }
+      }
       .width('100%')
       .height('100%')
 
@@ -1698,6 +1771,12 @@ export struct ReaderPage {
       overlayAlpha: this.overlayAlpha,
       pageTurnMode: this.pageTurnMode,
       showReadingStatus: this.showReadingStatus,
+      alwaysShowStatusBar: this.alwaysShowStatusBar,
+      onStatusBarChange: (enabled: boolean): void => {
+        this.alwaysShowStatusBar = enabled;
+        this.syncReaderStatusBar();
+        this.saveReadingSettings();
+      },
       palette: this.palette,
       followSystemTheme: this.followSystemTheme,
       marginLeft: this.marginLeft, marginRight: this.marginRight,
@@ -1706,7 +1785,7 @@ export struct ReaderPage {
       onFollowSystemChange: (enabled: boolean): void => {
         this.followSystemTheme = enabled;
         this.refreshPalette();
-        this.applyReadingSettings();
+        this.applyReadingSettings(false);
         this.saveReadingSettings();
       },
       onMarginChange: (edge: string, value: number, commit: boolean): void => {

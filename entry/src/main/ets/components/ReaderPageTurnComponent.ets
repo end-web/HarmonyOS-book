@@ -1,3 +1,4 @@
+import { emitter } from '@kit.BasicServicesKit';
 import { AnimatorResult } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -11,6 +12,7 @@ export struct ReaderPageTurnComponent {
   @Param paperColor: string = '#F5F2EA';
   @BuilderParam pageContent: () => void = this.emptyPage;
   @Event onPrepare: (forward: boolean) => Promise<boolean> = async (_forward: boolean): Promise<boolean> => false;
+  @Event onConfirm: () => void = (): void => {};
   @Event onComplete: (commit: boolean) => void = (_commit: boolean): void => {};
   @Event onCenterTap: () => void = (): void => {};
 
@@ -31,13 +33,22 @@ export struct ReaderPageTurnComponent {
   private commitOnRelease: boolean = false;
   private touchBlocked: boolean = false;
 
+  private backgroundHandler = (): void => {
+    this.cancelTurn(this.phase === 'settling' && this.commitOnRelease);
+  };
+
+  aboutToAppear(): void {
+    emitter.on('app.reader.background', this.backgroundHandler);
+  }
+
   @Monitor('mode', 'revision')
   onReaderChanged(): void {
-    this.cancelTurn();
+    this.cancelTurn(this.phase === 'settling' && this.commitOnRelease);
   }
 
   aboutToDisappear(): void {
-    this.cancelTurn();
+    emitter.off('app.reader.background', this.backgroundHandler);
+    this.cancelTurn(this.phase === 'settling' && this.commitOnRelease);
     this.canvasReady = false;
   }
 
@@ -49,14 +60,14 @@ export struct ReaderPageTurnComponent {
     if (bitmap !== null) bitmap.release().catch((): void => {});
   }
 
-  private cancelTurn(): void {
+  private cancelTurn(commit: boolean = false): void {
     const wasActive = this.phase !== 'idle';
     this.serial++;
     this.phase = 'idle';
     const running = this.animator;
     this.animator = null;
     if (running !== null) running.cancel();
-    if (wasActive) this.onComplete(false);
+    if (wasActive) this.onComplete(commit);
     if (this.canvasReady) this.canvas.clearRect(0, 0, this.pageWidth, this.pageHeight);
     this.releaseSnapshot();
   }
@@ -71,6 +82,13 @@ export struct ReaderPageTurnComponent {
     this.released = tap;
     this.commitOnRelease = tap;
     try {
+      if (this.mode === PageTurnMode.None && tap) {
+        const prepared = await this.onPrepare(forward);
+        if (ticket !== this.serial) return;
+        this.phase = 'idle';
+        this.onComplete(prepared);
+        return;
+      }
       const bitmap = await this.getUIContext().getComponentSnapshot().get(this.snapshotId);
       if (ticket !== this.serial) {
         bitmap.release().catch((): void => {});
@@ -137,6 +155,8 @@ export struct ReaderPageTurnComponent {
   }
 
   private handlePanCancel(): void {
+    // 系统返回桌面的 Cancel 不得撤销已经松手确认、正在收尾的翻页。
+    if (this.released || (this.phase !== 'preparing' && this.phase !== 'dragging')) return;
     this.released = true;
     this.commitOnRelease = false;
     if (this.phase === 'dragging') this.settle(false);
@@ -156,6 +176,14 @@ export struct ReaderPageTurnComponent {
   }
 
   private settle(commit: boolean): void {
+    if (commit) this.onConfirm();
+    if (this.mode === PageTurnMode.None) {
+      this.phase = 'idle';
+      this.onComplete(commit);
+      this.canvas.clearRect(0, 0, this.pageWidth, this.pageHeight);
+      this.releaseSnapshot();
+      return;
+    }
     const ticket = this.serial;
     const end = commit ? 1 : 0;
     this.phase = 'settling';
@@ -201,7 +229,7 @@ export struct ReaderPageTurnComponent {
     const ctx = this.canvas;
     const w = this.pageWidth;
     const h = this.pageHeight;
-    const p = Math.max(0, Math.min(1, value));
+    const p = this.mode === PageTurnMode.None ? 0 : Math.max(0, Math.min(1, value));
     ctx.globalAlpha = 1;
     ctx.clearRect(0, 0, w, h);
     ctx.save();
@@ -308,7 +336,9 @@ export struct ReaderPageTurnComponent {
     .clip(true)
     .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => {
       if (typeof size.width !== 'number' || typeof size.height !== 'number') return;
-      if (this.pageWidth !== size.width || this.pageHeight !== size.height) this.cancelTurn();
+      if (this.pageWidth !== size.width || this.pageHeight !== size.height) {
+        this.cancelTurn(this.phase === 'settling' && this.commitOnRelease);
+      }
       this.pageWidth = size.width;
       this.pageHeight = size.height;
     })

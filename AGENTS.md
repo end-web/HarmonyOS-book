@@ -116,9 +116,10 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 ## Testing
 
 - **App unit tests**: `entry/src/test/*.test.ets` (Hypium framework) — local rules, native adapters, bulk testing, search history/cache, pagination/themes, playback progress and download policies
-- **Statistics persistence regression**: `node scripts/test-stats-persistence.cjs` with `DEVECO_HOME` pointing to the installed IDE; runs the real service against temporary files and simulated platform APIs for midnight rollover, restart, recovery and concurrent writes.
+- **Node service regression scripts**: `node scripts/test-*.cjs` (reader progress/preferences/statusbar, reader-playback-sync, audio-commands, local-book-import, stats-persistence, source-web-session, talebook, text-content-cache, text-to-speech). Each requires `DEVECO_HOME` pointing to the installed Release IDE (they transpile real `entry/src/main/ets` services with the IDE's bundled TypeScript) and runs against temporary files with simulated platform APIs. `scripts/local-rule-http-fixture.cjs` is a shared fixture helper, not a test.
 - **App device tests**: `entry/src/ohosTest/ets/test/*.test.ets`
-- **Server tests**: `cd server && npm test` (Vitest) — 7 test files covering catalog, providers, auth, DB, sync
+- **Server tests**: `cd server && npm test` (Vitest) — 7 test files covering catalog, providers, auth, DB, sync; `npm run typecheck` for `tsc --noEmit`. Node >= 22, ESM. Vue admin lives in `server/admin` (`npm run admin:install`, `npm run admin:build`, `npm run build:all`)
+- **CI**: no build/test CI exists; the only workflow (`.github/workflows/app-gallery-pages.yml`) publishes `docs/app-gallery/**` to GitHub Pages on push to main. Never rely on CI to catch errors
 - After changing playback/source adapters/download: smoke-test search → detail → chapter → play on device, then verify resume, download and export
 - After changing local rule import/runtime/dispatch: verify no-source empty states, then import → single/bulk test → search → detail → read/play; disabled sources must leave existing favorites resolvable and one failed rule must not stop other sources
 - After changing reading: verify chapter/character-position restore, pagination after font or window changes, settings persistence and safe-area handling
@@ -126,7 +127,7 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 
 ## Security & Config
 
-- **`build-profile.json5` contains signing secrets** (key passwords, cert paths) — never commit changes to this file; signing is machine-specific and configured via DevEco Studio
+- **`build-profile.json5` contains signing secrets** (key passwords, cert paths) and is git-tracked — never commit changes to this file; signing is machine-specific and configured via DevEco Studio. `build-profile.template.json5` is the shareable template; `signing/` is gitignored
 - `code-linter.json5` enforces crypto security rules (no unsafe AES/RSA/DSA/DH/3DES) on all `.ets` files
 - The App has no configurable cloud API base; `server/` remains an optional independent project and must not become an implicit runtime dependency
 - QuickJS business code may call only `LocalRuleQuickJsRuntime.execute()`; that facade invokes native `evaluateBounded`. Keep the upstream license files and `THIRD_PARTY_NOTICES.md` when updating `entry/libs/quickjs.har`
@@ -136,6 +137,7 @@ Generated dirs (never edit, never commit): `build/`, `.hvigor/`, `oh_modules/`, 
 
 - **`CLAUDE.md`** — product/architecture source of truth (content model, services, page flow, SDK baseline)
 - **`docs/APP_UI.md`** — current UI interaction baseline and regression checklist
+- **`docs/BOOK_SOURCE_RULES.md`** — 书源规则编写指南 for imported rule sources; keep aligned with the actual import parser and rule runtime
 - **`server/README.md`** — server deployment and operations guide
 - Keep these documents aligned with active code paths. Remove superseded one-off plans and fix notes; Git retains their history.
 

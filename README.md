@@ -2,18 +2,18 @@
 
 简听是面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前版本：`0.1.24`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.26`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
-`v0.1.24` 修复电子书阅读后书架章节进度未实时更新的问题，返回书架无需切换 Tab 或手动刷新。
+`v0.1.26` 新增分段章节目录、纯黑阅读主题、无效果翻页和状态栏开关，支持自定义预缓存，优化搜索与书架交互，并修复阅读位置恢复和系统媒体信息更新问题。完整说明见 [更新日志](CHANGELOG.md)。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.24 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.24/JianTing-v0.1.24.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.26 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.26/JianTing-v0.1.26.hap)
 
 安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件。当前采用 Release SDK 和 Release 模式构建；GitHub HAP 沿用开发签名，供获授权手机安装，AppGallery 使用单独的正式签名 APP。
 
 ```bash
-hdc install JianTing-v0.1.24.hap
+hdc install JianTing-v0.1.26.hap
 ```
 
 包名保持 `com.huan.listenbook`，沿用已有书架、书源与记录。
@@ -147,7 +147,7 @@ AGENTS.md                 协作与工程约定
 
 GitHub HAP 使用 `product=default, buildMode=release`；官方邀测 APP 使用 `product=release, buildMode=release`，须绑定 AppGallery 正式发布证书与 `release / app_gallery` Profile。APP 包上传 AGC，GitHub 开发签名 HAP 供获授权设备安装。
 
-上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.24 --version-code 1000024`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
+上传前运行 `python scripts/verify-release-package.py <APP或HAP路径> --version 0.1.26 --version-code 1000026`，核验 SDK 正式版标记、目标 API 24、最低 API 20、版本和 1024×1024 分层图标；签名有效性另用 SDK 的 `hap-sign-tool verify-app` 检查。
 
 切换本机构建套件时，将 `DEVECO_SDK_HOME` 指向 Release IDE 的 `sdk` 目录，并使用同一安装目录下的 Node/Hvigor；HarmonyOS 构建不会从 `local.properties` 的 `hwsdk.dir` 切换 SDK。重建原生依赖可用 `scripts/build-quickjs.ps1 -DevEcoRoot <正式版IDE目录> -RequireReleaseSdk`。正式版与 Beta 的发布用途见[华为版本说明](https://developer.huawei.com/consumer/cn/doc/harmonyos-releases/overview-allversion)。
 

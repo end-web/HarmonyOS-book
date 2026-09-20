@@ -1,3 +1,4 @@
+import { ImmersiveOptionTabs } from '../components/ImmersiveOptionTabs';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -56,9 +57,9 @@ interface PreloadOption {
 const PRELOAD_OPTIONS: PreloadOption[] = [
   { count: 0, label: '不预加载' },
   { count: 1, label: '1章' },
-  { count: 3, label: '3章' },
   { count: 5, label: '5章' },
-  { count: 10, label: '10章' }
+  { count: 10, label: '10章' },
+  { count: -1, label: '' }
 ];
 
 const ROW_INDENT: number = AppSpace.Md;
@@ -74,6 +75,8 @@ export struct SettingsPage {
   @Local focusMode: number = 0;
   @Local autoResume: boolean = true;
   @Local preloadCount: number = 1;
+  @Local preloadDraft: string = '1';
+  @Local preloadCustom: boolean = false;
   @Local isLoaded: boolean = false;
   @Local isClearingCache: boolean = false;
   @Local isClearingBookshelf: boolean = false;
@@ -129,6 +132,8 @@ export struct SettingsPage {
     this.focusMode = await PreferenceService.getAudioInterruptMode();
     this.autoResume = await PreferenceService.getAudioAutoResume();
     this.preloadCount = await PreferenceService.getPreloadChapters();
+    this.preloadDraft = this.preloadCount.toString();
+    this.preloadCustom = !PRELOAD_OPTIONS.some((opt: PreloadOption): boolean => opt.count === this.preloadCount);
     this.isLoaded = true;
   }
 
@@ -163,8 +168,19 @@ export struct SettingsPage {
     await AudioService.getInstance().setAutoResume(enabled);
   }
 
+  private submitPreload(): void {
+    const count = Number(this.preloadDraft);
+    if (!/^[0-9]+$/.test(this.preloadDraft) || !Number.isInteger(count) || count < 0 || count > 50) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_preload_range') });
+      return;
+    }
+    this.preloadCustom = true;
+    this.setPreloadCount(count);
+  }
+
   private async setPreloadCount(count: number): Promise<void> {
     this.preloadCount = count;
+    this.preloadDraft = count.toString();
     await PreferenceService.setPreloadChapters(count);
     ChapterCacheService.getInstance().setPreloadCount(count);
   }
@@ -384,7 +400,7 @@ export struct SettingsPage {
       this.buildGroupTitle('外观')
 
       Column() {
-        Row() {
+        Row({ space: AppSpace.Sm }) {
           Column({ space: 2 }) {
             Text('主题模式')
               .fontSize(AppFont.BodyL)
@@ -393,15 +409,12 @@ export struct SettingsPage {
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
 
-          Select(THEME_OPTIONS.map((opt: ThemeOption): SelectOption => { return { value: opt.label }; }))
-            .selected(this.selectedThemeIndex)
-            .value(THEME_OPTIONS[this.selectedThemeIndex]?.label ?? '跟随系统')
-            .font({ size: AppFont.Body })
-            .fontColor($r('sys.color.font_secondary'))
-            .backgroundColor(Color.Transparent)
-            .onSelect((index: number) => {
-              this.setColorMode(THEME_OPTIONS[index].mode);
-            })
+          ImmersiveOptionTabs({
+            labels: THEME_OPTIONS.map((opt: ThemeOption): ResourceStr => opt.label),
+            selected: this.selectedThemeIndex,
+            onSelect: (index: number): void => { this.setColorMode(THEME_OPTIONS[index].mode); }
+          })
+
         }
         .width('100%')
         .padding({
@@ -479,13 +492,27 @@ export struct SettingsPage {
 
         this.buildDivider()
 
-        this.buildSelectItem(
-          '预加载章节数',
-          this.preloadCount === 0 ? '每次切换章节时重新请求音频地址' : '收听时提前缓存后续音频章节',
-          PRELOAD_OPTIONS.map((opt: PreloadOption): SelectOption => { return { value: opt.label }; }),
-          PRELOAD_OPTIONS.findIndex((opt: PreloadOption) => opt.count === this.preloadCount),
-          (index: number) => this.setPreloadCount(PRELOAD_OPTIONS[index].count)
-        )
+        Column({ space: AppSpace.Sm }) {
+          Text($r('app.string.settings_preload_custom')).fontSize(AppFont.BodyL)
+            .fontColor($r('sys.color.font_primary')).width('100%')
+          Row({ space: AppSpace.Sm }) {
+          ImmersiveOptionTabs({
+            labels: PRELOAD_OPTIONS.map((opt: PreloadOption): ResourceStr => opt.count < 0 ? $r('app.string.settings_preload_custom_tab') : opt.label),
+            selected: this.preloadCustom ? 4 : PRELOAD_OPTIONS.findIndex((opt: PreloadOption): boolean => opt.count === this.preloadCount),
+            onSelect: (index: number): void => {
+              this.preloadCustom = index === 4;
+              if (!this.preloadCustom) this.setPreloadCount(PRELOAD_OPTIONS[index].count);
+            }
+          }).layoutWeight(1)
+            TextInput({ text: this.preloadDraft, placeholder: $r('app.string.settings_preload_input_hint') })
+              .type(InputType.Number).maxLength(2).layoutWeight(1.2).height(40)
+              .onChange((value: string): void => { this.preloadDraft = value; })
+              .onSubmit((): void => this.submitPreload())
+            Button($r('app.string.appearance_apply')).fontColor(AppColor.OnBrand).backgroundColor(AppColor.Brand)
+              .fontSize(AppFont.Caption).layoutWeight(0.9).height(40).padding({ left: 12, right: 12 })
+              .onClick((): void => this.submitPreload())
+          }.width('100%').alignItems(VerticalAlign.Center)
+        }.width('100%').padding(ROW_INDENT)
 
         this.buildDivider()
 
@@ -534,36 +561,20 @@ export struct SettingsPage {
     selected: number,
     onSelect: (index: number) => void
   ) {
-    Row() {
+    Row({ space: AppSpace.Sm }) {
       Column({ space: 2 }) {
-        Text(title)
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
-        if (subtitle.length > 0) {
-          Text(subtitle)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-        }
+      Text(title).fontSize(AppFont.BodyL).fontColor($r('sys.color.font_primary')).width('100%')
+      if (subtitle.length > 0) {
+        Text(subtitle).fontSize(AppFont.Caption).fontColor($r('sys.color.font_tertiary')).width('100%')
       }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-
-      Select(options)
-        .selected(selected)
-        .value(options[selected]?.value ?? '')
-        .font({ size: AppFont.Body })
-        .fontColor($r('sys.color.font_secondary'))
-        .backgroundColor(Color.Transparent)
-        .onSelect((index: number) => onSelect(index))
+      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      ImmersiveOptionTabs({
+        labels: options.map((option: SelectOption): ResourceStr => option.value),
+        selected: selected,
+        onSelect: (index: number): void => onSelect(index)
+      })
     }
-    .width('100%')
-    .padding({
-      left: ROW_INDENT,
-      right: AppSpace.Xs,
-      top: AppSpace.Sm,
-      bottom: AppSpace.Sm
-    })
-    .constraintSize({ minHeight: 56 })
+    .width('100%').padding(ROW_INDENT)
   }
 
   @Builder

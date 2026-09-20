@@ -89,6 +89,7 @@ export class ReaderThemePreset {
 export const READER_THEME_PRESETS: ReaderThemePreset[] = [
   ReaderThemePreset.of(ReaderThemeId.Parchment, '羊皮纸', '#F5F2EA', '#2D2925', '#6F675E', false),
   ReaderThemePreset.of(ReaderThemeId.EyeCare, '护眼绿', '#E3EDDF', '#28322A', '#5C6B5B', false),
+  ReaderThemePreset.of(ReaderThemeId.Black, '', '#000000', '#D6D3CD', '#8F8B84', true),
   ReaderThemePreset.of(ReaderThemeId.Night, '夜间', '#1C1F22', '#D6D3CD', '#8F8B84', true)
 ];
 

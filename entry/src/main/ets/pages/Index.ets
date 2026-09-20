@@ -58,6 +58,7 @@ struct Index {
   @Local detailScale: number = 1;
   @Local detailOpacity: number = 1;
   private widgetSubscribed: boolean = false;
+  private homeBackHandler: (() => boolean) | undefined = undefined;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
   private browserLoginOpener: (route: RuleSourceLoginRouteParams) => void = (route: RuleSourceLoginRouteParams): void => {
@@ -169,12 +170,18 @@ struct Index {
   routerMap(name: string, param: object) {
     if (name === 'home') {
       NavDestination() {
-        MainPage({ navStack: this.navStack })
+        MainPage({
+          navStack: this.navStack,
+          onBackHandlerChange: (handler: (() => boolean) | undefined): void => {
+            this.homeBackHandler = handler;
+          }
+        })
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.NONE)
       .onBackPressed((): boolean => {
+        if (this.homeBackHandler?.()) return true;
         // 根页返回:移到后台而不是 pop,保证退出应用
         try {
           const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;

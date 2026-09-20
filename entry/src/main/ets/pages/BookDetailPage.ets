@@ -1,3 +1,4 @@
+import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
 import { emitter } from '@kit.BasicServicesKit';
@@ -45,6 +46,7 @@ export struct BookDetailPage {
   @Local debugInfo: string = '';
   /** 节目搜索关键词。 */
   @Local chapterQuery: string = '';
+  @Local showSegmentGrid: boolean = false;
   @Local chaptersDescending: boolean = false;
   @Local downloadTick: number = 0;
   @Local chapterDownloadTick: number = 0;
@@ -476,10 +478,12 @@ export struct BookDetailPage {
    * 修正长列表按平均行高估算导致的 ScrollAlign.CENTER 偏差(原先单次定位时灵时不灵)。
    */
   private scrollChapterListToIndex(idx: number): void {
-    if (idx < 0) return;
+    if (idx < 0 || this.showSegmentGrid) return;
     setTimeout(() => {
+      if (this.showSegmentGrid) return;
       try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
       setTimeout(() => {
+        if (this.showSegmentGrid) return;
         try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
       }, 150);
     }, 50);
@@ -492,6 +496,12 @@ export struct BookDetailPage {
     const query = this.chapterQuery.trim().toLowerCase();
     const filtered = source.filter((chapter: Chapter): boolean => chapter.title.toLowerCase().includes(query));
     this.displayedChapters = this.chaptersDescending ? filtered.reverse() : filtered;
+  }
+
+  private toggleChapterLayout(): void {
+    this.showSegmentGrid = !this.showSegmentGrid;
+    this.listOffsetFromCurrent = 0;
+    if (!this.showSegmentGrid) this.scrollToCurrentChapter();
   }
 
   /** 按关键词过滤章节。空关键词回到完整列表，再推送展示数组给 Repeat。 */
@@ -1033,6 +1043,7 @@ export struct BookDetailPage {
             .constraintSize({ maxWidth: '100%' })
           if (this.book!.chapterCount > 0) {
             Text(this.book!.chapterCount.toString() + (this.book!.contentType === 'text' ? '章' : '集'))
+              .onClick((): void => this.toggleChapterLayout())
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_secondary'))
               .maxLines(2)
@@ -1231,6 +1242,7 @@ export struct BookDetailPage {
       // 章节头部
       Row() {
         Text(this.chapterHeaderText())
+          .onClick((): void => this.toggleChapterLayout())
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
         // 首次加载由骨架屏自带提示，这里只在「已有章节 + 后台刷新」时补一个小圈
@@ -1251,7 +1263,7 @@ export struct BookDetailPage {
               });
             }
             this.applyChapterFilter();
-            this.chapterListScroller.scrollToIndex(0, false);
+            if (!this.showSegmentGrid) this.chapterListScroller.scrollToIndex(0, false);
           })
       }
       .width('100%')
@@ -1311,6 +1323,14 @@ export struct BookDetailPage {
             .fontColor($r('sys.color.font_tertiary'))
         }
         .width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+      } else if (this.showSegmentGrid) {
+        ChapterSegmentGrid({
+          chapters: this.book!.chapters,
+          currentId: this.book?.chapters[this.currentChapterIndex()]?.id ?? '',
+          keyword: this.chapterQuery,
+          descending: this.chaptersDescending,
+          onSelect: (chapter: Chapter): void => this.openPrimaryAction(chapter)
+        }).layoutWeight(1)
       } else {
         Stack({ alignContent: Alignment.BottomEnd }) {
           List({ space: 0, scroller: this.chapterListScroller }) {

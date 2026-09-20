@@ -46,6 +46,7 @@ export class TextReadingPosition {
 export enum PageTurnMode {
   /** 覆盖翻页（默认） */
   Cover = 'cover',
+  None = 'none',
   /** 仿真翻页 */
   Simulation = 'simulation',
   /** 滑动翻页 */
@@ -69,6 +70,7 @@ export class TextReadingSettings {
   static readonly CUSTOM_BACKGROUND_DEFAULT: string = '#F5F2EA';
   static readonly PAGE_TURN_MODE_DEFAULT: string = PageTurnMode.Cover;
   static readonly SHOW_READING_STATUS_DEFAULT: boolean = true;
+  static readonly ALWAYS_SHOW_STATUS_BAR_DEFAULT: boolean = true;
   /** 边距持久化宽松上限：上边距允许随屏幕高度放大到视口一半，其余边保持 UI 上限。 */
   static readonly MARGIN_MAX_LIMIT: number = 512;
   /** 常规边距 UI 上限（左右/下） */
@@ -100,6 +102,8 @@ export class TextReadingSettings {
   pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
   /** 底部居中显示电量和时间，不影响正文视口。 */
   showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
+  /** 关闭时跟随阅读工具栏显隐；安全区始终保留。 */
+  alwaysShowStatusBar: boolean = TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
 
   static of(fontSize: number, lineHeight: number): TextReadingSettings {
     const value = new TextReadingSettings();
@@ -138,7 +142,6 @@ export class TextReadingSettings {
   static normalizeThemeId(value: string): string {
     if (typeof value !== 'string' || value.length === 0) return TextReadingSettings.THEME_DEFAULT;
     if (value === ReaderThemeId.Paper) return ReaderThemeId.Parchment;
-    if (value === ReaderThemeId.Black) return ReaderThemeId.Night;
     if (value === ReaderThemeId.Custom || value === ReaderThemeId.Image) return value;
     return findThemePreset(value) !== null ? value : TextReadingSettings.THEME_DEFAULT;
   }
@@ -169,7 +172,7 @@ export class TextReadingSettings {
   }
 
   static normalizePageTurnMode(value?: string): string {
-    if (value === PageTurnMode.Cover || value === PageTurnMode.Simulation || value === PageTurnMode.Slide || value === PageTurnMode.Vertical) {
+    if (value === PageTurnMode.None || value === PageTurnMode.Cover || value === PageTurnMode.Simulation || value === PageTurnMode.Slide || value === PageTurnMode.Vertical) {
       return value;
     }
     return TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
