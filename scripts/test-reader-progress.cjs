@@ -64,6 +64,20 @@ function reader() {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
+  const stable = reader();
+  let layoutRefreshes = 0;
+  Object.assign(stable, {
+    readerViewportWidthVp: 400, readerViewportHeightVp: 800,
+    updateMarginTopMax() {}, scheduleReaderSettingsRefresh() { layoutRefreshes++; }
+  });
+  const viewport = { width: 400, height: 800 };
+  stable.handleViewportSizeChange(viewport, { width: 0, height: 0 });
+  stable.handleViewportSizeChange({ width: 0, height: 0 }, viewport);
+  assert.equal(layoutRefreshes, 0, 'a hidden zero-sized viewport followed by the same viewport must not reflow');
+  assert.equal(stable.currentPosition.charOffset, 100);
+  stable.handleViewportSizeChange(viewport, { width: 600, height: 800 });
+  assert.equal(layoutRefreshes, 1, 'a real window resize must still refresh pagination');
+
   const page = reader();
   for (let repeat = 0; repeat < 3; repeat++) {
     page.paginateOnlineTextContent = () => expanded;

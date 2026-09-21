@@ -146,11 +146,21 @@ interface FormIdBucket {
 }
 
 /** 华为账号登录身份标识(端侧直接返回,无需后端) */
-export interface HwAccount {
-  unionID: string;
-  openID: string;
+export class HwAccount {
+  unionID: string = '';
+  openID: string = '';
+  nickName: string = '';
+  /** 仅保存本地头像缓存文件名，不保存短期有效的头像 URL。 */
+  avatarFile: string = '';
   /** 登录时间戳 */
-  loginAt: number;
+  loginAt: number = 0;
+
+  static isValid(account: HwAccount | null): boolean {
+    return account !== null && typeof account.unionID === 'string' &&
+      account.unionID.trim().length > 0 && account.unionID.length <= 256 &&
+      typeof account.openID === 'string' && account.openID.trim().length > 0 && account.openID.length <= 256 &&
+      typeof account.loginAt === 'number' && Number.isFinite(account.loginAt) && account.loginAt > 0;
+  }
 }
 
 export class PreferenceService {
@@ -271,27 +281,50 @@ export class PreferenceService {
 
   static async getHwAccount(): Promise<HwAccount | null> {
     const s = await PreferenceService.ensureStore();
-    const raw = await s.get(KEY_HW_ACCOUNT, '') as string;
-    if (!raw) {
+    const raw = await s.get(KEY_HW_ACCOUNT, '');
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2048) {
       return null;
     }
     try {
-      return JSON.parse(raw) as HwAccount;
+      const parsed: HwAccount | null = JSON.parse(raw);
+      if (!parsed || !HwAccount.isValid(parsed)) return null;
+      const account = new HwAccount();
+      account.unionID = parsed.unionID;
+      account.openID = parsed.openID;
+      account.loginAt = parsed.loginAt;
+      account.nickName = typeof parsed.nickName === 'string' ? parsed.nickName.trim().substring(0, 256) : '';
+      account.avatarFile = typeof parsed.avatarFile === 'string' && /^[a-f0-9-]{36}\.img$/.test(parsed.avatarFile)
+        ? parsed.avatarFile : '';
+      return account;
     } catch (_e) {
       return null;
     }
   }
 
   static async setHwAccount(account: HwAccount): Promise<void> {
-    const s = await PreferenceService.ensureStore();
-    await s.put(KEY_HW_ACCOUNT, JSON.stringify(account));
-    await s.flush();
+    if (!HwAccount.isValid(account)) throw new Error('Invalid Huawei account');
+    await PreferenceService.writeHwAccount(JSON.stringify(account));
   }
 
   static async clearHwAccount(): Promise<void> {
+    await PreferenceService.writeHwAccount('');
+  }
+
+  private static async writeHwAccount(raw: string): Promise<void> {
     const s = await PreferenceService.ensureStore();
-    await s.delete(KEY_HW_ACCOUNT);
-    await s.flush();
+    const previous = await s.get(KEY_HW_ACCOUNT, '');
+    try {
+      if (raw) await s.put(KEY_HW_ACCOUNT, raw);
+      else await s.delete(KEY_HW_ACCOUNT);
+      await s.flush();
+    } catch (_error) {
+      // put/delete 先改变 Preferences 内存缓存；落盘失败后回滚，避免下次恢复误报成功。
+      try {
+        if (typeof previous === 'string' && previous) await s.put(KEY_HW_ACCOUNT, previous);
+        else await s.delete(KEY_HW_ACCOUNT);
+      } catch (_rollbackError) { /* 仍向调用方报告保存失败。 */ }
+      throw new Error('Huawei account persistence failed');
+    }
   }
 
   static async getHistory(): Promise<PlayHistoryItem[]> {
@@ -808,6 +841,29 @@ export class PreferenceService {
   }
 
   /** 获取搜索历史 */
+  static async setSearchHistory(history: string[]): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put(KEY_SEARCH_HISTORY, JSON.stringify(history.slice(0, MAX_SEARCH_HISTORY)));
+    await s.flush();
+  }
+
+  static async getSearchExact(): Promise<boolean> {
+    const s = await PreferenceService.ensureStore();
+    return s.get('search_exact', false).then((value): boolean => value === true);
+  }
+
+  static async getSearchByAuthor(): Promise<boolean> {
+    const s = await PreferenceService.ensureStore();
+    return s.get('search_by_author', false).then((value): boolean => value === true);
+  }
+
+  static async setSearchOptions(exact: boolean, byAuthor: boolean): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put('search_exact', exact);
+    await s.put('search_by_author', byAuthor);
+    await s.flush();
+  }
+
   static async getSearchHistory(): Promise<string[]> {
     const s = await PreferenceService.ensureStore();
     const raw = await s.get(KEY_SEARCH_HISTORY, '[]') as string;

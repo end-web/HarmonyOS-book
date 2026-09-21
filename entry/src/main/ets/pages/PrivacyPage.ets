@@ -1,7 +1,7 @@
 import { AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
-export const PRIVACY_POLICY_VERSION = '3.0.0';
+export const PRIVACY_POLICY_VERSION = '3.3.0';
 
 class PolicySection {
   id: string;
@@ -20,6 +20,7 @@ const POLICY_SECTIONS: PolicySection[] = [
     $r('app.string.privacy_overview_identity'), $r('app.string.privacy_overview_local')
   ]),
   new PolicySection('network', $r('app.string.privacy_network_title'), [
+    $r('app.string.privacy_network_huawei_account'),
     $r('app.string.privacy_network_sources'), $r('app.string.privacy_network_accounts'),
     $r('app.string.privacy_network_updates'), $r('app.string.privacy_network_tracking')
   ]),
@@ -31,7 +32,8 @@ const POLICY_SECTIONS: PolicySection[] = [
     $r('app.string.privacy_content_sources'), $r('app.string.privacy_content_rights')
   ]),
   new PolicySection('data', $r('app.string.privacy_data_title'), [
-    $r('app.string.privacy_data_storage'), $r('app.string.privacy_data_backup'),
+    $r('app.string.privacy_data_storage'), $r('app.string.privacy_data_local_backup'),
+    $r('app.string.privacy_data_backup'),
     $r('app.string.privacy_data_delete')
   ]),
   new PolicySection('children', $r('app.string.privacy_children_title'), [

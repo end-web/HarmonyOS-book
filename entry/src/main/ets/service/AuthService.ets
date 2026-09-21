@@ -1,41 +1,42 @@
 /**
- * AuthService - 华为账号登录(获取 UnionID/OpenID)
- *
- * 走「华为账号登录」场景(非一键登录):端侧 createLoginWithHuaweiIDRequest
- * 登录成功后 response.data 直接返回 unionID/openID,无需后端、无需申请权限。
- * 身份标识持久化到 PreferenceService,冷启动 restore() 恢复登录态。
- *
- * 前提(在 AGC 后台 + 工程配置完成,否则 executeRequest 报错):
- *  1. 手动签名 + AGC 配置应用公钥指纹(account-sign-fingerprints)
- *  2. entry/module.json5 配置 client_id metadata(account-client-id)
+ * 华为账号登录：通过 profile 授权获取身份、昵称和头像，仅在本机缓存账号资料。
+ * getHuaweiIDState 从 API 12 起可用，不依赖网络，用于恢复时核对系统账号。
+ * AGC 应用级 Client ID、应用包名和实际签名公钥指纹需一致。
  */
-
 import { authentication } from '@kit.AccountKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { PreferenceService, HwAccount } from './PreferenceService';
+import { AccountAvatarService } from './AccountAvatarService';
 
 const TAG = 'AuthService';
 const DOMAIN = 0x0000;
 
-/** 华为账号登录常见错误码(用于 UI 友好提示) */
 export enum HwAuthErrorCode {
-  /** 用户未登录华为账号 */
   LOGIN_OUT = 1001502001,
-  /** 网络异常 */
+  NOT_AUTHORIZED = 1001502002,
+  INVALID_PARAMETER = 1001502003,
   NETWORK = 1001502005,
-  /** 内部错误 */
   INTERNAL = 1001502009,
-  /** 用户取消授权 */
   USER_CANCEL = 1001502012,
-  /** 系统服务异常 */
+  PERMISSION_DENIED = 1001502014,
   SYSTEM_SERVICE = 12300001,
-  /** 重复请求 */
   REQUEST_REFUSE = 1001500002,
-  /** 应用指纹证书校验失败(签名/指纹/client_id 未配好) */
   CERT_INVALID = 1001500001,
+  NOT_SUPPORTED = 1001500003,
+  INVALID_RESPONSE = -1,
+  STORAGE = -2
+}
+
+export class HwAuthError extends Error implements BusinessError {
+  code: number;
+
+  constructor(code: number) {
+    super('Huawei account operation failed');
+    this.code = code;
+  }
 }
 
 @ObservedV2
@@ -43,9 +44,7 @@ export class AuthService {
   private static _instance: AuthService | null = null;
 
   static get instance(): AuthService {
-    if (!AuthService._instance) {
-      AuthService._instance = new AuthService();
-    }
+    if (!AuthService._instance) AuthService._instance = new AuthService();
     return AuthService._instance;
   }
 
@@ -53,89 +52,161 @@ export class AuthService {
   @Trace unionID: string = '';
   @Trace openID: string = '';
   @Trace loginAt: number = 0;
-  /** 登录请求进行中:按钮 loading / 防重复点击 */
+  @Trace nickName: string = '';
+  @Trace avatarUri: string = '';
+  @Trace dataOperation: boolean = false;
+  /** 登录和退出串行进行，防止重复请求。 */
   @Trace logging: boolean = false;
+  @Trace restoring: boolean = false;
 
-  private restored: boolean = false;
+  private restoreTask: Promise<void> | null = null;
+  private accountContext: common.Context | null = null;
+  private avatarFile: string = '';
 
-  /** 冷启动从本地恢复登录态(幂等,仅生效一次) */
-  async restore(): Promise<void> {
-    if (this.restored) {
+  /** 启动、进入个人中心和前台恢复时检查；无缓存时不发起账号请求或弹出授权。 */
+  restore(context: common.Context): Promise<void> {
+    if (this.logging) return Promise.resolve();
+    if (this.restoreTask) return this.restoreTask;
+    this.restoring = true;
+    this.restoreTask = this.restoreAccount(context).catch((error: BusinessError): void => {
+      // 系统服务临时失败时保留落盘身份供下次重试，不把未核验的缓存当成已登录。
+      this.resetAccount();
+      hilog.warn(DOMAIN, TAG, 'Huawei account restore failed, code=%{public}d', error.code ?? 0);
+    }).finally((): void => {
+      this.restoring = false;
+      this.restoreTask = null;
+    });
+    return this.restoreTask;
+  }
+
+  private async restoreAccount(context: common.Context): Promise<void> {
+    this.accountContext = context;
+    await PreferenceService.ensureReady(context);
+    const account = await PreferenceService.getHwAccount();
+    if (!account) {
+      this.resetAccount();
       return;
     }
-    this.restored = true;
-    const acc = await PreferenceService.getHwAccount();
-    if (acc && acc.unionID) {
-      this.unionID = acc.unionID;
-      this.openID = acc.openID;
-      this.loginAt = acc.loginAt;
-      this.isLoggedIn = true;
+    const request: authentication.StateRequest = {
+      idType: authentication.IdType.OPEN_ID,
+      idValue: account.openID
+    };
+    const result = await new authentication.HuaweiIDProvider().getHuaweiIDState(request);
+    if (result.state === authentication.State.AUTHORIZED) {
+      await this.applyAccount(context, account);
+    } else if (result.state === authentication.State.UNLOGGED_IN ||
+      result.state === authentication.State.UNAUTHORIZED) {
+      this.resetAccount();
+      await PreferenceService.clearHwAccount();
+      await AccountAvatarService.remove(context, account.avatarFile);
+    } else {
+      throw new HwAuthError(HwAuthErrorCode.INVALID_RESPONSE);
     }
   }
 
-  /**
-   * 华为账号登录。成功返回身份标识并落盘;失败抛 BusinessError,由调用方按错误码提示。
-   * @param context UIAbility 上下文(页面可用 this.getUIContext().getHostContext())
-   */
   async login(context: common.Context): Promise<HwAccount> {
-    if (this.logging) {
-      throw new Error('login already in progress');
-    }
+    if (this.logging || this.dataOperation) throw new HwAuthError(HwAuthErrorCode.REQUEST_REFUSE);
     this.logging = true;
     try {
-      const request = new authentication.HuaweiIDProvider().createLoginWithHuaweiIDRequest();
-      // 账号未登录时强制拉起华为账号登录页
-      request.forceLogin = true;
-      // 防跨站请求伪造
+      // 等待已有恢复完成，防止迟到的恢复覆盖新登录。
+      if (this.restoreTask) await this.restoreTask;
+      await PreferenceService.ensureReady(context);
+      this.accountContext = context;
+      const previous = await PreferenceService.getHwAccount();
+      const request = new authentication.HuaweiIDProvider().createAuthorizationWithHuaweiIDRequest();
+      request.scopes = ['profile'];
+      request.forceAuthorization = true;
       request.state = util.generateRandomUUID();
-
       const controller = new authentication.AuthenticationController(context);
-      const response = await controller.executeRequest(request) as authentication.LoginWithHuaweiIDResponse;
-
-      // 校验 state,防跨站
-      if (response.state && request.state !== response.state) {
-        throw new Error(`state mismatch, response state: ${response.state}`);
+      const account = await controller.executeRequest(request)
+        .then(async (response: authentication.AuthorizationWithHuaweiIDResponse): Promise<HwAccount> => {
+          // state 缺失也必须拒绝；不记录身份、授权码或完整响应。
+          if (!response || response.state !== request.state || !response.data) {
+            throw new HwAuthError(HwAuthErrorCode.INVALID_RESPONSE);
+          }
+          const result = new HwAccount();
+          result.unionID = response.data.unionID ?? '';
+          result.openID = response.data.openID ?? '';
+          result.loginAt = Date.now();
+          if (!HwAccount.isValid(result)) throw new HwAuthError(HwAuthErrorCode.INVALID_RESPONSE);
+          result.nickName = typeof response.data.nickName === 'string'
+            ? response.data.nickName.trim().substring(0, 256) : '';
+          result.avatarFile = await AccountAvatarService.download(context, response.data.avatarUri ?? '');
+          return result;
+        });
+      try {
+        await PreferenceService.setHwAccount(account);
+      } catch (_error) {
+        await AccountAvatarService.remove(context, account.avatarFile);
+        throw new HwAuthError(HwAuthErrorCode.STORAGE);
       }
-
-      const credential = response.data;
-      const unionID = credential?.unionID ?? '';
-      const openID = credential?.openID ?? '';
-      if (!unionID) {
-        throw new Error('login response missing unionID');
-      }
-
-      const account: HwAccount = { unionID, openID, loginAt: Date.now() };
-      await PreferenceService.setHwAccount(account);
-      this.unionID = unionID;
-      this.openID = openID;
-      this.loginAt = account.loginAt;
-      this.isLoggedIn = true;
+      await this.applyAccount(context, account);
+      if (previous) await AccountAvatarService.remove(context, previous.avatarFile);
       hilog.info(DOMAIN, TAG, 'Huawei ID login succeeded');
       return account;
-    } catch (e) {
-      const err = e as BusinessError;
-      hilog.error(DOMAIN, TAG, `login failed, code=${err.code}, msg=${err.message}`);
-      throw e as Error;
+    } catch (error) {
+      const failure: BusinessError = error;
+      const code = failure.code ?? HwAuthErrorCode.INTERNAL;
+      if (code !== HwAuthErrorCode.USER_CANCEL && code !== HwAuthErrorCode.REQUEST_REFUSE) {
+        hilog.error(DOMAIN, TAG, 'Huawei ID login failed, code=%{public}d', code);
+      }
+      throw new HwAuthError(code);
     } finally {
       this.logging = false;
     }
   }
 
-  /** 退出登录:仅清除本地身份标识(华为账号本身不登出) */
+  /** 仅退出简听，不退出系统华为账号，不删除书架、阅读记录或书源会话。 */
   async logout(): Promise<void> {
-    await PreferenceService.clearHwAccount();
+    if (this.logging || this.dataOperation) throw new HwAuthError(HwAuthErrorCode.REQUEST_REFUSE);
+    this.logging = true;
+    try {
+      if (this.restoreTask) await this.restoreTask;
+      await PreferenceService.clearHwAccount();
+      if (this.accountContext) await AccountAvatarService.remove(this.accountContext, this.avatarFile);
+      this.resetAccount();
+    } catch (_error) {
+      throw new HwAuthError(HwAuthErrorCode.STORAGE);
+    } finally {
+      this.logging = false;
+    }
+  }
+
+  /** 备份、恢复期间禁止退出或重新授权；系统账号状态检查仍可执行。 */
+  beginDataOperation(requireLogin: boolean = true): void {
+    if (this.logging || this.restoring || this.dataOperation) throw new HwAuthError(HwAuthErrorCode.REQUEST_REFUSE);
+    if (requireLogin && !this.isLoggedIn) throw new HwAuthError(HwAuthErrorCode.LOGIN_OUT);
+    this.dataOperation = true;
+  }
+
+  endDataOperation(): void {
+    this.dataOperation = false;
+  }
+
+  private async applyAccount(context: common.Context, account: HwAccount): Promise<void> {
+    const avatarUri = await AccountAvatarService.localUri(context, account.avatarFile);
+    this.unionID = account.unionID;
+    this.openID = account.openID;
+    this.loginAt = account.loginAt;
+    this.nickName = account.nickName;
+    this.avatarFile = account.avatarFile;
+    this.avatarUri = avatarUri;
+    this.isLoggedIn = true;
+  }
+
+  private resetAccount(): void {
     this.isLoggedIn = false;
     this.unionID = '';
     this.openID = '';
     this.loginAt = 0;
+    this.nickName = '';
+    this.avatarFile = '';
+    this.avatarUri = '';
   }
 
-  /** UI 展示用:中间打码的 UnionID */
   maskedId(): string {
-    const id = this.unionID;
-    if (id.length <= 10) {
-      return id;
-    }
-    return `${id.substring(0, 6)}****${id.substring(id.length - 4)}`;
+    const id = this.openID;
+    if (id.length <= 10) return '****';
+    return `${id.substring(0, 4)}****${id.substring(id.length - 4)}`;
   }
 }

@@ -605,6 +605,10 @@ export struct PlayerPage {
 
   private handleChapterDownloadLongPress(ch: Chapter): void {
     if (!this.book) return;
+    if (this.playerState.isLive && this.playerState.currentChapter?.id === ch.id) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.player_live_no_download') });
+      return;
+    }
     const record = this.chapterDownloadRecord(ch);
     if (record?.status === 'completed') {
       this.confirmDeleteChapterDownload(ch);
@@ -618,6 +622,11 @@ export struct PlayerPage {
       this.downloadTick = this.downloadTick + 1;
       this.showToast('已加入单章下载');
     }).catch(() => this.showToast('下载操作失败，请重试'));
+  }
+
+  private isLiveBook(): boolean {
+    return this.playerState.isLive && !this.playerState.isLoading &&
+      this.playerState.currentBook?.id === this.book?.id;
   }
 
   private confirmDeleteChapterDownload(ch: Chapter): void {
@@ -1108,6 +1117,9 @@ export struct PlayerPage {
   @Builder
   buildProgress() {
     Column({ space: AppSpace.Xxs }) {
+      if (this.isLiveBook()) {
+        Text($r('app.string.player_live')).fontSize(AppFont.Body).fontColor('#FFFFFF').height(48)
+      } else {
       Slider({
         value: this.progressValueMs(),
         min: 0,
@@ -1144,6 +1156,7 @@ export struct PlayerPage {
       .width('100%')
       .padding({ left: 9, right: 9 })
       .margin({ top: -3 })
+      }
     }
     .width('100%')
     .padding({ bottom: this.isCompactPlayer() ? AppSpace.Sm : AppSpace.Md })
@@ -1217,7 +1230,7 @@ export struct PlayerPage {
           showClose: false,
           dragBar: true,
           backgroundColor: AppMaterial.SheetBackground,
-          blurStyle: AppMaterial.SheetBlur,
+          blurStyle: AppMaterial.PlayerSheetBlur,
           systemMaterial: AppMaterial.PlayerSheet,
           onAppear: () => this.scrollToCurrentChapter(),
           onDisappear: () => { this.showChapterList = false; }
@@ -1234,7 +1247,7 @@ export struct PlayerPage {
   buildBottomBar() {
     Row() {
       Column() {
-        Text(this.fmtSpeed(this.playerState.speed) + 'x')
+        Text(this.fmtSpeed(this.isLiveBook() ? 1 : this.playerState.speed) + 'x')
           .fontSize(AppFont.Body)
           .height(22)
           .fontColor(this.playerState.speed !== 1.0 ? AppColor.Brand : '#B3B3B3')
@@ -1245,6 +1258,7 @@ export struct PlayerPage {
       .height(44)
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
+        if (this.isLiveBook()) return;
         this.speedValue = this.playerState.speed;
         this.showSpeedSheet = true;
       })
@@ -1254,7 +1268,7 @@ export struct PlayerPage {
         showClose: false,
         dragBar: true,
         backgroundColor: AppMaterial.SheetBackground,
-        blurStyle: AppMaterial.SheetBlur,
+        blurStyle: AppMaterial.PlayerSheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
         onDisappear: () => { this.showSpeedSheet = false; }
       })
@@ -1266,15 +1280,16 @@ export struct PlayerPage {
       Blank()
 
       Column() {
-        Stack({ alignContent: Alignment.Center }) {
-          SymbolGlyph($r('sys.symbol.clock'))
-            .fontSize(18)
-            .fontColor([this.sleepActive() ? AppColor.Brand : '#B3B3B3'])
-        }
-        .width(22)
-        .height(22)
         if (this.sleepActive()) {
-          Text(this.sleepLabel()).fontSize(10).fontColor(AppColor.Brand).maxLines(1)
+          Text(this.sleepLabel()).fontSize(12).fontColor(AppColor.Brand).maxLines(1)
+        } else {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.clock'))
+              .fontSize(18)
+              .fontColor(['#B3B3B3'])
+          }
+          .width(22)
+          .height(22)
         }
       }
       .width(this.isCompactPlayer() ? 56 : 64)
@@ -1289,7 +1304,7 @@ export struct PlayerPage {
         showClose: false,
         dragBar: true,
         backgroundColor: AppMaterial.SheetBackground,
-        blurStyle: AppMaterial.SheetBlur,
+        blurStyle: AppMaterial.PlayerSheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
         onWillDisappear: (): void => { this.sleepSheetDismissUntil = Date.now() + 400; },
         onWillDismiss: (action: DismissSheetAction): void => {
@@ -1332,7 +1347,7 @@ export struct PlayerPage {
         showClose: false,
         dragBar: true,
         backgroundColor: AppMaterial.SheetBackground,
-        blurStyle: AppMaterial.SheetBlur,
+        blurStyle: AppMaterial.PlayerSheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
         onDisappear: () => { this.showSkipSheet = false; }
       })

@@ -29,6 +29,8 @@ export class PlayerState {
   @Trace isPlaying: boolean = false;
   /** 正在解析音频 URL / 装载音源 / 等待 prepared 的过渡状态。UI 在此期间显示 loading 图标。 */
   @Trace isLoading: boolean = false;
+  /** prepared 后由播放器时长识别无固定时长的实时流。 */
+  @Trace isLive: boolean = false;
   @Trace progressMs: number = 0;
   @Trace durationMs: number = 0;
   /**
@@ -56,6 +58,7 @@ export class PlayerState {
     this.currentChapter = null;
     this.isPlaying = false;
     this.isLoading = false;
+    this.isLive = false;
     this.progressMs = 0;
     this.durationMs = 0;
     this.savedDurationMs = 0;

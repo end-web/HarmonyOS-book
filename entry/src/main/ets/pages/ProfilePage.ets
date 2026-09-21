@@ -2,10 +2,10 @@ import { HdsCompat } from '../utils/HdsCompat';
 import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
-import { AuthService, HwAuthErrorCode } from '../service/AuthService';
-import { common } from '@kit.AbilityKit';
-import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
+import { AuthService } from '../service/AuthService';
+import { pasteboard } from '@kit.BasicServicesKit';
 import { CommunityGroupService } from '../service/CommunityGroupService';
+import { AccountAvatar } from '../components/AccountAvatar';
 
 class ProfileItem {
   icon: Resource;
@@ -31,7 +31,6 @@ const CONTENT_ITEMS: ProfileItem[] = [
 
 const SYSTEM_ITEMS: ProfileItem[] = [
   new ProfileItem($r('sys.symbol.gearshape'), '设置', 'settings', '#8E8E93'),
-  new ProfileItem($r('sys.symbol.questionmark_circle'), '使用说明', 'guide', '#5AC8FA'),
   new ProfileItem($r('sys.symbol.info_circle'), '关于', 'about', '#0A59F7')
 ];
 
@@ -44,9 +43,6 @@ const SUPPORT_ITEMS: ProfileItem[] = [
 const ROW_INDENT: number = AppSpace.Md;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
 
-/** 华为账号登录入口开关:AGC(手动签名+指纹+client_id)配好后改 true 即显示 */
-const ENABLE_HW_LOGIN: boolean = false;
-
 @ComponentV2
 export struct ProfilePage {
   @Param navStack: NavPathStack = new NavPathStack();
@@ -57,58 +53,8 @@ export struct ProfilePage {
 
   aboutToAppear(): void {
     this.onScrollerReady(this.scrollScroller);
-    this.auth.restore();
-  }
-
-  private async handleLogin(): Promise<void> {
-    if (this.auth.logging) {
-      return;
-    }
-    const ctx = this.getUIContext().getHostContext() as common.Context;
-    try {
-      await this.auth.login(ctx);
-      this.getUIContext().getPromptAction().showToast({ message: '登录成功' });
-    } catch (e) {
-      const err = e as BusinessError;
-      if (err.code === HwAuthErrorCode.USER_CANCEL) {
-        return; // 用户主动取消,不提示
-      }
-      this.getUIContext().getPromptAction().showToast({ message: this.loginErrorText(err) });
-    }
-  }
-
-  private loginErrorText(err: BusinessError): string {
-    switch (err.code) {
-      case HwAuthErrorCode.LOGIN_OUT:
-        return '请先在系统设置登录华为账号';
-      case HwAuthErrorCode.NETWORK:
-        return '网络异常,请稍后重试';
-      case HwAuthErrorCode.CERT_INVALID:
-        return '签名指纹/Client ID 未配置(开发期)';
-      case HwAuthErrorCode.SYSTEM_SERVICE:
-        return '系统服务异常,请稍后重试';
-      default:
-        return `登录失败(${err.code ?? '未知'})`;
-    }
-  }
-
-  private handleLogout(): void {
-    this.getUIContext().showAlertDialog({
-      message: '确定退出登录?将清除本地华为账号身份标识。',
-      primaryButton: {
-        value: '退出',
-        fontColor: '#FF3B30',
-        action: () => {
-          this.auth.logout();
-        }
-      },
-      secondaryButton: {
-        value: '取消',
-        action: () => {}
-      },
-      alignment: DialogAlignment.Bottom,
-      offset: { dx: 0, dy: -16 }
-    });
+    const context = this.getUIContext().getHostContext();
+    if (context) this.auth.restore(context);
   }
 
   private onItemTap(id: string): void {
@@ -116,12 +62,12 @@ export struct ProfilePage {
       this.navStack.pushPathByName('import', '');
     } else if (id === 'downloads') {
       this.navStack.pushPathByName('downloads', '');
+    } else if (id === 'account') {
+      this.navStack.pushPathByName('account', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');
     } else if (id === 'ruleSources') {
       this.navStack.pushPathByName('ruleSources', '');
-    } else if (id === 'guide') {
-      this.navStack.pushPathByName('guide', '');
     } else if (id === 'about') {
       this.navStack.pushPathByName('about', '');
     } else if (id === 'wechat') {
@@ -172,9 +118,7 @@ export struct ProfilePage {
       HdsNavigation() {
         Scroll(this.scrollScroller) {
           Column({ space: AppSpace.Lg }) {
-            if (ENABLE_HW_LOGIN) {
-              this.buildAccountCard()
-            }
+            this.buildAccountCard()
             this.buildSourceGroup()
             this.buildGroup(CONTENT_ITEMS)
             this.buildGroup(SYSTEM_ITEMS)
@@ -244,24 +188,18 @@ export struct ProfilePage {
 
   @Builder
   buildAccountCard() {
-    Row({ space: AppSpace.Md }) {
-      // 头像
-      Stack() {
-        SymbolGlyph($r('sys.symbol.person_crop_circle_fill'))
-          .fontSize(40)
-          .fontColor([this.auth.isLoggedIn ? '#0A59F7' : '#C7C7CC'])
-      }
-      .width(48)
-      .height(48)
-
-      // 文案
+    Row({ space: AppSpace.Sm }) {
+      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 28 })
       Column({ space: 2 }) {
-        Text(this.auth.isLoggedIn ? '华为账号用户' : '点击登录华为账号')
+        Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
+          $r('app.string.hw_auth_login_title'))
           .fontSize(AppFont.BodyL)
-          .fontWeight(FontWeight.Medium)
           .fontColor($r('sys.color.font_primary'))
-        Text(this.auth.isLoggedIn ? `ID ${this.auth.maskedId()}` : '登录后用于标识你的听书身份')
-          .fontSize(AppFont.Body)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.auth.isLoggedIn ? $r('app.string.account_title') :
+          $r('app.string.hw_auth_login_desc'))
+          .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -269,34 +207,28 @@ export struct ProfilePage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      // 右侧操作
-      if (this.auth.isLoggedIn) {
-        Text('退出')
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_secondary'))
-          .padding({ left: AppSpace.Sm, right: AppSpace.Sm, top: 6, bottom: 6 })
-          .borderRadius(AppRadius.Md)
-          .backgroundColor($r('sys.color.comp_background_tertiary'))
-          .onClick(() => this.handleLogout())
-      } else if (this.auth.logging) {
+      if (this.auth.logging || this.auth.restoring) {
         LoadingProgress()
-          .width(22)
-          .height(22)
+          .width(24)
+          .height(24)
           .color(AppColor.Brand)
+          .accessibilityText($r('app.string.hw_auth_processing'))
       } else {
         SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(14)
+          .fontSize(24)
+          .width(24)
+          .height(24)
           .fontColor([$r('sys.color.font_tertiary')])
       }
     }
     .width('100%')
-    .padding(AppSpace.Md)
+    .padding({ left: ROW_INDENT, right: ROW_INDENT, top: AppSpace.Sm, bottom: AppSpace.Sm })
+    .constraintSize({ minHeight: 64 })
     .backgroundColor($r('sys.color.comp_background_primary'))
     .borderRadius(AppRadius.Lg)
+    .enabled(!this.auth.logging && !this.auth.restoring)
     .onClick(() => {
-      if (!this.auth.isLoggedIn) {
-        this.handleLogin();
-      }
+      this.navStack.pushPathByName('account', '');
     })
   }
 

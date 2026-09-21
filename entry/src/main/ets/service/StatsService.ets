@@ -307,7 +307,8 @@ export class StatsService {
       !!item && !!item.bookId && !item.bookId.startsWith('import_')));
     await StatsService.enqueue(async (): Promise<void> => {
       await StatsService.ensureReady();
-      await StatsService.commitRecords(safeRecords);
+      const importedRecords = StatsService.records.filter((item: BookUsageStats): boolean => item.bookId.startsWith('import_'));
+      await StatsService.commitRecords(importedRecords.concat(safeRecords));
       emitter.emit(EVT_USAGE_STATS_UPDATED);
     });
   }

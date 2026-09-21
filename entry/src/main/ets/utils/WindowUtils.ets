@@ -153,6 +153,7 @@ export class WindowUtils {
   }
 
   static updateColorMode(colorMode: ConfigurationConstant.ColorMode): void {
+    if (WindowUtils.colorMode === colorMode) return;
     WindowUtils.colorMode = colorMode;
     WindowUtils.readerColorListeners.forEach((listener: () => void): void => listener());
     WindowUtils.applySystemBarContent().catch(() => { /* ignore */ });
@@ -301,6 +302,8 @@ export class WindowUtils {
 
   private static syncAvoidArea(win: window.Window): void {
     try {
+      // 最小化时系统可能上报空避让区，不能用它重排仍在栈顶的阅读页。
+      if (WindowUtils.readerActive && win.getWindowStatus() === window.WindowStatusType.MINIMIZE) return;
       WindowUtils.updateDensity(win);
       const systemArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_SYSTEM);
       const navigationArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);

@@ -29,6 +29,7 @@
 | 播放、下载、导出 | `AudioService`、`AVSessionService`、`DownloadService`、`DownloadExportService` | 音频 URL / Header、播放进度、沙箱音频和导出副本 |
 | 书源管理 | `RuleSourcePage` → 导入解析器、仓库、批量测试器 | 加密 `rule_sources.db` |
 | 主账号、子源、网页登录 | `RuleSourceAccountPage` / `RuleSourceChildrenPage` / `RuleSourceLoginPage` | 来源主会话、按来源和站点隔离的 Cookie |
+| 华为账号登录、退出 | `ProfilePage` → `AuthService` → Account Kit | `listenbook_prefs.hw_account_v1` 保存 UnionID、OpenID、登录时间；前台恢复核对系统账号 |
 | 书架、记录、未收藏历史 | `FavoritePage` / `ReadingStatsPage` / `UnfavoritedHistoryPage` → `PreferenceService`、`StatsService` | 收藏、收听历史、累计统计和播放位置 |
 | 本地文件导入 | `ImportPage` → `LocalBookImportService` / `DataService` | 音频、TXT/EPUB/HTML/HTM、ZIP，独立目录及沙箱正文 |
 | 系统备份、跨设备续播 | `AppBackupService`、`ContinuationService` | 白名单备份快照、最小播放迁移载荷 |
@@ -117,9 +118,9 @@
 - 在线小说用 `OnlineTextPaginator` 分页，按章节标题或索引及 `charOffset` 恢复位置；切换字号和窗口尺寸后重新分页。阅读入口先恢复本地目录，缺失才联网并保存目录。章节正文有内存缓存、请求合并和相邻章节预取；已读和预读正文经 `OnlineTextContentCache` 写入 `cache/online_text_content`，按书源、书籍及章节地址隔离，重启后先读本地，缺失或损坏才联网。缓存随系统/用户清理失效，不代表已下载全书；单章缓存上限 8 MiB，写入失败不阻断阅读。
 - 分页前为每个非空正文段落统一添加两个全角空格，测量与显示共用排版文本；页起止偏移映射回清洗后的原文，新增缩进不改变阅读进度的字符坐标。跨页续行不补缩进，正文段落不做启发式合并。
 - `ReaderPage` 还保留已有 EPUB 路径的 ReaderKit 分支及 `EpubReaderComponent`；`ImportPage` 已支持音频、TXT/EPUB/HTML/HTM 与 ZIP 批量导入；新导入电子书转为文字章节使用现有阅读器，尚无书签管理入口。
-- 阅读页默认常驻显示系统状态栏，默认隐藏“详情 / 章节 / 设置”悬浮栏；阅读设置关闭“始终显示状态栏”后，状态栏跟随悬浮栏显隐。顶部安全区独立于正文和翻页快照，API 22 起读取不受显隐影响的系统避让区，API 20–21 保留本次阅读已测得的高度；工具栏与弹层覆盖正文，显隐不改变分页视口。离开阅读路由恢复系统栏，返回时恢复阅读模式，状态栏文字颜色跟随阅读背景。阅读设置包括字号、行高、翻页方式、羊皮纸／护眼绿／纯黑／夜间主题和自定义图片主题，支持更换图片及调整蒙层；翻页效果标题与选项同行，旧纯白、纹理与自定义色设置按兼容规则迁移。页脚默认显示电量与时间，开关独立持久化，不触发重新分页；阅读设置和章节弹层跟随应用强／均衡／弱三档材质，弱档沿用原厚材质，旧系统使用对应磨砂回退。
+- 阅读页默认常驻显示系统状态栏，默认隐藏“详情 / 章节 / 设置”悬浮栏；阅读设置关闭“始终显示状态栏”后，状态栏跟随悬浮栏显隐。自定义背景与翻页纸面按完整视口绘制并延伸到状态栏和底部系统区域，仅正文保留安全区内边距，不叠加顶部纯色遮罩。API 22 起读取不受显隐影响的系统避让区，API 20–21 保留本次阅读已测得的高度；工具栏与弹层覆盖正文，显隐不改变分页视口。阅读路由仍在栈顶时，前后台切换保留阅读模式、安全区和当前页；最小化空避让区、零尺寸及未变化的主题通知不触发重排。离开阅读路由恢复系统栏，返回时恢复阅读模式，状态栏文字颜色跟随阅读背景。阅读设置包括字号、行高、翻页方式、羊皮纸／护眼绿／纯黑／夜间主题和自定义图片主题，支持更换图片及调整蒙层；翻页效果标题与选项同行，旧纯白、纹理与自定义色设置按兼容规则迁移。页脚默认显示电量与时间，开关独立持久化，不触发重新分页；阅读设置、章节、朗读及听书页弹层固定弱档（厚材质），不跟随全局材质偏好，旧系统固定使用厚磨砂回退。
 - 详情页点击总集数在原目录区域切换列表与双列分段卡片，不打开新页面或弹层；分段每 40 章，切换后保留全书搜索、章节排序和点章阅读/播放。听书与阅读章节弹层默认使用相同双列分段目录，点击总集数切换原列表，保留搜索及点章播放/阅读，听书保留长按下载。设置预缓存支持 0–50 章，0 关闭，选择项、输入框和应用按钮同行，存取及备份恢复均校验范围。
-- AVSession 冷启动提前初始化并激活，书名和章节先发布、封面异步补齐，旧封面回调不能覆盖新书。播放器定时按钮显示剩余时间／章数，弹层关闭期间阻止同次点击重开。
+- AVSession 冷启动提前初始化并激活，书名和章节先发布、封面异步补齐，旧封面回调不能覆盖新书。播放器定时未启用时显示时钟图标，启用后隐藏图标，仅显示剩余时间／章数；弹层关闭期间阻止同次点击重开。
 - AVPlayer 负责播放、音频焦点和续播，`AVSessionService` 对接系统倍速、上下集和收藏，后台任务维持收听。
 - 耳机摘戴通过 AVPlayer 的 `audioOutputDeviceChangeWithInfo` 与 AVSession 播控适配：旧输出设备不可用时暂停并取消焦点自动恢复，加载完成也保持暂停；支持佩戴检测的耳机/系统下发 `play` 后按原进度续播。重复 `play`/`pause` 保持各自语义，设备重新连接本身不触发播放。
 - 设置的“启动”分组提供“打开软件自动播放”，默认关闭并随通用设置备份。开启后，冷启动完成播放状态恢复且进入前台时尝试续播上次章节和进度；没有可恢复内容时不播放，普通后台返回不重复起播，跨设备续播及卡片控制优先。
@@ -201,7 +202,19 @@ scripts/                HAR 构建与图标工具
 
 来源与阅读改动应验证“无导入源空态 → 导入 → 单源/批量测试 → 搜索 → 详情 → 阅读或播放”，以及禁用后的收藏解析、单源失败隔离。播放与下载改动应验证切章、续播、系统控制、下载和导出。UI 改动按 `docs/APP_UI.md` 回归。
 
-华为账号入口当前由 `ENABLE_HW_LOGIN = false` 关闭，模块中的 `client_id` 仍为占位配置。不要将它描述为已上线登录功能。
+华为账号登录入口位于“我的”顶部，与书源管理行尺寸一致。`AuthService` 使用 `createAuthorizationWithHuaweiIDRequest` 和 `profile` scope，严格校验 state 和身份字段，获取昵称与头像；不请求服务端授权码或保存 Client Secret。`AccountAvatarService` 仅通过 HTTPS 下载最大 2MiB 的头像，限时请求并在本机缓存，不保存临时头像 URL。旧登录缓存保留兼容，更新资料由用户主动授权。通过 `getHuaweiIDState` 核对本机缓存与系统账号；系统退出或换号后清除原资料，临时服务异常保留缓存供重试但不展示已登录。退出清除本机资料并保留业务数据与云备份。
+
+“我的”顶部账号行统一进入 `AccountPage`，提供登录、资料更新、退出及个人华为云空间备份/恢复。`AppScope/app.json5` 开启 `cloudFileSyncEnabled`，`CloudBackupService` 使用 `Context.cloudFileDir`、`cloudSync.FileSync`（API12）、`CloudFileCache`（API11）和 `getCoreFileSyncState`（API20）；均不超出最低 API20。云文件按 OpenID 的 SHA-256 摘要区分，不将账号资料放入快照。上传在完成事件及文件成功状态均确认后才算成功；同步/下载有两分钟超时、取消和监听清理，并检查系统账号。云空间使用的是用户账号配额，没有新增服务器或用户数据表。
+
+`AppBackupService` 复用系统快照白名单，手动本地/云模式不吞掉书源读取/写入错误。快照包含搜索、发现（含分页）、详情、目录、正文规则及书源管理状态；新增字段在旧版 v2 快照中可缺省。导出时在独立副本中兼容已发布版本混淆过的历史时间戳、章节索引和播放位置，保留原记录及数值；校验允许未知时长 -1 和合法负数书源排序，未知缺失字段仍报错。恢复同地址书源遵循仓库的管理状态保留及锁定保护。恢复前限制 32MiB 并校验完整快照，向用户展示备份时间和数量，确认后才写入；保留本地导入数据及锁定源。云恢复写入前保存 `filesDir/backup/before_cloud_restore.json`，此文件不在系统备份白名单或云目录；跨多个本地存储的恢复不是事务，失败时会提示未全部完成并保留快照。不会上传下载音频、导入文件、阅读器独立 Preferences 或书源登录会话。系统云服务未就绪、账号/应用同步未启用等需要设备端配置，代码编译与模拟测试不代表服务已开通。
+
+本地备份仅保留在 `AccountPage`，未登录也可通过“我的”顶部账号行进入。`LocalBackupService` 使用 `DocumentViewPicker(context)` 的保存/选择接口及 `fileIo` 描述符读写，所有使用的 API 均兼容最低 API20。文件 URI 只在当前操作中使用，分块复制处理短读/短写及文件增长，保存完成后才报成功。本地备份为完整快照 JSON，不把独立书源数组当作恢复文件。恢复前保存并验证 `filesDir/backup/before_local_restore.json`；取消选择/确认不恢复业务数据，失败保留安全快照。本地操作通过 `AuthService.beginDataOperation(false)` 与云备份、资料授权、退出互斥。回归使用 `DEVECO_HOME=<Release IDE> node scripts/test-local-backup.cjs`，共享真实服务转译与文件模拟设施，并覆盖书源字段往返、无登录、取消、损坏/超限文件、失败和资源释放。
+
+个人云空间配置：官方端云文件协同指南要求设备系统至少 HarmonyOS 6.0.0.115、云空间至少 6.0.0.300，使用 API21 以上正式版 SDK 构建（本工程已满足）。安装带有 `cloudFileSyncEnabled` 的应用后，在系统“设置 → 云空间”找到“简听”并打开同步开关；跨设备恢复须使用同一华为账号。本路径无需接入开发者 AGC 存储桶。低于服务要求或没有开启应用同步时，页面提示云空间不可用，原有本地功能仍可使用。
+
+`entry/src/main/module.json5` 配置的是 AGC 应用级 OAuth 2.0 Client ID `6917615941058168740`，不能使用项目级 Client ID。调试和发布时还需在 AGC“应用 → SHA256证书/公钥指纹”登记实际签名公钥的 SHA-256；更换签名后重新核对。客户端不保存 Client Secret。配置依据：[华为账号登录 API](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/account-unionid-login-api)、[配置 Client ID](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/account-client-id)、[账号状态 API](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/account-api-authentication)。本机模拟回归使用 `DEVECO_HOME=<Release IDE> node scripts/test-huawei-auth.cjs`，真实登录仍以设备授权和 AGC 配置验证为准。
+
+本轮资料依据：[头像昵称在线技能](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-development/hmos-one-sdk-skill/hmos-sdk-basic-skill/Account%20Kit(华为账号服务)/hmos-account-kit-get-avatar-nickname/SUB_SKILL.md)、[头像昵称授权指南](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/account-get-avatar-nickname)、[应用文件云同步](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/app-cloud-sync-filesync)、[ArkTS 语法指南](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/07-tools/tools/deveco-studio/deveco-native-flow/references/lang-syntax/SKILL.md)、[ArkUI 检索指南](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-development/01-application-framework/ArkUI/hmos-arkui-knowledge-retriever/SKILL.md)。API 及版本以安装的 Release SDK 声明复核。云状态和恢复校验模拟回归：`DEVECO_HOME=<Release IDE> node scripts/test-cloud-backup.cjs`；使用 Release IDE 内置 Node，避免 PATH 中旧 Node 不支持 `node:` 模块。
 
 产品或交互变化直接更新现行文档；已失效的一次性计划和修复说明删除，历史由 Git 保留。
 

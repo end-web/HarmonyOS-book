@@ -9,6 +9,7 @@ import { Book, Chapter } from '../model/Book';
 import { BookSource } from '../model/BookSource';
 import { AudioRequestInfo, BookSourceService } from './BookSourceService';
 import { SourceDataService } from './SourceDataService';
+import { DownloadPolicy } from './DownloadPolicy';
 
 const DOMAIN = 0x0001;
 const TAG = 'ChapterCache';
@@ -64,6 +65,23 @@ export class ChapterCacheService {
   private fileQueue: Array<() => Promise<void>> = [];
   private appContext: common.Context | null = null;
   private clearGen: number = 0;
+  private preloadSuspended: boolean = false;
+  private activeRequests: Set<http.HttpRequest> = new Set();
+
+  suspendPreload(): void {
+    this.preloadSuspended = true;
+    this.queue = [];
+    this.fileQueue = [];
+    this.clearGen++;
+    for (const request of this.activeRequests) request.destroy();
+    this.activeRequests.clear();
+  }
+
+  resumePreload(): void {
+    this.preloadSuspended = false;
+    this.drain();
+    this.drainFile();
+  }
 
   static getInstance(): ChapterCacheService {
     if (!ChapterCacheService.instance) {
@@ -282,6 +300,7 @@ export class ChapterCacheService {
   }
 
   private drain(): void {
+    if (this.preloadSuspended) return;
     while (this.runningCount < MAX_CONCURRENT && this.queue.length > 0) {
       const task = this.queue.shift()!;
       this.runningCount++;
@@ -303,6 +322,7 @@ export class ChapterCacheService {
   }
 
   private drainFile(): void {
+    if (this.preloadSuspended) return;
     while (this.fileRunningCount < MAX_FILE_CONCURRENT && this.fileQueue.length > 0) {
       const task = this.fileQueue.shift()!;
       this.fileRunningCount++;
@@ -324,11 +344,13 @@ export class ChapterCacheService {
     this.pendingTasks.add(taskKey);
     try {
       const source = await this.findSource(book.sourceUrl);
+      if (myClearGen !== this.clearGen) return;
       if (!source) throw new Error('预加载书源不可用');
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const requestInfo: AudioRequestInfo =
         await BookSourceService.resolveAudioRequest(source, pageUrl, book.variables, chapter.variables);
       const audioUrl = requestInfo.url;
+      if (myClearGen !== this.clearGen) return;
       if (audioUrl && audioUrl !== pageUrl) {
         this.preloadFailureAt.delete(chapter.id);
         this.evictUrlCache();
@@ -345,7 +367,7 @@ export class ChapterCacheService {
         throw new Error('预加载未获取到有效音频地址');
       }
     } catch (err) {
-      this.markPreloadFailure(chapter.id);
+      if (myClearGen === this.clearGen) this.markPreloadFailure(chapter.id);
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'resolve preload failed [%{public}s]: %{public}s', chapter.title,
         e?.message ?? JSON.stringify(err));
@@ -362,6 +384,8 @@ export class ChapterCacheService {
 
   private async downloadFile(book: Book, chapter: Chapter, audioUrl: string,
     headers: Record<string, string> = {}): Promise<void> {
+    // HLS 是播放清单，不能作为完整音频写入 mp3 缓存（包含点播与直播）。
+    if (DownloadPolicy.isHls(audioUrl, '')) return;
     if (!this.appContext) return;
     if (!audioUrl || !audioUrl.startsWith('http')) return;
     if (this.fileCache.has(chapter.id)) return;
@@ -383,6 +407,7 @@ export class ChapterCacheService {
       }
 
       httpClient = http.createHttp();
+      this.activeRequests.add(httpClient);
       const resp = await httpClient.request(audioUrl, {
         method: http.RequestMethod.GET,
         header: headers,
@@ -396,6 +421,7 @@ export class ChapterCacheService {
         return;
       }
       const buf = resp.result as ArrayBuffer;
+      if (capturedGen !== this.clearGen) return;
       f = await fileIo.open(filePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
       await fileIo.write(f.fd, buf);
       await fileIo.close(f);
@@ -412,14 +438,17 @@ export class ChapterCacheService {
       await this.enforceDiskCacheLimit();
       this.extractDuration(chapter, filePath);
     } catch (err) {
-      this.markPreloadFailure(chapter.id);
+      if (capturedGen === this.clearGen) this.markPreloadFailure(chapter.id);
       const e = err as Error;
       hilog.warn(DOMAIN, TAG, 'downloadFile failed: %{public}s', e?.message ?? JSON.stringify(err));
     } finally {
       if (f) {
         try { await fileIo.close(f); } catch (_e) { /* ignore */ }
       }
-      if (httpClient) httpClient.destroy();
+      if (httpClient) {
+        this.activeRequests.delete(httpClient);
+        httpClient.destroy();
+      }
       this.pendingTasks.delete(taskKey);
     }
   }

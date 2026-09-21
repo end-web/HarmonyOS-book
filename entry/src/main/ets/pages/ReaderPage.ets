@@ -240,7 +240,8 @@ export struct ReaderPage {
   }
 
   private handleViewportSizeChange(_oldValue: SizeOptions, newValue: SizeOptions): void {
-    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number') return;
+    if (typeof newValue.width !== 'number' || typeof newValue.height !== 'number' ||
+      newValue.width <= 0 || newValue.height <= 0) return;
     const changed = Math.abs(this.readerViewportWidthVp - newValue.width) >= 0.5 ||
       Math.abs(this.readerViewportHeightVp - newValue.height) >= 0.5;
     this.readerViewportWidthVp = newValue.width;
@@ -1450,12 +1451,6 @@ export struct ReaderPage {
         })
       }
 
-      // 固定在顶部；align 只控制组件内部，不能覆盖父 Stack 的底部对齐。
-      Column()
-        .width('100%').height(this.topSafeVp)
-        .backgroundColor(this.palette.background)
-        .position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None)
-
       if (this.loading) {
         this.buildLoadingState()
       } else if (this.readerError) {
@@ -1578,8 +1573,9 @@ export struct ReaderPage {
       .padding({
         left: this.marginLeft,
         right: this.marginRight,
-        top: this.marginTop,
-        bottom: this.marginBottom
+        // 只让正文避开系统栏；背景和翻页纸面始终使用完整视口，保持图片连续。
+        top: this.topSafeVp + this.marginTop,
+        bottom: this.readerBottomInsetVp() + this.marginBottom
       })
 
     }
@@ -1625,7 +1621,6 @@ export struct ReaderPage {
     }
     .width('100%')
     .height('100%')
-    .padding({ top: this.topSafeVp, bottom: this.readerBottomInsetVp() })
   }
 
   @Builder

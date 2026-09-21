@@ -97,7 +97,8 @@ export class DownloadPolicy {
     const lower = (url || '').toLowerCase();
     return lower.indexOf('.mp3') >= 0 || lower.indexOf('.m4a') >= 0
       || lower.indexOf('.aac') >= 0 || lower.indexOf('.flac') >= 0
-      || lower.indexOf('.wav') >= 0 || lower.indexOf('.ogg') >= 0;
+      || lower.indexOf('.wav') >= 0 || lower.indexOf('.ogg') >= 0
+      || /\.m3u8(?:[?#]|$)/i.test(url);
   }
 
   static isHls(url: string, contentType: string): boolean {

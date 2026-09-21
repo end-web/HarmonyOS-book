@@ -5,6 +5,7 @@ import { AppColor, AppFont, AppMaterial } from '../theme/Theme';
 export struct ImmersiveOptionTabs {
   @Param labels: ResourceStr[] = [];
   @Param selected: number = 0;
+  @Param fillWidth: boolean = false;
   @Event onSelect: (index: number) => void = () => {};
 
   private options(): SelectOption[] {
@@ -13,6 +14,7 @@ export struct ImmersiveOptionTabs {
 
   build() {
     Select(this.options())
+      .width(this.fillWidth ? '100%' : LayoutPolicy.wrapContent)
       .selected(this.selected)
       .value(this.labels[this.selected] ?? '')
       .font({ size: AppFont.Body })

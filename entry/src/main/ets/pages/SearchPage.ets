@@ -12,6 +12,7 @@ import { LocalRuleSource, LocalRuleSourceStatus } from '../model/LocalRuleSource
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { SearchCache } from '../utils/SearchCache';
+import { SearchOptions } from '../utils/SearchOptions';
 import { BookCard } from '../components/BookCard';
 import { CoverImage } from '../components/CoverImage';
 import { BookDataSource } from '../utils/BookDataSource';
@@ -46,6 +47,10 @@ export struct SearchPage {
   @Param navStack: NavPathStack = new NavPathStack();
 
   @Local keyword: string = '';
+  @Local exactSearch: boolean = false;
+  @Local searchByAuthor: boolean = false;
+  @Local historyWidth: number = 0;
+  private historyWrite: Promise<void> = Promise.resolve();
   @Local searching: boolean = false;
   @Local hasSearched: boolean = false;
   @Local searchTab: number = 0;
@@ -148,7 +153,12 @@ export struct SearchPage {
   private async loadSearchHistory(): Promise<void> {
     try {
       const history = await PreferenceService.getSearchHistory();
-      if (!this.leavingPage) this.searchHistory = history;
+      if (!this.leavingPage) {
+        this.searchHistory = history;
+        this.trimHistory();
+        this.exactSearch = await PreferenceService.getSearchExact();
+        this.searchByAuthor = await PreferenceService.getSearchByAuthor();
+      }
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'load search history failed: %{public}s', String(e));
     }
@@ -195,11 +205,41 @@ export struct SearchPage {
 
   private async clearAllHistory(): Promise<void> {
     try {
-      await PreferenceService.clearSearchHistory();
-      if (!this.leavingPage) this.searchHistory = [];
+      this.searchHistory = [];
+      this.persistHistory();
+      await this.historyWrite;
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'clear search history failed: %{public}s', String(e));
     }
+  }
+
+  private historyItemWidth(keyword: string): number {
+    const size = this.getUIContext().getMeasureUtils().measureTextSize({ textContent: keyword, fontSize: 13 });
+    const measured = this.getUIContext().px2vp(Number(size.width));
+    return Math.min(Math.max(1, this.historyWidth - AppSpace.Xs), 176, Math.ceil(measured) + 24);
+  }
+
+  private trimHistory(): void {
+    if (this.historyWidth <= 0) return;
+    const widths = this.searchHistory.map((keyword: string): number => this.historyItemWidth(keyword));
+    const count = SearchOptions.visibleCount(widths, this.historyWidth - AppSpace.Xs, AppSpace.Xs);
+    if (count < this.searchHistory.length) {
+      this.searchHistory = this.searchHistory.slice(0, count);
+      this.persistHistory();
+    }
+  }
+
+  private persistHistory(): void {
+    const snapshot = this.searchHistory.slice();
+    this.historyWrite = this.historyWrite.then((): Promise<void> => PreferenceService.setSearchHistory(snapshot))
+      .catch((error: Error): void => { hilog.warn(DOMAIN, TAG, 'save history: %{public}s', error.message); });
+  }
+
+  private updateSearchOptions(): void {
+    PreferenceService.setSearchOptions(this.exactSearch, this.searchByAuthor).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'save search options: %{public}s', error.message);
+    });
+    if (this.hasSearched) this.doSearch();
   }
 
   private async loadRecommendations(): Promise<void> {
@@ -343,12 +383,9 @@ export struct SearchPage {
     }
     this.keyword = keyword;
     this.cancelRecommendations();
-    PreferenceService.addSearchHistory(keyword).catch((e: Error) => {
-      hilog.warn(DOMAIN, TAG, 'save search history failed: %{public}s', e.message);
-    });
-    this.loadSearchHistory().catch((e: Error) => {
-      hilog.warn(DOMAIN, TAG, 'reload search history failed: %{public}s', e.message);
-    });
+    this.searchHistory = [keyword].concat(this.searchHistory.filter((item: string): boolean => item !== keyword));
+    this.trimHistory();
+    this.persistHistory();
     this.searchGen++;
     const gen = this.searchGen;
     this.searching = true;
@@ -417,6 +454,7 @@ export struct SearchPage {
       const fallbackContentType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
         ? 'text' : 'audio';
       for (const item of results) {
+        if (!SearchOptions.matches(item.name, item.author || '', keyword, this.exactSearch, this.searchByAuthor)) continue;
         const dedupeKey = `${item.sourceUrl}\u001f${item.bookUrl}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
@@ -606,7 +644,7 @@ export struct SearchPage {
   buildHistoryItem(keyword: string) {
     ImmersiveTabComponent({
       label: keyword,
-      fitContent: true,
+      itemWidth: this.historyItemWidth(keyword),
       onTap: (): void => this.submitHistoryKeyword(keyword)
     })
     .margin({ right: AppSpace.Xs, bottom: AppSpace.Xs })
@@ -644,9 +682,11 @@ export struct SearchPage {
         .width('100%')
         .height(LayoutPolicy.wrapContent)
         .onSizeChange((_oldSize: SizeOptions, newSize: SizeOptions): void => {
+          this.historyWidth = Number(newSize.width);
+          this.trimHistory();
           const nextHeight: number = Number(newSize.height);
           if (nextHeight > 0 && Math.abs(nextHeight - this.historyTagsHeight) > 0.5) {
-            this.historyTagsHeight = nextHeight;
+            this.historyTagsHeight = Math.min(84, nextHeight);
           }
         })
       }
@@ -983,6 +1023,22 @@ export struct SearchPage {
           this.keyword = value;
           if (value.length === 0 && this.hasSearched) this.clearSearch();
         })
+
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.funnel'))
+          .fontSize(22)
+          .fontColor([this.exactSearch || this.searchByAuthor ? AppColor.Brand : $r('sys.color.icon_primary')])
+      }
+        .width(SEARCH_TITLE_CONTROL_HEIGHT)
+        .height(SEARCH_TITLE_CONTROL_HEIGHT)
+        .padding(0)
+        .backgroundColor(Color.Transparent)
+        .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
+        .accessibilityText($r('app.string.search_options'))
+        .id('search-options-button')
+        .onClick(() => this.searchController.stopEditing())
+        .bindMenu(this.buildSearchOptionsMenu(), this.searchOptionsMenuOptions())
     }
     .width('100%')
     .height(SEARCH_HEADER_HEIGHT)
@@ -994,8 +1050,40 @@ export struct SearchPage {
     .visibility(this.searchCollapseOffset >= SEARCH_HEADER_HEIGHT - 0.5 ? Visibility.Hidden : Visibility.Visible)
   }
 
+  private searchOptionsMenuOptions(): MenuOptions {
+    const options: MenuOptions = {
+      backgroundColor: AppMaterial.SheetBackground,
+      backgroundBlurStyle: AppMaterial.SheetBlur
+    };
+    if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    return options;
+  }
+
+  @Builder
+  buildSearchOptionsMenu() {
+    Menu() {
+      MenuItem({ content: $r('app.string.search_exact') })
+        .contentFontColor(this.exactSearch ? AppColor.Brand : $r('sys.color.font_primary'))
+        .selected(this.exactSearch)
+        .selectIcon(true)
+        .onChange((selected: boolean): void => {
+          this.exactSearch = selected;
+          this.updateSearchOptions();
+        })
+      MenuItem({ content: $r('app.string.search_by_author') })
+        .contentFontColor(this.searchByAuthor ? AppColor.Brand : $r('sys.color.font_primary'))
+        .selected(this.searchByAuthor)
+        .selectIcon(true)
+        .onChange((selected: boolean): void => {
+          this.searchByAuthor = selected;
+          this.updateSearchOptions();
+        })
+    }
+  }
+
   @Builder
   buildSearchNavigationBottom() {
+    Column() {
     if (this.hasSearched) {
       this.buildResultToolbar()
     } else if (this.searchHistory.length > 0) {
@@ -1007,6 +1095,11 @@ export struct SearchPage {
       .height(LayoutPolicy.wrapContent)
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
     }
+    }.width('100%')
+      .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => {
+        this.historyWidth = Math.max(0, Number(size.width) - AppSpace.Md * 2);
+        this.trimHistory();
+      })
   }
 
   @Builder

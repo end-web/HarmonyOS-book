@@ -6,6 +6,7 @@ import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
+import { AccountPage } from './AccountPage';
 import { GuidePage } from './GuidePage';
 import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
@@ -101,6 +102,12 @@ struct Index {
     const r = param as Record<string, Object>;
     const v = r[key];
     return typeof v === 'string' ? v : '';
+  }
+
+  private syncReaderWindowMode(): void {
+    // onHidden 也会在退后台触发；阅读路由仍在栈顶时保留系统栏和安全区。
+    const paths: string[] = this.navStack.getAllPathName();
+    WindowUtils.setReaderActive(paths.length > 0 && paths[paths.length - 1] === 'reader');
   }
 
   /** EntryAbility.onCreate 写入路由后,Index 首次挂载时消费一次 */
@@ -295,8 +302,8 @@ struct Index {
       }
       .hideTitleBar(true)
       .backgroundColor('#F5F2EA')
-      .onShown((): void => WindowUtils.setReaderActive(true))
-      .onHidden((): void => WindowUtils.setReaderActive(false))
+      .onShown((): void => this.syncReaderWindowMode())
+      .onHidden((): void => this.syncReaderWindowMode())
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'search') {
       SearchPage({ navStack: this.navStack })
@@ -315,6 +322,8 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor('#F5F2EA')
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'account') {
+      AccountPage({ navStack: this.navStack })
     } else if (name === 'settings') {
       ProfileMenuDestination() {
         SettingsPage({ navStack: this.navStack })

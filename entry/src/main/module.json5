@@ -10,11 +10,11 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
-    // Account Kit 华为账号登录:把 AGC「应用」的 Client ID 填到这里(若 Client ID 与 APP ID 相同则可不配)
+    // Account Kit 使用 AGC「应用」下的 OAuth 2.0 客户端 ID，不使用项目级 Client ID。
     "metadata": [
       {
         "name": "client_id",
-        "value": "REPLACE_WITH_YOUR_APP_CLIENT_ID"
+        "value": "6917615941058168740"
       }
     ],
     "requestPermissions": [

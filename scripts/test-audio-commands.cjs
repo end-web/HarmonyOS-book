@@ -59,7 +59,14 @@ async function fixture(initialState = 'paused') {
     restoreAudioCallbacks() {}, async updateMetadata() {},
     async init() {}, async destroy() {}, async updateMetadataDuration() {}
   };
-  const playbackStore = { setPlaying() {} };
+  const playbackStore = { setPlaying() {}, update() {} };
+  const cacheCalls = [];
+  const cache = {
+    suspendPreload() { cacheCalls.push('suspend'); },
+    resumePreload() { cacheCalls.push('resume'); },
+    ensureFileCached() { cacheCalls.push('current'); },
+    preloadAudioChapters() { cacheCalls.push('next'); }
+  };
   const coordinatorModule = { exports: {} };
   const coordinatorCode = ts.transpileModule(fs.readFileSync(
     path.join(path.dirname(source), 'PlaybackCoordinator.ets'), 'utf8'), {
@@ -81,6 +88,8 @@ async function fixture(initialState = 'paused') {
     delete: async key => preferenceValues.delete(key), flush: async () => {}
   });
   const modules = {
+    './LiveAudioService': { LiveAudioService: { isLive: async () => false } },
+    './ChapterCacheService': { ChapterCacheService: { getInstance: () => cache } },
     './PlaybackCoordinator': coordinatorModule.exports,
     '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 } } },
     '@kit.AudioKit': { audio },
@@ -119,7 +128,7 @@ async function fixture(initialState = 'paused') {
   service.stopTick = () => {};
   service.initAVSession();
   await service.ensurePlayer();
-  return { service, player, state, session, savedPositions, events, preference };
+  return { service, player, state, session, savedPositions, events, preference, cacheCalls };
 }
 
 let passed = 0;
@@ -130,6 +139,85 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('HLS rolling-window duration remains live and normal audio replaces stalled radio', async () => {
+    const f = await fixture('initialized');
+    f.service.liveSource = true;
+    f.player.duration = 60000;
+    f.state.currentChapter.source = { type: 'url', value: 'https://radio.test/live.m3u8' };
+    f.player.transition('prepared');
+    assert.equal(f.state.isLive, true);
+    assert.equal(f.state.durationMs, 0);
+    const oldStateCallback = f.events.get('stateChange');
+    f.player.reset = () => new Promise(() => {});
+    f.player.release = () => new Promise(() => {});
+    const nextPlayer = { state: 'idle' };
+    f.service.ensurePlayer = async () => { f.service.player = nextPlayer; return nextPlayer; };
+    f.service.isFastSwitchPath = () => true;
+    f.service.resolveAudioUrl = async () => ({ success: true, headers: {} });
+    f.service.syncCastMediaSource = () => {};
+    f.service.applySource = async () => true;
+    const chapter = { id: 'other-chapter', source: { type: 'file', value: '/audio.mp3' } };
+    const book = { id: 'other-book', chapters: [chapter] };
+    await Promise.race([f.service.doPlayChapter(book, chapter, 0),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('radio blocked switch')), 1000))]);
+    assert.equal(f.state.currentBook.id, 'other-book');
+    assert.equal(f.state.isLive, false);
+    oldStateCallback('prepared', 1);
+    assert.equal(f.state.isLive, false);
+    assert.equal(f.state.currentBook.id, 'other-book');
+  });
+  await check('live recovery obeys generation and pause and never seeks old stream', async () => {
+    const f = await fixture('playing');
+    f.state.isLive = true;
+    f.service.liveSource = true;
+    let reconnects = 0;
+    f.service.doPlayChapter = async (_book, _chapter, position) => {
+      assert.equal(position, 0); reconnects++;
+    };
+    f.service.recoverLiveBuffer(f.player, f.service.playGen + 1);
+    f.service.pauseRequested = true;
+    f.service.recoverLiveBuffer(f.player, f.service.playGen);
+    assert.equal(reconnects, 0);
+    f.service.pauseRequested = false;
+    f.service.recoverLiveBuffer(f.player, f.service.playGen);
+    assert.equal(reconnects, 1);
+    assert.equal(f.service.player, null);
+    assert.deepEqual(f.player.seeks, []);
+  });
+  await check('live streams start without historical seek, speed or preloading', async () => {
+    const f = await fixture('initialized');
+    f.state.currentChapter.source = { type: 'url', value: 'https://radio.test/live.m3u8' };
+    f.state.currentBook.chapters = [f.state.currentChapter];
+    f.player.duration = -1;
+    f.state.speed = 1.5;
+    f.service.pendingSeek = 80000;
+    f.service.resumeTargetMs = 80000;
+    f.player.transition('prepared');
+    assert.equal(f.player.plays, 1);
+    assert.equal(f.state.isLive, true);
+    assert.equal(f.state.durationMs, 0);
+    assert.equal(f.service.resumeTargetMs, 0);
+    await f.service.seek(10000);
+    await f.service.seekAndPlaySameChapter(20000);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.player.seeks, []);
+    assert.deepEqual(f.cacheCalls, []);
+  });
+  await check('preload starts after playing and obsolete tasks do not start', async () => {
+    const f = await fixture('initialized');
+    f.state.currentBook.chapters = [f.state.currentChapter];
+    assert.deepEqual(f.cacheCalls, []);
+    f.player.transition('prepared');
+    assert.equal(f.player.plays, 1);
+    assert.deepEqual(f.cacheCalls, []);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.cacheCalls, ['resume', 'next']);
+    f.cacheCalls.length = 0;
+    f.service.triggerPreload(f.state.currentBook, f.state.currentChapter);
+    f.service.playGen++;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.cacheCalls, []);
+  });
   await check('manual play recovers an errored player at the saved position', async () => {
     const f = await fixture('error');
     let resumedAt = -1;

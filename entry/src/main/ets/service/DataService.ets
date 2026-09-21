@@ -540,13 +540,24 @@ export class DataService {
       .map((book: Book): Book => DataService.slimBook(book));
   }
 
-  static async restoreBackupBookShells(books: Book[]): Promise<void> {
+  static async restoreBackupBookShells(books: Book[], strict: boolean = false): Promise<void> {
     const current = await DataService.loadCachedBooks();
     const restored = books
       .filter((book: Book) => !!book && !!book.id && !book.id.startsWith('import_'))
       .map((book: Book): Book => DataService.slimBook(book));
-    DataService.cachedBooksMem = DataService.mergeBookLists(restored, current).slice(0, MAX_CACHED_BOOKS);
-    await DataService.writeIndex(DataService.cachedBooksMem);
+    const merged = DataService.mergeBookLists(restored, current).slice(0, MAX_CACHED_BOOKS);
+    if (strict) {
+      const path = DataService.cachedFilePath();
+      if (!path || DataService.persistUnsafe) throw new Error('Book storage is unavailable');
+      const slim: Book[] = merged.map((book: Book): Book => DataService.slimBook(book));
+      const task = DataService.writeChain.then(() => DataService.atomicWrite(path, JSON.stringify(slim)));
+      DataService.writeChain = task.then(() => {}, () => {});
+      await task;
+      DataService.cachedBooksMem = merged;
+    } else {
+      DataService.cachedBooksMem = merged;
+      await DataService.writeIndex(merged);
+    }
   }
 
   /**

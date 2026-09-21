@@ -111,20 +111,23 @@ export class AppMaterial {
     return AppMaterial.material('sheet', uiMaterial.ImmersiveStyle.THIN, true, false);
   }
   static get PlayerSheet(): uiMaterial.Material | undefined {
-    return AppMaterial.Sheet;
+    return AppMaterial.ReaderSheetThick;
+  }
+  static get PlayerSheetBlur(): BlurStyle | undefined {
+    return AppMaterial.ReaderSheetBlur;
   }
   /** 阅读页底部悬浮胶囊栏：固定薄光感材质 + 柔和投影，同官方浮动 Tab 视觉。 */
   static get ReaderBar(): uiMaterial.Material | undefined {
     if (!PlatformCompat.immersiveMaterial) return undefined;
     return AppMaterial.material('readerBar', uiMaterial.ImmersiveStyle.THIN, true, false);
   }
-  /** 阅读弹层固定厚度，避免正文透出干扰设置项，不跟随外观厚度选项。 */
+  /** 阅读与听书弹层固定弱档（厚材质），不跟随全局材质偏好。 */
   static get ReaderSheetThick(): uiMaterial.Material | undefined {
     if (!PlatformCompat.immersiveMaterial) return undefined;
-    return AppMaterial.material('readerSheetThick', uiMaterial.ImmersiveStyle.THICK, true, false);
+    return AppMaterial.material('readerSheetThick', uiMaterial.ImmersiveStyle.THICK, true, false, false, true);
   }
   static get ReaderSheetBlur(): BlurStyle | undefined {
-    return PlatformCompat.immersiveMaterial ? undefined : AppMaterial.fallbackBlur;
+    return PlatformCompat.immersiveMaterial ? undefined : BlurStyle.COMPONENT_THICK;
   }
   static get DialogUltraThick(): uiMaterial.Material | undefined {
     if (!PlatformCompat.immersiveMaterial) return undefined;

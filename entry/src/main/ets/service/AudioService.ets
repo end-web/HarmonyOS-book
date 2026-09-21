@@ -18,6 +18,7 @@ import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
 import { ChapterCacheService } from './ChapterCacheService';
 import { DownloadPolicy } from './DownloadPolicy';
+import { LiveAudioService } from './LiveAudioService';
 import { DownloadService } from './DownloadService';
 import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
@@ -53,6 +54,79 @@ interface AudioResolveResult {
 export class AudioService {
   private static instance: AudioService | null = null;
   private player: media.AVPlayer | null = null;
+  private liveSource: boolean = false;
+  private liveBufferTimer: number = -1;
+  private liveReconnectAttempts: number = 0;
+  private liveReconnectChapter: string = '';
+  private liveLastReconnectAt: number = 0;
+
+  private cancelLiveRecovery(): void {
+    if (this.liveBufferTimer >= 0) clearTimeout(this.liveBufferTimer);
+    this.liveBufferTimer = -1;
+  }
+
+  private scheduleLiveRecovery(player: media.AVPlayer): void {
+    if (this.liveBufferTimer >= 0) return;
+    const generation = this.playGen;
+    this.liveBufferTimer = setTimeout((): void => {
+      this.liveBufferTimer = -1;
+      this.recoverLiveBuffer(player, generation);
+    }, 15000);
+  }
+
+  private recoverLiveBuffer(player: media.AVPlayer, generation: number): void {
+    if (this.player !== player || generation !== this.playGen || !this.state?.isLive ||
+      !this.state.isPlaying || this.pauseRequested || this.sleepPausePending || this.pausedByFocus ||
+      this.pausedByExternalMedia || PlaybackCoordinator.speechActive) return;
+    const book = this.state.currentBook;
+    const chapter = this.state.currentChapter;
+    if (!book || !chapter) return;
+    if (Date.now() - this.liveLastReconnectAt > 120000) this.liveReconnectAttempts = 0;
+    if (this.liveReconnectAttempts >= 3) {
+      this.pause('live-buffer-timeout');
+      this.emitPlayFailed(book.id, chapter.id, '电台连接中断，请稍后重试');
+      return;
+    }
+    this.liveReconnectAttempts++;
+    this.liveLastReconnectAt = Date.now();
+    this.tracePlayback(`live-reconnect:${this.liveReconnectAttempts}`);
+    // HLS 下载器可能一直停留在 playing+buffering，未必会抛 error；重新取直播点。
+    this.detachPlayer(player);
+    this.doPlayChapter(book, chapter, 0).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'live reconnect failed: %{public}s', error.message);
+    });
+  }
+
+  private detachPlayer(player: media.AVPlayer): void {
+    if (this.player === player) this.player = null;
+    this.stopTick();
+    // 移除事件后异步释放，旧 HLS reset/release 不得阻塞新章节或回写新状态。
+    try { player.off('stateChange'); } catch (_e) {}
+    try { player.off('timeUpdate'); } catch (_e) {}
+    try { player.off('error'); } catch (_e) {}
+    try { player.off('audioInterrupt'); } catch (_e) {}
+    try { player.off('bufferingUpdate'); } catch (_e) {}
+    try { player.off('audioOutputDeviceChangeWithInfo'); } catch (_e) {}
+    player.release().catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'release old player: %{public}s', error.message);
+    });
+  }
+
+  private async resetPlayerForSwitch(player: media.AVPlayer): Promise<void> {
+    let timer: number = -1;
+    let resetDone = false;
+    const reset = player.reset().then((): void => { resetDone = true; })
+      .catch((_error: Error): void => {});
+    const timeout = new Promise<void>((resolve: () => void): void => {
+      timer = setTimeout(resolve, 2000);
+    });
+    await Promise.race([reset, timeout]);
+    if (timer >= 0) clearTimeout(timer);
+    if (!resetDone && this.player === player) {
+      hilog.warn(DOMAIN, TAG, 'player reset stalled; replace player');
+      this.detachPlayer(player);
+    }
+  }
   private state: PlayerState | null = null;
   private context: common.UIAbilityContext | null = null;
   private timer: number = -1;
@@ -301,6 +375,7 @@ export class AudioService {
     }
     const p = await media.createAVPlayer();
     p.on('stateChange', (newState: media.AVPlayerState, reason: media.StateChangeReason) => {
+      if (this.player !== p) return;
       this.tracePlayback(`state:${newState}:reason=${reason}`);
       if (!this.state) return;
       if (newState === 'initialized') {
@@ -321,10 +396,18 @@ export class AudioService {
       } else if (newState === 'prepared') {
         // 此时 player 已进入合法状态,补一次焦点模式 setter(ensurePlayer 阶段不能设)
         this.applyInterruptMode(p);
-        this.state.durationMs = p.duration;
+        this.state.isLive = this.liveSource || (this.state.currentChapter?.source.type === 'url' && p.duration < 0);
+        this.state.durationMs = this.state.isLive ? 0 : Math.max(0, p.duration);
+        hilog.info(DOMAIN, TAG, 'prepared live=%{public}s duration=%{public}d', String(this.state.isLive), p.duration);
+        if (this.state.isLive) {
+          this.pendingSeek = 0;
+          this.resumeTargetMs = 0;
+          this.state.progressMs = 0;
+          this.state.savedDurationMs = 0;
+        }
         // TOC 不带时长,这里把 AVPlayer 解出的真实时长回写到章节,
         // 让冷启动滑块/详情页百分比/书架文案能拿到 duration(否则恒为 0)
-        if (this.state.currentChapter && p.duration > 0) {
+        if (!this.state.isLive && this.state.currentChapter && p.duration > 0) {
           this.state.currentChapter.duration = Math.round(p.duration / 1000);
           // 立即持久化时长到数据库，确保冷启动后仍可用
           if (this.state.currentBook) {
@@ -334,14 +417,14 @@ export class AudioService {
           }
         }
         // prepared 即上报一次 playbackState,让控制中心能立刻拿到 duration 渲染进度条
-        AVSessionService.getInstance().updateMetadataDuration(p.duration);
+        AVSessionService.getInstance().updateMetadataDuration(this.state.durationMs);
         this.syncPlaybackState();
         if (this.pendingSeek > 0) {
           p.seek(this.pendingSeek, media.SeekMode.SEEK_PREV_SYNC);
           this.pendingSeek = 0;
         }
         // 续用上次的倍速:切章节/换书 reset 后 AVPlayer 会回到 1.0x,这里在 prepared 合法态补回
-        if (this.state.speed !== 1.0) {
+        if (!this.state.isLive && this.state.speed !== 1.0) {
           try { p.setPlaybackRate(this.state.speed); } catch (_e) { /* 状态异常忽略 */ }
         }
         // 立即设置播放状态，让UI立即响应
@@ -360,6 +443,9 @@ export class AudioService {
         // 真正开始出声,清掉 loading 标记
         this.state.isLoading = false;
         this.startTick();
+        if (this.state.currentBook && this.state.currentChapter) {
+          this.triggerPreload(this.state.currentBook, this.state.currentChapter);
+        }
         this.syncPlaybackState();
         PlaybackStore.getInstance().setPlaying(true);
         if (this.context) {
@@ -393,7 +479,7 @@ export class AudioService {
       }
     });
     p.on('timeUpdate', (ms: number) => {
-      if (!this.state) return;
+      if (!this.state || this.player !== p || this.state.isLive) return;
       // 切换章节/书的过程中（reset 之后、新音源 prepared 之前），AVPlayer 偶尔会回调
       // 一些残留的旧位置 timeUpdate；isLoading=true 期间一律不写 progressMs，
       // 避免把进度条来回打回。
@@ -430,6 +516,7 @@ export class AudioService {
       }
     });
     p.on('error', (err: BusinessError) => {
+      if (this.player !== p) return;
       const e = err;
       this.tracePlayback(`error:code=${err.code}`);
       hilog.error(DOMAIN, TAG, 'AVPlayer error: %{public}s',
@@ -469,11 +556,18 @@ export class AudioService {
       if (this.context) BackgroundTaskService.stop(this.context);
     });
     p.on('audioInterrupt', (event: audio.InterruptEvent) => {
+      if (this.player !== p) return;
       this.handleInterrupt(event);
     });
     p.on('bufferingUpdate', (type: media.BufferingInfoType, value: number): void => {
+      if (this.player !== p) return;
       if (type === media.BufferingInfoType.BUFFERING_START || type === media.BufferingInfoType.BUFFERING_END) {
         this.tracePlayback(`buffering:type=${type}:value=${value}`);
+      }
+      if (type === media.BufferingInfoType.BUFFERING_START && this.state?.isLive && p.state === 'playing') {
+        this.scheduleLiveRecovery(p);
+      } else if (type === media.BufferingInfoType.BUFFERING_END) {
+        this.cancelLiveRecovery();
       }
     });
     // API 11：包括支持佩戴检测的耳机双耳摘下，以及蓝牙断开/有线耳机拔出。
@@ -492,6 +586,7 @@ export class AudioService {
   }
 
   private handleInterrupt(event: audio.InterruptEvent): void {
+    this.cancelLiveRecovery();
     this.tracePlayback(`interrupt:type=${event.eventType}:force=${event.forceType}:hint=${event.hintType}:autoResume=${this.autoResume}`);
     if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
     if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
@@ -645,7 +740,7 @@ export class AudioService {
     const chapter = this.state.currentChapter;
     const chapterId = chapter.id;
     const chapterTitle = chapter.title;
-    const progressMs = this.state.progressMs;
+    const progressMs = this.state.isLive ? 0 : this.state.progressMs;
     const durationMs = this.state.durationMs;
     const chapterIndex = this.findChapterIndex(book, chapter);
     await PreferenceService.upsertHistory({
@@ -787,6 +882,10 @@ export class AudioService {
     if (!this.state) return;
     const p = this.player;
     if (!p) return;
+    if (this.state.isLive) {
+      await this.seekAndPlaySameChapter(0);
+      return;
+    }
     // toggle() 可能在调用前设了 isLoading=true，复用章节不需要 loading 圈
     this.state.isLoading = false;
     const skipIntroMs = (this.state.currentBook?.skipIntro ?? 0) * 1000;
@@ -886,6 +985,16 @@ export class AudioService {
   private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
     if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
     const myGen = ++this.playGen;
+    this.cancelLiveRecovery();
+    const oldWasLive = this.liveSource || this.state.isLive;
+    this.liveSource = false;
+    this.state.isLive = false;
+    if (this.liveReconnectChapter !== chapter.id) {
+      this.liveReconnectChapter = chapter.id;
+      this.liveReconnectAttempts = 0;
+    }
+    ChapterCacheService.getInstance().suspendPreload();
+    this.currentAudioHeaders = {};
     this.tracePlayback('chapter-load');
     // ★ 缓存命中→快路径,UI 不显示 loading 圈;否则常规路径,显示加载状态
     const fastPath = this.isFastSwitchPath(book, chapter);
@@ -903,7 +1012,8 @@ export class AudioService {
       try {
         const cur = this.player;
         if (cur && cur.state !== 'released') {
-          await cur.reset();
+          if (oldWasLive) this.detachPlayer(cur);
+          else await this.resetPlayerForSwitch(cur);
         }
       } catch (_e) { /* ignore */ }
       if (myGen !== this.playGen) {
@@ -916,6 +1026,7 @@ export class AudioService {
       this.state.currentChapter = chapter;
       this.state.progressMs = seekMs;
       this.state.durationMs = 0;
+      this.state.isLive = false;
       this.state.isPlaying = false;
       // 切章/切书一律翻 loading:即使 URL 已缓存(快路径),音频仍要缓冲/落盘,
       // 页面若无提示用户会以为卡死。真正出声(prepared→playing)后清掉,
@@ -962,14 +1073,21 @@ export class AudioService {
       }
       this.syncCastMediaSource(book, chapter);
 
+      const isLive = chapter.source.type === 'url'
+        ? await LiveAudioService.isLive(chapter.source.value, audioHeaders) : false;
+      if (myGen !== this.playGen) return;
+      this.liveSource = isLive;
+      this.state.isLive = isLive;
+
       // 3) 装载
       const p = await this.ensurePlayer();
       if (myGen !== this.playGen) {
         return;
       }
-      const startMs = Math.max(seekMs, Math.max(0, book.skipIntro ?? 0) * 1000);
+      const startMs = isLive ? 0 : Math.max(seekMs, Math.max(0, book.skipIntro ?? 0) * 1000);
       this.pendingSeek = startMs;
       this.resumeTargetMs = startMs;
+      this.currentAudioHeaders = audioHeaders;
       const loaded = await this.applySource(p, chapter.source, audioHeaders);
       if (!loaded) {
         // 装载失败(缓存文件被系统清理/URL 失效等),立即清 loading 并提示,
@@ -982,7 +1100,6 @@ export class AudioService {
         }
         return;
       }
-      this.triggerPreload(book, chapter);
     } catch (err) {
       if (myGen === this.playGen && this.state) {
         this.state.isLoading = false;
@@ -1066,7 +1183,6 @@ export class AudioService {
       if (cachedUrl) {
         chapter.source = { type: 'url', value: cachedUrl };
         const cachedHeaders = cache.getAudioHeaders(chapter.id);
-        cache.ensureFileCached(book, chapter, cachedUrl, cachedHeaders);
         const r: AudioResolveResult = { headers: cachedHeaders, success: true };
         return r;
       }
@@ -1087,7 +1203,6 @@ export class AudioService {
       // 还会跳过 doPlayChapter 的解析重试。
       if (DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl)) {
         chapter.source = { type: 'url', value: audioUrl };
-        cache.ensureFileCached(book, chapter, audioUrl, requestInfo.headers);
         const r: AudioResolveResult = { headers: requestInfo.headers, success: true };
         return r;
       }
@@ -1250,6 +1365,7 @@ export class AudioService {
   }
 
   async seek(ms: number): Promise<void> {
+    if (this.state?.isLive) return;
     if (PlaybackCoordinator.speechActive) return;
     this.sleepPausePending = false;
     this.resumeAfterSleepChapter = false;
@@ -1310,6 +1426,7 @@ export class AudioService {
   }
 
   async setSpeed(speed: number): Promise<void> {
+    if (this.state?.isLive) return;
     const p = await this.ensurePlayer();
     // 连续(无级)倍速:用 setPlaybackRate,有效范围 [0.125, 4.0]。
     // 旧实现用 media.PlaybackSpeed 离散枚举,只能 0.75/1/1.25/1.75/2,无法无级调节。
@@ -1481,6 +1598,7 @@ export class AudioService {
   }
 
   async release(): Promise<void> {
+    this.cancelLiveRecovery();
     this.pauseRequested = true;
     this.cancelExternalMediaWatch();
     this.cancelSleepTimer();
@@ -1576,6 +1694,7 @@ export class AudioService {
   /** 设置完成即调整当前章节；已越过片头时不回退，加载期间更新待跳转位置。 */
   applySkipConfigNow(bookId: string, intro: number, outro: number): void {
     if (!this.state || this.state.currentBook?.id !== bookId) return;
+    if (this.state.isLive) return;
     this.state.currentBook.skipIntro = Math.max(0, intro);
     this.state.currentBook.skipOutro = Math.max(0, outro);
     const p = this.player;
@@ -1652,6 +1771,8 @@ export class AudioService {
 
   private beginChapterLoading(): void {
     if (!this.state) return;
+    this.cancelLiveRecovery();
+    this.state.isLive = false;
     this.state.isLoading = true;
     this.state.isPlaying = false;
   }
@@ -1661,6 +1782,10 @@ export class AudioService {
     if (!this.state) return;
     const p = this.player;
     if (!p) return;
+    if (this.state.isLive) {
+      if (p.state === 'paused' || p.state === 'prepared') await p.play();
+      return;
+    }
     this.state.progressMs = seekMs;
     if (seekMs > 0) {
       this.resumeTargetMs = seekMs;
@@ -1681,10 +1806,21 @@ export class AudioService {
   }
 
   private triggerPreload(book: Book, chapter: Chapter): void {
-    const idx = this.findChapterIndex(book, chapter);
-    if (idx < 0) return;
-    ChapterCacheService.getInstance().preloadAudioChapters(book, idx);
+    const generation = this.playGen;
+    setTimeout((): void => {
+      if (generation !== this.playGen || !this.state?.isPlaying || this.state.isLoading) return;
+      if (this.state.isLive) return;
+      const cache = ChapterCacheService.getInstance();
+      cache.resumePreload();
+      if (chapter.source.type === 'url') {
+        cache.ensureFileCached(book, chapter, chapter.source.value, this.currentAudioHeaders);
+      }
+      const idx = this.findChapterIndex(book, chapter);
+      if (idx >= 0) cache.preloadAudioChapters(book, idx);
+    }, 0);
   }
+
+  private currentAudioHeaders: Record<string, string> = {};
 
   private findChapterIndex(book: Book, chapter: Chapter | null): number {
     if (!book || !chapter) return -1;
@@ -1725,6 +1861,7 @@ export class AudioService {
 
   /** 系统播控、耳机和卡片共用的暂停入口，重复指令保持暂停。 */
   async pause(source: string = 'user'): Promise<void> {
+    this.cancelLiveRecovery();
     this.pauseSource = source;
     this.tracePlayback('pause-request');
     this.pauseRequested = true;

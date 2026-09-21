@@ -498,18 +498,19 @@ export struct SettingsPage {
           Row({ space: AppSpace.Sm }) {
           ImmersiveOptionTabs({
             labels: PRELOAD_OPTIONS.map((opt: PreloadOption): ResourceStr => opt.count < 0 ? $r('app.string.settings_preload_custom_tab') : opt.label),
+            fillWidth: true,
             selected: this.preloadCustom ? 4 : PRELOAD_OPTIONS.findIndex((opt: PreloadOption): boolean => opt.count === this.preloadCount),
             onSelect: (index: number): void => {
               this.preloadCustom = index === 4;
               if (!this.preloadCustom) this.setPreloadCount(PRELOAD_OPTIONS[index].count);
             }
-          }).layoutWeight(1)
+          }).layoutWeight(1.5)
             TextInput({ text: this.preloadDraft, placeholder: $r('app.string.settings_preload_input_hint') })
-              .type(InputType.Number).maxLength(2).layoutWeight(1.2).height(40)
+              .type(InputType.Number).maxLength(2).layoutWeight(1).height(40)
               .onChange((value: string): void => { this.preloadDraft = value; })
               .onSubmit((): void => this.submitPreload())
             Button($r('app.string.appearance_apply')).fontColor(AppColor.OnBrand).backgroundColor(AppColor.Brand)
-              .fontSize(AppFont.Caption).layoutWeight(0.9).height(40).padding({ left: 12, right: 12 })
+              .fontSize(AppFont.Caption).layoutWeight(0.8).height(40).padding({ left: 4, right: 4 })
               .onClick((): void => this.submitPreload())
           }.width('100%').alignItems(VerticalAlign.Center)
         }.width('100%').padding(ROW_INDENT)

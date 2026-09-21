@@ -14,6 +14,56 @@
 # 这些属性来自外部 JSON（Legado 书源格式）或本地持久化，
 # 通过 JSON.parse / JSON.stringify 访问，混淆器无法静态追踪，必须显式保留。
 -keep-property-name
+  # Huawei account persisted identity
+  unionID
+  openID
+  loginAt
+  nickName
+  avatarFile
+  # System / personal cloud backup snapshot fields
+  exportedAt
+  preferences
+  stats
+  ruleSources
+  favorites
+  history
+  lastPlayed
+  progresses
+  skipConfigs
+  colorMode
+  materialStyle
+  accentColor
+  defaultTab
+  autoPlayOnLaunch
+  audioInterruptMode
+  audioAutoResume
+  homeGridColumns
+  preloadChapters
+  bookId
+  chapterId
+  chapterTitle
+  progressMs
+  positionMs
+  chapterIndex
+  durationMs
+  updatedAt
+  # Legacy playback JSON aliases must remain readable during backup migration
+  h15
+  q11
+  c10
+  h26
+  m56
+  l50
+  n49
+  x47
+  u47
+  speed
+  listenSeconds
+  days
+  day
+  validationStatus
+  validationMessage
+  variable
   # BookSource
   bookSourceUrl
   bookSourceName
@@ -38,6 +88,8 @@
   coverDecodeJs
   respondTime
   customOrder
+  isLocked
+  isPinned
   weight
   concurrentRate
   ruleSearch
@@ -50,6 +102,7 @@
   subscriptionUrl
   # SearchRule / ExploreRule
   bookList
+  nextPageUrl
   coverUrl
   bookUrl
   intro

@@ -7,6 +7,7 @@ import { rpc } from '@kit.IPCKit';
 import { BusinessError, emitter } from '@kit.BasicServicesKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
+import { AuthService } from '../service/AuthService';
 import { AudioService } from '../service/AudioService';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { DataService } from '../service/DataService';
@@ -536,6 +537,8 @@ export default class EntryAbility extends UIAbility {
     AudioService.getInstance().setForeground(true);
     TextToSpeechService.getInstance().setForeground(true);
     this.isInForeground = true;
+    // 不阻塞前台恢复；已保存的账号需重新核对系统登录状态。
+    AuthService.instance.restore(this.context);
     WindowUtils.refreshAvoidArea();
     try {
       // 等待 bootstrapAudioService 完成(带超时保护,避免初始化卡死时永久阻塞前台回调)

@@ -321,6 +321,8 @@ export struct HomePage {
   @Local categoryError: ResourceStr = '';
   @Local categoryHasMore: boolean = true;
   @Local categoryNextUrl: string = '';
+  private categoryNextPage: number = 1;
+  private categoryLoadOnReachEnd: boolean = false;
   @Local isRefreshing: boolean = false;
   @Local refreshPullOffset: number = 0;
   @Local contentEntered: boolean = true;
@@ -665,8 +667,9 @@ export struct HomePage {
   /** 切换首页入口（-1=推荐，其他值为榜单或具体分类）。 */
   private async switchCategory(index: number, forceReload: boolean = false): Promise<void> {
     if (this.selectedCategoryIndex === index && !forceReload) return;
-    const generation = ++this.homeGen;
+    this.homeGen++;
     if (!forceReload) this.selectCategoryTab(index);
+    this.categoryLoadOnReachEnd = false;
     this.loadingHome = false;
     this.categoryLoading = false;
     if (index === -1) {
@@ -682,42 +685,47 @@ export struct HomePage {
       this.categoryBooks = [];
       this.categoryDS.setBooks([]);
     }
-    this.categoryLoading = true;
     this.categoryError = '';
     this.categoryHasMore = true;
-    this.categoryNextUrl = '';
+    this.categoryNextUrl = category.url;
+    this.categoryNextPage = 1;
+    await this.loadCategoryPage(false, !forceReload);
+  }
+
+  private async loadCategoryPage(append: boolean, animateEntrance: boolean = false): Promise<void> {
+    const source = this.currentSource;
+    if (source === undefined || this.selectedCategoryIndex < 0 || this.categoryLoading ||
+      !this.categoryHasMore || !this.categoryNextUrl) return;
+    const generation = this.homeGen;
+    const pageNumber = this.categoryNextPage;
+    this.categoryLoadOnReachEnd = false;
+    this.categoryLoading = true;
+    this.categoryError = '';
     try {
-      const books: Book[] = [];
-      const seen = new Set<string>();
-      let nextUrl = category.url;
-      let pageNumber: number = 1;
-      // 页码模板可能始终使用同一个 URL，按页推进并限制最多四页。
-      while (books.length < 50 && nextUrl.length > 0 && pageNumber <= 4) {
-        const page: ExploreFetchResult = await BookSourceService.getExploreBooksByUrl(source, nextUrl, pageNumber);
-        if (generation !== this.homeGen) return;
-        let added: number = 0;
-        for (const item of page.books) {
-          if (seen.has(item.bookUrl)) continue;
-          seen.add(item.bookUrl);
-          books.push(this.homeBookFromResult(item));
-          added++;
-        }
-        nextUrl = page.nextUrl;
-        pageNumber = page.nextPage ?? (pageNumber + 1);
-        if (added === 0) break;
+      const page: ExploreFetchResult = await BookSourceService.getExploreBooksByUrl(
+        source, this.categoryNextUrl, pageNumber);
+      if (generation !== this.homeGen) return;
+      const newBooks: Book[] = [];
+      const seen = new Set<string>(append ? this.categoryBooks.map((book: Book): string => book.bookUrl) : []);
+      for (const item of page.books) {
+        if (seen.has(item.bookUrl)) continue;
+        seen.add(item.bookUrl);
+        newBooks.push(this.homeBookFromResult(item));
       }
-      this.categoryBooks = books;
-      this.categoryDS.setBooks(books);
-      if (!forceReload) this.animateContentEntrance();
-      this.categoryNextUrl = nextUrl;
-      this.categoryHasMore = nextUrl.length > 0;
-      if (books.length === 0) this.categoryError = $r('app.string.home_source_empty');
-      CoverPrefetcher.prefetchMany(books.map((book: Book): string => book.cover)
+      this.categoryBooks = append ? this.categoryBooks.concat(newBooks) : newBooks;
+      this.categoryDS.setBooks(this.categoryBooks);
+      if (animateEntrance) this.animateContentEntrance();
+      this.categoryNextUrl = page.nextUrl;
+      this.categoryNextPage = page.nextPage ?? (pageNumber + 1);
+      this.categoryHasMore = page.nextUrl.length > 0 && newBooks.length > 0;
+      if (this.categoryBooks.length === 0) this.categoryError = $r('app.string.home_source_empty');
+      CoverPrefetcher.prefetchMany(newBooks.map((book: Book): string => book.cover)
         .filter((cover: string): boolean => cover.startsWith('http')), 16);
     } catch (error) {
       if (generation !== this.homeGen) return;
-      this.categoryError = $r('app.string.home_source_category_failed');
-      hilog.error(DOMAIN, TAG, 'switchCategory failed: %{public}s', String(error));
+      this.categoryError = append ? $r('app.string.home_category_more_failed') :
+        $r('app.string.home_source_category_failed');
+      hilog.error(DOMAIN, TAG, 'loadCategoryPage failed: %{public}s', String(error));
     } finally {
       if (generation === this.homeGen) this.categoryLoading = false;
     }
@@ -1323,6 +1331,21 @@ export struct HomePage {
             }
             .margin({ bottom: AppSpace.Md })
           }, (row: HomeCategoryBookRow) => row.key)
+          if (this.categoryLoading || this.categoryHasMore || this.categoryError) {
+            ListItem() {
+              Row({ space: AppSpace.Xs }) {
+                if (this.categoryLoading) {
+                  LoadingProgress().width(24).height(24).color(AppColor.Brand)
+                }
+                Text(this.categoryError || (this.categoryLoading ?
+                  $r('app.string.home_category_loading_more') : $r('app.string.home_category_load_more')))
+                  .fontSize(AppFont.Caption)
+                  .fontColor($r('sys.color.font_secondary'))
+              }
+              .width('100%').height(48).justifyContent(FlexAlign.Center)
+              .onClick(() => this.loadCategoryPage(this.categoryNextPage !== 1))
+            }
+          }
         }
 
         // 底部留白避开浮动 Tab + MiniPlayer。
@@ -1342,6 +1365,19 @@ export struct HomePage {
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .cachedCount(recommendations ? 1 : 5)
+    .onScrollFrameBegin((offset: number, state: ScrollState) => {
+      if (!recommendations && this.selectedCategoryIndex >= 0 && !this.categoryLoading &&
+        state === ScrollState.Scroll && offset > 0) {
+        this.categoryLoadOnReachEnd = true;
+      }
+      return { offsetRemain: offset };
+    })
+    .onReachEnd(() => {
+      if (!recommendations && this.selectedCategoryIndex >= 0 && this.categoryBooks.length > 0 &&
+        this.categoryLoadOnReachEnd && !this.categoryError && !this.isRefreshing) {
+        this.loadCategoryPage(true);
+      }
+    })
     .translate({ y: this.refreshPullOffset + (this.contentEntered ? 0 : 12) })
     .opacity(this.contentEntered ? 1 : 0)
     .clip(false)
