@@ -2,18 +2,18 @@
 
 简听是面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
-当前源码 / 邀测版本：`0.1.27`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
+当前版本：`0.1.27`，最低 API 20 / 目标 API 24，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
 `v0.1.27` 新增账号管理、本地与个人云空间备份、精准/作者搜索，优化沉浸式筛选与直播播放，并修复旧数据导致的备份失败。完整说明见 [更新日志](CHANGELOG.md)。
 
 ## 下载与更新
 
-[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.26 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.26/JianTing-v0.1.26.hap)
+[最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.27 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.27/JianTing-v0.1.27.hap)
 
 安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件。当前采用 Release SDK 和 Release 模式构建；GitHub HAP 沿用开发签名，供获授权手机安装，AppGallery 使用单独的正式签名 APP。
 
 ```bash
-hdc install JianTing-v0.1.26.hap
+hdc install JianTing-v0.1.27.hap
 ```
 
 包名保持 `com.huan.listenbook`，沿用已有书架、书源与记录。
