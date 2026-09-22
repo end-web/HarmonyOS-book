@@ -6,7 +6,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const ide = process.env.DEVECO_HOME;
 if (!ide) throw new Error('Set DEVECO_HOME to a Release IDE');
 const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
@@ -38,7 +38,9 @@ function harness() {
     sources: [], restoredSources: [], selectUris: [], saveUris: [], pickerError: false,
     maxRead: Infinity, maxWrite: Infinity, fileWriteError: false, flushError: false, snapshotShortWrite: false,
     pickerCalls: 0, restoreCount: 0, selectedData: null, backupPreferences: snapshot().preferences,
-    backupStats: [], speechReloads: 0
+    backupStats: [], speechReloads: 0,
+    cloudCopyUnsupported: false, cloudWriteError: 0, cloudStateError: 0, onCloudWrite: null,
+    initialCompleted: false, fileStates: new Map()
   };
   const preferenceStores = new Map();
   const stored = name => {
@@ -70,7 +72,10 @@ function harness() {
     endDataOperation() { this.dataOperation = false; }
   };
   class FileSync {
-    on(_event, listener) { this.listener = listener; }
+    on(_event, listener) {
+      this.listener = listener;
+      if (control.initialCompleted) this.emit(4, 0);
+    }
     off(_event, listener) { assert.equal(this.listener, listener); this.listener = null; }
     async start() {
       syncTasks.push(this);
@@ -117,7 +122,7 @@ function harness() {
   };
   const fileIo = {
     OpenMode: { READ_ONLY: 0, READ_WRITE: 1, CREATE: 2, TRUNC: 4 },
-    access: async p => fs.existsSync(p), mkdir: p => fsp.mkdir(p),
+    access: async p => fs.existsSync(p), mkdir: p => fsp.mkdir(p), listFile: p => fsp.readdir(p),
     open: async (p, mode) => {
       const resolved = resolveDocument(p);
       const fd = fs.openSync(resolved, mode === 0 ? 'r' : 'w+');
@@ -131,6 +136,11 @@ function harness() {
     write: async (fd, data, options) => {
       assert.equal(options?.offset, undefined);
       if (control.fileWriteError && handles.get(fd) === documentPath) throw new Error('disk full');
+      if (handles.get(fd)?.startsWith(context.cloudFileDir)) {
+        if (control.cloudWriteError) throw { code: control.cloudWriteError };
+        control.cloudWrites++;
+        control.onCloudWrite?.();
+      }
       const bytes = Buffer.from(data);
       const length = options ? Math.min(options.length, control.maxWrite) :
         control.snapshotShortWrite ? Math.floor(bytes.length / 2) : bytes.length;
@@ -142,8 +152,17 @@ function harness() {
       fs.fsyncSync(fd);
     },
     readText: p => fsp.readFile(p, 'utf8'), unlink: p => fsp.unlink(p),
-    moveFile: (src, dest) => fsp.rename(src, dest),
-    copyFile: async (src, dest) => { if (dest.startsWith(context.cloudFileDir)) control.cloudWrites++; await fsp.copyFile(src, dest); },
+    moveFile: async (src, dest) => {
+      // Matches the device cloud directory: rename succeeds for a new name, rejects replacement with EINVAL.
+      if (dest.startsWith(context.cloudFileDir) && fs.existsSync(dest)) throw { code: 13900020 };
+      await fsp.rename(src, dest);
+    },
+    copyFile: async (src, dest) => {
+      if (control.cloudCopyUnsupported &&
+        (src.startsWith(context.cloudFileDir) || dest.startsWith(context.cloudFileDir))) throw { code: 13900042 };
+      if (dest.startsWith(context.cloudFileDir)) control.cloudWrites++;
+      await fsp.copyFile(src, dest);
+    },
     stat: async p => {
       const stat = typeof p === 'number' ? fs.fstatSync(p) : await fsp.stat(p);
       return { size: stat.size, isFile: () => stat.isFile(), location: control.remoteOnly ? 2 : 3 };
@@ -155,9 +174,12 @@ function harness() {
     ErrorType: { NO_ERROR: 0, NETWORK_UNAVAILABLE: 1, WIFI_UNAVAILABLE: 2, BATTERY_LEVEL_LOW: 3,
       BATTERY_LEVEL_WARNING: 4, CLOUD_STORAGE_FULL: 5, LOCAL_STORAGE_FULL: 6, DEVICE_TEMPERATURE_TOO_HIGH: 7 },
     State: { RUNNING: 0, COMPLETED: 1, FAILED: 2, STOPPED: 3 },
-    FileState: { INITIAL_AFTER_DOWNLOAD: 0, UPLOAD_SUCCESS: 4 },
+    FileState: { INITIAL_AFTER_DOWNLOAD: 0, UPLOADING: 1, STOPPED: 2, TO_BE_UPLOADED: 3, UPLOAD_SUCCESS: 4, UPLOAD_FAILURE: 5 },
     DownloadErrorType: { NETWORK_UNAVAILABLE: 2, LOCAL_STORAGE_FULL: 3 },
-    getCoreFileSyncState: () => control.uploadState
+    getCoreFileSyncState: uri => {
+      if (control.cloudStateError) throw { code: control.cloudStateError };
+      return control.fileStates.get(path.normalize(uri.slice('file://'.length))) ?? control.uploadState;
+    }
   };
   const modules = new Map();
   function load(relative) {
@@ -183,7 +205,9 @@ function harness() {
         } };
         if (name === '@kit.BasicServicesKit') return { emitter: { emit() {} } };
         if (name === '@kit.CoreFileKit') return { fileIo, picker, cloudSync, fileUri: { getUriFromPath: p => 'file://' + p } };
-        if (name === '@kit.ArkTS') return { util: { TextEncoder: class { encodeInto(s) { return new Uint8Array(Buffer.from(s)); } } } };
+        if (name === '@kit.ArkTS') return { util: {
+          TextEncoder: class { encodeInto(s) { return new Uint8Array(Buffer.from(s)); } }, generateRandomUUID: () => randomUUID()
+        } };
         if (name === '@kit.CryptoArchitectureKit') return { cryptoFramework: { createMd: () => {
           const hash = createHash('sha256'); return { update: async blob => hash.update(blob.data), digest: async () => ({ data: hash.digest() }) };
         } } };
@@ -229,7 +253,14 @@ function harness() {
   const service = module.CloudBackupService.instance;
   const localModule = load('service/LocalBackupService');
   const local = localModule.LocalBackupService.instance;
-  const cloudPath = (account = auth.openID) => path.join(context.cloudFileDir, 'listenbook_' + createHash('sha256').update(account).digest('hex') + '.json');
+  const legacyCloudPath = (account = auth.openID) => path.join(context.cloudFileDir, 'listenbook_' + createHash('sha256').update(account).digest('hex') + '.json');
+  const cloudPath = (account = auth.openID) => {
+    const legacy = legacyCloudPath(account);
+    const prefix = path.basename(legacy, '.json') + '_';
+    const versions = fs.readdirSync(context.cloudFileDir).filter(name => name.startsWith(prefix) && name.endsWith('.json'))
+      .sort((a, b) => Number(b.slice(prefix.length).split('_')[0]) - Number(a.slice(prefix.length).split('_')[0]));
+    return versions.length ? path.join(context.cloudFileDir, versions[0]) : legacy;
+  };
   const seed = (data = snapshot(), account) => fs.writeFileSync(cloudPath(account), JSON.stringify(data));
   const settled = () => {
     assert.equal(service.busy, false);

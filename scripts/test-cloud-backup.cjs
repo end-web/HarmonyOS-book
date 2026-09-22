@@ -18,7 +18,62 @@ const { assert, fs, path, fixtures, snapshot, harness, until } = require('./back
   assert.equal(JSON.parse(fs.readFileSync(manual.cloudPath(), 'utf8')).preferences.favorites[0], 'online-book');
   manual.settled();
 
+  // Cloud directories may reject optimized copy operations while ordinary reads/writes work.
+  const streamed = harness();
+  streamed.control.cloudCopyUnsupported = true;
+  streamed.control.maxRead = 71;
+  streamed.control.maxWrite = 23;
+  await streamed.service.backup(streamed.context);
+  streamed.control.backupPreferences.favorites = ['updated-book'];
+  await streamed.service.backup(streamed.context);
+  assert.deepEqual(JSON.parse(fs.readFileSync(streamed.cloudPath(), 'utf8')).preferences.favorites, ['updated-book']);
+  assert.equal(await streamed.service.restore(streamed.context, async () => true), true);
+  assert.deepEqual(Array.from(streamed.control.selectedData.favorites), ['updated-book']);
+  streamed.control.fileStates.set(streamed.cloudPath(), 3);
+  await streamed.service.restore(streamed.context, async () => true);
+  assert.deepEqual(Array.from(streamed.control.selectedData.favorites), ['online-book'], 'restore skips an upload that is not confirmed');
+  streamed.control.fileStates.clear();
+  await streamed.service.backup(streamed.context);
+  assert.equal(fs.readdirSync(streamed.context.cloudFileDir).filter(name => name.endsWith('.json')).length, 2,
+    'keep the new backup and one previous confirmed backup');
+  streamed.settled();
+
+  for (const systemCode of [13900025, 13900020, 13900028]) {
+    const failedWrite = harness();
+    failedWrite.seed();
+    const previous = fs.readFileSync(failedWrite.cloudPath(), 'utf8');
+    failedWrite.control.cloudWriteError = systemCode;
+    await assert.rejects(failedWrite.service.backup(failedWrite.context), error =>
+      error.code === (systemCode === 13900025 ? failedWrite.codes.LOCAL_FULL : failedWrite.codes.CLOUD_FILE_FAILURE) &&
+      error.systemCode === systemCode);
+    assert.equal(fs.readFileSync(failedWrite.cloudPath(), 'utf8'), previous, 'failed uploads preserve the previous backup');
+    assert.equal(fs.existsSync(failedWrite.cloudPath() + '.pending'), false);
+    assert.equal(fs.readdirSync(failedWrite.context.cloudFileDir).some(name => name.endsWith('.pending')), false);
+    assert.equal(failedWrite.service.lastBackupAt, 0);
+    failedWrite.settled();
+  }
+
+  const cancelledCopy = harness();
+  cancelledCopy.seed();
+  const beforeCancel = fs.readFileSync(cancelledCopy.cloudPath(), 'utf8');
+  cancelledCopy.control.maxWrite = 23;
+  cancelledCopy.control.onCloudWrite = () => cancelledCopy.service.cancel();
+  await assert.rejects(cancelledCopy.service.backup(cancelledCopy.context), error => error.code === cancelledCopy.codes.CANCELLED);
+  assert.equal(fs.readFileSync(cancelledCopy.cloudPath(), 'utf8'), beforeCancel);
+  assert.equal(fs.existsSync(cancelledCopy.cloudPath() + '.pending'), false);
+  cancelledCopy.settled();
+
+  for (const stage of ['startError', 'cloudStateError']) {
+    const serverError = harness();
+    serverError.control[stage] = 22400005;
+    await assert.rejects(serverError.service.backup(serverError.context), error =>
+      error.code === serverError.codes.SERVER && error.systemCode === 22400005);
+    assert.equal(serverError.service.lastBackupAt, 0);
+    serverError.settled();
+  }
+
   const unavailable = harness();
+  unavailable.control.initialCompleted = true;
   unavailable.control.startError = 22400001;
   await assert.rejects(unavailable.service.backup(unavailable.context), e => e.code === unavailable.codes.UNAVAILABLE);
   assert.equal(unavailable.control.cloudWrites, 0);
@@ -59,9 +114,28 @@ const { assert, fs, path, fixtures, snapshot, harness, until } = require('./back
 
   const unconfirmed = harness();
   unconfirmed.control.uploadState = 3;
-  await assert.rejects(unconfirmed.service.backup(unconfirmed.context), e => e.code === unconfirmed.codes.SERVER);
+  const unconfirmedTask = unconfirmed.service.backup(unconfirmed.context);
+  const unconfirmedReject = assert.rejects(unconfirmedTask, e => e.code === unconfirmed.codes.TIMEOUT);
+  await until(() => unconfirmed.syncTasks.length === 2);
+  assert.equal(unconfirmed.service.busy, true, 'completed callback must wait for this file to finish uploading');
+  [...unconfirmed.timers.values()][0]();
+  await unconfirmedReject;
   assert.equal(unconfirmed.service.lastBackupAt, 0, 'completed app sync with an unuploaded file is not backup success');
   unconfirmed.settled();
+
+  const delayed = harness();
+  delayed.control.uploadState = 3;
+  const delayedTask = delayed.service.backup(delayed.context);
+  await until(() => delayed.syncTasks.length === 2);
+  assert.equal(delayed.service.lastBackupAt, 0);
+  delayed.control.uploadState = 1;
+  for (const tick of [...delayed.intervals.values()]) tick();
+  assert.equal(delayed.service.busy, true);
+  delayed.control.uploadState = 4;
+  for (const tick of [...delayed.intervals.values()]) tick();
+  await delayedTask;
+  assert.ok(delayed.service.lastBackupAt > 0);
+  delayed.settled();
 
   const restore = harness();
   restore.seed();
@@ -120,7 +194,7 @@ const { assert, fs, path, fixtures, snapshot, harness, until } = require('./back
   await assert.rejects(partial.service.restore(partial.context, async () => true), e => e.code === partial.codes.RESTORE_FAILED);
   assert.ok(fs.existsSync(path.join(partial.context.filesDir, 'backup/before_cloud_restore.json')));
   partial.settled();
-  console.log('PASS: cloud completion, unavailable/full/timeout/cancel, account isolation, download, confirmation, validation, restore errors');
+  console.log('PASS: cloud streaming round trip, overwrite, failed/cancelled upload preserves backup, system error codes, completion, account isolation, restore validation');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   for (const dir of fixtures) fs.rmSync(dir, { recursive: true, force: true });
 });

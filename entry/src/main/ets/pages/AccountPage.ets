@@ -20,6 +20,7 @@ export struct AccountPage {
   @Local local: LocalBackupService = LocalBackupService.instance;
   @Local message: ResourceStr = '';
   @Local hasMessage: boolean = false;
+  @Local cloudSystemCode: number = 0;
   @Local localMessage: ResourceStr = '';
   @Local hasLocalMessage: boolean = false;
   private finishConfirmation: ((confirmed: boolean) => void) | null = null;
@@ -94,6 +95,7 @@ export struct AccountPage {
     const context = this.getUIContext().getHostContext();
     if (!context) return;
     this.hasMessage = false;
+    this.cloudSystemCode = 0;
     try {
       await this.cloud.backup(context);
       this.message = $r('app.string.cloud_backup_success');
@@ -108,6 +110,7 @@ export struct AccountPage {
     const context = this.getUIContext().getHostContext();
     if (!context) return;
     this.hasMessage = false;
+    this.cloudSystemCode = 0;
     try {
       const restored = await this.cloud.restore(context,
         (info: CloudBackupInfo): Promise<boolean> => this.confirmRestore(
@@ -205,6 +208,7 @@ export struct AccountPage {
 
   private showCloudError(error: CloudBackupError): void {
     this.message = this.cloudErrorText(error.code);
+    this.cloudSystemCode = error.systemCode ?? 0;
     this.hasMessage = true;
   }
 
@@ -223,6 +227,7 @@ export struct AccountPage {
       case CloudBackupErrorCode.NO_BACKUP: return $r('app.string.cloud_error_empty');
       case CloudBackupErrorCode.INVALID_BACKUP: return $r('app.string.cloud_error_invalid');
       case CloudBackupErrorCode.RESTORE_FAILED: return $r('app.string.cloud_error_restore');
+      case CloudBackupErrorCode.CLOUD_FILE_FAILURE: return $r('app.string.cloud_error_file');
       default: return $r('app.string.cloud_error_local');
     }
   }
@@ -440,6 +445,12 @@ export struct AccountPage {
           .lineHeight(21)
           .fontColor($r('sys.color.font_secondary'))
           .width('100%')
+        if (this.cloudSystemCode !== 0) {
+          Text($r('app.string.cloud_error_code', this.cloudSystemCode))
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+            .width('100%')
+        }
       }
       Text($r('app.string.cloud_backup_exclusions'))
         .fontSize(AppFont.Caption)

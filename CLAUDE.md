@@ -13,7 +13,7 @@
 - 编译使用经确认的 Release SDK；当前配套为 DevEco Studio 26.0.0.821，编译版本与目标/最低版本分开管理。上传前检查 APP 内所有 HAP 的 `apiReleaseType = Release`，QuickJS HAR 也需用正式工具链重建。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.28`、`versionCode = 1000028`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.29`、`versionCode = 1000029`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -207,6 +207,8 @@ scripts/                HAR 构建与图标工具
 华为账号登录入口位于“我的”顶部，与书源管理行尺寸一致。`AuthService` 使用 `createAuthorizationWithHuaweiIDRequest` 和 `profile` scope，严格校验 state 和身份字段，获取昵称与头像；不请求服务端授权码或保存 Client Secret。`AccountAvatarService` 仅通过 HTTPS 下载最大 2MiB 的头像，限时请求并在本机缓存，不保存临时头像 URL。旧登录缓存保留兼容，更新资料由用户主动授权。通过 `getHuaweiIDState` 核对本机缓存与系统账号；系统退出或换号后清除原资料，临时服务异常保留缓存供重试但不展示已登录。退出清除本机资料并保留业务数据与云备份。
 
 “我的”顶部账号行统一进入 `AccountPage`，提供登录、资料更新、退出及个人华为云空间备份/恢复。`AppScope/app.json5` 开启 `cloudFileSyncEnabled`，`CloudBackupService` 使用 `Context.cloudFileDir`、`cloudSync.FileSync`（API12）、`CloudFileCache`（API11）和 `getCoreFileSyncState`（API20）；均不超出最低 API20。云文件按 OpenID 的 SHA-256 摘要区分，不将账号资料放入快照。上传在完成事件及文件成功状态均确认后才算成功；同步/下载有两分钟超时、取消和监听清理，并检查系统账号。云空间使用的是用户账号配额，没有新增服务器或用户数据表。
+
+云文件与本机暂存文件之间使用有大小上限的分块读写，处理短读、短写，避免快捷复制依赖的文件系统扩展操作。云目录覆盖重命名在实机上返回 `13900020`，因此每次使用账号摘要、递增版本号和 UUID 创建新文件，完整写入 `.pending` 后只重命名到尚不存在的目标。同步回调可能早于实际文件上传完成，需等待启动请求成功并轮询本次文件状态；两分钟内未确认上传则提示超时。确认新文件上传后保留最新两份已同步备份，清理失败不影响新备份。恢复选择当前账号最新已同步版本，兼容原固定文件名，忽略临时文件及未完成上传。复制失败或取消时保留原备份，并在账号仍一致时清理临时云文件。错误区分本机快照准备、云文件读写和系统同步；FileIO 空间不足使用 `13900025`，云服务内部错误 `22400005` 归入同步异常。页面保留系统错误码供用户反馈，日志只记录操作、阶段、分类和错误码，不记录账号、文件路径或备份内容。
 
 `AppBackupService` 复用系统快照白名单，手动本地/云模式不吞掉书源读取/写入错误。快照包含搜索、发现（含分页）、详情、目录、正文规则及书源管理状态；新增字段在旧版 v2 快照中可缺省。导出时在独立副本中兼容已发布版本混淆过的历史时间戳、章节索引和播放位置，保留可恢复的记录及数值；无法恢复或不符合格式的历史、逐书播放进度、阅读/朗读进度和统计逐条跳过，不改写本机记录。校验允许未知时长 -1 和合法负数书源排序；导入文件仍严格校验，存储或书源读写失败仍报错。恢复同地址书源遵循仓库的管理状态保留及锁定保护。恢复前限制 32MiB 并校验完整快照，向用户展示备份时间和数量，确认后才写入；保留本地导入数据及锁定源。云恢复写入前保存 `filesDir/backup/before_cloud_restore.json`，此文件不在系统备份白名单或云目录；跨多个本地存储的恢复不是事务，失败时会提示未全部完成并保留快照。不会上传下载音频、导入文件、自定义阅读背景/配色/字体或书源登录会话。系统云服务未就绪、账号/应用同步未启用等需要设备端配置，代码编译与模拟测试不代表服务已开通。
 
