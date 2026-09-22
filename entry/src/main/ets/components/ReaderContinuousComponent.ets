@@ -1,4 +1,5 @@
 import { AppColor } from '../theme/Theme';
+import { LengthMetrics } from '@kit.ArkUI';
 import { ReaderPalette } from '../model/ReaderTheme';
 import { TextToSpeechState } from '../model/TextToSpeechState';
 import { OnlineTextPaginator } from '../service/text/OnlineTextPaginator';
@@ -14,6 +15,8 @@ export struct ReaderContinuousComponent {
   @Param charOffset: number = 0;
   @Param chapterCount: number = 0;
   @Param chapterStep: number = 1;
+  @Param fontFamily: string = 'HarmonyOS Sans';
+  @Param fontWeight: number = 400;
   @Param fontSize: number = 18;
   @Param lineHeight: number = 1.9;
   @Param palette: ReaderPalette = new ReaderPalette();
@@ -41,9 +44,10 @@ export struct ReaderContinuousComponent {
   private serial: number = 0;
   private restoreTimer: number = -1;
   private restoring: boolean = false;
+  private restoreTarget: number = -1;
   private disposed: boolean = false;
 
-  @Monitor('revision')
+  @Monitor('revision', 'fontFamily', 'fontWeight', 'fontSize', 'lineHeight')
   onRevisionChanged(): void { this.reset(); }
 
   @Monitor('followOffset')
@@ -66,7 +70,7 @@ export struct ReaderContinuousComponent {
     const fontPx = ui.fp2px(this.fontSize);
     this.rowHeight = ui.px2vp(fontPx) * this.lineHeight;
     // 高度 1px 将测量结果按行输出；列表按像素连续滚动，不做分页吸附。
-    const lines = OnlineTextPaginator.paginate(content, ui.vp2px(this.contentWidth), 1, fontPx, this.lineHeight);
+    const lines = OnlineTextPaginator.paginate(content, ui.vp2px(this.contentWidth), 1, fontPx, this.lineHeight, this.fontFamily, this.fontWeight);
     return OnlineTextScrollChapter.create(index, this.getKey(index), this.getTitle(index), content, lines);
   }
 
@@ -79,19 +83,24 @@ export struct ReaderContinuousComponent {
     this.nextLoading = false;
     this.previousFailed = false;
     this.nextFailed = false;
-    const chapter = this.makeChapter(this.chapterIndex, this.content);
-    this.chapters = [chapter];
-    this.source.reset(chapter.rows);
+    // 字体重排保留已加载的相邻章节，避免清空后再次前插上一章改变恢复锚点。
+    const retained = this.chapters.find((item: OnlineTextScrollChapter): boolean =>
+      item.index === this.chapterIndex && item.content === this.content);
+    this.chapters = retained !== undefined ?
+      this.chapters.map((item: OnlineTextScrollChapter): OnlineTextScrollChapter =>
+        this.makeChapter(item.index, item.content)) : [this.makeChapter(this.chapterIndex, this.content)];
+    const rows: OnlineTextScrollRow[] = [];
+    for (const chapter of this.chapters) rows.push(...chapter.rows);
+    this.source.reset(rows);
     const target = Math.max(0, this.source.findPosition(this.chapterIndex, this.charOffset));
+    this.restoreTarget = target;
     this.firstVisible = target;
     this.lastVisible = target;
     this.restoreTimer = setTimeout((): void => {
       this.restoreTimer = -1;
       if (this.disposed || ticket !== this.serial) return;
       this.scroller.scrollToIndex(target, false, ScrollAlign.START);
-      this.restoring = false;
-      this.loadNeighbor(false);
-      this.loadNeighbor(true);
+      // 等待列表确认目标行；不让重排过程中旧索引回调覆盖章节/字符位置。
     }, 0);
   }
 
@@ -138,7 +147,16 @@ export struct ReaderContinuousComponent {
   }
 
   private visibleChanged(first: number, last: number): void {
-    if (this.restoring || first < 0) return;
+    if (first < 0) return;
+    if (this.restoring) {
+      if (first !== this.restoreTarget) return;
+      this.restoring = false;
+      this.restoreTarget = -1;
+      this.firstVisible = first;
+      this.lastVisible = last;
+      this.loadNeighbor(true);
+      return;
+    }
     this.firstVisible = first;
     this.lastVisible = last;
     this.reportPosition(false);
@@ -203,6 +221,7 @@ export struct ReaderContinuousComponent {
             } else {
               ReaderSpeechText({
                 text: row.text, source: row.source, sourceStart: row.startOffset,
+                fontFamily: this.fontFamily, fontWeight: this.fontWeight,
                 state: this.speechState, fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette,
                 highlightEnabled: this.speechState.bookId === this.bookId && this.speechState.chapterIndex === row.chapterIndex
               })
@@ -212,6 +231,7 @@ export struct ReaderContinuousComponent {
         }, (row: OnlineTextScrollRow): string => row.key)
       }
       .width('100%').height('100%')
+      .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(36) })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
       .cachedCount(12)
@@ -226,7 +246,16 @@ export struct ReaderContinuousComponent {
         return touch !== undefined && touch.y < this.topGestureInset ? HitTestMode.None : HitTestMode.Default;
       })
       .onScrollIndex((first: number, last: number): void => this.visibleChanged(first, last))
-      .onScrollStart((): void => { if (!this.restoring) this.onScrollStart(); })
+      .onTouch((event: TouchEvent): void => {
+        // 索引未变化时平台不会重复上报；完成定位后的首次真实触摸解除恢复锁。
+        if (event.type === TouchType.Down && this.restoreTimer === -1) {
+          this.restoring = false;
+          this.restoreTarget = -1;
+        }
+      })
+      .onScrollStart((): void => {
+        if (!this.restoring) this.onScrollStart();
+      })
       .onScrollStop((): void => this.reportPosition(true))
       .parallelGesture(TapGesture().onAction((event: GestureEvent): void => {
         const finger = event.fingerList[0];

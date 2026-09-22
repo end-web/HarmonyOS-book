@@ -24,7 +24,11 @@ const fileIo = {
   },
   async write(fd, text) { return (await handles.get(fd).write(text)).bytesWritten; },
   async copyFile(source, target) { await handles.get(target).writeFile(await handles.get(source).readFile()); },
-  mkdir: (directory) => fsp.mkdir(directory, { recursive: true }),
+  async mkdir(directory) {
+    // HarmonyOS recursive mkdir still reports EEXIST for an existing leaf directory.
+    if (fs.existsSync(directory)) throw new Error('File exists');
+    await fsp.mkdir(directory, { recursive: true });
+  },
   rmdir: (directory) => fsp.rm(directory, { recursive: true, force: true }),
   readText: (filename) => fsp.readFile(filename, 'utf8'),
   async access(filename) { try { await fsp.access(filename); return true; } catch { return false; } },
@@ -101,6 +105,8 @@ function load(relative) {
   assert.equal(await fsp.readFile(html.chapters[0].source.value, 'utf8'), '章节\n\n甲&乙\n\n尾声');
   file.ext = '.epub';
   const epub = await service.importBook(context, file, 'import_epub', '', '', '', () => {});
+  await data.addImportedBook(epub); // Existing imported_toc must not block a second import.
+  assert.equal((await data.getImportedBooks()).length, 2);
   assert.equal(epub.title, 'EPUB 标题');
   assert.equal(epub.chapters.map(ch => ch.title).join(','), '第一章,第二章');
   assert.equal(await fsp.readFile(epub.chapters[1].source.value, 'utf8'), '章节 2');

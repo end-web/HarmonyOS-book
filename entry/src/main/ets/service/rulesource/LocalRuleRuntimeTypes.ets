@@ -9,6 +9,8 @@ export class LocalRuleDocument {
   kind: number = LocalRuleDocumentKind.TEXT;
   payload: string = '';
   baseUrl: string = '';
+  /** 仅供当前解析批次复用的静态 DOM 字段，消费后释放。 */
+  htmlFields: Map<string, string[]> = new Map();
 
   static of(kind: number, payload: string, baseUrl: string): LocalRuleDocument {
     const document = new LocalRuleDocument();

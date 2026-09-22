@@ -59,7 +59,8 @@ function harness(memory = new Map()) {
     '../AVSessionService': { AVSessionService: { getInstance: () => session } },
     '../BackgroundTaskService': { BackgroundTaskService: { startSpeech: async () => {}, stopSpeech: async () => {} } },
     '../PlaybackCoordinator': coordinator,
-    '../PreferenceService': { PreferenceService: { isFavorite: async () => false, toggleFavorite: async () => true } },
+    '../PreferenceService': { PreferenceService: { isFavorite: async () => false, toggleFavorite: async () => true,
+      applyTocOrder: async () => {}, chapterStep: () => 1 } },
     '../StatsService': { StatsService: { addListenSeconds: async (seconds, value) => stats.push([seconds, value]) } },
     '../DataService': { DataService: { upsertCachedBook: async () => {} } },
     '../BookSourceService': { BookSourceService: { getTextChapterContent: async (value, url) => {
@@ -80,7 +81,8 @@ function harness(memory = new Map()) {
   const service = TextToSpeechService.getInstance();
   const context = { resourceManager: { getStringSync: key => key } };
   return { service, tts, memory, spoken, engines, timers, session, coordinator: coordinator.PlaybackCoordinator,
-    init: () => service.initialize(context), failContent: value => { failContent = value; },
+    init: () => service.initialize(context), reloadSettings: () => TextToSpeechService.reloadSettings(context),
+    failContent: value => { failContent = value; },
     deferEngine: value => { createDeferred = value; }, focus: (reason = 0) => focusCallback?.({ reason }),
     unplug: () => deviceCallback?.({ type: 1 }),
     complete(type = 1, request = spoken.at(-1)) { request.engine.listener.onComplete(request.id, { type }); } };
@@ -88,6 +90,16 @@ function harness(memory = new Map()) {
 let passed = 0;
 async function check(name, action) { await action(); console.log(`PASS ${name}`); passed++; }
 (async () => {
+  await check('恢复朗读备份后刷新已初始化的设置，不创建引擎或启动播放', async () => {
+    const h = harness(); await h.init();
+    h.memory.set('speed', 1.5); h.memory.set('follow', false); h.memory.set('person', 21);
+    await h.reloadSettings();
+    assert.equal(h.service.state.speed, 1.5);
+    assert.equal(h.service.state.follow, false);
+    assert.equal(h.service.state.person, 21);
+    assert.equal(h.service.state.playing, false);
+    assert.equal(h.engines.length, 0);
+  });
   await check('默认中文女声兼容语言和编号别名，内置音色无需下载即显示已选择', async () => {
     const h = harness(); await h.init();
     h.tts.listVoices = async () => [{ person: 0, language: 'zh_CN', style: 'interaction-broadcast', status: 'NOT_INSTALLED' },

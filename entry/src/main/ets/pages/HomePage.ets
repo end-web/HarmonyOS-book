@@ -29,7 +29,7 @@ import { DataService } from '../service/DataService';
 import { emitter } from '@kit.BasicServicesKit';
 import { LocalRuleSource } from '../model/LocalRuleSource';
 import { EVT_HOME_SOURCE_CHANGED, EVT_FAVORITES_CHANGED, PreferenceService } from '../service/PreferenceService';
-import { HomeSourceCategory, HomeSourceService } from '../service/rulesource/HomeSourceService';
+import { HomeSourceCategory, HomeSourceContent, HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 class HomeCategoryDataSource implements IDataSource {
   private categories: HomeSourceCategory[] = [];
@@ -469,9 +469,9 @@ export struct HomePage {
       this.carouselExpansion = 1;
       this.carouselLayoutExpansion = 1;
       this.carouselTargetExpansion = 1;
-      await this.loadHomeBlocks();
+      await this.loadHomeBlocks(false, true);
     } else if (this.selectedCategoryIndex < 0) {
-      await this.loadHomeBlocks(true);
+      await this.loadHomeBlocks(true, true);
     } else {
       await this.switchCategory(this.selectedCategoryIndex, true);
     }
@@ -495,7 +495,7 @@ export struct HomePage {
     }
   }
 
-  private async loadHomeBlocks(preserveContent: boolean = false): Promise<void> {
+  private async loadHomeBlocks(preserveContent: boolean = false, forceRefresh: boolean = false): Promise<void> {
     const generation = ++this.homeGen;
     this.loadingHome = true;
     this.categoryLoading = false;
@@ -530,11 +530,15 @@ export struct HomePage {
         this.homeError = $r('app.string.home_source_no_discovery');
         return;
       }
-      const categories = await HomeSourceService.getCategories(source);
+      const content = await HomeSourceService.loadHome(source, forceRefresh,
+        (partial: HomeSourceContent): void => {
+          if (generation !== this.homeGen) return;
+          if (this.homeCategories !== partial.categories) this.updateHomeCategories(partial.categories);
+          // 刷新时保留现有书单；首次加载则哪个分类先完成就先展示。
+          if (partial.blocks.length > 0 && this.homeBlocks !== partial.blocks) this.updateHomeBlocks(partial.blocks);
+        });
       if (generation !== this.homeGen) return;
-      this.updateHomeCategories(categories);
-      const blocks = await HomeSourceService.getHomeBlocks(source, categories);
-      if (generation !== this.homeGen) return;
+      const blocks = content.blocks;
       this.updateHomeBlocks(blocks);
       const covers: string[] = [];
       for (const block of blocks) {
@@ -807,18 +811,27 @@ export struct HomePage {
   }
 
   private updateHomeBlocks(blocks: HomeBlockSection[]): void {
+    if (blocks.length === this.homeBlocks.length &&
+      blocks.every((block: HomeBlockSection, index: number): boolean => block === this.homeBlocks[index])) return;
     const sources: Map<string, HomeRecommendationDataSource<SearchResult>> = new Map();
     for (const block of blocks) {
       const key = this.homeBlockKey(block);
       const source = this.homeCoverDataSources.get(key) ?? new HomeRecommendationDataSource<SearchResult>();
-      source.setItems(block.books);
+      const previous = this.homeBlocks.find((item: HomeBlockSection): boolean => this.homeBlockKey(item) === key);
+      if (previous?.books !== block.books) source.setItems(block.books);
       sources.set(key, source);
     }
     this.homeCoverDataSources = sources;
     // 分页只在数据更新时计算，返回精品推荐时复用同一个数据源。
-    this.featuredPageDataSource.setItems(this.featuredPages(blocks.length > 0 ? blocks[0].books : []));
+    if (this.homeBlocks[0]?.books !== blocks[0]?.books) {
+      this.featuredPageDataSource.setItems(this.featuredPages(blocks.length > 0 ? blocks[0].books : []));
+    }
     this.homeBlocks = blocks;
-    this.carouselBooks = this.collectCarouselBooks(blocks);
+    const carousel = this.collectCarouselBooks(blocks);
+    if (carousel.length !== this.carouselBooks.length ||
+      carousel.some((book: SearchResult, index: number): boolean => book !== this.carouselBooks[index])) {
+      this.carouselBooks = carousel;
+    }
     this.homeBlockDataSource.setBlocks(blocks);
   }
 

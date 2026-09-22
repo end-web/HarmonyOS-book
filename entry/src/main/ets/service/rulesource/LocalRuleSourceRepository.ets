@@ -18,7 +18,8 @@ const COOKIE_TABLE_NAME = 'rule_source_cookies';
 const LOGIN_TABLE_NAME = 'rule_source_login_status';
 const STATE_TABLE_NAME = 'rule_source_script_state';
 const GROUP_TABLE_NAME = 'rule_source_groups';
-const MAX_SOURCE_JSON_BYTES = 512 * 1024;
+const MAX_SOURCE_JSON_BYTES = 1024 * 1024;
+const MAX_SCRIPT_STATE_BYTES = 512 * 1024;
 const MAX_SESSION_TOKEN_LENGTH = 4096;
 const MAX_SESSION_DEVICE_ID_LENGTH = 256;
 const MAX_COOKIE_HEADER_LENGTH = 64 * 1024;
@@ -144,7 +145,7 @@ export class LocalRuleSourceRepository {
   }
 
   static async writeScriptState(sourceUrl: string, stateJson: string): Promise<void> {
-    if (buffer.byteLength(stateJson, 'utf-8') > MAX_SOURCE_JSON_BYTES) {
+    if (buffer.byteLength(stateJson, 'utf-8') > MAX_SCRIPT_STATE_BYTES) {
       throw new Error('书源运行状态超过 512 KiB');
     }
     const store = await LocalRuleSourceRepository.ensureStore();
@@ -982,7 +983,7 @@ export class LocalRuleSourceRepository {
     const sourceJson = LocalRuleSourceCodec.stringify(source);
     const sourceBytes = buffer.byteLength(sourceJson, 'utf-8');
     if (sourceBytes > MAX_SOURCE_JSON_BYTES) {
-      throw new Error(`书源数据超过 512 KiB：${source.bookSourceName}`);
+      throw new Error(`书源数据超过 1 MiB：${source.bookSourceName}`);
     }
 
     const report = LocalRuleSourceImportParser.parse(sourceJson);

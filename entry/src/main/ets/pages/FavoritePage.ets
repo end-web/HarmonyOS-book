@@ -116,6 +116,8 @@ export struct FavoritePage {
   @Param visible: boolean = false;
   @Local showBookActions: boolean = false;
   @Local removingBook: boolean = false;
+  private pendingRemoval: Book | null = null;
+  private pendingDeleteFiles: boolean = false;
 
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
@@ -766,9 +768,15 @@ export struct FavoritePage {
 
   private async removeActionBook(book: Book, deleteFiles: boolean): Promise<void> {
     if (this.removingBook) return;
+    if (this.showBookActions) {
+      // 先让原生菜单完成退场，避免删除宿主节点后菜单遮罩和点击锁残留。
+      this.pendingRemoval = book;
+      this.pendingDeleteFiles = deleteFiles;
+      return;
+    }
     this.removingBook = true;
     try { await this.doRemove(book.id, deleteFiles); }
-    finally { this.removingBook = false; }
+    finally { this.removingBook = false; this.showBookActions = false; }
   }
 
   private bookMenuOptions(): ContextMenuOptions {
@@ -777,7 +785,12 @@ export struct FavoritePage {
       backgroundColor: AppMaterial.SheetBackground,
       backgroundBlurStyle: AppMaterial.SheetBlur,
       onAppear: (): void => { this.showBookActions = true; },
-      onDisappear: (): void => { this.showBookActions = false; }
+      onDisappear: (): void => {
+        this.showBookActions = false;
+        const book = this.pendingRemoval;
+        this.pendingRemoval = null;
+        if (book !== null) this.removeActionBook(book, this.pendingDeleteFiles);
+      }
     };
     if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
     return options;

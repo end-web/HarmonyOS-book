@@ -23,6 +23,13 @@ export class OnlineTextContentCache {
     return `${context.cacheDir}/online_text_content/${BookIdentity.onlineTextBookId(key, '')}.json`;
   }
 
+  static async contains(context: common.Context, key: string): Promise<boolean> {
+    try {
+      const stat = await fileIo.stat(OnlineTextContentCache.path(context, key));
+      return stat.size > 0 && stat.size <= OnlineTextContentCache.MAX_FILE_BYTES;
+    } catch (_e) { return false; }
+  }
+
   static async read(context: common.Context, key: string): Promise<string | undefined> {
     try {
       const path = OnlineTextContentCache.path(context, key);

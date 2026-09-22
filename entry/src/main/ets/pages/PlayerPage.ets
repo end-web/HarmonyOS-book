@@ -97,7 +97,7 @@ export struct PlayerPage {
   @Local book: Book | null = null;
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
-  @Local chapterGridVisible: boolean = true;
+  @Local chapterGridVisible: boolean = false;
   @Local showSleepSheet: boolean = false;
   @Local sleepSheetMode: SleepMode = SleepMode.Duration;
   @Local sleepCustomVisible: boolean = false;
@@ -355,6 +355,16 @@ export struct PlayerPage {
     if (this.isLeaving) return;
     this.book = b;
     this.chapterDataSource.setChapters(PreferenceService.orderedChapters(b));
+    const pendingToc = BookSourceService.pendingAudioBook(b.id);
+    if (pendingToc !== undefined) {
+      pendingToc.then((loaded: Book): void => {
+        if (this.isLeaving || this.book?.id !== loaded.id) return;
+        this.book = this.cloneBookWithChapters(loaded, loaded.chapters, loaded.intro, loaded.variables);
+        this.chapterDataSource.setChapters(PreferenceService.orderedChapters(loaded));
+      }).catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'background toc failed: %{public}s', error.message);
+      });
+    }
     if (current && this.isSameBook(current, b)
       && current.chapters.length < b.chapters.length) {
       this.playerState.currentBook = b;
@@ -382,6 +392,9 @@ export struct PlayerPage {
   }
 
   private needsChapterHydration(book: Book): boolean {
+    if (book.tocComplete === false) {
+      return book.chapters.length === 0 || BookSourceService.pendingAudioBook(book.id) === undefined;
+    }
     return book.chapters.length === 0 || (book.chapters.length === 1 && book.chapterCount > 1);
   }
 
@@ -401,11 +414,14 @@ export struct PlayerPage {
       rating: book.rating,
       tags: book.tags,
       chapters: chapters,
+      tocComplete: book.tocComplete,
       bookUrl: book.bookUrl,
       sourceUrl: book.sourceUrl,
       variables: variables,
       skipIntro: book.skipIntro,
-      skipOutro: book.skipOutro
+      skipOutro: book.skipOutro,
+      chaptersDescending: book.chaptersDescending,
+      completed: book.completed
     };
     return hydrated;
   }
@@ -414,6 +430,9 @@ export struct PlayerPage {
     if (!this.needsChapterHydration(book) || this.chapterLoadInProgress) return book;
     this.chapterLoadInProgress = true;
     try {
+      if (book.tocComplete === false) {
+        return await BookSourceService.loadAudioBook(book, (_loaded: Book): void => {});
+      }
       const localChapters = await DataService.getChaptersForBook(book.id);
       if (localChapters.length > 0
         && !(localChapters.length === 1 && book.chapterCount > 1)) {
@@ -1401,6 +1420,7 @@ export struct PlayerPage {
 
       if (this.chapterGridVisible) {
         ChapterSegmentGrid({
+          book: this.book,
           chapters: this.book?.chapters ?? [], currentId: this.playerState.currentChapter?.id ?? '',
           keyword: this.chapterSearchKeyword, descending: this.book?.chaptersDescending ?? false,
           onSelect: (chapter: Chapter): void => { this.selectChapter(chapter); },
@@ -1450,11 +1470,6 @@ export struct PlayerPage {
                 .fontSize(AppFont.BodyL)
                 .fontColor(this.isCurrentChapter(ch) ? AppColor.Brand : $r('sys.color.font_primary'))
                 .fontWeight(this.isCurrentChapter(ch) ? FontWeight.Medium : FontWeight.Normal)
-              if (this.chapterDurationSec(ch) > 0) {
-                Text(this.formatDuration(this.chapterDurationSec(ch)))
-                  .fontSize(AppFont.Caption)
-                  .fontColor($r('sys.color.font_secondary'))
-              }
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
@@ -1468,9 +1483,8 @@ export struct PlayerPage {
                   .fontSize(18)
                   .fontColor([AppColor.Brand])
               }
-            } else {
-              this.buildChapterDownloadIndicator(ch)
             }
+            this.buildChapterDownloadIndicator(ch)
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
@@ -1855,8 +1869,10 @@ export struct PlayerPage {
 
   @Builder
   buildChapterDownloadIndicator(ch: Chapter) {
-    if (this.chapterDownloadRecord(ch)?.status === 'completed') {
-      SymbolGlyph($r('sys.symbol.checkmark'))
+    if (this.chapterDownloadRecord(ch)?.status === 'completed' ||
+      (this.chapterCacheTick >= 0 && this.book !== null &&
+        ChapterCacheService.getInstance().isAudioChapterCached(this.book, ch))) {
+      SymbolGlyph($r('sys.symbol.checkmark_circle'))
         .fontSize(16)
         .fontColor([AppColor.Brand])
     } else if (this.chapterDownloadRecord(ch)?.status === 'pending'
@@ -1870,10 +1886,10 @@ export struct PlayerPage {
       SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
         .fontSize(16)
         .fontColor(['#D03050'])
-    } else if (this.chapterCacheTick >= 0 && !ChapterCacheService.getInstance().isAudioChapterCached(this.book!, ch)) {
+    } else {
       SymbolGlyph($r('sys.symbol.cloud'))
         .fontSize(16)
-        .fontColor([AppColor.GlassTextTertiary])
+        .fontColor([$r('sys.color.font_tertiary')])
     }
   }
 }

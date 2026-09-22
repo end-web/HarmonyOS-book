@@ -78,5 +78,29 @@ function load(relative) {
   assert.equal(customRestored.themeId, 'black');
   assert.equal(customRestored.pageTurnMode, 'none');
   assert.equal(resolvePalette(customRestored.themeId, '').background, '#000000');
-  console.log('PASS: legacy preferences, vertical mode, four margins, system theme, invalid values, reset');
+  const typography = new TextReadingSettings();
+  typography.fontSize = 50;
+  typography.lineHeight = 1;
+  typography.fontWeight = 537;
+  typography.fontColor = '#123456';
+  typography.fontName = 'Test.ttf';
+  typography.fontPath = '/data/storage/el2/base/files/reader_fonts/test.ttf';
+  typography.themeId = ReaderThemeId.Custom;
+  typography.customBackground = '#BADA55';
+  typography.screenOnMinutes = 5;
+  await service.save({}, typography);
+  const fontRestored = await service.get({});
+  for (const field of ['fontSize', 'lineHeight', 'fontWeight', 'fontColor', 'fontName', 'fontPath',
+    'themeId', 'customBackground', 'screenOnMinutes']) assert.equal(fontRestored[field], typography[field], field);
+  assert.equal(TextReadingSettings.normalizeFontSize(100), 50);
+  assert.equal(TextReadingSettings.normalizeLineHeight(0), 1);
+  assert.equal(TextReadingSettings.normalizeFontWeight(NaN), 400);
+  assert.equal(TextReadingSettings.normalizeFontWeight(950), 900);
+  assert.equal(TextReadingSettings.normalizeScreenOnMinutes(7), 0);
+  for (const minutes of [0, 1, 5, 10, -1]) {
+    typography.screenOnMinutes = minutes;
+    await service.save({}, typography);
+    assert.equal((await service.get({})).screenOnMinutes, minutes);
+  }
+  console.log('PASS: legacy preferences, vertical mode, four margins, system theme, invalid values, reset, custom typography/colors/fonts, screen timeout');
 })().catch(error => { console.error(error); process.exitCode = 1; });

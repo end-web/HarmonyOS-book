@@ -57,9 +57,9 @@ export enum PageTurnMode {
 
 export class TextReadingSettings {
   static readonly FONT_SIZE_MIN: number = 14;
-  static readonly FONT_SIZE_MAX: number = 30;
+  static readonly FONT_SIZE_MAX: number = 50;
   static readonly FONT_SIZE_DEFAULT: number = 18;
-  static readonly LINE_HEIGHT_MIN: number = 1.4;
+  static readonly LINE_HEIGHT_MIN: number = 1;
   static readonly LINE_HEIGHT_MAX: number = 2.4;
   static readonly LINE_HEIGHT_DEFAULT: number = 1.9;
   /** 背景图蒙层浓度：0 = 图片原样，0.85 = 几乎被底色盖住 */
@@ -84,6 +84,20 @@ export class TextReadingSettings {
 
   static normalizeMargin(value: number, fallback: number, max: number = TextReadingSettings.MARGIN_UI_MAX): number {
     return Number.isFinite(value) ? Math.round(Math.max(0, Math.min(max, value))) : fallback;
+  }
+
+  fontWeight: number = 400;
+  fontColor: string = '';
+  fontPath: string = '';
+  fontName: string = '';
+  screenOnMinutes: number = 0;
+
+  static normalizeFontWeight(value: number): number {
+    return Number.isFinite(value) ? Math.round(Math.max(100, Math.min(900, value))) : 400;
+  }
+
+  static normalizeScreenOnMinutes(value: number): number {
+    return [-1, 0, 1, 5, 10].includes(value) ? value : 0;
   }
 
   fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
@@ -131,8 +145,7 @@ export class TextReadingSettings {
       value.customBackground = resolvePalette(value.themeId, value.customBackground).background;
       value.themeId = ReaderThemeId.Image;
     }
-    if (value.themeId === ReaderThemeId.Custom
-      || (value.themeId === ReaderThemeId.Image && value.backgroundImage.length === 0)) {
+    if (value.themeId === ReaderThemeId.Image && value.backgroundImage.length === 0) {
       value.themeId = TextReadingSettings.THEME_DEFAULT;
     }
     value.pattern = value.themeId === ReaderThemeId.Image ? ReaderPattern.Image : ReaderPattern.None;

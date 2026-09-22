@@ -37,8 +37,27 @@ function harness() {
     cloudWrites: 0, localRestores: 0, confirmed: 0,
     sources: [], restoredSources: [], selectUris: [], saveUris: [], pickerError: false,
     maxRead: Infinity, maxWrite: Infinity, fileWriteError: false, flushError: false, snapshotShortWrite: false,
-    pickerCalls: 0, restoreCount: 0, selectedData: null, backupPreferences: snapshot().preferences
+    pickerCalls: 0, restoreCount: 0, selectedData: null, backupPreferences: snapshot().preferences,
+    backupStats: [], speechReloads: 0
   };
+  const preferenceStores = new Map();
+  const stored = name => {
+    if (!preferenceStores.has(name)) preferenceStores.set(name, new Map());
+    return preferenceStores.get(name);
+  };
+  const preferences = { getPreferences: async (_context, { name }) => {
+    const values = stored(name);
+    return {
+      get: async (key, fallback) => values.has(key) ? values.get(key) : fallback,
+      put: async (key, value) => values.set(key, value),
+      delete: async key => values.delete(key),
+      getSync: (key, fallback) => values.has(key) ? values.get(key) : fallback,
+      putSync: (key, value) => values.set(key, value),
+      deleteSync: key => values.delete(key),
+      getAll: async () => Object.fromEntries(values),
+      flush: async () => {}
+    };
+  } };
   const syncTasks = [], downloadTasks = [], timers = new Map(), intervals = new Map();
   let timerId = 0;
   const auth = {
@@ -157,6 +176,12 @@ function harness() {
       setInterval: cb => { const id = ++timerId; intervals.set(id, cb); return id; },
       clearInterval: id => intervals.delete(id),
       require: name => {
+        if (name === '@kit.ArkData') return { preferences };
+        if (name === '@kit.AbilityKit') return { ConfigurationConstant: { ColorMode: { COLOR_MODE_NOT_SET: -1 } } };
+        if (name === '../model/AppAppearance') return { AppAppearance: {
+          current: { material: 0, accent: '' }, normalizeMaterial: value => value, normalizeAccent: value => value
+        } };
+        if (name === '@kit.BasicServicesKit') return { emitter: { emit() {} } };
         if (name === '@kit.CoreFileKit') return { fileIo, picker, cloudSync, fileUri: { getUriFromPath: p => 'file://' + p } };
         if (name === '@kit.ArkTS') return { util: { TextEncoder: class { encodeInto(s) { return new Uint8Array(Buffer.from(s)); } } } };
         if (name === '@kit.CryptoArchitectureKit') return { cryptoFramework: { createMd: () => {
@@ -175,7 +200,7 @@ function harness() {
           }
         };
         if (name === './StatsService') return { StatsService: {
-          init: async () => {}, getBookStats: async () => [], restoreBackupStats: async () => { control.localRestores++; }
+          init: async () => {}, exportBackupStats: async () => control.backupStats, restoreBackupStats: async () => { control.localRestores++; }
         } };
         if (name === './DataService') return { DataService: {
           setContext: () => {}, exportBackupBookShells: async () => [],
@@ -191,6 +216,10 @@ function harness() {
         if (name === './rulesource/shushan/ShuShanSourceIdentity') return { ShuShanSourceIdentity: { isSourceUrl: () => false } };
         if (name === '../model/LocalRuleSource') return load('model/LocalRuleSource');
         if (name === './BookSource' || name === '../model/Book') return {};
+        if (name === './TextToSpeechService') return { TextToSpeechService: {
+          reloadSettings: async () => { control.speechReloads++; }
+        } };
+        if (name.startsWith('.')) return load(path.posix.normalize(path.posix.join(path.posix.dirname(relative), name)));
         throw new Error('Unexpected dependency: ' + name);
       }
     }, { filename: relative + '.ets' });
@@ -213,7 +242,7 @@ function harness() {
   };
   return { context, control, auth, service, codes: module.CloudBackupErrorCode, seed, cloudPath,
     local, localCodes: localModule.LocalBackupErrorCode, documentPath, documentUri,
-    syncTasks, downloadTasks, timers, intervals, settled, load };
+    syncTasks, downloadTasks, timers, intervals, settled, load, stored };
 }
 
 async function until(predicate) {

@@ -1,3 +1,5 @@
+import { ChapterCacheIndicator } from './ChapterCacheIndicator';
+import { Book, Chapter } from '../model/Book';
 /**
  * ChapterListItem - 详情页/播放器章节列表项（复用组件）
  *
@@ -19,6 +21,8 @@ export enum ChapterBadge {
 @ComponentV2
 @ReusableV2
 export struct ChapterListItem {
+  @Param book: Book | null = null;
+  @Param chapter: Chapter | null = null;
   @Param title: string = '';
   @Param isTextBook: boolean = false;
   @Param isPlaying: boolean = false;
@@ -44,11 +48,6 @@ export struct ChapterListItem {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         Row({ space: AppSpace.Xs }) {
-          if (this.durationText.length > 0) {
-            Text(this.durationText)
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_tertiary'))
-          }
           if (this.bytesText.length > 0) {
             Text(this.bytesText)
               .fontSize(AppFont.Caption)
@@ -65,13 +64,14 @@ export struct ChapterListItem {
       .alignItems(HorizontalAlign.Start)
 
       Row({ space: AppSpace.Xs }) {
+        if (this.isPlaying && !this.isTextBook) {
+          SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
+            .fontSize(18).fontColor([AppColor.BrandDark])
+        }
         if (this.badge === ChapterBadge.Downloaded) {
-          Text($r('app.string.chapter_downloaded'))
-            .fontSize(AppFont.Caption)
-            .fontColor('#248A3D')
-            .backgroundColor('#14248A3D')
-            .borderRadius(AppRadius.Xs)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+          SymbolGlyph($r('sys.symbol.checkmark_circle'))
+            .fontSize(18).fontColor([AppColor.Brand])
+            .accessibilityText($r('app.string.chapter_downloaded'))
         } else if (this.badge === ChapterBadge.Downloading) {
           Text($r('app.string.chapter_downloading'))
             .fontSize(AppFont.Caption)
@@ -87,10 +87,14 @@ export struct ChapterListItem {
             .borderRadius(AppRadius.Xs)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
         }
-        if (this.isPlaying && !this.isTextBook) {
-          SymbolGlyph($r('sys.symbol.speaker_wave_2_fill'))
-            .fontSize(18).fontColor([AppColor.BrandDark])
+        if (this.badge === ChapterBadge.None && this.book !== null && this.chapter !== null) {
+          ChapterCacheIndicator({ book: this.book, chapter: this.chapter })
+        } else if (this.badge === ChapterBadge.None) {
+          SymbolGlyph($r('sys.symbol.cloud'))
+            .fontSize(18).fontColor([$r('sys.color.font_tertiary')])
+            .accessibilityText($r('app.string.chapter_not_cached'))
         }
+
       }
     }
     .width('100%')

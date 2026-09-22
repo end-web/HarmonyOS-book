@@ -439,7 +439,12 @@ export class DataService {
   static async addImportedBook(book: Book): Promise<void> {
     if (!DataService.ctx) throw new Error('本地存储尚未初始化');
     const directory = `${DataService.ctx.filesDir}/imported_toc`;
-    await fileIo.mkdir(directory, true);
+    if (!await fileIo.access(directory)) {
+      try { await fileIo.mkdir(directory, true); }
+      catch (error) {
+        if (!await fileIo.access(directory)) throw new Error(error instanceof Error ? error.message : String(error));
+      }
+    }
     await DataService.atomicWrite(`${directory}/${book.id}.json`, JSON.stringify(book.chapters));
     const list = await DataService.getImportedBooks();
     list.unshift(DataService.slimBook(book));
@@ -489,7 +494,7 @@ export class DataService {
     DataService.cachedBooksMem = list;
     await DataService.writeIndex(list);
     // 仅在确有章节时写 sidecar:空章节的 upsert(如时长回写前)不覆盖已存的好目录
-    if (book.chapters && book.chapters.length > 0) {
+    if (book.tocComplete !== false && book.chapters && book.chapters.length > 0) {
       await DataService.writeToc(book.id, book.chapters);
     }
   }

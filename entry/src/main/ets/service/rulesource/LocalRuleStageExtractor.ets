@@ -9,7 +9,7 @@ import {
   LocalRuleExecutionLimits
 } from './LocalRuleRuntimeTypes';
 import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
-import { LocalRuleWebExtractMode, LocalRuleWebRuntime } from './LocalRuleWebRuntime';
+import { LocalRuleWebExtractMode, LocalRuleWebRuntime, LocalRuleWebSelector } from './LocalRuleWebRuntime';
 
 class LocalRuleRegexProcessor {
   baseRule: string = '';
@@ -34,6 +34,46 @@ class LocalRuleScriptChain {
 
 /** 结构化规则的阶段提取器；不持有源状态，因此单次失败不会污染下一次执行。 */
 export class LocalRuleStageExtractor {
+  /** 预读不依赖变量或脚本的 DOM 字段；规则求值、正则处理和 @put 顺序保持原样。 */
+  static async prefetchHtmlFields(documents: LocalRuleDocument[], rules: string[]): Promise<void> {
+    const htmlDocuments = documents.filter((document: LocalRuleDocument): boolean =>
+      document.kind === LocalRuleDocumentKind.HTML);
+    if (htmlDocuments.length === 0) return;
+    const keys: string[] = [];
+    const selectors: LocalRuleWebSelector[] = [];
+    for (const rule of rules) {
+      if (LocalRuleScriptRuntime.hasScript(rule) || LocalRuleStageExtractor.scriptChain(rule) !== undefined || rule.includes('@put:') ||
+        rule.includes('@get:') || rule.includes('{{')) continue;
+      const base = LocalRuleStageExtractor.regexProcessor(rule.trim()).baseRule.trim();
+      if (!base || keys.includes(base) || new RegExp('^(https?://|data:|%|:|@regex:)', 'i').test(base) ||
+        ['||', '&&', '%%'].some((separator: string): boolean =>
+          LocalRuleStageExtractor.splitTopLevel(base, separator).length > 1)) continue;
+      const spec = LocalRuleStageExtractor.selectorSpec(base, false);
+      const selector = new LocalRuleWebSelector();
+      selector.selector = spec.selector;
+      selector.xpath = spec.xpath;
+      selector.mode = spec.mode;
+      selector.attribute = spec.attribute;
+      keys.push(base);
+      selectors.push(selector);
+    }
+    if (keys.length === 0) return;
+    try {
+      const values = await LocalRuleWebRuntime.instance.selectBatch(
+        htmlDocuments.map((document: LocalRuleDocument): string => document.payload), selectors);
+      if (values.length !== htmlDocuments.length * keys.length) return;
+      for (let index = 0; index < htmlDocuments.length; index++) {
+        for (let field = 0; field < keys.length; field++) {
+          const parsed: string[] = JSON.parse(values[index * keys.length + field]);
+          htmlDocuments[index].htmlFields.set(keys[field], parsed);
+        }
+      }
+    } catch (_error) {
+      // 大片段、复杂选择器或批次失败走原提取路径，不改变单字段的错误语义。
+      for (const document of htmlDocuments) document.htmlFields.clear();
+    }
+  }
+
   static createDocument(body: string, baseUrl: string): LocalRuleDocument {
     const trimmed = body.trim();
     if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
@@ -306,6 +346,8 @@ export class LocalRuleStageExtractor {
     }
     if (document.kind === LocalRuleDocumentKind.HTML) {
       const spec = LocalRuleStageExtractor.selectorSpec(cleanRule, false);
+      const cached = document.htmlFields.get(cleanRule);
+      if (cached !== undefined) return cached;
       return LocalRuleWebRuntime.instance.select(document.payload, spec.selector,
         spec.xpath, spec.mode, spec.attribute);
     }

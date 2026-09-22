@@ -1,5 +1,8 @@
+import { ChapterCacheIndicator } from '../components/ChapterCacheIndicator';
+import { ReaderSpeechFloating } from '../components/ReaderSpeechFloating';
+import { ReaderFontService, ReaderImportedFont } from '../service/text/ReaderFontService';
+import { ReaderScreenOnService } from '../service/text/ReaderScreenOnService';
 import { HdsTabs, HdsTabsFloatingStyle } from '@kit.UIDesignKit';
-import { SymbolGlyphModifier } from '@kit.ArkUI';
 import { HdsCompat, CompatibleTabsModifier } from '../utils/HdsCompat';
 import { PreferenceService } from '../service/PreferenceService';
 import { ReaderSpeechText } from '../components/ReaderSpeechText';
@@ -115,8 +118,18 @@ export struct ReaderPage {
   @Local jumpingResourceIndex: number = -1;
   @Local readerBarVisible: boolean = false;
   @Local showChapterSheet: boolean = false;
-  @Local chapterSegmented: boolean = true;
+  @Local chapterSegmented: boolean = false;
   @Local showSettingsSheet: boolean = false;
+  @Local fontPanel: boolean = false;
+  @Local fontWeight: number = 400;
+  @Local fontColor: string = '';
+  @Local fontFamily: string = 'HarmonyOS Sans';
+  @Local fontPath: string = '';
+  @Local fontName: string = '';
+  @Local importedFonts: ReaderImportedFont[] = [];
+  @Local screenOnMinutes: number = 0;
+  private pickingFont: boolean = false;
+  private screenOn: ReaderScreenOnService = new ReaderScreenOnService();
   @Local showSpeechSheet: boolean = false;
   @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
   @Local speechCanResume: boolean = false;
@@ -203,10 +216,13 @@ export struct ReaderPage {
     WindowUtils.refreshAvoidArea();
     TextToSpeechService.getInstance().addListener(this.speechListener);
     emitter.on(EVT_READER_JUMP_CHAPTER, this.jumpChapterHandler);
+    this.screenOn.init(this.context).catch((): void => {});
+    this.screenOn.setVisible(true);
     this.initializeReader();
   }
 
   aboutToDisappear(): void {
+    this.screenOn.dispose();
     emitter.off('app.reader.background', this.backgroundHandler);
     this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     this.leaving = true;
@@ -493,7 +509,7 @@ export struct ReaderPage {
       Math.max(1, this.readerTextHeightVp - READER_TEXT_LAYOUT_GUARD) :
       Math.max(80, viewportHeightVp - reservedHeightVp);
     return OnlineTextPaginator.paginate(content, contentWidthVp * density,
-      contentHeightVp * density, this.fontSize * scaledDensity, this.lineHeight);
+      contentHeightVp * density, this.fontSize * scaledDensity, this.lineHeight, this.fontFamily, this.fontWeight);
   }
 
   private currentOnlineTextCharOffset(): number {
@@ -655,6 +671,17 @@ export struct ReaderPage {
       this.marginRight = settings.marginRight;
       this.marginTop = settings.marginTop;
       this.marginBottom = settings.marginBottom;
+      this.fontWeight = settings.fontWeight;
+      this.fontColor = settings.fontColor;
+      this.fontPath = settings.fontPath;
+      this.fontName = settings.fontName;
+      this.importedFonts = await ReaderFontService.list(currentContext, this.fontPath, this.fontName);
+      this.screenOnMinutes = settings.screenOnMinutes;
+      this.screenOn.configure(this.screenOnMinutes);
+      if (this.fontPath.length > 0) {
+        try { this.fontFamily = ReaderFontService.register(currentContext, this.fontPath); }
+        catch (_e) { this.fontPath = ''; this.fontName = ''; this.fontFamily = 'HarmonyOS Sans'; }
+      }
       this.fontSize = settings.fontSize;
       this.lineHeight = settings.lineHeight;
       this.themeId = settings.themeId;
@@ -687,6 +714,13 @@ export struct ReaderPage {
     this.marginRight = 16;
     this.marginTop = 12;
     this.marginBottom = 12;
+    this.fontWeight = 400;
+    this.fontColor = '';
+    this.fontFamily = 'HarmonyOS Sans';
+    this.fontPath = '';
+    this.fontName = '';
+    this.screenOnMinutes = 0;
+    this.screenOn.configure(0);
     this.fontSize = TextReadingSettings.FONT_SIZE_DEFAULT;
     this.lineHeight = TextReadingSettings.LINE_HEIGHT_DEFAULT;
     this.themeId = TextReadingSettings.THEME_DEFAULT;
@@ -711,7 +745,9 @@ export struct ReaderPage {
       ReaderThemeId.Parchment : this.themeId;
     const effectiveTheme = this.followSystemTheme ?
       (this.systemNightOverride ? ReaderThemeId.Night : daytimeTheme) : this.themeId;
-    this.palette = resolvePalette(effectiveTheme, this.customBackground);
+    const palette = resolvePalette(effectiveTheme, this.customBackground);
+    if (this.fontColor.length > 0 && !this.systemNightOverride) palette.primary = this.fontColor;
+    this.palette = palette;
     // 深色底配白字状态栏，浅色底配黑字
     WindowUtils.setReaderStatusBarLight(this.palette.isDark).catch((_e: Error): void => {});
   }
@@ -721,6 +757,11 @@ export struct ReaderPage {
     if (currentContext === null) return;
     const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
       this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
+    settings.fontWeight = this.fontWeight;
+    settings.fontColor = this.fontColor;
+    settings.fontPath = this.fontPath;
+    settings.fontName = this.fontName;
+    settings.screenOnMinutes = this.screenOnMinutes;
     settings.followSystemTheme = this.followSystemTheme;
     settings.alwaysShowStatusBar = this.alwaysShowStatusBar;
     settings.marginLeft = this.marginLeft;
@@ -739,11 +780,11 @@ export struct ReaderPage {
     const verticalSafePx = (this.topSafeVp + this.readerBottomInsetVp() +
       READER_TEXT_FOOTER_HEIGHT + this.marginTop + this.marginBottom) * density;
     const pageConfig: readerCore.ReaderSetting = {
-      fontName: '系统字体',
+      fontName: this.fontName || this.fontFamily,
       fontSize: TextReadingSettings.normalizeFontSize(this.fontSize),
-      fontWeight: 400,
+      fontWeight: this.fontWeight,
       fontColor: this.palette.primary,
-      fontPath: '',
+      fontPath: this.fontPath,
       lineHeight: TextReadingSettings.normalizeLineHeight(this.lineHeight),
       nightMode: this.palette.isDark,
       themeColor: this.palette.background,
@@ -823,6 +864,39 @@ export struct ReaderPage {
    * 相册选图 → 复制进沙箱 files/reader_bg。
    * 相册 uri 是临时授权，重启后失效，所以必须落本地副本再引用。
    */
+  private selectReaderFont(font: ReaderImportedFont): void {
+    if (this.context === null) return;
+    try {
+      const family = font.path.length > 0 ? ReaderFontService.register(this.context, font.path) : 'HarmonyOS Sans';
+      this.fontPath = font.path; this.fontName = font.name; this.fontFamily = family;
+      this.applyReadingSettings(); this.saveReadingSettings();
+    } catch (_e) { this.showToast($r('app.string.reader_font_unavailable')); }
+  }
+
+  private async deleteReaderFont(font: ReaderImportedFont): Promise<void> {
+    if (this.context === null || this.pickingFont) return;
+    this.pickingFont = true;
+    try {
+      this.importedFonts = await ReaderFontService.remove(this.context, font.path);
+      if (this.fontPath === font.path) this.selectReaderFont(new ReaderImportedFont());
+    } catch (_e) { this.showToast($r('app.string.reader_font_delete_failed')); }
+    finally { this.pickingFont = false; }
+  }
+
+  private async pickReaderFont(): Promise<void> {
+    if (this.context === null || this.pickingFont) return;
+    this.pickingFont = true;
+    try {
+      const result = await ReaderFontService.pick(this.context);
+      if (this.leaving) return;
+      this.importedFonts = await ReaderFontService.list(this.context);
+      if (result.fonts.length > 0) this.selectReaderFont(result.fonts[result.fonts.length - 1]);
+      if (result.failures.length > 0) this.showToast($r('app.string.reader_font_partial', result.fonts.length, result.failures.length));
+    } catch (_e) {
+      this.showToast($r('app.string.reader_import_font_failed'));
+    } finally { this.pickingFont = false; }
+  }
+
   private async pickBackgroundImage(): Promise<void> {
     const currentContext = this.context;
     if (currentContext === null || this.pickingBackgroundImage) return;
@@ -862,6 +936,11 @@ export struct ReaderPage {
       this.applyReadingSettings(false);
       const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
         this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
+      settings.fontWeight = this.fontWeight;
+      settings.fontColor = this.fontColor;
+      settings.fontPath = this.fontPath;
+      settings.fontName = this.fontName;
+      settings.screenOnMinutes = this.screenOnMinutes;
       settings.followSystemTheme = this.followSystemTheme;
       settings.alwaysShowStatusBar = this.alwaysShowStatusBar;
       settings.marginLeft = this.marginLeft;
@@ -1112,7 +1191,7 @@ export struct ReaderPage {
 
   private onlineTextTurnRevision(): string {
     return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:` +
-      `${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.overlayAlpha}:` +
+      `${this.fontFamily}:${this.fontWeight}:${this.fontColor}:${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.overlayAlpha}:` +
       `${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}`;
   }
 
@@ -1124,11 +1203,12 @@ export struct ReaderPage {
     }
   }
 
-  private readerTabStyle(icon: Resource, label: ResourceStr): BottomTabBarStyle {
-    return new BottomTabBarStyle({
-      normal: new SymbolGlyphModifier(icon).fontSize(24).fontColor([this.palette.primary]),
-      selected: new SymbolGlyphModifier(icon).fontSize(24).fontColor([this.palette.primary])
-    }, label).labelStyle({ unselectedColor: this.palette.primary, selectedColor: this.palette.primary });
+  @Builder
+  readerTabStyle(icon: Resource, label: Resource) {
+    Stack({ alignContent: Alignment.Center }) {
+      SymbolGlyph(icon).fontSize(24).fontColor([this.palette.primary])
+        .accessibilityText(label)
+    }.width('100%').height(48)
   }
 
   /** 正文底部避让：三键导航等实体底栏完整避让；手势/悬浮小白条只留最小间隙。 */
@@ -1157,13 +1237,12 @@ export struct ReaderPage {
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.info_circle'), $r('app.string.reader_details')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.list_bullet'), $r('app.string.reader_chapters')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
-        if (this.isOnlineTextBook()) {
-          TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.speaker_wave_2'), $r('app.string.tts_title')))
-        }
+        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.textformat'), $r('app.string.reader_font_tab')))
       }
       .width('100%')
       .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM)
       .barOverlap(true)
+      .barMode(BarMode.Fixed)
       .barPosition(BarPosition.End)
       .scrollable(false)
       .attributeModifier(new CompatibleTabsModifier(this.readerFloatingStyle(), READER_BAR_HEIGHT + this.bottomSafeVp))
@@ -1243,7 +1322,8 @@ export struct ReaderPage {
     this.showReaderBar();
   }
 
-  private openSettingsSheet(): void {
+  private openSettingsSheet(fontPanel: boolean = false): void {
+    this.fontPanel = fontPanel;
     this.showChapterSheet = false;
     this.hideReaderBar();
     this.showSettingsSheet = true;
@@ -1306,7 +1386,7 @@ export struct ReaderPage {
     } else if (index === 2) {
       this.openSettingsSheet();
     } else if (index === 3) {
-      this.openSpeechSheet();
+      this.openSettingsSheet(true);
     }
   }
 
@@ -1430,6 +1510,15 @@ export struct ReaderPage {
             .width('100%')
             .height('100%')
           this.buildReaderTabs()
+          if (this.isOnlineTextBook() && this.readerBarVisible) {
+            Row() {
+              ReaderSpeechFloating({ playing: this.speechState.playing && this.speechState.bookId === this.bookId,
+                onOpen: (): void => { this.openSpeechSheet(); } })
+            }
+            .width('100%').justifyContent(FlexAlign.End)
+            .padding({ right: 16 }).margin({ bottom: this.bottomSafeVp + 110 })
+            .hitTestBehavior(HitTestMode.Transparent)
+          }
         }
         .width('100%')
         .height('100%')
@@ -1473,6 +1562,8 @@ export struct ReaderPage {
         if (!this.leaving && !this.showSettingsSheet) this.showReaderBar();
       }
     })
+    .onTouch((event: TouchEvent): void => { if (event.type === TouchType.Down) this.screenOn.touch(); })
+    .onVisibleAreaChange([0, 1], (visible: boolean): void => this.screenOn.setVisible(visible))
     // 背景由 ReaderBackground 铺，根节点保持透明
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .onSizeChange((oldValue: SizeOptions, newValue: SizeOptions): void => {
@@ -1514,6 +1605,7 @@ export struct ReaderPage {
               chapterCount: this.book?.chapters.length ?? 0,
               chapterStep: this.book !== null ? PreferenceService.chapterStep(this.book) : 1,
               fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette,
+              fontFamily: this.fontFamily, fontWeight: this.fontWeight,
               bookId: this.bookId, speechState: this.speechState, followOffset: this.continuousFollowOffset,
               topGestureInset: Math.max(0, this.readerViewportHeightVp * 0.1 -
                 this.topSafeVp - this.marginTop - READER_TEXT_HEADER_HEIGHT),
@@ -1536,7 +1628,8 @@ export struct ReaderPage {
               state: this.speechState,
               highlightEnabled: this.onlineTextTurnPreview === null && this.speechState.bookId === this.bookId &&
                 this.speechState.chapterIndex === this.currentResourceIndex,
-              fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette
+              fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette,
+              fontFamily: this.fontFamily, fontWeight: this.fontWeight
             })
           }
         }
@@ -1659,6 +1752,7 @@ export struct ReaderPage {
         .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
       if (this.chapterSegmented) {
         ChapterSegmentGrid({
+          book: this.book,
           chapters: this.book?.chapters ?? [],
           currentId: this.book?.chapters[this.currentResourceIndex]?.id ?? '',
           keyword: this.chapterQuery,
@@ -1701,6 +1795,7 @@ export struct ReaderPage {
                   .fontSize(18)
                   .fontColor([AppColor.Brand])
               }
+              ChapterCacheIndicator({ book: this.book, chapter: chapter })
             }
             .width('100%')
             .constraintSize({ minHeight: READER_CHAPTER_ROW_HEIGHT })
@@ -1758,6 +1853,35 @@ export struct ReaderPage {
   @Builder
   buildSettingsSheet(): void {
     ReaderSettingsSheet({
+      fontPanel: this.fontPanel, fontWeight: this.fontWeight,
+      fonts: this.importedFonts, fontPath: this.fontPath,
+      onSelectFont: (font: ReaderImportedFont): void => this.selectReaderFont(font),
+      onDeleteFont: (font: ReaderImportedFont): void => { this.deleteReaderFont(font); },
+      fontFamily: this.fontFamily, fontName: this.fontName, screenOnMinutes: this.screenOnMinutes,
+      onWeightChange: (weight: number, commit: boolean): void => {
+        this.fontWeight = TextReadingSettings.normalizeFontWeight(weight);
+        this.applyReadingSettings();
+        if (commit) this.saveReadingSettings();
+      },
+      onColorChange: (color: string, background: boolean, commit: boolean): void => {
+        this.followSystemTheme = false;
+        if (background) {
+          this.customBackground = color;
+          this.themeId = ReaderThemeId.Custom;
+          this.backgroundPattern = ReaderPattern.None;
+        } else { this.fontColor = color; }
+        this.refreshPalette();
+        this.applyReadingSettings(false);
+        if (commit) this.saveReadingSettings();
+      },
+      onPickFont: (): void => { this.pickReaderFont(); },
+      onSystemFont: (): void => {
+        this.fontFamily = 'HarmonyOS Sans'; this.fontPath = ''; this.fontName = '';
+        this.applyReadingSettings(); this.saveReadingSettings();
+      },
+      onScreenOnChange: (minutes: number): void => {
+        this.screenOnMinutes = minutes; this.screenOn.configure(minutes); this.saveReadingSettings();
+      },
       fontSize: this.fontSize,
       lineHeight: this.lineHeight,
       themeId: this.themeId,

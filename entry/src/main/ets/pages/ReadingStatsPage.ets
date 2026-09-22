@@ -17,25 +17,66 @@ import {
 } from '../service/PreferenceService';
 import { Book } from '../model/Book';
 import { DataService } from '../service/DataService';
+import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
+import { TextReadingProgressService, EVT_TEXT_READING_PROGRESS_CHANGED } from '../service/text/TextReadingProgressService';
 import {
   ListeningHistoryPolicy,
   ListeningRecordCandidate,
   MergedListeningRecord
 } from '../service/ListeningHistoryPolicy';
 
-interface ListenRecordView {
-  bookId: string;
-  aliasBookIds: string[];
-  title: string;
-  author: string;
-  cover: string;
-  chapterId: string;
-  chapterTitle: string;
-  progressMs: number;
-  durationMs: number;
-  progressPercent: number;
-  listenSeconds: number;
-  updatedAt: number;
+@ObservedV2
+class ListenRecordView {
+  bookId: string = '';
+  aliasBookIds: string[] = [];
+  @Trace title: string = '';
+  @Trace author: string = '';
+  @Trace cover: string = '';
+  chapterId: string = '';
+  @Trace chapterTitle: string = '';
+  progressMs: number = 0;
+  durationMs: number = 0;
+  @Trace progressPercent: number = 0;
+  @Trace listenSeconds: number = 0;
+  updatedAt: number = 0;
+  @Trace isText: boolean = false;
+  readingPosition: TextReadingPosition | null = null;
+}
+
+class ListeningRecordDataSource implements IDataSource {
+  private items: ListenRecordView[] = [];
+  private listeners: DataChangeListener[] = [];
+
+  totalCount(): number { return this.items.length; }
+  getData(index: number): ListenRecordView { return this.items[index]; }
+  registerDataChangeListener(listener: DataChangeListener): void { this.listeners.push(listener); }
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    this.listeners = this.listeners.filter((item: DataChangeListener): boolean => item !== listener);
+  }
+  setRecords(records: ListenRecordView[]): void {
+    // 保留同一本书的可观察对象，稳定 key 下进度、标题仍能即时刷新。
+    const existing = new Map<string, ListenRecordView>();
+    for (const item of this.items) existing.set(item.bookId, item);
+    this.items = records.map((record: ListenRecordView): ListenRecordView => {
+      const item = existing.get(record.bookId);
+      if (!item) return record;
+      item.aliasBookIds = record.aliasBookIds;
+      item.title = record.title;
+      item.author = record.author;
+      item.cover = record.cover;
+      item.chapterId = record.chapterId;
+      item.chapterTitle = record.chapterTitle;
+      item.progressMs = record.progressMs;
+      item.durationMs = record.durationMs;
+      item.progressPercent = record.progressPercent;
+      item.listenSeconds = record.listenSeconds;
+      item.updatedAt = record.updatedAt;
+      item.isText = record.isText;
+      item.readingPosition = record.readingPosition;
+      return item;
+    });
+    for (const listener of this.listeners) listener.onDataReloaded();
+  }
 }
 
 const AVERAGE_BOOK_SECONDS: number = 8 * 60 * 60;
@@ -55,11 +96,13 @@ export struct ReadingStatsPage {
   @Local sourceRecords: BookUsageStats[] = [];
   @Local records: ListenRecordView[] = [];
   @Local loading: boolean = true;
+  @Local refreshing: boolean = false;
   @Local appeared: boolean = false;
   @Local selectMode: boolean = false;
   @Local selectedIds: Set<string> = new Set();
 
   private scroller: Scroller = new Scroller();
+  private recordDataSource: ListeningRecordDataSource = new ListeningRecordDataSource();
   private loadingStats: boolean = false;
   private reloadPending: boolean = false;
   private statsHandler = (_evt: emitter.EventData): void => {
@@ -76,6 +119,7 @@ export struct ReadingStatsPage {
     this.loadStats();
     emitter.on(EVT_USAGE_STATS_UPDATED, this.statsHandler);
     emitter.on(EVT_FAVORITES_CHANGED, this.favoritesHandler);
+    emitter.on(EVT_TEXT_READING_PROGRESS_CHANGED, this.statsHandler);
     setTimeout(() => { this.appeared = true; }, 24);
   }
 
@@ -86,6 +130,7 @@ export struct ReadingStatsPage {
       try { emitter.off(EVT_USAGE_STATS_UPDATED); } catch (_ignore) { /* ignore */ }
     }
     try { emitter.off(EVT_FAVORITES_CHANGED, this.favoritesHandler); } catch (_e) { /* ignore */ }
+    try { emitter.off(EVT_TEXT_READING_PROGRESS_CHANGED, this.statsHandler); } catch (_e) { /* ignore */ }
   }
 
   private applyStatsBundle(bundle: StatsBundle): void {
@@ -101,7 +146,8 @@ export struct ReadingStatsPage {
       return;
     }
     this.loadingStats = true;
-    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const ctx = this.getUIContext().getHostContext();
+    if (!ctx) { this.loadingStats = false; this.refreshing = false; return; }
     try {
       await StatsService.init(ctx);
       const bundle: StatsBundle = await StatsService.getStatsBundle(1);
@@ -110,9 +156,11 @@ export struct ReadingStatsPage {
       await PreferenceService.ensureReady(ctx);
       const history = await PreferenceService.getHistory();
       const favoriteIds = new Set<string>(await PreferenceService.getFavorites());
-      const allRecords = await this.buildRecordViews(ctx, bundle.records, history);
+      const reading = await TextReadingProgressService.getAll(ctx);
+      const allRecords = await this.buildRecordViews(ctx, bundle.records, history, reading);
       this.records = allRecords.filter((item: ListenRecordView): boolean =>
         this.shouldShowRecord(item, favoriteIds));
+      this.recordDataSource.setRecords(this.records);
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
       if (this.selectedIds.size === 0) this.selectMode = false;
@@ -121,6 +169,7 @@ export struct ReadingStatsPage {
       console.error(`[ReadingStatsPage] load stats failed: ${JSON.stringify(e)}`);
     } finally {
       this.loading = false;
+      this.refreshing = false;
       this.loadingStats = false;
       if (this.reloadPending) {
         this.reloadPending = false;
@@ -135,17 +184,22 @@ export struct ReadingStatsPage {
     return this.onlyUnfavorited ? !isFavorite : isFavorite;
   }
 
-  private pageTitle(): string {
-    return this.onlyUnfavorited ? '未收藏历史' : '收听记录';
+  private pageTitle(): Resource {
+    return this.onlyUnfavorited ? $r('app.string.record_unfavorited_title') : $r('app.string.record_title');
   }
 
-  private async buildRecordViews(context: common.UIAbilityContext, stats: BookUsageStats[],
-    history: PlayHistoryItem[]): Promise<ListenRecordView[]> {
+  private async buildRecordViews(context: common.Context, stats: BookUsageStats[],
+    history: PlayHistoryItem[], reading: TextReadingPosition[]): Promise<ListenRecordView[]> {
     const statsMap = new Map<string, BookUsageStats[]>();
     const historyMap = new Map<string, PlayHistoryItem>();
     const bookIds = new Set<string>();
+    const readingMap = new Map<string, TextReadingPosition>();
+    for (const position of reading) {
+      readingMap.set(position.bookId, position);
+      bookIds.add(position.bookId);
+    }
     for (const item of stats) {
-      if (!item || !item.bookId || item.listenSeconds <= 0 || this.isLegacyTextBook(item.bookId)) continue;
+      if (!item || !item.bookId || item.listenSeconds <= 0) continue;
       let bookStats = statsMap.get(item.bookId);
       if (!bookStats) {
         bookStats = [];
@@ -155,7 +209,7 @@ export struct ReadingStatsPage {
       bookIds.add(item.bookId);
     }
     for (const item of history) {
-      if (!item || !item.bookId || this.isLegacyTextBook(item.bookId)) continue;
+      if (!item || !item.bookId) continue;
       const current = historyMap.get(item.bookId);
       if (!current || item.updatedAt >= current.updatedAt) historyMap.set(item.bookId, item);
       bookIds.add(item.bookId);
@@ -165,6 +219,8 @@ export struct ReadingStatsPage {
     const books = new Map<string, Book>();
     for (const bookId of bookIds) {
       const candidate = new ListeningRecordCandidate(bookId);
+      candidate.readingPosition = readingMap.get(bookId) ?? null;
+      candidate.isText = candidate.readingPosition !== null || this.isLegacyTextBook(bookId);
       const bookStats = statsMap.get(bookId) ?? [];
       for (const stat of bookStats) {
         candidate.addStats(stat.listenSeconds, stat.updatedAt, stat.title, stat.author, stat.cover,
@@ -184,6 +240,7 @@ export struct ReadingStatsPage {
       if (book) {
         books.set(bookId, book);
         candidate.setBook(book.sourceUrl, book.bookUrl, book.title, book.author || book.narrator, book.cover);
+        candidate.isText = candidate.isText || book.contentType === 'text';
       }
       candidates.push(candidate);
     }
@@ -203,29 +260,31 @@ export struct ReadingStatsPage {
   private createRecordView(item: MergedListeningRecord, book: Book | null): ListenRecordView {
     let chapterId = item.chapterId;
     let chapterIndex = item.chapterIndex;
-    if (book && book.chapters && book.chapters.length > 0) {
+    if (!item.isText && book && book.chapters && book.chapters.length > 0) {
       const resolvedIndex = DataService.resolveChapterIndex(book, item.chapterId, item.chapterTitle);
       if (resolvedIndex >= 0) {
         chapterIndex = resolvedIndex;
         chapterId = book.chapters[resolvedIndex].id;
       }
     }
-    const ratio = this.calculateBookProgress(book, chapterId, item.chapterTitle, chapterIndex,
-      item.progressMs, item.durationMs);
-    return {
-      bookId: item.bookId,
-      aliasBookIds: item.aliasBookIds,
-      title: book?.title || item.title || '未知书籍',
-      author: book?.author || book?.narrator || item.author || '未知作者',
-      cover: book?.cover || item.cover || '',
-      chapterId,
-      chapterTitle: item.chapterTitle,
-      progressMs: item.progressMs,
-      durationMs: item.durationMs,
-      progressPercent: Math.round(ratio * 100),
-      listenSeconds: item.listenSeconds,
-      updatedAt: item.updatedAt || Date.now()
-    };
+    const ratio = item.isText ? Math.max(0, Math.min(1, chapterIndex / Math.max(1, book?.chapterCount ?? 1))) :
+      this.calculateBookProgress(book, chapterId, item.chapterTitle, chapterIndex, item.progressMs, item.durationMs);
+    const view = new ListenRecordView();
+    view.bookId = item.bookId;
+    view.aliasBookIds = item.aliasBookIds;
+    view.title = book?.title || item.title || '未知书籍';
+    view.author = book?.author || book?.narrator || item.author || '未知作者';
+    view.cover = book?.cover || item.cover || '';
+    view.chapterId = chapterId;
+    view.chapterTitle = item.chapterTitle;
+    view.progressMs = item.progressMs;
+    view.durationMs = item.durationMs;
+    view.progressPercent = Math.round(ratio * 100);
+    view.listenSeconds = item.listenSeconds;
+    view.updatedAt = item.updatedAt || 0;
+    view.isText = item.isText;
+    view.readingPosition = item.readingPosition;
+    return view;
   }
 
   private calculateBookProgress(book: Book | null, chapterId: string, chapterTitle: string,
@@ -322,7 +381,7 @@ export struct ReadingStatsPage {
     const count = this.selectedIds.size;
     this.getUIContext().getPromptAction().showDialog({
       title: '删除记录',
-      message: `确认删除已选 ${count} 本书的收听记录？`,
+      message: this.getUIContext().getHostContext()?.resourceManager.getStringSync($r('app.string.record_delete_confirm').id, count),
       buttons: [
         { text: '取消', color: '#8F8F8F' },
         { text: '删除', color: '#C45D34' }
@@ -335,6 +394,8 @@ export struct ReadingStatsPage {
   }
 
   private async deleteSelected(): Promise<void> {
+    const context = this.getUIContext().getHostContext();
+    if (!context) return;
     const deletedIds = new Set<string>();
     for (const item of this.records) {
       if (!this.selectedIds.has(item.bookId)) continue;
@@ -346,6 +407,7 @@ export struct ReadingStatsPage {
     for (const id of ids) {
       await PreferenceService.removeHistory(id);
       await PreferenceService.removeProgress(id);
+      await TextReadingProgressService.remove(context, id);
     }
     this.clearSelection();
     await this.loadStats();
@@ -356,8 +418,19 @@ export struct ReadingStatsPage {
     this.navStack.pushPathByName('detail', item.bookId);
   }
 
-  private resumeRecord(item: ListenRecordView): void {
+  private async resumeRecord(item: ListenRecordView): Promise<void> {
     if (!item.bookId) return;
+    if (item.isText) {
+      const context = this.getUIContext().getHostContext();
+      if (!context) return;
+      const reading = item.readingPosition;
+      if (reading && reading.bookId !== item.bookId) {
+        await TextReadingProgressService.save(context, TextReadingPosition.atChar(item.bookId,
+          reading.resourceIndex, reading.domPos, reading.charOffset, reading.pageOffset, reading.chapterTitle));
+      }
+      this.navStack.pushPathByName('reader', TextReaderRouteParams.of(item.bookId));
+      return;
+    }
     const params: Record<string, Object> = {
       'bookId': item.bookId,
       'chapterId': item.chapterId,
@@ -383,25 +456,39 @@ export struct ReadingStatsPage {
         })
 
       HdsNavigation() {
-        Scroll(this.scroller) {
-          Column({ space: AppSpace.Md }) {
+        Refresh({ refreshing: $$this.refreshing, builder: this.refreshIndicator() }) {
+          List({ scroller: this.scroller, space: AppSpace.Md }) {
             if (!this.onlyUnfavorited) {
-              this.buildSummaryCard()
+              ListItem() { this.buildSummaryCard() }
             }
-            this.buildRecordList()
+            if (this.loading) {
+              ListItem() { this.buildLoadingState() }
+            } else if (this.records.length === 0) {
+              ListItem() { this.buildEmptyState() }
+            } else {
+              ListItem() { this.buildHistoryHeader() }
+              LazyForEach(this.recordDataSource, (item: ListenRecordView) => {
+                ListItem() { this.buildRecordItem(item) }
+              }, (item: ListenRecordView): string => item.bookId)
+            }
           }
           .width('100%')
+          .height('100%')
+          .cachedCount(5)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .padding({
             left: AppSpace.Md,
-            right: AppSpace.Md,
-            top: WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm,
-            bottom: this.inTab ? WindowUtils.getFloatingTabBottomVp() : WindowUtils.getBottomSafeVp() + AppSpace.Xl
+            right: AppSpace.Md
           })
+          // 首尾避让随列表滚动，避免 padding 将内容裁在悬浮底栏上方。
+          .contentStartOffset(WindowUtils.getStatusBarHeightVp() + MINI_TITLE_BAR_HEIGHT + AppSpace.Sm)
+          .contentEndOffset(this.inTab ? WindowUtils.getFloatingTabBottomVp() :
+            WindowUtils.getBottomSafeVp() + AppSpace.Xl)
         }
+        .onRefreshing(() => { this.loadStats(); })
         .width('100%')
         .height('100%')
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .backgroundColor(Color.Transparent)
         .align(Alignment.Top)
       }
@@ -420,7 +507,7 @@ export struct ReadingStatsPage {
             value: [{
               content: {
                 icon: $r('sys.symbol.clock'),
-                label: this.onlyUnfavorited ? '返回收藏历史' : '未收藏历史',
+                label: this.onlyUnfavorited ? $r('app.string.record_favorited_back') : $r('app.string.record_unfavorited_title'),
                 action: () => {
                   if (this.onlyUnfavorited) {
                     this.navStack.pop();
@@ -481,6 +568,17 @@ export struct ReadingStatsPage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  refreshIndicator() {
+    Row() {
+      if (this.refreshing) {
+        LoadingProgress().width(24).height(24).color(AppColor.Brand)
+      }
+    }
+    .height(56)
+    .justifyContent(FlexAlign.Center)
   }
 
   @Builder
@@ -706,34 +804,10 @@ export struct ReadingStatsPage {
   }
 
   @Builder
-  buildRecordList() {
-    if (this.loading) {
-      this.buildLoadingState()
-    } else if (this.records.length === 0) {
-      this.buildEmptyState()
-    } else {
-      Column({ space: AppSpace.Md }) {
-        this.buildHistoryHeader()
-        Column({ space: AppSpace.Sm }) {
-          ForEach(this.records, (item: ListenRecordView) => {
-            this.buildRecordItem(item)
-          }, (item: ListenRecordView) =>
-            `${item.bookId}|${item.updatedAt}|${item.progressPercent}|${item.listenSeconds}`)
-        }
-        .width('100%')
-      }
-      .width('100%')
-      .opacity(this.appeared ? 1 : 0)
-      .translate({ y: this.appeared ? 0 : 18 })
-      .animation({ duration: 460, delay: 160, curve: AppCurve.Decelerate })
-    }
-  }
-
-  @Builder
   buildHistoryHeader() {
     Row() {
       Column({ space: 5 }) {
-        Text(this.onlyUnfavorited ? '未收藏历史' : '收听历史')
+        Text(this.pageTitle())
           .fontSize(AppFont.Title)
           .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
@@ -822,16 +896,17 @@ export struct ReadingStatsPage {
 
         Row({ space: AppSpace.Sm }) {
           Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.play_fill'))
+            SymbolGlyph(item.isText ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
               .fontSize(10)
               .fontColor([HomeTheme.Accent])
-            Text(`已听 ${item.progressPercent}%`)
+            Text(item.isText ? $r('app.string.record_read_progress', item.progressPercent) :
+              $r('app.string.record_listen_progress', item.progressPercent))
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_secondary'))
           }
           .alignItems(VerticalAlign.Center)
 
-          Text(this.formatDurationText(item))
+          Text(item.isText ? (item.chapterTitle || $r('app.string.record_read_started')) : this.formatDurationText(item))
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
             .maxLines(1)
@@ -862,7 +937,7 @@ export struct ReadingStatsPage {
 
       if (!this.selectMode) {
         Stack() {
-          SymbolGlyph($r('sys.symbol.play_fill'))
+          SymbolGlyph(item.isText ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
             .fontSize(16)
             .fontColor([$r('sys.color.font_primary')])
         }
@@ -973,11 +1048,11 @@ export struct ReadingStatsPage {
       .height(52)
       .borderRadius(26)
       .backgroundColor(AppColor.BrandSoft)
-      Text(this.onlyUnfavorited ? '暂无未收藏历史' : '暂无收藏书籍的收听记录')
+      Text(this.onlyUnfavorited ? $r('app.string.record_unfavorited_empty') : $r('app.string.record_empty'))
         .fontSize(AppFont.BodyL)
         .fontColor($r('sys.color.font_primary'))
         .fontWeight(FontWeight.Medium)
-      Text(this.onlyUnfavorited ? '未收藏的书籍会显示在这里。' : '收藏书籍后，这里会保留你的聆听进度。')
+      Text(this.onlyUnfavorited ? $r('app.string.record_unfavorited_hint') : $r('app.string.record_empty_hint'))
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))
     }

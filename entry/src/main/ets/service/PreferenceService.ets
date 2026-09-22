@@ -87,6 +87,7 @@ export class PreferenceBackupSnapshot {
   lastPlayed: LastPlayedItem | null = null;
   progresses: PlayProgress[] = [];
   skipConfigs: BookSkipBackup[] = [];
+  descendingBookIds: string[] | undefined = undefined;
   colorMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
   materialStyle: number = 0;
   accentColor: string = '';
@@ -911,12 +912,15 @@ export class PreferenceService {
   /** 导出允许跨设备迁移的白名单偏好，不包含账号、卡片和本地导入数据。 */
   static async exportBackupSnapshot(): Promise<PreferenceBackupSnapshot> {
     const snapshot = new PreferenceBackupSnapshot();
+    snapshot.descendingBookIds = [];
     snapshot.favorites = (await PreferenceService.getFavorites())
       .filter((id: string) => !id.startsWith('import_'));
     snapshot.history = (await PreferenceService.getHistory())
-      .filter((item: PlayHistoryItem) => !item.bookId.startsWith('import_'));
+      .filter((item: PlayHistoryItem): boolean => !!item && typeof item.bookId === 'string' &&
+        !item.bookId.startsWith('import_'));
     const lastPlayed = await PreferenceService.getLastPlayed();
-    snapshot.lastPlayed = lastPlayed && !lastPlayed.bookId.startsWith('import_') ? lastPlayed : null;
+    snapshot.lastPlayed = lastPlayed && typeof lastPlayed.bookId === 'string' &&
+      !lastPlayed.bookId.startsWith('import_') ? lastPlayed : null;
     snapshot.colorMode = await PreferenceService.getColorMode();
     snapshot.materialStyle = AppAppearance.current.material;
     snapshot.accentColor = AppAppearance.current.accent;
@@ -934,6 +938,11 @@ export class PreferenceService {
         if (bookId.startsWith('import_')) continue;
         const progress = await PreferenceService.getProgress(bookId);
         if (progress) snapshot.progresses.push(progress);
+      } else if (key.startsWith(KEY_TOC_ORDER_PREFIX)) {
+        const bookId = key.substring(KEY_TOC_ORDER_PREFIX.length);
+        if (bookId && !bookId.startsWith('import_') && await PreferenceService.getTocOrder(bookId)) {
+          snapshot.descendingBookIds.push(bookId);
+        }
       } else if (key.startsWith(KEY_SKIP_PREFIX)) {
         const bookId = key.substring(KEY_SKIP_PREFIX.length);
         if (bookId.startsWith('import_')) continue;
@@ -974,6 +983,9 @@ export class PreferenceService {
       if (key.startsWith(KEY_PROGRESS_PREFIX)) {
         const bookId = key.substring(KEY_PROGRESS_PREFIX.length);
         if (!bookId.startsWith('import_')) await s.delete(key);
+      } else if (snapshot.descendingBookIds !== undefined && key.startsWith(KEY_TOC_ORDER_PREFIX)) {
+        const bookId = key.substring(KEY_TOC_ORDER_PREFIX.length);
+        if (!bookId.startsWith('import_')) await s.delete(key);
       } else if (key.startsWith(KEY_CHAPTER_PROGRESS_PREFIX)) {
         const bookId = key.substring(KEY_CHAPTER_PROGRESS_PREFIX.length);
         if (!bookId.startsWith('import_')) await s.delete(key);
@@ -985,6 +997,14 @@ export class PreferenceService {
     PreferenceService.progressMemo.clear();
     PreferenceService.chapterProgressMemo.clear();
     PreferenceService.skipMemo.clear();
+    if (snapshot.descendingBookIds !== undefined) {
+      PreferenceService.tocOrderMemo.clear();
+      for (const bookId of snapshot.descendingBookIds) {
+        if (!bookId || bookId.startsWith('import_')) continue;
+        PreferenceService.tocOrderMemo.set(bookId, true);
+        await s.put(KEY_TOC_ORDER_PREFIX + bookId, true);
+      }
+    }
     for (const progress of snapshot.progresses) {
       if (!progress || !progress.bookId || progress.bookId.startsWith('import_')) continue;
       PreferenceService.progressMemo.set(progress.bookId, progress);

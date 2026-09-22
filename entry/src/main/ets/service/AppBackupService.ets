@@ -11,13 +11,16 @@ import {
   LocalRuleSourceType,
   LocalRuleTocRule
 } from '../model/LocalRuleSource';
-import { PreferenceBackupSnapshot, PreferenceService } from './PreferenceService';
+import {
+  LastPlayedItem, PlayHistoryItem, PlayProgress, PreferenceBackupSnapshot, PreferenceService
+} from './PreferenceService';
 import { BookUsageStats, StatsService } from './StatsService';
 import { DataService } from './DataService';
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
 import { GuangYuSourceIdentity } from './rulesource/guangyu/GuangYuSourceIdentity';
 import { ShuShanSourceIdentity } from './rulesource/shushan/ShuShanSourceIdentity';
 import { SourceDataService } from './SourceDataService';
+import { ReadingBackupService, ReadingBackupSnapshot } from './text/ReadingBackupService';
 
 const BACKUP_DIR: string = 'backup';
 const BACKUP_FILE: string = 'listenbook_state.json';
@@ -77,6 +80,7 @@ export class AppBackupSnapshot {
   stats: BookUsageStats[] = [];
   books: Book[] = [];
   ruleSources: BackupRuleSource[] = [];
+  reading: ReadingBackupSnapshot | undefined = undefined;
 }
 
 export class AppBackupService {
@@ -90,14 +94,14 @@ export class AppBackupService {
 
   static async createSnapshot(context: common.Context, outputPath: string = '', strict: boolean = false): Promise<void> {
     await PreferenceService.init(context);
-    await StatsService.init(context);
     DataService.setContext(context);
     const snapshot = new AppBackupSnapshot();
     snapshot.exportedAt = Date.now();
     snapshot.preferences = AppBackupService.normalizePlaybackSnapshot(await PreferenceService.exportBackupSnapshot());
-    snapshot.stats = (await StatsService.getBookStats())
-      .filter((item: BookUsageStats) => !item.bookId.startsWith('import_'));
+    snapshot.stats = (await StatsService.exportBackupStats(context))
+      .filter((item: BookUsageStats): boolean => AppBackupService.validStats(item));
     snapshot.books = await DataService.exportBackupBookShells();
+    snapshot.reading = await ReadingBackupService.createSnapshot(context);
     try {
       await LocalRuleSourceRepository.init(context);
       const localSources = await LocalRuleSourceRepository.getAll();
@@ -131,31 +135,47 @@ export class AppBackupService {
   }
 
   private static normalizePlaybackSnapshot(original: PreferenceBackupSnapshot): PreferenceBackupSnapshot {
-    // 在独立副本中补全，不改写本机历史或进度缓存，也不丢弃旧记录。
+    // 只处理导出副本：兼容已知旧字段，逐条跳过仍不合法的记录，不改写本机缓存。
     const snapshot: PreferenceBackupSnapshot = JSON.parse(JSON.stringify(original));
-    for (const item of snapshot.history) {
+    snapshot.history = snapshot.history.filter((item: PlayHistoryItem): boolean => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
       const legacy: LegacyPlaybackFields = JSON.parse(JSON.stringify(item));
-      item.updatedAt = AppBackupService.recoverPlaybackNumber(item.updatedAt,
+      const updatedAt = AppBackupService.recoverPlaybackNumber(item.updatedAt,
         [legacy.h15, legacy.q11, legacy.c10]);
-    }
-    for (const item of snapshot.progresses) {
+      if (updatedAt === undefined) return false;
+      item.updatedAt = updatedAt;
+      return AppBackupService.validHistoryItem(item);
+    });
+    snapshot.progresses = snapshot.progresses.filter((item: PlayProgress): boolean => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
       const legacy: LegacyPlaybackFields = JSON.parse(JSON.stringify(item));
-      item.updatedAt = AppBackupService.recoverPlaybackNumber(item.updatedAt,
+      const updatedAt = AppBackupService.recoverPlaybackNumber(item.updatedAt,
         [legacy.h15, legacy.q11, legacy.c10]);
-      item.chapterIndex = AppBackupService.recoverPlaybackNumber(item.chapterIndex, [legacy.h26]);
-      item.positionMs = AppBackupService.recoverPlaybackNumber(item.positionMs,
+      const chapterIndex = AppBackupService.recoverPlaybackNumber(item.chapterIndex, [legacy.h26]);
+      const positionMs = AppBackupService.recoverPlaybackNumber(item.positionMs,
         [legacy.m56, legacy.l50, legacy.n49, legacy.x47, legacy.u47]);
+      if (updatedAt === undefined || chapterIndex === undefined || positionMs === undefined) return false;
+      item.updatedAt = updatedAt;
+      item.chapterIndex = chapterIndex;
+      item.positionMs = positionMs;
+      return AppBackupService.validProgress(item);
+    });
+    if (snapshot.lastPlayed && !AppBackupService.validLastPlayed(snapshot.lastPlayed)) snapshot.lastPlayed = null;
+    const skippedHistory = original.history.length - snapshot.history.length;
+    const skippedProgresses = original.progresses.length - snapshot.progresses.length;
+    if (skippedHistory > 0 || skippedProgresses > 0) {
+      console.warn(`[AppBackupService] skipped invalid playback records: history=${skippedHistory}, progresses=${skippedProgresses}`);
     }
     return snapshot;
   }
 
-  private static recoverPlaybackNumber(current: number, legacy: Array<number | undefined>): number {
-    if (current !== undefined) return current;
+  private static recoverPlaybackNumber(current: number, legacy: Array<number | undefined>): number | undefined {
+    if (AppBackupService.validNumber(current)) return current;
     for (const value of legacy) {
       if (value !== undefined && AppBackupService.validNumber(value)) return value;
     }
-    // 不推测未知格式，也不以 0 覆盖无法恢复的位置。
-    throw new Error('Unrecognized legacy playback field');
+    // 不推测未知格式，也不以 0 覆盖无法恢复的位置；由调用方跳过这一条。
+    return undefined;
   }
 
   /** 云端或用户选择的文件进入本地恢复流程前，先验证整个快照。 */
@@ -203,6 +223,7 @@ export class AppBackupService {
     await PreferenceService.restoreBackupSnapshot(snapshot.preferences);
     await StatsService.restoreBackupStats(Array.isArray(snapshot.stats) ? snapshot.stats : []);
     await DataService.restoreBackupBookShells(snapshot.books, strict);
+    if (snapshot.reading !== undefined) await ReadingBackupService.restoreSnapshot(context, snapshot.reading);
     return true;
   }
 
@@ -212,6 +233,14 @@ export class AppBackupService {
       !snapshot.preferences || !Array.isArray(snapshot.books) || snapshot.books.length > 10000 ||
       !Array.isArray(snapshot.stats) || snapshot.stats.length > 10000) return AppBackupService.invalidSnapshot('snapshot');
     const prefs = snapshot.preferences;
+    if (prefs.descendingBookIds !== undefined && (!Array.isArray(prefs.descendingBookIds) ||
+      prefs.descendingBookIds.length > 10000 ||
+      !prefs.descendingBookIds.every((id: string): boolean => AppBackupService.validId(id)))) {
+      return AppBackupService.invalidSnapshot('preferences.descendingBookIds');
+    }
+    if (snapshot.reading !== undefined && !ReadingBackupService.isValidSnapshot(snapshot.reading)) {
+      return AppBackupService.invalidSnapshot('reading');
+    }
     if (!Array.isArray(prefs.favorites) || prefs.favorites.length > 10000 ||
       !prefs.favorites.every((id: string): boolean => AppBackupService.validId(id)) ||
       !Array.isArray(prefs.history) || prefs.history.length > 10000 ||
@@ -224,26 +253,14 @@ export class AppBackupService {
       !AppBackupService.optionalNumber(prefs.materialStyle) ||
       !AppBackupService.optionalNumber(prefs.preloadChapters) ||
       (prefs.autoPlayOnLaunch !== undefined && typeof prefs.autoPlayOnLaunch !== 'boolean')) return AppBackupService.invalidSnapshot('preferences.settings');
-    if (prefs.lastPlayed && (!AppBackupService.validId(prefs.lastPlayed.bookId) ||
-      !AppBackupService.validText(prefs.lastPlayed.chapterId) ||
-      !AppBackupService.validNumber(prefs.lastPlayed.progressMs) ||
-      !AppBackupService.optionalText(prefs.lastPlayed.chapterTitle) ||
-      !AppBackupService.validDuration(prefs.lastPlayed.durationMs) ||
-      !AppBackupService.optionalNumber(prefs.lastPlayed.speed))) return AppBackupService.invalidSnapshot('preferences.lastPlayed');
+    if (prefs.lastPlayed && !AppBackupService.validLastPlayed(prefs.lastPlayed)) {
+      return AppBackupService.invalidSnapshot('preferences.lastPlayed');
+    }
     for (const item of prefs.history) {
-      if (!item || !AppBackupService.validId(item.bookId) || !AppBackupService.validText(item.chapterId) ||
-        !AppBackupService.validNumber(item.progressMs) || !AppBackupService.validNumber(item.updatedAt) ||
-        !AppBackupService.optionalText(item.chapterTitle) || !AppBackupService.validDuration(item.durationMs) ||
-        !AppBackupService.optionalText(item.sourceUrl) || !AppBackupService.optionalText(item.bookUrl)) return AppBackupService.invalidSnapshot('preferences.history');
+      if (!AppBackupService.validHistoryItem(item)) return AppBackupService.invalidSnapshot('preferences.history');
     }
     for (const progress of prefs.progresses) {
-      if (!progress || !AppBackupService.validId(progress.bookId) ||
-        !AppBackupService.validText(progress.chapterId) || !AppBackupService.validText(progress.chapterTitle) ||
-        !AppBackupService.optionalNumber(progress.speed) || !AppBackupService.optionalText(progress.sourceUrl) ||
-        !AppBackupService.optionalText(progress.bookUrl) ||
-        progress.durationMs === undefined || !AppBackupService.validDuration(progress.durationMs) ||
-        ![progress.chapterIndex, progress.positionMs, progress.updatedAt]
-          .every((value: number): boolean => AppBackupService.validNumber(value))) return AppBackupService.invalidSnapshot('preferences.progresses');
+      if (!AppBackupService.validProgress(progress)) return AppBackupService.invalidSnapshot('preferences.progresses');
     }
     for (const skip of prefs.skipConfigs) {
       if (!skip || !AppBackupService.validId(skip.bookId) ||
@@ -261,21 +278,48 @@ export class AppBackupService {
           .every((value: number): boolean => AppBackupService.validNumber(value))) return AppBackupService.invalidSnapshot('books');
     }
     for (const stat of snapshot.stats) {
-      if (!stat || !AppBackupService.validId(stat.bookId) ||
-        ![stat.title, stat.author, stat.cover].every((value: string): boolean => AppBackupService.validText(value)) ||
-        !AppBackupService.validNumber(stat.listenSeconds) || !AppBackupService.validNumber(stat.updatedAt) ||
-        !AppBackupService.optionalText(stat.sourceUrl) || !AppBackupService.optionalText(stat.bookUrl) ||
-        !Array.isArray(stat.days) || stat.days.length > 10000) return AppBackupService.invalidSnapshot('stats');
-      for (const day of stat.days) {
-        if (!day || typeof day.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day.day) ||
-          !AppBackupService.validNumber(day.listenSeconds)) return AppBackupService.invalidSnapshot('stats.days');
-      }
+      if (!AppBackupService.validStats(stat)) return AppBackupService.invalidSnapshot('stats');
     }
     if (snapshot.version >= 2) {
       if (!Array.isArray(snapshot.ruleSources) || snapshot.ruleSources.length > 10000) return AppBackupService.invalidSnapshot('ruleSources');
       for (const source of snapshot.ruleSources) {
         if (!AppBackupService.validRuleSource(source)) return AppBackupService.invalidSnapshot('ruleSources.item');
       }
+    }
+    return true;
+  }
+
+  private static validLastPlayed(item: LastPlayedItem): boolean {
+    return !!item && AppBackupService.validId(item.bookId) && AppBackupService.validText(item.chapterId) &&
+      AppBackupService.validNumber(item.progressMs) && AppBackupService.optionalText(item.chapterTitle) &&
+      AppBackupService.validDuration(item.durationMs) && AppBackupService.optionalNumber(item.speed);
+  }
+
+  private static validHistoryItem(item: PlayHistoryItem): boolean {
+    return !!item && AppBackupService.validId(item.bookId) && AppBackupService.validText(item.chapterId) &&
+      AppBackupService.validNumber(item.progressMs) && AppBackupService.validNumber(item.updatedAt) &&
+      AppBackupService.optionalText(item.chapterTitle) && AppBackupService.validDuration(item.durationMs) &&
+      AppBackupService.optionalText(item.sourceUrl) && AppBackupService.optionalText(item.bookUrl);
+  }
+
+  private static validProgress(item: PlayProgress): boolean {
+    return !!item && AppBackupService.validId(item.bookId) && AppBackupService.validText(item.chapterId) &&
+      AppBackupService.validText(item.chapterTitle) && AppBackupService.optionalNumber(item.speed) &&
+      AppBackupService.optionalText(item.sourceUrl) && AppBackupService.optionalText(item.bookUrl) &&
+      item.durationMs !== undefined && AppBackupService.validDuration(item.durationMs) &&
+      [item.chapterIndex, item.positionMs, item.updatedAt]
+        .every((value: number): boolean => AppBackupService.validNumber(value));
+  }
+
+  private static validStats(stat: BookUsageStats): boolean {
+    if (!stat || !AppBackupService.validId(stat.bookId) ||
+      ![stat.title, stat.author, stat.cover].every((value: string): boolean => AppBackupService.validText(value)) ||
+      !AppBackupService.validNumber(stat.listenSeconds) || !AppBackupService.validNumber(stat.updatedAt) ||
+      !AppBackupService.optionalText(stat.sourceUrl) || !AppBackupService.optionalText(stat.bookUrl) ||
+      !Array.isArray(stat.days) || stat.days.length > 10000) return false;
+    for (const day of stat.days) {
+      if (!day || typeof day.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day.day) ||
+        !AppBackupService.validNumber(day.listenSeconds)) return false;
     }
     return true;
   }

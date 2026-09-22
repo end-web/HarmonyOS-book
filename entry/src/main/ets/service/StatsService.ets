@@ -204,6 +204,54 @@ export class StatsService {
     return StatsService.normalizeRecords(StatsService.records);
   }
 
+  /** 备份独立读取副本；单条旧统计损坏不能阻断整份备份，也不能借此覆盖本机存储。 */
+  static async exportBackupStats(context: common.Context): Promise<BookUsageStats[]> {
+    await StatsService.writeQueue;
+    if (StatsService.initialized) return StatsService.normalizeBackupRecords(StatsService.records);
+    const store = await preferences.getPreferences(context, { name: STORE_NAME });
+    let primary: StatsDiskSnapshot | undefined = undefined;
+    let backup: StatsDiskSnapshot | undefined = undefined;
+    let readFailed = false;
+    try {
+      const raw = await store.get(KEY_BOOK_USAGE, '');
+      if (typeof raw !== 'string') throw new Error('Invalid statistics value');
+      if (raw.length > 0) {
+        const records: BookUsageStats[] = JSON.parse(raw);
+        if (!Array.isArray(records)) throw new Error('Invalid statistics records');
+        primary = new StatsDiskSnapshot();
+        primary.records = StatsService.normalizeBackupRecords(records);
+        const revision = await store.get(KEY_BOOK_USAGE_REVISION, 0);
+        primary.revision = typeof revision === 'number' && Number.isFinite(revision) ? revision : 0;
+      }
+    } catch (_e) { primary = undefined; readFailed = true; }
+    try {
+      const path = `${context.filesDir}/${SNAPSHOT_FILE}`;
+      if (await fileIo.access(path)) {
+        const saved: StatsDiskSnapshot = JSON.parse(await fileIo.readText(path));
+        if (!saved || saved.version !== 1 || !Number.isFinite(saved.revision) || !Array.isArray(saved.records)) {
+          throw new Error('Invalid statistics snapshot');
+        }
+        backup = new StatsDiskSnapshot();
+        backup.revision = saved.revision;
+        backup.records = StatsService.normalizeBackupRecords(saved.records);
+      }
+    } catch (_e) { backup = undefined; readFailed = true; }
+    const selected = backup !== undefined && (primary === undefined || backup.revision > primary.revision) ? backup : primary;
+    if (selected === undefined && readFailed) throw new Error('Statistics could not be read for backup');
+    return selected?.records ?? [];
+  }
+
+  private static normalizeBackupRecords(records: BookUsageStats[]): BookUsageStats[] {
+    const result: BookUsageStats[] = [];
+    for (const record of records) {
+      try {
+        const normalized = StatsService.normalizeRecords([record]);
+        result.push(normalized[0]);
+      } catch (_e) { /* 只跳过当前异常项，保留其他统计。 */ }
+    }
+    return result;
+  }
+
   private static parseRecords(raw: string): BookUsageStats[] {
     const list: BookUsageStats[] = JSON.parse(raw);
     if (!Array.isArray(list)) throw new Error('Invalid statistics records');

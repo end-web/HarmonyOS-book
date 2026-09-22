@@ -1,4 +1,5 @@
-import { Chapter } from '../model/Book';
+import { ChapterCacheIndicator } from './ChapterCacheIndicator';
+import { Book, Chapter } from '../model/Book';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 
@@ -33,6 +34,7 @@ class ChapterSegmentSource implements IDataSource {
 /** 40 章一段，使用真实章节身份懒加载；搜索覆盖整本书。 */
 @ComponentV2
 export struct ChapterSegmentGrid {
+  @Param book: Book | null = null;
   @Param chapters: Chapter[] = [];
   @Param currentId: string = '';
   @Param keyword: string = '';
@@ -49,15 +51,25 @@ export struct ChapterSegmentGrid {
   private positionTimer: number = -1;
 
   aboutToAppear(): void {
+    this.locateCurrent();
+  }
+
+  @Monitor('currentId')
+  onCurrentChanged(): void { this.locateCurrent(); }
+
+  private locateCurrent(): void {
     const index = this.chapters.findIndex((chapter: Chapter): boolean => chapter.id === this.currentId);
     this.selectedStart = Math.floor(Math.max(0, index) / 40) * 40;
     this.refresh();
+    if (this.positionTimer !== -1) clearTimeout(this.positionTimer);
     this.positionTimer = setTimeout((): void => {
       this.positionTimer = -1;
-      if (this.chapters.length > 0) {
-        this.tabScroller.scrollToIndex(this.selectedStart / 40, false, ScrollAlign.CENTER);
-      }
-    }, 0);
+      if (this.keyword.trim().length > 0 || index < 0) return;
+      this.tabScroller.scrollToIndex(this.selectedStart / 40, false, ScrollAlign.CENTER);
+      const count = Math.min(40, this.chapters.length - this.selectedStart);
+      const offset = index - this.selectedStart;
+      this.listScroller.scrollToIndex(this.descending ? count - 1 - offset : offset, false, ScrollAlign.CENTER);
+    }, 100);
   }
 
   aboutToDisappear(): void {
@@ -65,7 +77,7 @@ export struct ChapterSegmentGrid {
   }
 
   @Monitor('chapters', 'keyword', 'descending')
-  onDataChanged(): void { this.refresh(); }
+  onDataChanged(): void { this.locateCurrent(); }
 
   private refresh(): void {
     this.selectedStart = Math.min(this.selectedStart, Math.floor(Math.max(0, this.chapters.length - 1) / 40) * 40);
@@ -105,9 +117,15 @@ export struct ChapterSegmentGrid {
         List({ space: 12, scroller: this.listScroller }) {
           LazyForEach(this.source, (chapter: Chapter) => {
             ListItem() {
-              Text(chapter.title)
+              Row({ space: 6 }) {
+                Text(chapter.title).layoutWeight(1)
                 .fontSize(AppFont.Body).fontColor(chapter.id === this.currentId ? AppColor.Brand : $r('sys.color.font_primary'))
                 .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                if (chapter.id === this.currentId) {
+                  SymbolGlyph($r('sys.symbol.scope')).fontSize(16).fontColor([AppColor.Brand])
+                }
+                ChapterCacheIndicator({ book: this.book, chapter: chapter })
+              }
                 .width('100%').height(64).padding({ left: 14, right: 14 })
                 .backgroundColor(chapter.id === this.currentId ? AppColor.BrandSoft : $r('sys.color.comp_background_tertiary'))
                 .borderRadius(AppRadius.Md)

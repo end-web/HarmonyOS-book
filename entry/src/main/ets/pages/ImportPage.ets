@@ -1,4 +1,4 @@
-import { LocalBookImportService, LocalImportFile } from '../service/LocalBookImportService';
+import { LocalBookImportService, LocalImportFile, LocalBookPreview } from '../service/LocalBookImportService';
 import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
@@ -14,7 +14,9 @@ import { WindowUtils } from '../utils/WindowUtils';
 export const EVT_SWITCH_TAB = 'app.nav.switchTab';
 const TAB_INDEX_FAVORITE = 1;
 
-class PickedFile extends LocalImportFile {}
+class PickedFile extends LocalImportFile {
+  preview: LocalBookPreview | null = null;
+}
 
 class ImportFileDataSource implements IDataSource {
   private files: PickedFile[] = [];
@@ -39,6 +41,11 @@ export struct ImportPage {
   @Local pickedFiles: PickedFile[] = [];
   @Local coverPath: string = '';
   @Local importing: boolean = false;
+  @Local parsing: boolean = false;
+  private disposed: boolean = false;
+  private autoTitle: string = '';
+  private autoAuthor: string = '';
+  private autoCover: string = '';
   @Local importDone: boolean = false;
   @Local progressText: string = '';
 
@@ -51,8 +58,51 @@ export struct ImportPage {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
   }
 
+  aboutToDisappear(): void {
+    this.disposed = true;
+    for (const file of this.pickedFiles) {
+      if (file.preview !== null && file.preview.directory.length > 0) {
+        fileIo.rmdir(file.preview.directory).catch((): void => {});
+      }
+    }
+  }
+
+  private async previewFiles(files: PickedFile[]): Promise<void> {
+    if (this.context === null) return;
+    this.parsing = true;
+    this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_reading_metadata').id);
+    let failures = 0;
+    try {
+      for (const file of files) {
+        if (this.disposed) break;
+        if (file.preview !== null) continue;
+        try {
+          file.preview = await LocalBookImportService.preview(this.context, file);
+          if (this.disposed && file.preview.directory.length > 0) {
+            await fileIo.rmdir(file.preview.directory).catch((): void => {});
+          }
+        } catch (_e) { failures++; }
+      }
+      if (this.disposed) return;
+      if (files.length === 1 && files[0].preview !== null) {
+        const info = files[0].preview;
+        if (!this.bookTitle || this.bookTitle === this.autoTitle) this.bookTitle = info.title;
+        if (!this.bookAuthor || this.bookAuthor === this.autoAuthor) this.bookAuthor = info.author;
+        if (!this.coverPath || this.coverPath === this.autoCover) this.coverPath = info.cover;
+        this.autoTitle = info.title; this.autoAuthor = info.author; this.autoCover = info.cover;
+      } else {
+        if (this.bookTitle === this.autoTitle) this.bookTitle = '';
+        if (this.bookAuthor === this.autoAuthor) this.bookAuthor = '';
+        if (this.coverPath === this.autoCover) this.coverPath = '';
+        this.autoTitle = ''; this.autoAuthor = ''; this.autoCover = '';
+      }
+      this.progressText = failures > 0 ?
+        this.context.resourceManager.getStringSync($r('app.string.import_metadata_failed').id) : '';
+    } finally { this.parsing = false; }
+  }
+
   private async pickFiles(): Promise<void> {
-    if (this.importing) return;
+    if (this.importing || this.parsing) return;
     try {
       const opt = new picker.DocumentSelectOptions();
       opt.maxSelectNumber = 500;
@@ -72,16 +122,14 @@ export struct ImportPage {
       }
       this.pickedFiles = files;
       this.fileDataSource.setFiles(files);
-      if (files.length === 1 && !this.bookTitle) {
-        this.bookTitle = files[0].name;
-      }
+      await this.previewFiles(files);
     } catch (e) {
       // user cancelled or error
     }
   }
 
   private async pickCover(): Promise<void> {
-    if (this.importing) return;
+    if (this.importing || this.parsing) return;
     try {
       const opt = new photoAccessHelper.PhotoSelectOptions();
       opt.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
@@ -270,7 +318,8 @@ export struct ImportPage {
       const file = ebooks[index];
       try {
         const book = await LocalBookImportService.importBook(this.context!, file, `${batchId}_text_${index}`,
-          files.length === 1 ? title : '', this.bookAuthor, this.coverPath,
+          files.length === 1 ? title : file.preview?.title || '',
+          this.bookAuthor || file.preview?.author || '', this.coverPath || file.preview?.cover || '',
           (progress: string): void => { this.progressText = progress; });
         await this.saveImported(book);
         imported++;
@@ -282,7 +331,7 @@ export struct ImportPage {
   }
 
   private async doImport(): Promise<void> {
-    if (this.importing || this.pickedFiles.length === 0 || this.context === null) return;
+    if (this.importing || this.parsing || this.pickedFiles.length === 0 || this.context === null) return;
     this.importing = true;
     this.importedCount = 0;
     this.importFailures = [];
@@ -643,7 +692,7 @@ export struct ImportPage {
   }
 
   private canImport(): boolean {
-    return this.pickedFiles.length > 0;
+    return this.pickedFiles.length > 0 && !this.parsing;
   }
 
   private importColorChannel(hex: string, offset: number): number {

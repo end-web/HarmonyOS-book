@@ -1,3 +1,6 @@
+import { ReaderImportedFont } from '../service/text/ReaderFontService';
+import { ReaderFontTabs } from './ReaderFontTabs';
+import { ReaderColorPalette } from './ReaderColorPalette';
 import { ImmersiveOptionTabs } from './ImmersiveOptionTabs';
 /**
  * ReaderSettingsSheet - 阅读设置面板
@@ -185,6 +188,21 @@ struct ReaderMarginSlider {
 
 @ComponentV2
 export struct ReaderSettingsSheet {
+  @Param fontPanel: boolean = false;
+  @Param fontWeight: number = 400;
+  @Param fontFamily: string = 'HarmonyOS Sans';
+  @Param fonts: ReaderImportedFont[] = [];
+  @Param fontPath: string = '';
+  @Event onDeleteFont: (font: ReaderImportedFont) => void = () => {};
+  @Event onSelectFont: (font: ReaderImportedFont) => void = () => {};
+  @Param fontName: string = '';
+  @Param screenOnMinutes: number = 0;
+  @Local colorTarget: string = '';
+  @Event onWeightChange: (weight: number, commit: boolean) => void = () => {};
+  @Event onColorChange: (color: string, background: boolean, commit: boolean) => void = () => {};
+  @Event onPickFont: () => void = () => {};
+  @Event onSystemFont: () => void = () => {};
+  @Event onScreenOnChange: (minutes: number) => void = () => {};
   @Param followSystemTheme: boolean = false;
   @Param marginLeft: number = 16;
   @Param marginRight: number = 16;
@@ -246,6 +264,8 @@ export struct ReaderSettingsSheet {
         Text(PREVIEW_TEXT)
           .width('100%')
           .fontSize(this.fontSize)
+          .fontFamily(this.fontFamily)
+          .fontWeight(this.fontWeight, { enableVariableFontWeight: true })
           .fontColor(this.palette.primary)
           .lineHeight(this.fontSize * this.lineHeight)
           .textAlign(TextAlign.Start)
@@ -395,7 +415,7 @@ export struct ReaderSettingsSheet {
         }.width('100%')
         Row({ space: AppSpace.Sm }) {
           ForEach(
-            READER_THEME_PRESETS,
+            READER_THEME_PRESETS.filter((preset: ReaderThemePreset): boolean => preset.id !== ReaderThemeId.EyeCare),
             (preset: ReaderThemePreset) => {
               ReaderThemeSwatch({
                 preset: preset,
@@ -405,11 +425,27 @@ export struct ReaderSettingsSheet {
             },
             (preset: ReaderThemePreset) => `theme-${preset.id}`
           )
+          Column({ space: 6 }) {
+            Stack({ alignContent: Alignment.Center }) {
+              SymbolGlyph($r('sys.symbol.paintpalette'))
+                .fontSize(20).fontColor([AppColor.Brand])
+            }
+            .width(40).height(40).borderRadius(20)
+            .backgroundColor(AppColor.GlassSheetControlTint)
+            .border({ width: 1,
+              color: this.themeId === ReaderThemeId.Custom ? AppColor.Brand : $r('sys.color.font_tertiary') })
+            .margin({ top: 2, bottom: 2 })
+            Text($r('app.string.reader_palette')).fontSize(10).fontColor(AppColor.Brand)
+          }.alignItems(HorizontalAlign.Center).onClick((): void => { this.colorTarget = this.colorTarget === 'background' ? '' : 'background'; })
           this.buildImageThemeSwatch()
         }
         .width('100%')
         .justifyContent(FlexAlign.SpaceBetween)
 
+        if (this.colorTarget === 'background') {
+          ReaderColorPalette({ color: this.palette.background,
+            onChange: (color: string, commit: boolean): void => this.onColorChange(color, true, commit) })
+        }
         if (this.themeId === ReaderThemeId.Image) {
           this.buildImageControls()
         }
@@ -570,10 +606,54 @@ export struct ReaderSettingsSheet {
     }
   }
 
+  @Builder
+  buildFontAppearance() {
+    if (this.fontPath.length === 0) {
+    ReaderSettingCard({ title: $r('app.string.reader_font_weight') }) {
+      Row({ space: AppSpace.Sm }) {
+        Slider({ value: this.fontWeight, min: 100, max: 900, step: 1, style: SliderStyle.InSet })
+          .layoutWeight(1).height(40)
+          .blockColor(AppColor.OnBrand).trackColor($r('sys.color.comp_divider'))
+          .selectedColor(AppColor.Brand).trackThickness(6)
+          .onChange((value: number, mode: SliderChangeMode): void => this.onWeightChange(value,
+            mode === SliderChangeMode.End || mode === SliderChangeMode.Click))
+        Text(`${this.fontWeight}`).fontColor(AppColor.Brand).fontSize(14)
+      }
+    }
+    }
+    ReaderSettingCard({ title: $r('app.string.reader_font_color') }) {
+      ReaderColorPalette({ color: this.palette.primary,
+        onChange: (color: string, commit: boolean): void => this.onColorChange(color, false, commit) })
+    }
+    ReaderSettingCard({ title: $r('app.string.reader_font_tab') }) {
+      ReaderFontTabs({ fonts: this.fonts, selectedPath: this.fontPath,
+        onSelect: (font: ReaderImportedFont): void => this.onSelectFont(font),
+        onDelete: (font: ReaderImportedFont): void => this.onDeleteFont(font) })
+      Row({ space: AppSpace.Sm }) {
+        Button($r('app.string.reader_import_font')).fontColor(AppColor.Brand)
+          .backgroundColor(AppColor.GlassSheetControlTint).onClick((): void => this.onPickFont())
+      }
+      Text($r('app.string.reader_import_font_hint')).fontSize(12).fontColor($r('sys.color.font_secondary'))
+    }
+  }
+
+  @Builder
+  buildScreenOnSection() {
+    ReaderSettingCard({ title: $r('app.string.reader_screen_on'), inline: true }) {
+      ImmersiveOptionTabs({
+        labels: [$r('app.string.reader_screen_system'), $r('app.string.reader_screen_minutes', 1),
+          $r('app.string.reader_screen_minutes', 5), $r('app.string.reader_screen_minutes', 10),
+          $r('app.string.reader_screen_always')],
+        selected: [0, 1, 5, 10, -1].indexOf(this.screenOnMinutes),
+        onSelect: (index: number): void => this.onScreenOnChange([0, 1, 5, 10, -1][index])
+      })
+    }
+  }
+
   build() {
     Column() {
       Row() {
-        Text('阅读设置')
+        Text(this.fontPanel ? $r('app.string.reader_font_tab') : $r('app.string.reader_settings'))
           .fontSize(AppFont.Title)
           .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
@@ -602,14 +682,19 @@ export struct ReaderSettingsSheet {
 
       Scroll() {
         Column({ space: AppSpace.Md }) {
-          this.buildPreview()
-          this.buildFontSizeSection()
-          this.buildLineHeightSection()
-          this.buildPageTurnModeSection()
-          this.buildThemeSection()
-          this.buildMarginSection()
-          this.buildStatusBarSection()
-          this.buildReadingStatusSection()
+          if (this.fontPanel) {
+            this.buildThemeSection()
+            this.buildPreview()
+            this.buildFontSizeSection()
+            this.buildLineHeightSection()
+            this.buildFontAppearance()
+          } else {
+            this.buildPageTurnModeSection()
+            this.buildMarginSection()
+            this.buildScreenOnSection()
+            this.buildStatusBarSection()
+            this.buildReadingStatusSection()
+          }
         }
         .width('100%')
         .padding({

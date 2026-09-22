@@ -38,6 +38,8 @@ export interface Book {
   rating: number;
   tags: string[];
   chapters: Chapter[];
+  /** false 表示在线目录尚未完整获取；部分目录不得覆盖持久目录。旧缓存未设置时按原规则判断。 */
+  tocComplete?: boolean;
   bookUrl: string;
   sourceUrl: string;
   variables?: Record<string, string>;

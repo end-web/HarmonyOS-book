@@ -10,6 +10,8 @@ export struct ReaderSpeechText {
   @Param state: TextToSpeechState = new TextToSpeechState();
   @Param sourceStart: number = 0;
   @Param highlightEnabled: boolean = false;
+  @Param fontFamily: string = 'HarmonyOS Sans';
+  @Param fontWeight: number = 400;
   @Param fontSize: number = 18;
   @Param lineHeight: number = 1.9;
   @Param palette: ReaderPalette = new ReaderPalette();
@@ -42,7 +44,8 @@ export struct ReaderSpeechText {
     .width('100%')
     .fontSize(this.fontSize)
     .fontColor(this.palette.primary)
-    .fontWeight(FontWeight.Normal)
+    .fontFamily(this.fontFamily)
+    .fontWeight(this.fontWeight, { enableVariableFontWeight: true })
     .lineHeight(this.fontSize * this.lineHeight)
     .textAlign(TextAlign.JUSTIFY)
     .wordBreak(WordBreak.BREAK_WORD)

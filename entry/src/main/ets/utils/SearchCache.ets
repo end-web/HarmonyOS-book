@@ -9,8 +9,9 @@ export class SearchCache {
   static put(book: Book): void {
     const id = book.id;
     const existing = searchCache.get(id);
-    if (existing && existing.chapters.length > 0 && book.chapters.length === 0) {
+    if (existing && existing.chapters.length > 0 && book.chapters.length === 0 && book.tocComplete !== false) {
       book.chapters = existing.chapters;
+      book.tocComplete = existing.tocComplete;
       if (book.chapterCount < existing.chapters.length) {
         book.chapterCount = existing.chapters.length;
       }

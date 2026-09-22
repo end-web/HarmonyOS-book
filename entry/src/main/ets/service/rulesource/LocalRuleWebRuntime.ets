@@ -12,6 +12,13 @@ export class LocalRuleWebExtractMode {
   static readonly ATTRIBUTE: string = 'attribute';
 }
 
+export class LocalRuleWebSelector {
+  selector: string = '';
+  xpath: boolean = false;
+  mode: string = LocalRuleWebExtractMode.TEXT;
+  attribute: string = '';
+}
+
 class LocalRuleWebTask {
   html: string = '';
   selector: string = '';
@@ -22,6 +29,8 @@ class LocalRuleWebTask {
   reject: (error: Error) => void = (_error: Error): void => {};
   timerId: number = 0;
   settled: boolean = false;
+  htmlBatch: string[] = [];
+  selectors: LocalRuleWebSelector[] = [];
 }
 
 /**
@@ -66,6 +75,25 @@ export class LocalRuleWebRuntime {
       task.xpath = xpath;
       task.mode = mode;
       task.attribute = attribute;
+      task.resolve = resolve;
+      task.reject = reject;
+      this.queue.push(task);
+      this.runNext();
+    });
+  }
+
+  /** 单次跨线程提取一小批静态字段；结果按 HTML、字段顺序展平，每项为 JSON 数组。 */
+  async selectBatch(html: string[], selectors: LocalRuleWebSelector[]): Promise<string[]> {
+    const inputChars = html.reduce((total: number, value: string): number => total + value.length, 0);
+    if (html.length > 32 || selectors.length > 12 || inputChars > 128 * 1024) {
+      throw new Error('HTML 批量解析超出预算');
+    }
+    if (html.length === 0 || selectors.length === 0) return [];
+    await this.ensureController();
+    return new Promise<string[]>((resolve, reject) => {
+      const task = new LocalRuleWebTask();
+      task.htmlBatch = html;
+      task.selectors = selectors;
       task.resolve = resolve;
       task.reject = reject;
       this.queue.push(task);
@@ -127,16 +155,38 @@ export class LocalRuleWebRuntime {
   }
 
   private buildScript(task: LocalRuleWebTask): string {
+    const extractor = this.buildExtractorScript();
+    if (task.htmlBatch.length > 0) {
+      return `(function(){try{
+        var html=${JSON.stringify(task.htmlBatch)}, specs=${JSON.stringify(task.selectors)};
+        var extract=${extractor}, out=[], total=0;
+        for(var i=0;i<html.length;i++){
+          var doc=(new DOMParser()).parseFromString(html[i],'text/html');
+          for(var j=0;j<specs.length;j++){
+            var spec=specs[j], value=JSON.stringify(extract(doc,spec.selector,spec.mode,spec.attribute,spec.xpath));
+            total+=value.length;
+            if(total>512*1024)throw new Error('HTML 批量结果超出预算');
+            out.push(value);
+          }
+        }
+        return JSON.stringify(out);
+      }catch(e){return JSON.stringify(['__LOCAL_RULE_ERROR__'+String(e&&e.message?e.message:e)]);}})()`;
+    }
     const html = JSON.stringify(task.html);
     const selector = JSON.stringify(task.selector);
     const mode = JSON.stringify(task.mode);
     const attribute = JSON.stringify(task.attribute);
     const xpath = task.xpath ? 'true' : 'false';
+    return `(function(){try{
+      var doc=(new DOMParser()).parseFromString(${html},'text/html');
+      return JSON.stringify((${extractor})(doc,${selector},${mode},${attribute},${xpath}));
+    }catch(e){return JSON.stringify(['__LOCAL_RULE_ERROR__'+String(e&&e.message?e.message:e)]);}})()`;
+  }
+
+  private buildExtractorScript(): string {
     const maxNodes = LocalRuleExecutionLimits.MAX_JSON_NODES;
     const maxChars = LocalRuleExecutionLimits.MAX_RESPONSE_CHARS;
-    return `(function(){try{
-      var html=${html}, selector=${selector}, mode=${mode}, attribute=${attribute}, useXpath=${xpath};
-      var doc=(new DOMParser()).parseFromString(html,'text/html');
+    return `(function(doc,selector,mode,attribute,useXpath){
       var nodes=[];
       if(useXpath){
         var evaluated=doc.evaluate(selector,doc,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);
@@ -322,8 +372,8 @@ export class LocalRuleWebRuntime {
         if(total>${maxChars})break;
         out.push(value);
       }
-      return JSON.stringify(out);
-    }catch(e){return JSON.stringify(['__LOCAL_RULE_ERROR__'+String(e&&e.message?e.message:e)]);}})()`;
+      return out;
+    })`;
   }
 
   private parseResult(result: string): string[] {

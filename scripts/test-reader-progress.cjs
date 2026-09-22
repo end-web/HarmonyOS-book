@@ -24,7 +24,7 @@ function compile(relative, source) {
   const exports = {};
   vm.runInNewContext(ts.transpileModule(source ?? fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
-  }).outputText, { exports, require: name => mocks[name] || {}, setTimeout, clearTimeout }, { filename });
+  }).outputText, { exports, require: name => mocks[name] || {}, setTimeout, clearTimeout, ScrollAlign: { START: 0 } }, { filename });
   return exports;
 }
 mocks['./ReaderTheme'] = compile('model/ReaderTheme');
@@ -35,7 +35,7 @@ mocks['../service/text/OnlineTextPaginator'] = compile('service/text/OnlineTextP
 const { TextReadingProgressService: progress } = compile('service/text/TextReadingProgressService');
 mocks['../service/text/TextReadingProgressService'] = { TextReadingProgressService: progress };
 let source = fs.readFileSync(path.join(root, 'pages/ReaderPage.ets'), 'utf8');
-source = source.slice(0, source.indexOf('  private readerTabStyle(')) + '\n}';
+source = source.slice(0, source.search(/\s*@Builder\s+readerTabStyle\(/)) + '\n}';
 source = source.replace('@ComponentV2', '').replace('export struct', 'export class')
   .replace(/@(Param|Local)\s+/g, '');
 const { ReaderPage } = compile('pages/ReaderPage', source);
@@ -119,5 +119,36 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   page.updateOnlineTextPosition(true);
   await tick();
   assert.equal((await progress.get({}, 'test-book')).charOffset, 200, 'a deliberate turn must advance the saved anchor');
+  const scrollModel = compile('service/text/OnlineTextScrollDataSource');
+  mocks['../service/text/OnlineTextScrollDataSource'] = scrollModel;
+  let continuousSource = fs.readFileSync(path.join(root, 'components/ReaderContinuousComponent.ets'), 'utf8');
+  continuousSource = continuousSource.slice(0, continuousSource.indexOf('  @Builder')) + '\n}';
+  continuousSource = continuousSource.replace('@ComponentV2', '').replace('export struct', 'export class')
+    .replace(/@(Param|Local|Event)\s+/g, '').replace(/@Monitor\([^\n]+\)\s*/g, '');
+  const { ReaderContinuousComponent } = compile('components/ReaderContinuousComponent', continuousSource);
+  const continuous = Object.create(ReaderContinuousComponent.prototype);
+  const makeChapter = index => scrollModel.OnlineTextScrollChapter.create(index, `chapter-${index}`,
+    `Chapter ${index}`, content, expanded);
+  let positioned = -1;
+  let reported = -1;
+  Object.assign(continuous, {
+    contentWidth: 360, disposed: false, serial: 0, restoreTimer: -1,
+    chapters: [makeChapter(9), makeChapter(10), makeChapter(11)],
+    chapterIndex: 10, charOffset: 150, content, source: new scrollModel.OnlineTextScrollDataSource(),
+    makeChapter, scroller: { scrollToIndex: index => { positioned = index; } },
+    onPosition: chapter => { reported = chapter; }, loadNeighbor() {}
+  });
+  continuous.reset();
+  continuous.visibleChanged(0, 2); // platform's stale pre-layout callback
+  assert.equal(reported, -1, 'old list indexes must not overwrite the restored chapter');
+  assert.equal(continuous.chapters.length, 3, 'font reflow retains already loaded neighbors');
+  // reset() restores through setTimeout(0); setImmediate can run before that timer.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(positioned >= 0, 'the restore timer must position the list before checking its row');
+  assert.equal(continuous.source.getData(positioned).chapterIndex, 10);
+  assert.equal(continuous.source.getData(positioned).startOffset, 110);
+  continuous.visibleChanged(positioned, positioned + 2);
+  continuous.reportPosition(true);
+  assert.equal(reported, 10, 'font change stays in the current chapter');
   console.log('PASS: repeated Home/layout restoration, saved-position reload, confirmed cross-chapter turn, cancelled drag, deliberate page turn');
 })().catch(error => { console.error(error); process.exitCode = 1; });

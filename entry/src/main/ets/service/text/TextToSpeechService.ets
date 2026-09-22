@@ -79,7 +79,12 @@ export class TextToSpeechService {
     return this.initPromise;
   }
 
-  private async loadSettings(context: common.UIAbilityContext): Promise<void> {
+  static async reloadSettings(context: common.Context): Promise<void> {
+    const service = TextToSpeechService.instance;
+    if (service !== null && service.store !== null) await service.loadSettings(context);
+  }
+
+  private async loadSettings(context: common.Context): Promise<void> {
     this.store = await preferences.getPreferences(context, { name: 'text_to_speech' });
     const speed = this.store.getSync('speed', 1);
     const person = this.store.getSync('person', 13);

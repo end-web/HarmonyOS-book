@@ -203,6 +203,28 @@ async function check(name, test) {
     await service.init(context);
     assert.equal((await service.getSummary()).totalSeconds, 28800);
   });
+  await check('backup skips one corrupt statistics record without initializing or rewriting the original stores', async () => {
+    const primary = JSON.stringify({ book_usage_revision_v3: 1, book_usage_records_v2: JSON.stringify([
+      { bookId: 'valid', title: 'Valid', listenSeconds: 80, updatedAt: now, days: [] }, null, { title: 'No id' }
+    ]) });
+    const durable = JSON.stringify({ version: 1, revision: 2, records: [null,
+      { bookId: 'newer', title: 'Newer', listenSeconds: 90, updatedAt: now, days: [] }, { bookId: 123 }
+    ] });
+    fs.writeFileSync(primaryPath, primary);
+    fs.writeFileSync(snapshotPath, durable);
+    const exporting = newProcess();
+    const records = await exporting.exportBackupStats(context);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].bookId, 'newer');
+    assert.equal(records[0].listenSeconds, 90);
+    assert.equal(fs.readFileSync(primaryPath, 'utf8'), primary);
+    assert.equal(fs.readFileSync(snapshotPath, 'utf8'), durable);
+    assert.equal(exporting.getCachedStatsBundle(1), undefined);
+    fs.unlinkSync(snapshotPath);
+    assert.equal((await newProcess().exportBackupStats(context))[0].bookId, 'valid');
+    fs.writeFileSync(primaryPath, JSON.stringify({ book_usage_records_v2: 'invalid' }));
+    await assert.rejects(newProcess().exportBackupStats(context), /could not be read/);
+  });
   console.log(`${passed} statistics persistence checks passed (real temporary files, simulated platform APIs).`);
 })().catch(error => {
   console.error(error);

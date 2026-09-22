@@ -1,4 +1,5 @@
 import { BookIdentity } from '../utils/BookIdentity';
+import { TextReadingPosition } from '../model/TextReading';
 
 export class ListeningRecordCandidate {
   bookId: string = '';
@@ -21,6 +22,8 @@ export class ListeningRecordCandidate {
   progressDurationMs: number = 0;
   progressChapterIndex: number = -1;
   progressUpdatedAt: number = 0;
+  isText: boolean = false;
+  readingPosition: TextReadingPosition | null = null;
 
   constructor(bookId: string) {
     this.bookId = bookId;
@@ -86,6 +89,8 @@ export class MergedListeningRecord {
   chapterIndex: number = -1;
   listenSeconds: number = 0;
   updatedAt: number = 0;
+  isText: boolean = false;
+  readingPosition: TextReadingPosition | null = null;
 }
 
 export class ListeningHistoryPolicy {
@@ -161,6 +166,10 @@ export class ListeningHistoryPolicy {
     let latestPlaybackAt = -1;
     for (const candidate of group) {
       if (!merged.aliasBookIds.includes(candidate.bookId)) merged.aliasBookIds.push(candidate.bookId);
+      merged.isText = merged.isText || candidate.isText;
+      const reading = candidate.readingPosition;
+      if (reading !== null && (merged.readingPosition === null ||
+        reading.updatedAt >= merged.readingPosition.updatedAt)) merged.readingPosition = reading;
       merged.listenSeconds += candidate.listenSeconds;
       merged.updatedAt = Math.max(merged.updatedAt, candidate.statsUpdatedAt);
       if (candidate.historyChapterId && candidate.historyUpdatedAt > latestPlaybackAt) {
@@ -183,11 +192,17 @@ export class ListeningHistoryPolicy {
       }
     }
     if (latestPlaybackAt >= 0) merged.updatedAt = Math.max(merged.updatedAt, latestPlaybackAt);
+    if (merged.readingPosition !== null) {
+      merged.updatedAt = Math.max(merged.updatedAt, merged.readingPosition.updatedAt);
+      merged.chapterIndex = merged.readingPosition.resourceIndex;
+      merged.chapterTitle = merged.readingPosition.chapterTitle;
+    }
     merged.chapterId = BookIdentity.rebaseChapterId(merged.chapterId, merged.sourceBookId, merged.bookId);
     return merged;
   }
 
   private static candidateUpdatedAt(candidate: ListeningRecordCandidate): number {
-    return Math.max(candidate.statsUpdatedAt, candidate.historyUpdatedAt, candidate.progressUpdatedAt);
+    return Math.max(candidate.statsUpdatedAt, candidate.historyUpdatedAt, candidate.progressUpdatedAt,
+      candidate.readingPosition?.updatedAt ?? 0);
   }
 }

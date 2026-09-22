@@ -71,6 +71,16 @@ export class TextReadingSettingsService {
       TextReadingSettings.MARGIN_MAX_LIMIT);
     const marginBottom = store.getSync('marginBottom', 12);
     result.marginBottom = TextReadingSettings.normalizeMargin(typeof marginBottom === 'number' ? marginBottom : 12, 12);
+    const weight = store.getSync('font_weight', 400);
+    result.fontWeight = TextReadingSettings.normalizeFontWeight(typeof weight === 'number' ? weight : 400);
+    const color = store.getSync('font_color', '');
+    result.fontColor = typeof color === 'string' && color.length > 0 ? normalizeHex(color) : '';
+    const fontPath = store.getSync('font_path', '');
+    result.fontPath = typeof fontPath === 'string' ? fontPath : '';
+    const fontName = store.getSync('font_name', '');
+    result.fontName = typeof fontName === 'string' ? fontName : '';
+    const minutes = store.getSync('screen_on_minutes', 0);
+    result.screenOnMinutes = TextReadingSettings.normalizeScreenOnMinutes(typeof minutes === 'number' ? minutes : 0);
     return result;
   }
 
@@ -94,6 +104,11 @@ export class TextReadingSettingsService {
     store.putSync('marginTop', TextReadingSettings.normalizeMargin(settings.marginTop, 12,
       TextReadingSettings.MARGIN_MAX_LIMIT));
     store.putSync('marginBottom', TextReadingSettings.normalizeMargin(settings.marginBottom, 12));
+    store.putSync('font_weight', TextReadingSettings.normalizeFontWeight(settings.fontWeight));
+    store.putSync('font_color', settings.fontColor.length > 0 ? normalizeHex(settings.fontColor) : '');
+    store.putSync('font_path', settings.fontPath);
+    store.putSync('font_name', settings.fontName);
+    store.putSync('screen_on_minutes', TextReadingSettings.normalizeScreenOnMinutes(settings.screenOnMinutes));
     await store.flush();
   }
 }

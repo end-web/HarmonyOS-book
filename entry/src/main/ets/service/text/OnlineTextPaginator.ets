@@ -165,7 +165,7 @@ export class OnlineTextPaginator {
   }
 
   static paginate(content: string, widthPx: number, heightPx: number,
-    fontSizePx: number, lineHeight: number): OnlineTextPage[] {
+    fontSizePx: number, lineHeight: number, fontFamily: string = 'HarmonyOS Sans', fontWeight: number = 400): OnlineTextPage[] {
     const normalized = OnlineTextPaginator.normalizeContent(content);
     if (normalized.length === 0) return [OnlineTextPage.of('', 0, 0)];
     const displayed = OnlineTextIndentedContent.fromNormalized(normalized);
@@ -175,7 +175,9 @@ export class OnlineTextPaginator {
     const safeLineHeight = Math.max(1, lineHeight);
     const textStyle: graphicsText.TextStyle = {
       fontSize: safeFontSize,
-      fontWeight: graphicsText.FontWeight.W400,
+      fontWeight: Math.max(0, Math.min(8, Math.round(fontWeight / 100) - 1)),
+      fontFamilies: [fontFamily],
+      fontVariations: [{ axis: 'wght', value: fontWeight }],
       heightScale: safeLineHeight,
       heightOnly: true,
       locale: 'zh-Hans'

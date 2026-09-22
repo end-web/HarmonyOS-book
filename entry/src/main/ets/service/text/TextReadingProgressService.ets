@@ -55,6 +55,49 @@ export class TextReadingProgressService {
     await store.flush();
   }
 
+  /** 记录页与备份共用逐条校验，坏记录不影响其他书籍。 */
+  static async getAll(context: common.Context): Promise<TextReadingPosition[]> {
+    await TextReadingProgressService.init(context);
+    const store = TextReadingProgressService.store;
+    const positions: TextReadingPosition[] = [];
+    if (store === null) return positions;
+    for (const key of Object.keys(await store.getAll())) {
+      if (!key.startsWith(KEY_PREFIX)) continue;
+      const raw = store.getSync(key, '');
+      if (typeof raw !== 'string' || !raw) continue;
+      try {
+        const position: TextReadingPosition = JSON.parse(raw);
+        if (TextReadingProgressService.isValidPosition(position)) positions.push(position);
+      } catch (_e) { /* 只跳过当前记录，不改写本机数据。 */ }
+    }
+    return positions.sort((left: TextReadingPosition, right: TextReadingPosition): number =>
+      right.updatedAt - left.updatedAt);
+  }
+
+  static isValidPosition(position: TextReadingPosition): boolean {
+    return !!position && typeof position.bookId === 'string' && position.bookId.length > 0 &&
+      position.bookId.length <= 8192 && typeof position.domPos === 'string' && position.domPos.length <= 8192 &&
+      typeof position.chapterTitle === 'string' && position.chapterTitle.length <= 1024 * 1024 &&
+      [position.resourceIndex, position.charOffset, position.pageOffset, position.updatedAt]
+        .every((value: number): boolean => Number.isSafeInteger(value) && value >= 0);
+  }
+
+  /** 替换在线进度，保留当前设备的本地导入书籍。 */
+  static async restoreBackupPositions(context: common.Context, positions: TextReadingPosition[]): Promise<void> {
+    await TextReadingProgressService.init(context);
+    const store = TextReadingProgressService.store;
+    if (store === null) throw new Error('Reading progress storage is unavailable');
+    for (const key of Object.keys(await store.getAll())) {
+      if (key.startsWith(KEY_PREFIX) && !key.startsWith(KEY_PREFIX + 'import_')) store.deleteSync(key);
+    }
+    for (const position of positions) {
+      if (!TextReadingProgressService.isValidPosition(position) || position.bookId.startsWith('import_')) continue;
+      store.putSync(TextReadingProgressService.key(position.bookId), JSON.stringify(position));
+    }
+    await store.flush();
+    emitter.emit(EVT_TEXT_READING_PROGRESS_CHANGED);
+  }
+
   static async remove(context: common.Context, bookId: string): Promise<void> {
     await TextReadingProgressService.init(context);
     const store = TextReadingProgressService.store;

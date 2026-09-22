@@ -111,14 +111,14 @@ export default function readerThemeTest() {
       expect(restored.overlayAlpha).assertEqual(0.62);
     });
 
-    it('retires texture and custom color settings and handles missing images', 0, () => {
+    it('retires textures, preserves custom colors and handles missing images', 0, () => {
       const texture = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.EyeCare,
         '#FFFFFF', ReaderPattern.Paper, '', 0.35);
       expect(texture.pattern).assertEqual(ReaderPattern.None);
       expect(texture.themeId).assertEqual(ReaderThemeId.EyeCare);
       const color = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.Custom,
         '#101010', ReaderPattern.None, '', 0.35);
-      expect(color.themeId).assertEqual(TextReadingSettings.THEME_DEFAULT);
+      expect(color.themeId).assertEqual(ReaderThemeId.Custom);
       const missing = TextReadingSettings.ofAll(18, 1.9, ReaderThemeId.Image,
         '#FFFFFF', ReaderPattern.Image, '', 0.35);
       expect(missing.themeId).assertEqual(TextReadingSettings.THEME_DEFAULT);

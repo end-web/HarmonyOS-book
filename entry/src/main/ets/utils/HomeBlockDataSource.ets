@@ -13,6 +13,17 @@ export class HomeBlockDataSource implements IDataSource {
   }
 
   setBlocks(blocks: HomeBlockSection[]): void {
+    const previous = this.blocks;
+    // 分类分批完成时只插入新增项，不重建已挂载的横向列表和 Swiper。
+    if (previous.length > 0 && previous.every((block: HomeBlockSection): boolean => blocks.includes(block))) {
+      this.blocks = blocks;
+      for (let index = 0; index < blocks.length; index++) {
+        if (!previous.includes(blocks[index])) {
+          for (const listener of this.listeners.slice()) listener.onDataAdd(index);
+        }
+      }
+      return;
+    }
     this.blocks = blocks;
     this.listeners.forEach((l) => l.onDataReloaded());
   }

@@ -54,7 +54,7 @@ def main():
     parser.add_argument('--version', required=True)
     parser.add_argument('--version-code', required=True, type=int)
     parser.add_argument('--min-api', type=int, default=20)
-    parser.add_argument('--target-api', type=int, default=24)
+    parser.add_argument('--target-api', type=int, default=26)
     args = parser.parse_args()
     if args.package.suffix.lower() == '.app':
         with zipfile.ZipFile(args.package) as app:

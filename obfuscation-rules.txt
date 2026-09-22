@@ -30,6 +30,7 @@
   lastPlayed
   progresses
   skipConfigs
+  descendingBookIds
   colorMode
   materialStyle
   accentColor
@@ -39,6 +40,32 @@
   audioAutoResume
   homeGridColumns
   preloadChapters
+  # Reading backup and persisted reading/speech positions
+  reading
+  positions
+  settings
+  speechPositions
+  speechSpeed
+  speechPerson
+  speechLanguage
+  speechFollow
+  resourceIndex
+  domPos
+  charOffset
+  pageOffset
+  fontSize
+  lineHeight
+  fontWeight
+  themeId
+  pageTurnMode
+  showReadingStatus
+  alwaysShowStatusBar
+  followSystemTheme
+  marginLeft
+  marginRight
+  marginTop
+  marginBottom
+  screenOnMinutes
   bookId
   chapterId
   chapterTitle

@@ -5,12 +5,10 @@ import { emitter } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial, AppCurve } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
-import { TocItem } from '../model/BookSource';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
-import { SourceDataService } from '../service/SourceDataService';
 import { AudioService } from '../service/AudioService';
 import { DownloadService, DownloadUpdatePayload, EVT_DOWNLOAD_UPDATED } from '../service/DownloadService';
 import { DownloadStore, DownloadBookRecord, DownloadChapterRecord } from '../service/DownloadStore';
@@ -38,6 +36,9 @@ export struct BookDetailPage {
   @Local loadFailed: boolean = false;
   @Local isFavorite: boolean = false;
   @Local loadingToc: boolean = false;
+  @Local tocFailed: boolean = false;
+  private tocGeneration: number = 0;
+  private detailActive: boolean = false;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   @Local isStartingPlay: boolean = false;
   @Local lastHistory: PlayHistoryItem | null = null;
@@ -75,6 +76,7 @@ export struct BookDetailPage {
   }
 
   aboutToAppear(): void {
+    this.detailActive = true;
     hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, '====== BookDetailPage aboutToAppear START, bookId=%{public}s ======', this.bookId);
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
     // 首帧先展示缓存内容，再推迟数据加载到转场后。
@@ -83,9 +85,8 @@ export struct BookDetailPage {
     this.chapterDownloadTick = this.chapterDownloadTick + 1;
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(false);
-    // 转场动画 380ms，在动画进行时并行加载数据，用户感知不到等待
-    hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'aboutToAppear: scheduling loadBook in 200ms');
-    setTimeout(() => { this.loadBook(); }, 200);
+    // I/O 本身异步，立即开始目录恢复和请求，避免固定增加 200ms 等待。
+    this.loadBook();
   }
 
   /** 同步从 SearchCache 取 book,让首帧有内容,后续重活推迟 */
@@ -96,10 +97,10 @@ export struct BookDetailPage {
       hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'primeBookFromCache: found cached book, title=%{public}s, cover=%{public}s',
         cached.title, cached.cover.substring(0, 60));
       this.book = cached;
-      // 搜索结果只是电子书的基础快照，章节正文仍需异步加载；数据未完整前保持详情 loading。
-      this.loadingDetail = cached.contentType === 'text' && cached.chapters.length === 0;
+      // 先展示已有资料，章节加载仅影响目录区域。
+      this.loadingDetail = false;
       // 音频搜索结果只有基础信息时，首帧直接展示目录骨架，避免先闪出”暂无章节信息”。
-      this.loadingToc = this.needsAudioTocLoad(cached);
+      this.loadingToc = cached.contentType === 'text' ? cached.chapters.length === 0 : this.needsAudioTocLoad(cached);
       AudioService.getInstance().prewarmBookSource(cached);
       this.refreshDisplayedChapters(cached.chapters);
     } else {
@@ -108,13 +109,15 @@ export struct BookDetailPage {
   }
 
   private needsAudioTocLoad(book: Book): boolean {
-    const tocIncomplete = book.chapters.length === 0 ||
+    const tocIncomplete = book.tocComplete === false || book.chapters.length === 0 ||
       (book.chapters.length === 1 && book.chapterCount > 1);
     return book.contentType !== 'text' && tocIncomplete &&
       book.bookUrl.length > 0 && book.sourceUrl.length > 0;
   }
 
   aboutToDisappear(): void {
+    this.detailActive = false;
+    this.tocGeneration++;
     this.cancelViewportUpdateTimer();
     emitter.off(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(false);
@@ -179,22 +182,8 @@ export struct BookDetailPage {
     return this.book?.completed === false ? '连载中' : '已完结';
   }
 
-  private parseAudioChapterCount(rawValue: string): number {
-    const match = rawValue.match(new RegExp('[0-9]+'));
-    if (match === null || match.length === 0) return 0;
-    const count = Number(match[0]);
-    return Number.isSafeInteger(count) && count > 0 ? count : 0;
-  }
-
-  private isPlaceholderIntro(value: string): boolean {
-    const compact = value.trim().replace(new RegExp('\\s+', 'g'), '');
-    const placeholders: string[] = ['=.=','==', '暂无', '暂无简介', '暂无介绍', '无'];
-    return placeholders.includes(compact);
-  }
-
   private async loadBook(): Promise<void> {
-    this.loadingDetail = this.book === null ||
-      (this.book.contentType === 'text' && this.book.chapters.length === 0);
+    this.loadingDetail = this.book === null;
     this.loadFailed = false;
     try {
       await this.loadBookData();
@@ -210,6 +199,7 @@ export struct BookDetailPage {
 
   private async loadBookData(): Promise<void> {
     const b = await this.findBookById(this.bookId);
+    if (!this.detailActive) return;
     if (!b) {
       this.loadFailed = true;
       hilog.error(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
@@ -223,11 +213,15 @@ export struct BookDetailPage {
       await PreferenceService.applyTocOrder(b);
       this.chaptersDescending = PreferenceService.chapterStep(b) < 0;
       if (b.contentType === 'text') {
-        await this.loadTextBook(b);
+        this.book = this.copyBookForRender(b);
+        this.loadingDetail = false;
+        this.refreshDisplayedChapters(b.chapters);
+        this.loadTextBook(b);
         return;
       }
       // 独立 KV 为权威:贴回跳过头尾,详情页起播也带上正确 skip(否则会用无 skip 对象喂 AudioService)
       await PreferenceService.applySkipConfig(b);
+      if (!this.detailActive) return;
       // 先快速渲染基础信息
       this.book = b;
       AudioService.getInstance().prewarmBookSource(b);
@@ -248,8 +242,16 @@ export struct BookDetailPage {
 
   private async loadTextBook(book: Book): Promise<void> {
     const startedAt = Date.now();
+    const generation = ++this.tocGeneration;
+    this.loadingToc = book.chapters.length === 0;
+    this.tocFailed = false;
     try {
-      const sourceBook = book.chapters.length > 0 ? book : await BookSourceService.loadTextBook(book);
+      const sourceBook = book.chapters.length > 0 ? book : await BookSourceService.loadTextBook(book,
+        (partial: Book): void => {
+          if (!this.detailActive || generation !== this.tocGeneration) return;
+          this.book = this.copyBookForRender(partial);
+        });
+      if (!this.detailActive || generation !== this.tocGeneration) return;
       const loaded = this.copyBookForRender(sourceBook);
       this.book = loaded;
       this.refreshDisplayedChapters(loaded.chapters);
@@ -262,11 +264,14 @@ export struct BookDetailPage {
         'text detail ready, id=%{public}s chapters=%{public}d elapsedMs=%{public}d',
         loaded.id, loaded.chapters.length, Date.now() - startedAt);
     } catch (e) {
-      this.loadFailed = true;
+      if (!this.detailActive || generation !== this.tocGeneration) return;
+      this.tocFailed = true;
       this.debugInfo = e instanceof Error ? e.message : String(e);
       hilog.error(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
         'text detail failed, id=%{public}s elapsedMs=%{public}d error=%{public}s',
         book.id, Date.now() - startedAt, this.debugInfo);
+    } finally {
+      if (this.detailActive && generation === this.tocGeneration) this.loadingToc = false;
     }
   }
 
@@ -285,11 +290,13 @@ export struct BookDetailPage {
       rating: book.rating,
       tags: book.tags.slice(),
       chapters: book.chapters.slice(),
+      tocComplete: book.tocComplete,
       bookUrl: book.bookUrl,
       sourceUrl: book.sourceUrl,
       variables: book.variables,
       skipIntro: book.skipIntro,
       skipOutro: book.skipOutro,
+      chaptersDescending: book.chaptersDescending,
       completed: book.completed
     };
     return value;
@@ -318,8 +325,20 @@ export struct BookDetailPage {
 
   private async findBookById(id: string): Promise<Book | null> {
     const cached = SearchCache.get(id);
-    if (cached) return cached;
+    if (cached && BookSourceService.pendingAudioBook(id) !== undefined) return cached;
+    if (cached && cached.chapters.length > 0 && !this.needsAudioTocLoad(cached)) return cached;
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (cached) {
+      // 保留搜索快照的最新封面/简介，只恢复目录及其解析变量；本地读失败仍能在线加载。
+      const stored = await DataService.getBookById(ctx, id).catch((): undefined => undefined);
+      if (stored && stored.tocComplete !== false && stored.chapters.length > 0) {
+        cached.chapters = stored.chapters;
+        cached.tocComplete = stored.tocComplete;
+        cached.chapterCount = Math.max(cached.chapterCount, stored.chapterCount, stored.chapters.length);
+        cached.variables = stored.variables ?? cached.variables;
+      }
+      return cached;
+    }
     const imported = await DataService.getBookById(ctx, id);
     if (imported) return imported;
     const record = await DownloadStore.getBook(id);
@@ -328,104 +347,32 @@ export struct BookDetailPage {
   }
 
   private async loadTocFromSource(book: Book): Promise<void> {
+    const generation = ++this.tocGeneration;
+    const startedAt = Date.now();
     this.loadingToc = true;
-    this.debugInfo = `bookUrl=${book.bookUrl}\nsourceUrl=${book.sourceUrl}`;
+    this.tocFailed = false;
+    let firstShown = false;
     try {
-      const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
-      this.debugInfo += `\nsource=${source ? source.bookSourceName : 'NOT FOUND'}`;
-      if (source && book.bookUrl) {
-        // 先获取书籍详情，提取正确的 tocUrl
-        let tocUrl = book.bookUrl;
-        const bookInfo = await BookSourceService.getBookInfo(source, book.bookUrl, book.variables);
-        // 合并 search 时的 @put 变量 + getBookInfo 时的 @put 变量
-        const mergedVars: Record<string, string> = {};
-        if (book.variables) {
-          for (const k of Object.keys(book.variables)) {
-            mergedVars[k] = book.variables[k];
-          }
+      await BookSourceService.loadAudioBook(book, (loaded: Book): void => {
+        if (!this.detailActive || generation !== this.tocGeneration) return;
+        this.book = this.copyBookForRender(loaded);
+        this.refreshDisplayedChapters(loaded.chapters);
+        this.loadingToc = loaded.tocComplete === false;
+        if (!firstShown && loaded.chapters.length > 0) {
+          firstShown = true;
+          hilog.info(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG,
+            'toc first visible, chapters=%{public}d elapsedMs=%{public}d',
+            loaded.chapters.length, Date.now() - startedAt);
         }
-        if (bookInfo?.variables) {
-          for (const k of Object.keys(bookInfo.variables)) {
-            mergedVars[k] = bookInfo.variables[k];
-          }
-        }
-        if (bookInfo) {
-          if (bookInfo.tocUrl) tocUrl = bookInfo.tocUrl;
-          if (bookInfo.name.trim().length > 0) book.title = bookInfo.name;
-          if (bookInfo.author.trim().length > 0) book.author = bookInfo.author;
-          if (bookInfo.coverUrl.trim().length > 0) book.cover = bookInfo.coverUrl;
-          if (bookInfo.intro.trim().length > 0) book.intro = bookInfo.intro;
-          else if (this.isPlaceholderIntro(book.intro)) book.intro = '';
-          if (bookInfo.kind.trim().length > 0) book.category = bookInfo.kind;
-          if (bookInfo.completed !== undefined) book.completed = bookInfo.completed;
-          const declaredChapterCount = this.parseAudioChapterCount(bookInfo.wordCount);
-          if (declaredChapterCount > 0) book.chapterCount = declaredChapterCount;
-          const detailBook = this.copyBookForRender(book);
-          this.book = detailBook;
-          SearchCache.put(detailBook);
-        }
-        this.debugInfo += `\ntocUrl=${tocUrl}`;
-
-        const tocItems = await BookSourceService.getBookToc(source, tocUrl, mergedVars, book.title);
-        this.debugInfo += `\ntocItems=${tocItems.length}`;
-        if (tocItems.length > 0) {
-          this.debugInfo += `\nfirst=${tocItems[0].name}`;
-        }
-        // 去重:按 URL 去重(保留首次出现的章节,丢弃重复 URL)
-        const seenUrls = new Set<string>();
-        const uniqueTocItems = tocItems.filter(item => {
-          if (seenUrls.has(item.url)) {
-            return false;
-          }
-          seenUrls.add(item.url);
-          return true;
-        });
-        this.debugInfo += `\nunique=${uniqueTocItems.length}`;
-        book.chapters = uniqueTocItems.map((item: TocItem, idx: number): Chapter => ({
-          id: `${book.id}-c${idx}`,
-          index: idx + 1,
-          title: item.name,
-          duration: item.duration || 0,
-          source: { type: 'url', value: item.url },
-          originSourceValue: item.url,
-          variables: item.variables
-        }));
-        book.chapterCount = Math.max(book.chapterCount, book.chapters.length);
-        const cloned: Book = {
-          id: book.id,
-          title: book.title,
-          author: book.author,
-          narrator: book.narrator,
-          cover: book.cover,
-          category: book.category,
-          intro: book.intro,
-          totalDuration: book.totalDuration,
-          chapterCount: book.chapterCount,
-          rating: book.rating,
-          tags: book.tags,
-          chapters: book.chapters,
-          bookUrl: book.bookUrl,
-          sourceUrl: book.sourceUrl,
-          contentType: book.contentType,
-          variables: Object.keys(mergedVars).length > 0 ? mergedVars : book.variables,
-          // 保留 skip:否则 upsertCachedBook(cloned) 会把缓存索引里的旧 skip 清掉
-          skipIntro: book.skipIntro,
-          skipOutro: book.skipOutro,
-          completed: book.completed
-        };
-        this.book = cloned;
-        this.refreshDisplayedChapters(cloned.chapters);
-        SearchCache.put(cloned);
-        // 已收藏的在线书：同步把最新 toc 写回 cachedBooks,保证书架直接进播放器有完整章节
-        if (this.isFavorite) {
-          await DataService.upsertCachedBook(cloned);
-        }
-      }
-    } catch (e) {
-      this.debugInfo += `\nERROR: ${e}`;
+      });
+    } catch (error) {
+      if (!this.detailActive || generation !== this.tocGeneration) return;
+      this.tocFailed = true;
+      this.debugInfo = error instanceof Error ? error.message : String(error);
+      hilog.warn(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'toc load failed: %{public}s', this.debugInfo);
+    } finally {
+      if (this.detailActive && generation === this.tocGeneration) this.loadingToc = false;
     }
-    this.loadingToc = false;
-    this.scrollToCurrentChapter();
   }
 
   /**
@@ -530,12 +477,12 @@ export struct BookDetailPage {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
       const snap = await DataService.getBookById(ctx, this.book.id);
       if (!snap) {
-        const needToc = (!this.book.chapters || this.book.chapters.length === 0)
+        const needToc = (this.book.tocComplete === false || !this.book.chapters || this.book.chapters.length === 0)
           && !!this.book.bookUrl && !!this.book.sourceUrl;
         if (needToc) {
           await this.loadTocFromSource(this.book);
         }
-        await DataService.upsertCachedBook(this.book);
+        await DataService.upsertCachedBook(SearchCache.get(this.book.id) ?? this.book);
         this.isFavorite = true;
         try {
           this.getUIContext().getPromptAction().showToast({ message: '已重新加入书架' });
@@ -546,12 +493,12 @@ export struct BookDetailPage {
     this.isFavorite = await PreferenceService.toggleFavorite(this.book.id);
     if (this.isFavorite) {
       // 在线书:章节还没拉到就先把 toc 拉齐再写缓存,避免书架点击时拿到空 chapters
-      const needToc = (!this.book.chapters || this.book.chapters.length === 0)
+      const needToc = (this.book.tocComplete === false || !this.book.chapters || this.book.chapters.length === 0)
         && !!this.book.bookUrl && !!this.book.sourceUrl;
       if (needToc) {
         await this.loadTocFromSource(this.book);
       }
-      await DataService.upsertCachedBook(this.book);
+      await DataService.upsertCachedBook(SearchCache.get(this.book.id) ?? this.book);
     } else if (!this.bookId.startsWith('import_')) {
       // 取消收藏后,如果没有播放历史,也清掉缓存避免堆积
       const history = await PreferenceService.getHistory();
@@ -744,6 +691,9 @@ export struct BookDetailPage {
   private async startPlay(chapter?: Chapter): Promise<void> {
     if (!this.book || this.isStartingPlay) return;
     this.isStartingPlay = true;
+    // 起播使用任务持有的目录，后台追加章节会继续对播放器可见。
+    const loadingBook = SearchCache.get(this.bookId);
+    if (loadingBook && BookSourceService.pendingAudioBook(this.bookId) !== undefined) this.book = loadingBook;
 
     // 没有指定章节时，优先从历史恢复，否则用第一章
     let target: Chapter | undefined = chapter;
@@ -1215,13 +1165,16 @@ export struct BookDetailPage {
   }
 
   /** 章节区头部计数文案；首次拉目录时不显示误导性的「共 0 集」。 */
-  private chapterHeaderText(): string {
+  private chapterHeaderText(): ResourceStr {
     const unit = this.book!.contentType === 'text' ? ' 章' : ' 集';
     if (this.chapterQuery.trim().length > 0) {
       return `匹配 ${this.displayedChapters.length}${unit}`;
     }
     if (this.loadingToc && this.book!.chapters.length === 0) {
       return this.book!.contentType === 'text' ? '目录加载中' : '节目加载中';
+    }
+    if (this.loadingToc && this.book!.chapters.length > 0) {
+      return $r('app.string.chapter_loading_count', this.book!.chapters.length);
     }
     const totalCount = Math.max(this.book!.chapterCount, this.book!.chapters.length);
     return `共 ${totalCount}${unit}`;
@@ -1248,6 +1201,16 @@ export struct BookDetailPage {
         // 首次加载由骨架屏自带提示，这里只在「已有章节 + 后台刷新」时补一个小圈
         if (this.loadingToc && this.book!.chapters.length > 0) {
           LoadingProgress().width(16).height(16).color(AppColor.Brand).margin({ left: AppSpace.Xs })
+        }
+        if (this.tocFailed) {
+          Button($r('app.string.chapter_load_retry'))
+            .fontSize(AppFont.Caption)
+            .fontColor(AppColor.Brand)
+            .backgroundColor(Color.Transparent)
+            .onClick((): void => { if (this.book) {
+              if (this.book.contentType === 'text') this.loadTextBook(this.book);
+              else this.loadTocFromSource(this.book);
+            } })
         }
         Blank()
         Button(this.chaptersDescending ? $r('app.string.chapter_order_desc') : $r('app.string.chapter_order_asc'))
@@ -1405,6 +1368,7 @@ export struct BookDetailPage {
   @Builder
   buildChapterItem(ri: RepeatItem<Chapter>) {
     ChapterListItem({
+      book: this.book, chapter: ri.item,
       title: ri.item.title,
       isTextBook: this.book?.contentType === 'text',
       isPlaying: this.isPlayingChapter(ri.item),

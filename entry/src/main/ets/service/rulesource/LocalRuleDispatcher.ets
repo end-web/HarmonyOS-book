@@ -70,7 +70,8 @@ class LocalRuleTocItem implements TocItem {
 /** 本地规则源旁路 Dispatcher；它从不调用或修改 BuiltInDispatcher。 */
 export class LocalRuleDispatcher {
   static async explore(source: LocalRuleSource, address: string, page: number = 1,
-    variables: Record<string, string> = {}): Promise<LocalRuleExploreResult> {
+    variables: Record<string, string> = {},
+    resultLimit: number = LocalRuleExecutionLimits.MAX_SEARCH_RESULTS): Promise<LocalRuleExploreResult> {
     if (!source.enabledExplore || !source.canExecute()) throw new Error('书源未启用发现');
     if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
       return TalebookSourceAdapter.list(source, '', page);
@@ -85,9 +86,20 @@ export class LocalRuleDispatcher {
     const elements = await LocalRuleStageExtractor.selectList(document, rule.bookList, source, variables);
     const result = new LocalRuleExploreResult();
     const seen = new Set<string>();
-    for (const element of elements.slice(0, LocalRuleExecutionLimits.MAX_SEARCH_RESULTS)) {
+    const limit = Math.max(1, Math.min(LocalRuleExecutionLimits.MAX_SEARCH_RESULTS, resultLimit));
+    const previewElements = elements.slice(0, LocalRuleExecutionLimits.MAX_SEARCH_RESULTS);
+    for (let index = 0; index < previewElements.length; index++) {
+      if (result.books.length >= limit) break;
+      const batchSize = Math.min(32, limit);
+      if (index % batchSize === 0) {
+        await LocalRuleStageExtractor.prefetchHtmlFields(previewElements.slice(index, index + batchSize),
+          [rule.name, rule.author, rule.coverUrl, rule.bookUrl, rule.intro, rule.kind,
+            rule.status, rule.lastChapter, rule.wordCount]);
+      }
+      const element = previewElements[index];
       const item = await LocalRuleDispatcher.extractSearchResult(element, source,
         LocalRuleDispatcher.copyVariables(variables), rule);
+      element.htmlFields.clear();
       if (!item.name || !item.bookUrl || seen.has(item.bookUrl)) continue;
       seen.add(item.bookUrl);
       result.books.push(item);
@@ -216,11 +228,20 @@ export class LocalRuleDispatcher {
   }
 
   static async getBookToc(source: LocalRuleSource, tocUrl: string,
-    variables: Record<string, string> = {}): Promise<TocItem[]> {
+    variables: Record<string, string> = {},
+    onBatch?: (items: TocItem[]) => void): Promise<TocItem[]> {
     if (!source.canExecute()) return [];
     try {
       await LocalRuleDispatcher.prepareVariables(source, variables, tocUrl);
       const output: TocItem[] = [];
+      let reportedCount = 0;
+      let reportedAt = Date.now();
+      const report = (): void => {
+        if (onBatch === undefined || output.length === reportedCount) return;
+        onBatch(output.slice(reportedCount));
+        reportedCount = output.length;
+        reportedAt = Date.now();
+      };
       const chapterUrls = new Set<string>();
       const pageUrls = new Set<string>();
       let currentUrl = tocUrl;
@@ -232,14 +253,25 @@ export class LocalRuleDispatcher {
         pageCount++;
         const fetch = await LocalRuleHttpClient.fetch(source, currentUrl, variables);
         LocalRuleDispatcher.assertFetch(fetch, '目录');
-        if (responseCharacters + fetch.body.length > LocalRuleExecutionLimits.MAX_STAGE_RESPONSE_CHARS) break;
+        if (responseCharacters + fetch.body.length > LocalRuleExecutionLimits.MAX_STAGE_RESPONSE_CHARS) {
+          throw new Error('目录响应超出预算，未获取完整目录');
+        }
         responseCharacters += fetch.body.length;
         const document = LocalRuleStageExtractor.createDocument(fetch.body, fetch.requestUrl);
         const elements = await LocalRuleStageExtractor.selectList(document,
           source.ruleToc.chapterList, source, variables);
-        for (const element of elements) {
+        for (let elementIndex = 0; elementIndex < elements.length; elementIndex++) {
           LocalRuleDiagnostics.check(variables);
-          if (output.length >= LocalRuleExecutionLimits.MAX_TOC_ITEMS) break;
+          if (output.length >= LocalRuleExecutionLimits.MAX_TOC_ITEMS) {
+            report();
+            throw new Error('目录章节数超出预算，未获取完整目录');
+          }
+          if (elementIndex % 32 === 0) {
+            await LocalRuleStageExtractor.prefetchHtmlFields(elements.slice(elementIndex, elementIndex + 32),
+              [source.ruleToc.chapterName, source.ruleToc.chapterUrl, source.ruleToc.isVip,
+                source.ruleToc.isPay, source.ruleToc.isVolume, source.ruleToc.updateTime, source.ruleToc.duration]);
+          }
+          const element = elements[elementIndex];
           const itemVariables = LocalRuleDispatcher.copyVariables(variables);
           const item = new LocalRuleTocItem();
           item.name = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
@@ -250,7 +282,10 @@ export class LocalRuleDispatcher {
           const chapterUrl = LocalRuleChapterRequest.needsDeferredRequest(source.ruleToc.chapterUrl)
             ? LocalRuleChapterRequest.create(element, itemVariables)
             : await LocalRuleStageExtractor.extract(element, source.ruleToc.chapterUrl, source, itemVariables, true);
-          if (!chapterUrl || chapterUrls.has(chapterUrl)) continue;
+          if (!chapterUrl || chapterUrls.has(chapterUrl)) {
+            element.htmlFields.clear();
+            continue;
+          }
           chapterUrls.add(chapterUrl);
           item.url = chapterUrl;
           itemVariables['chapterUrl'] = chapterUrl;
@@ -266,23 +301,32 @@ export class LocalRuleDispatcher {
             source.ruleToc.updateTime, source, itemVariables), 80);
           item.duration = LocalRuleStageExtractor.parseDuration(await LocalRuleStageExtractor.extract(element,
             source.ruleToc.duration, source, itemVariables));
+          element.htmlFields.clear();
           item.variables = LocalRuleDispatcher.copyVariables(itemVariables);
           output.push(item);
+          // 首批立即展示，后续至多每 160ms 刷新一次，避免逐条刷新大列表。
+          if ((reportedCount === 0 && output.length >= 16) || Date.now() - reportedAt >= 160) report();
           if (output.length % 64 === 0) {
             await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 0); });
           }
         }
+        report();
         const nextUrl = await LocalRuleStageExtractor.extract(document,
           source.ruleToc.nextTocUrl, source, variables, true);
         if (!nextUrl || pageUrls.has(nextUrl)) break;
         currentUrl = nextUrl;
+        if (pageCount >= 100 || output.length >= LocalRuleExecutionLimits.MAX_TOC_ITEMS) {
+          throw new Error('目录分页超出预算，未获取完整目录');
+        }
       }
       console.info(`[LocalRuleDispatcher] toc ${source.bookSourceName}: ` +
         `responseChars=${responseCharacters}, pages=${pageCount}, results=${output.length}`);
       return output;
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'getBookToc', error as Object);
-      if (variables['__traceId']) throw new Error(error instanceof Error ? error.message : String(error));
+      if (onBatch !== undefined || variables['__traceId']) {
+        throw new Error(error instanceof Error ? error.message : String(error));
+      }
       return [];
     }
   }
