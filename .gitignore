@@ -65,3 +65,8 @@ reader_shot.png
 /.deveco/
 /icon_backup/
 /icon_backup_entry/
+
+# 本地助手记忆与临时构建目录
+/.workbuddy-ai/
+/.tmp-build*/
+/artifacts/

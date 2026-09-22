@@ -11,6 +11,35 @@ class LocalRuleUrlParts {
 
 /** 只分析声明式 URL，不执行脚本、Cookie 表达式或 WebView 请求。 */
 export class LocalRuleUrlAnalyzer {
+  /** Light-reader URL context: explicit query IDs first, retaining /book/ file suffixes. */
+  static bookId(address: string): string {
+    const clean = LocalRuleUrlAnalyzer.splitOptions(address.trim()).address.split('#')[0];
+    if (!new RegExp('^https?://', 'i').test(clean)) return '';
+    const query = clean.indexOf('?');
+    if (query >= 0) {
+      const parameters = clean.substring(query + 1).split('&');
+      for (const name of ['book_id', 'bookid', 'id']) {
+        for (const parameter of parameters) {
+          const separator = parameter.indexOf('=');
+          if (separator < 0 || parameter.substring(0, separator) !== name) continue;
+          try {
+            const value = decodeURIComponent(parameter.substring(separator + 1).replace(new RegExp('\\+', 'g'), ' '));
+            if (value) return value;
+          } catch (_error) { /* Malformed query values do not become identifiers. */ }
+        }
+      }
+    }
+    const path = (query >= 0 ? clean.substring(0, query) : clean)
+      .replace(new RegExp('^https?://[^/]+', 'i'), '');
+    const bookPath = path.match(new RegExp('/book/([^/]+)$'));
+    if (bookPath !== null) return bookPath[1];
+    const segments = path.split('/');
+    for (let index = segments.length - 1; index >= 0; index--) {
+      if (new RegExp('^[a-zA-Z0-9_-]{3,40}$').test(segments[index])) return segments[index];
+    }
+    return '';
+  }
+
   static analyze(source: LocalRuleSource, rawAddress: string,
     variables: Record<string, string> = {}, keyword: string = '', page: number = 1): LocalRuleRequestPlan {
     const parts = LocalRuleUrlAnalyzer.splitOptions(rawAddress.trim());

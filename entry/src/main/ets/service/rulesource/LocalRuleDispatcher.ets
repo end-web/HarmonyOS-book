@@ -159,6 +159,7 @@ export class LocalRuleDispatcher {
     variables: Record<string, string> = {}): Promise<BookInfo | null> {
     if (!source.canExecute()) return null;
     try {
+      variables['bookUrl'] = bookUrl;
       await LocalRuleDispatcher.prepareVariables(source, variables, bookUrl);
       const isTingYouBook = TingYouSourceAdapter.canResolveBook(source, bookUrl);
       if (isTingYouBook) {

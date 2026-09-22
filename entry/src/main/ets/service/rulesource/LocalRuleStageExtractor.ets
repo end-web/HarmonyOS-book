@@ -582,6 +582,13 @@ export class LocalRuleStageExtractor {
     }
     const variable = variables[expression];
     if (variable !== undefined) return variable;
+    if (expression === 'id' && document.kind !== LocalRuleDocumentKind.JSON) {
+      const id = LocalRuleUrlAnalyzer.bookId(variables['bookUrl'] || document.baseUrl);
+      if (id) return id;
+    }
+    if (LocalRuleTemplate.isJsonExpression(expression)) {
+      return LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl, expression, source, variables);
+    }
     if (!new RegExp('^(\\$[.\\[]|@@|@json:|@css:|@xpath:|//)', 'i').test(expression) &&
       !new RegExp('^[A-Za-z_$][\\w$-]*$').test(expression)) {
       return LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl, expression, source, variables);
