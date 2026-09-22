@@ -25,7 +25,7 @@ export struct ReaderSpeechFloating {
   label() {
     Text($r('app.string.reader_listen_short'))
       .fontSize(18).fontWeight(this.playing ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor('#181818').hitTestBehavior(HitTestMode.None)
+      .fontColor($r('sys.color.font_primary')).hitTestBehavior(HitTestMode.None)
   }
 
   build() {
@@ -50,9 +50,9 @@ export struct ReaderSpeechFloating {
           .accessibilityText($r('app.string.tts_title')).onClick((): void => this.onOpen())
       } else {
         Button({ type: ButtonType.Circle }) { this.label() }
-          .width(48).height(48).padding(0).backgroundColor('#D9FFFFFF')
+          .width(48).height(48).padding(0).backgroundColor($r('sys.color.comp_background_primary'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-          .border({ width: 0.5, color: '#BFFFFFFF' })
+          .border({ width: 0.5, color: $r('sys.color.comp_divider') })
           .accessibilityText($r('app.string.tts_title')).onClick((): void => this.onOpen())
       }
     }.width(48).height(48).attributeModifier(new SpeechCircleClip())
