@@ -1303,7 +1303,11 @@ export class AudioService {
           return false;
         }
         const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
-        if (PlatformCompat.supports(23)) {
+        // HLS 保留在线续流；M4A/MP4 等容器可能把索引放在文件尾，
+        // 保留普通网络播放的 Range 寻址，避免离线缓存顺序填充拖慢首播。
+        const indexedContainer = new RegExp('\\.(m4a|m4b|mp4|mov)([?#]|$)', 'i').test(src.value);
+        if (PlatformCompat.supports(23) && !this.liveSource && !DownloadPolicy.isHls(src.value, '') &&
+          !indexedContainer) {
           mediaSource.enableOfflineCache(true);
         }
         await p.setMediaSource(mediaSource);

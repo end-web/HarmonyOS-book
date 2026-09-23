@@ -1,5 +1,6 @@
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleJsonPath } from './LocalRuleJsonPath';
+import { LocalRuleRegexCompat } from './LocalRuleRegexCompat';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
 import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
 import { LocalRuleTemplate } from './LocalRuleTemplate';
@@ -99,8 +100,11 @@ export class LocalRuleStageExtractor {
       const selected = await LocalRuleStageExtractor.selectList(document, cleanRule.substring(1), source, variables);
       return selected.reverse();
     }
+    if (cleanRule.startsWith(':') || cleanRule.startsWith('%') || cleanRule.toLowerCase().startsWith('@regex:')) {
+      return LocalRuleStageExtractor.regexDocuments(document, cleanRule);
+    }
     const listScript = LocalRuleStageExtractor.scriptChain(cleanRule);
-    if (listScript !== undefined) {
+    if (listScript !== undefined && !LocalRuleStageExtractor.hasRuleGroups(cleanRule)) {
       return LocalRuleStageExtractor.executeListScriptChain(document, listScript, source, variables);
     }
     if (LocalRuleScriptRuntime.standaloneCode(cleanRule).length > 0) {
@@ -224,6 +228,10 @@ export class LocalRuleStageExtractor {
         standaloneCode, source, variables, '', document.kind === LocalRuleDocumentKind.JSON);
       return LocalRuleStageExtractor.expandScriptValue(value);
     }
+    // 每个带脚本的 ||/&&/%% 分支都基于原文档求值，不能把后一分支当作前一脚本的后处理。
+    if (LocalRuleScriptRuntime.hasScript(cleanRule) && LocalRuleStageExtractor.hasRuleGroups(cleanRule)) {
+      return LocalRuleStageExtractor.extractBaseValues(document, cleanRule, source, variables);
+    }
     const scriptChain = LocalRuleStageExtractor.scriptChain(cleanRule);
     if (scriptChain !== undefined) {
       return LocalRuleStageExtractor.executeScriptChain(document, scriptChain, source, variables);
@@ -265,7 +273,7 @@ export class LocalRuleStageExtractor {
       const regexText = parts[0];
       const replacement = parts.length > 1 ? parts[1] : '';
       if (!regexText) return value;
-      return value.replace(new RegExp(regexText, 'g'), replacement);
+      return value.replace(LocalRuleRegexCompat.compile(regexText, 'g'), LocalRuleRegexCompat.replacement(replacement));
     } catch (_error) {
       throw new Error('正文净化正则无效');
     }
@@ -298,7 +306,7 @@ export class LocalRuleStageExtractor {
     source: LocalRuleSource, variables: Record<string, string>): Promise<string[]> {
     const cleanRule = rule.trim();
     if (!cleanRule) return [document.payload];
-    if (cleanRule.includes('{{')) {
+    if (cleanRule.includes('{{') || cleanRule.includes('{$.') || cleanRule.includes('{$[')) {
       return [await LocalRuleStageExtractor.expandElementTemplate(document, cleanRule, source, variables)];
     }
     if (new RegExp('^(https?://|data:)', 'i').test(cleanRule)) return [cleanRule];
@@ -341,7 +349,7 @@ export class LocalRuleStageExtractor {
       cleanRule.toLowerCase().startsWith('@regex:')) {
       return LocalRuleStageExtractor.directRegex(document.payload, cleanRule);
     }
-    if (document.kind === LocalRuleDocumentKind.JSON) {
+    if (document.kind === LocalRuleDocumentKind.JSON || cleanRule.toLowerCase().startsWith('@json:')) {
       return LocalRuleStageExtractor.extractJson(document.payload, cleanRule);
     }
     if (document.kind === LocalRuleDocumentKind.HTML) {
@@ -396,6 +404,10 @@ export class LocalRuleStageExtractor {
   }
 
   private static normalizeJsonRule(rule: string): string {
+    rule = rule.trim();
+    if (rule.toLowerCase().startsWith('@json:')) rule = rule.substring(6).trim();
+    if (new RegExp('^\\$\\d+$').test(rule)) return `$[${JSON.stringify(rule)}]`;
+    if (rule.startsWith('.') || rule.startsWith('[')) return `$${rule}`;
     if (LocalRuleJsonPath.isJsonPath(rule)) return rule;
     if (new RegExp('^[A-Za-z_$][A-Za-z0-9_$-]*(?:\\.[A-Za-z_$][A-Za-z0-9_$-]*|\\[[\\s\\S]+\\])+$').test(rule)) {
       return `$.${rule}`;
@@ -534,7 +546,7 @@ export class LocalRuleStageExtractor {
     output = output.replace(
       new RegExp('(^|[\\s>+~,])tag\\.([A-Za-z][A-Za-z0-9_-]*)', 'g'), '$1$2');
     output = output.replace(
-      new RegExp('((?:^|[\\s>+~,])(?:[A-Za-z][A-Za-z0-9_-]*|[.#][A-Za-z_][A-Za-z0-9_-]*))\\.(-?\\d+)(?=$|[\\s>+~,])', 'g'),
+      new RegExp('((?:^|[\\s>+~,])(?:[A-Za-z][A-Za-z0-9_-]*)?(?:[.#][A-Za-z_][A-Za-z0-9_-]*)*)\\.(-?\\d+)(?=$|[\\s>+~,])', 'g'),
       '$1:eq($2)');
     return output;
   }
@@ -551,20 +563,27 @@ export class LocalRuleStageExtractor {
     let output = '';
     let position = 0;
     while (position < template.length) {
-      const start = template.indexOf('{{', position);
+      const doubleStart = template.indexOf('{{', position);
+      const dotStart = template.indexOf('{$.', position);
+      const bracketStart = template.indexOf('{$[', position);
+      let singleStart = dotStart < 0 ? bracketStart : bracketStart < 0 ? dotStart : Math.min(dotStart, bracketStart);
+      if (singleStart > 0 && template.charAt(singleStart - 1) === '{') singleStart = -1;
+      const single = singleStart >= 0 && (doubleStart < 0 || singleStart < doubleStart);
+      const start = single ? singleStart : doubleStart;
       if (start < 0) {
         output += template.substring(position);
         break;
       }
       output += template.substring(position, start);
-      const end = LocalRuleTemplate.end(template, start + 2);
+      const end = single ? LocalRuleStageExtractor.findMatchingBrace(template, start)
+        : LocalRuleTemplate.end(template, start + 2);
       if (end < 0) {
         output += template.substring(start);
         break;
       }
-      const expression = template.substring(start + 2, end).trim();
+      const expression = template.substring(start + (single ? 1 : 2), end).trim();
       output += await LocalRuleStageExtractor.templateValue(document, expression, source, variables);
-      position = end + 2;
+      position = end + (single ? 1 : 2);
     }
     return output;
   }
@@ -748,7 +767,8 @@ export class LocalRuleStageExtractor {
     for (const baseValue of baseValues) {
       const scripted = await LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl,
         chain.code, source, variables, baseValue,
-        chain.baseRule.length === 0 && document.kind === LocalRuleDocumentKind.JSON);
+        document.kind === LocalRuleDocumentKind.JSON &&
+          LocalRuleStageExtractor.createDocument(baseValue, document.baseUrl).kind === LocalRuleDocumentKind.JSON);
       if (chain.trailingRule.length > 0) {
         const scriptedDocument = LocalRuleStageExtractor.createDocument(scripted, document.baseUrl);
         const values = await LocalRuleStageExtractor.extractValues(
@@ -965,16 +985,17 @@ export class LocalRuleStageExtractor {
     if (!pattern) return values;
     let regex: RegExp;
     try {
-      regex = new RegExp(pattern, firstMatchOnly ? '' : 'g');
+      regex = LocalRuleRegexCompat.compile(pattern, firstMatchOnly ? '' : 'g');
     } catch (_error) {
       throw new Error('字段正则无效');
     }
     const output: string[] = [];
+    const convertedReplacement = LocalRuleRegexCompat.replacement(replacement);
     for (const value of values) {
       if (firstMatchOnly) {
         const match = regex.exec(value);
-        output.push(match === null ? '' : match[0].replace(regex, replacement));
-      } else output.push(value.replace(regex, replacement));
+        output.push(match === null ? '' : match[0].replace(regex, convertedReplacement));
+      } else output.push(value.replace(regex, convertedReplacement));
     }
     return output;
   }
@@ -991,7 +1012,7 @@ export class LocalRuleStageExtractor {
     }
     let regex: RegExp;
     try {
-      regex = new RegExp(pattern, firstOnly ? '' : 'g');
+      regex = LocalRuleRegexCompat.compile(pattern, firstOnly ? '' : 'g');
     } catch (_error) {
       throw new Error('直接正则无效');
     }
@@ -1000,7 +1021,7 @@ export class LocalRuleStageExtractor {
     while (match !== null && output.length < LocalRuleExecutionLimits.MAX_JSON_NODES) {
       if (match.length <= 1) output.push(match[0] ?? '');
       else {
-        for (let index = 1; index < match.length; index++) output.push(match[index] ?? '');
+        for (let index = firstOnly ? 0 : 1; index < match.length; index++) output.push(match[index] ?? '');
       }
       if (firstOnly || match[0] === '') break;
       match = regex.exec(content);
@@ -1010,14 +1031,53 @@ export class LocalRuleStageExtractor {
 
   private static regexDocuments(document: LocalRuleDocument, rule: string): LocalRuleDocument[] {
     if (!rule.startsWith('%') && !rule.startsWith(':') && !rule.toLowerCase().startsWith('@regex:')) return [];
-    const values = LocalRuleStageExtractor.directRegex(document.payload, rule);
-    const output: LocalRuleDocument[] = [];
-    for (const value of values) output.push(LocalRuleDocument.of(LocalRuleDocumentKind.TEXT, value, document.baseUrl));
-    return output;
+    const firstOnly = rule.startsWith('%');
+    const pattern = rule.substring(rule.toLowerCase().startsWith('@regex:') ? 7 : 1);
+    const stages = rule.startsWith(':') ? LocalRuleStageExtractor.splitTopLevel(pattern, '&&') : [pattern];
+    let input = document.payload;
+    for (let stage = 0; stage < stages.length; stage++) {
+      const regex = LocalRuleRegexCompat.compile(stages[stage], firstOnly ? '' : 'g');
+      const output: LocalRuleDocument[] = [];
+      const intermediate: string[] = [];
+      let characters = 0;
+      let matchedCount = 0;
+      let match: RegExpExecArray | null = regex.exec(input);
+      while (match !== null && matchedCount < LocalRuleExecutionLimits.MAX_JSON_NODES) {
+        matchedCount++;
+        if (stage === stages.length - 1) {
+          const fields: string[] = [];
+          for (let group = 0; group < match.length; group++) {
+            fields.push(`${JSON.stringify(`$${group}`)}:${JSON.stringify(match[group] ?? '')}`);
+          }
+          const payload = `{${fields.join(',')}}`;
+          characters += payload.length;
+          if (characters > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) throw new Error('正则列表结果超出预算');
+          output.push(LocalRuleDocument.of(LocalRuleDocumentKind.JSON, payload, document.baseUrl));
+        } else {
+          const value = match[0] ?? '';
+          characters += value.length;
+          if (characters > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) throw new Error('正则中间结果超出预算');
+          intermediate.push(value);
+        }
+        if (firstOnly) break;
+        if (match[0] === '') regex.lastIndex++;
+        match = regex.exec(input);
+      }
+      if (stage === stages.length - 1) return output;
+      input = intermediate.join('');
+      if (!input) return [];
+    }
+    return [];
+  }
+
+  private static hasRuleGroups(value: string): boolean {
+    return ['||', '&&', '%%'].some((operator: string): boolean =>
+      LocalRuleStageExtractor.splitTopLevel(value, operator).length > 1);
   }
 
   private static splitTopLevel(value: string, operator: string): string[] {
     const output: string[] = [];
+    const lower = value.toLowerCase();
     let current = '';
     let quote = '';
     let escaped = false;
@@ -1050,6 +1110,21 @@ export class LocalRuleStageExtractor {
         quote = character;
         index++;
         continue;
+      }
+      if (parentheses === 0 && brackets === 0 && braces === 0) {
+        const marker = lower.substring(index, index + 4);
+        if (marker === '<js>') {
+          const close = lower.indexOf('</js>', index + 4);
+          if (close < 0) throw new Error('书源脚本缺少 </js>');
+          current += value.substring(index, close + 5);
+          index = close + 5;
+          continue;
+        }
+        // @js: 没有结束标签，之后的逻辑操作符属于 JavaScript。
+        if (marker === '@js:' || (index === 0 && lower.startsWith('js:'))) {
+          current += value.substring(index);
+          break;
+        }
       }
       if (character === '(') parentheses++;
       else if (character === ')') parentheses = Math.max(0, parentheses - 1);

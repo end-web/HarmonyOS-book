@@ -1,4 +1,6 @@
-import { SpeechTextHighlighter } from './SpeechTextHighlighter';
+import { CustomTtsConfig } from '../../model/CustomTtsConfig';
+import { CustomTtsConfigParser } from './CustomTtsConfigParser';
+import { HttpTtsAudioOutput, HttpTtsPlayer } from './HttpTtsPlayer';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { textToSpeech } from '@kit.CoreSpeechKit';
@@ -18,7 +20,7 @@ import { OnlineTextContentCache } from './OnlineTextContentCache';
 import { OnlineTextPaginator } from './OnlineTextPaginator';
 import { SpeechSegment, SpeechTextSegmenter } from './SpeechTextSegmenter';
 
-/** 独立于页面生命周期的离线朗读。停止/换书后所有旧请求均由代次和 requestId 隔离。 */
+/** 独立于页面生命周期的系统/HTTP 朗读。停止/换书后旧请求由代次和 requestId 隔离。 */
 export class TextToSpeechService {
   private static instance: TextToSpeechService | null = null;
   readonly state: TextToSpeechState = new TextToSpeechState();
@@ -26,21 +28,24 @@ export class TextToSpeechService {
   private store: preferences.Preferences | null = null;
   private initPromise: Promise<void> | null = null;
   private engine: textToSpeech.TextToSpeechEngine | null = null;
+  private httpPlayer: HttpTtsPlayer | null = null;
+  private httpPlaybackChain: Promise<void> = Promise.resolve();
+  private httpSynthesisChain: Promise<void> = Promise.resolve();
+  private httpTasks: Map<number, HttpTtsPlayer> = new Map();
+  private httpOutput: HttpTtsAudioOutput = new HttpTtsAudioOutput();
   private downloadedVoices: Set<string> = new Set();
   private enginePerson: number = -1;
   private engineLanguage: string = '';
   private engineChain: Promise<void> = Promise.resolve();
   private book: Book | null = null;
   private segments: SpeechSegment[] = [];
+  private chapterContent: string = '';
   private segmentIndex: number = 0;
   private generation: number = 0;
   private requestSequence: number = 0;
   private requestId: string = '';
   private watchdog: number = -1;
   private foreground: boolean = true;
-  private highlightTimer: number = -1;
-  private characterUnitMs: number = 260;
-  private utteranceStart: number = 0;
   private sleepTimer: number = -1;
   private sleepDeadline: number = 0;
   private flushChain: Promise<void> = Promise.resolve();
@@ -94,6 +99,13 @@ export class TextToSpeechService {
     this.state.person = typeof person === 'number' && Number.isFinite(person) ? person : 13;
     this.state.language = typeof language === 'string' ? language : 'zh-CN';
     this.state.follow = typeof follow === 'boolean' ? follow : true;
+    const catalog = this.store.getSync('customTtsCatalog', '[]');
+    try {
+      this.state.customTtsConfigs = typeof catalog === 'string' && catalog !== '[]' ? CustomTtsConfigParser.parse(catalog) : [];
+    } catch (_error) { this.state.customTtsConfigs = []; }
+    const selected = this.store.getSync('customTtsId', '');
+    this.state.customTtsId = typeof selected === 'string' &&
+      this.state.customTtsConfigs.some((item: CustomTtsConfig): boolean => item.id === selected) ? selected : '';
     if (!this.isChineseVoice(this.state.language)) {
       this.state.language = 'zh-CN';
       this.state.person = 13;
@@ -103,14 +115,13 @@ export class TextToSpeechService {
 
   addListener(listener: () => void): void {
     this.listeners.add(listener);
-    if (this.state.playing && this.spokenSince > 0) this.startHighlight();
   }
   removeListener(listener: () => void): void {
     this.listeners.delete(listener);
-    if (this.listeners.size === 0) this.stopHighlight();
   }
 
   private notify(): void {
+    if (!this.foreground) return;
     this.listeners.forEach((listener: () => void): void => listener());
   }
 
@@ -145,9 +156,9 @@ export class TextToSpeechService {
         if (!voices.some((existing: SpeechVoice): boolean => existing.id === voice.id)) voices.push(voice);
       }
       this.state.voices = voices;
-      if (voices.length === 0) this.state.error = this.message($r('app.string.tts_no_voices'));
+      if (voices.length === 0 && !this.state.customTtsId) this.state.error = this.message($r('app.string.tts_no_voices'));
     } catch (error) {
-      this.state.error = this.message($r('app.string.tts_engine_error'));
+      if (!this.state.customTtsId) this.state.error = this.message($r('app.string.tts_engine_error'));
       this.report(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -173,12 +184,55 @@ export class TextToSpeechService {
     }
     const resume = this.state.playing || this.state.loading;
     this.pause();
+    this.state.customTtsId = '';
+    this.rebuildSpeechSegments();
     this.state.person = voice.person;
     this.state.language = voice.language;
-    this.characterUnitMs = 260;
     this.saveSettings();
     this.releaseEngine();
     if (resume) await this.resume();
+  }
+
+  async importCustomTts(configs: CustomTtsConfig[]): Promise<void> {
+    const store = this.store;
+    if (store === null || configs.length === 0) return;
+    const catalog = this.state.customTtsConfigs.slice();
+    for (const config of configs) {
+      const index = catalog.findIndex((item: CustomTtsConfig): boolean => item.id === config.id);
+      if (index >= 0) catalog[index] = config;
+      else catalog.push(config);
+    }
+    if (catalog.length > CustomTtsConfigParser.MAX_CONFIGS) throw new Error('TTS catalog full');
+    const previous = JSON.stringify(this.state.customTtsConfigs);
+    store.putSync('customTtsCatalog', JSON.stringify(catalog));
+    try { await store.flush(); }
+    catch (_error) { store.putSync('customTtsCatalog', previous); throw new Error('TTS save failed'); }
+    this.state.customTtsConfigs = catalog;
+    await this.selectCustomTts(configs[configs.length - 1].id);
+  }
+
+  async selectCustomTts(id: string): Promise<void> {
+    if (id && !this.state.customTtsConfigs.some((item: CustomTtsConfig): boolean => item.id === id)) return;
+    const resume = this.state.playing || this.state.loading;
+    this.pause();
+    this.releaseEngine();
+    this.state.customTtsId = id;
+    this.rebuildSpeechSegments();
+    this.state.error = '';
+    this.saveSettings();
+    if (resume) await this.resume();
+  }
+
+  async removeCustomTts(id: string): Promise<void> {
+    const store = this.store;
+    if (store === null) return;
+    const previous = this.state.customTtsConfigs;
+    const catalog = previous.filter((item: CustomTtsConfig): boolean => item.id !== id);
+    store.putSync('customTtsCatalog', JSON.stringify(catalog));
+    try { await store.flush(); }
+    catch (_error) { store.putSync('customTtsCatalog', JSON.stringify(previous)); throw new Error('TTS save failed'); }
+    this.state.customTtsConfigs = catalog;
+    if (this.state.customTtsId === id) await this.selectCustomTts('');
   }
 
   private downloadVoice(voice: SpeechVoice): Promise<void> {
@@ -275,6 +329,7 @@ export class TextToSpeechService {
       this.state.cover = book.cover;
       this.state.chapterCount = book.chapters.length;
       this.segments = [];
+      this.chapterContent = '';
       this.prefetchedKey = '';
       this.prefetchedText = '';
       if (restore) {
@@ -318,7 +373,6 @@ export class TextToSpeechService {
   }
 
   pause(): void {
-    this.stopHighlight();
     this.recordSpokenTime();
     this.generation++;
     this.requestId = '';
@@ -326,6 +380,10 @@ export class TextToSpeechService {
     this.state.playing = false;
     this.state.loading = false;
     try { this.engine?.stop(); } catch (_error) { /* 引擎可能已被系统回收 */ }
+    this.httpPlayer?.cancel();
+    this.httpPlayer = null;
+    this.clearHttpPrefetch();
+    this.httpPlaybackChain = this.httpPlaybackChain.catch((): void => {}).then((): Promise<void> => this.httpOutput.release());
     this.savePosition(true);
     this.syncSession();
     if (this.context !== null) BackgroundTaskService.stopSpeech(this.context);
@@ -341,7 +399,21 @@ export class TextToSpeechService {
     PlaybackCoordinator.speechActive = false;
     this.state.active = false;
     this.state.highlightOffset = -1;
+    this.state.highlightEnd = -1;
     AVSessionService.getInstance().restoreAudioCallbacks();
+  }
+
+  async removeSavedPositions(context: common.Context, bookIds: string[]): Promise<void> {
+    if (bookIds.includes(this.state.bookId)) {
+      this.stop();
+      this.book = null;
+      this.state.bookId = '';
+      this.notify();
+    }
+    await this.flushChain;
+    const store = this.store ?? await preferences.getPreferences(context, { name: 'text_to_speech' });
+    for (const id of bookIds) store.deleteSync(`position_${id}`);
+    await store.flush();
   }
 
   async moveChapter(delta: number): Promise<void> {
@@ -357,11 +429,12 @@ export class TextToSpeechService {
 
   private async preparePlayback(ticket: number): Promise<void> {
     await AudioService.getInstance().suspendForSpeech();
+    await this.httpPlaybackChain.catch((): void => {});
     if (!this.valid(ticket) || this.context === null) return;
     this.installSessionCallbacks();
     await AVSessionService.getInstance().init(this.context);
     if (!this.valid(ticket)) return;
-    await this.ensureEngine(ticket);
+    if (!this.state.customTtsId) await this.ensureEngine(ticket);
     if (!this.valid(ticket)) return;
     await this.acquireFocus(ticket);
   }
@@ -387,7 +460,7 @@ export class TextToSpeechService {
         onStart: (id: string, _response: textToSpeech.StartResponse): void => {
           if (id !== this.requestId) return;
           this.spokenSince = Date.now();
-          this.startHighlight();
+          this.highlightParagraph();
           this.state.loading = false;
           this.state.playing = true;
           if (this.context !== null) BackgroundTaskService.startSpeech(this.context);
@@ -397,7 +470,6 @@ export class TextToSpeechService {
         onComplete: (id: string, response: textToSpeech.CompleteResponse): void => {
           // 合成完成不代表播放结束，只有 type=1 才能推进正文位置。
           if (id !== this.requestId || response.type !== 1) return;
-          this.finishHighlight();
           this.recordSpokenTime();
           this.requestId = '';
           this.clearWatchdog();
@@ -451,6 +523,7 @@ export class TextToSpeechService {
   private async loadChapter(index: number, offset: number, ticket: number): Promise<void> {
     const book = this.book;
     if (book === null || !this.valid(ticket)) return;
+    this.clearHttpPrefetch();
     this.state.loading = true;
     this.state.chapterIndex = index;
     this.state.chapterTitle = book.chapters[index].title;
@@ -458,12 +531,15 @@ export class TextToSpeechService {
     this.state.contentLength = 0;
     this.state.sentence = '';
     this.state.highlightOffset = -1;
+    this.state.highlightEnd = -1;
     this.segments = [];
+    this.chapterContent = '';
     this.publishMetadata();
     try {
       const content = await this.fetchChapter(book, index);
       if (!this.valid(ticket)) return;
-      this.segments = SpeechTextSegmenter.split(content);
+      this.chapterContent = content;
+      this.rebuildSpeechSegments();
       if (this.segments.length === 0) throw new Error('Empty chapter');
       this.state.contentLength = content.length;
       this.segmentIndex = SpeechTextSegmenter.indexAt(this.segments, offset);
@@ -503,7 +579,7 @@ export class TextToSpeechService {
   }
 
   private speakNext(ticket: number): void {
-    if (!this.valid(ticket) || this.engine === null || this.book === null) return;
+    if (!this.valid(ticket) || (!this.state.customTtsId && this.engine === null) || this.book === null) return;
     if (this.sleepDeadline > 0 && Date.now() >= this.sleepDeadline) {
       this.pause(); this.setSleep(0); return;
     }
@@ -519,10 +595,6 @@ export class TextToSpeechService {
     }
     const segment = this.segments[this.segmentIndex];
     this.state.charOffset = segment.start;
-    const rawStart = segment.start;
-    // 分段 trim 只改变播报字符串，游标仍映射到原文中的真实位置。
-    this.utteranceStart = rawStart + segment.leadingWhitespace;
-    this.state.highlightOffset = this.utteranceStart;
     this.state.sentence = segment.text;
     this.requestId = this.nextId();
     this.state.playing = true;
@@ -538,49 +610,94 @@ export class TextToSpeechService {
       this.watchdog = setTimeout((): void => {
         if (this.valid(ticket)) this.fail(new Error('Speech callback timed out'));
       }, 150000);
-      this.engine.speak(segment.text, params);
+      if (this.state.customTtsId) this.speakHttp(segment.text, this.requestId, ticket);
+      else this.engine?.speak(segment.text, params);
     } catch (error) {
       this.fail(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
+  private clearHttpPrefetch(): void {
+    this.httpTasks.forEach((task: HttpTtsPlayer): void => task.cancel());
+    this.httpTasks.clear();
+    this.httpSynthesisChain = Promise.resolve();
+  }
+
+  private rebuildSpeechSegments(): void {
+    this.segments = SpeechTextSegmenter.split(this.chapterContent, this.state.customTtsId.length > 0);
+    this.segmentIndex = SpeechTextSegmenter.indexAt(this.segments, this.state.charOffset);
+  }
+
+  private prefetchHttp(config: CustomTtsConfig, ticket: number): void {
+    // 当前句 + 后续两句；同一时刻只合成一句，避免触发提供方并发限制。
+    const end = Math.min(this.segments.length, this.segmentIndex + 3);
+    const speed = this.state.speed;
+    for (let index = this.segmentIndex; index < end; index++) {
+      if (this.httpTasks.has(index)) continue;
+      const task = new HttpTtsPlayer();
+      const text = this.segments[index].text;
+      this.httpTasks.set(index, task);
+      this.httpSynthesisChain = this.httpSynthesisChain.then(async (): Promise<void> => {
+        if (!this.valid(ticket) || this.httpTasks.get(index) !== task) return;
+        try { await task.prepare(config, text, speed); }
+        catch (_error) { /* 预取失败不打断当前句，到该句时按原有错误路径提示。 */ }
+      });
+    }
+  }
+
+  private speakHttp(text: string, id: string, ticket: number): void {
+    const config = this.state.customTtsConfigs.find((item: CustomTtsConfig): boolean => item.id === this.state.customTtsId);
+    const context = this.context;
+    if (!config || context === null) { this.fail(new Error('TTS config unavailable')); return; }
+    this.prefetchHttp(config, ticket);
+    const index = this.segmentIndex;
+    const player = this.httpTasks.get(index);
+    if (!player) { this.fail(new Error('TTS task unavailable')); return; }
+    this.state.loading = !player.ready;
+    this.state.playing = player.ready;
+    // 等待上一任务释放播放器，避免切换配置时两种声音重叠。
+    this.httpPlaybackChain = this.httpPlaybackChain.catch((): void => {}).then(async (): Promise<void> => {
+      if (!this.valid(ticket) || id !== this.requestId) return;
+      this.httpPlayer = player;
+      try {
+        await player.speak(context, config, text, this.state.speed, id, (): void => {
+          if (!this.valid(ticket) || id !== this.requestId) return;
+          this.spokenSince = Date.now();
+          this.state.loading = false;
+          this.state.playing = true;
+          this.highlightParagraph();
+          BackgroundTaskService.startSpeech(context);
+          this.syncSession();
+          this.notify();
+        }, this.httpOutput);
+        if (!this.valid(ticket) || id !== this.requestId) return;
+        this.recordSpokenTime();
+        this.requestId = '';
+        this.clearWatchdog();
+        this.httpTasks.delete(index);
+        this.segmentIndex++;
+        this.speakNext(ticket);
+      } catch (_error) {
+        if (this.valid(ticket) && id === this.requestId) {
+          this.pause();
+          this.state.error = this.message($r('app.string.tts_custom_play_error'));
+        }
+      } finally {
+        if (this.httpPlayer === player) this.httpPlayer = null;
+      }
+    });
+  }
+
   setForeground(foreground: boolean): void {
     this.foreground = foreground;
-    if (foreground && this.state.playing) this.startHighlight();
-    else this.stopHighlight();
+    if (foreground) this.notify();
   }
 
-  private startHighlight(): void {
-    this.stopHighlight();
-    if (!this.foreground || this.listeners.size === 0) return;
-    this.advanceHighlight();
-    this.highlightTimer = setInterval((): void => this.advanceHighlight(), 80);
-  }
-
-  private advanceHighlight(): void {
-    if (this.spokenSince <= 0 || !this.requestId) return;
-    const offset = this.utteranceStart + SpeechTextHighlighter.offsetAt(this.state.sentence,
-      Date.now() - this.spokenSince, this.characterUnitMs / this.state.speed);
-    if (offset !== this.state.highlightOffset) {
-      this.state.highlightOffset = offset;
-      this.notify();
-    }
-  }
-
-  private finishHighlight(): void {
-    this.stopHighlight();
-    const weight = SpeechTextHighlighter.totalWeight(this.state.sentence);
-    if (weight > 1 && this.spokenSince > 0) {
-      const measured = (Date.now() - this.spokenSince) * this.state.speed / weight;
-      if (measured >= 80 && measured <= 1000) {
-        this.characterUnitMs = Math.max(120, Math.min(650, this.characterUnitMs * 0.35 + measured * 0.65));
-      }
-    }
-  }
-
-  private stopHighlight(): void {
-    if (this.highlightTimer !== -1) clearInterval(this.highlightTimer);
-    this.highlightTimer = -1;
+  private highlightParagraph(): void {
+    const segment = this.segments[this.segmentIndex];
+    if (!segment) return;
+    if (this.state.highlightOffset !== segment.paragraphStart) this.state.highlightOffset = segment.paragraphStart;
+    if (this.state.highlightEnd !== segment.paragraphEnd) this.state.highlightEnd = segment.paragraphEnd;
   }
 
   private recordSpokenTime(): void {
@@ -649,6 +766,7 @@ export class TextToSpeechService {
     this.store.putSync('person', this.state.person);
     this.store.putSync('language', this.state.language);
     this.store.putSync('follow', this.state.follow);
+    this.store.putSync('customTtsId', this.state.customTtsId);
     this.flush();
     } catch (_error) { this.state.error = this.message($r('app.string.tts_save_error')); }
   }

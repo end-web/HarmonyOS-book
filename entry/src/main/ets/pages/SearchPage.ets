@@ -21,7 +21,7 @@ import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
-import { TingYouSourceIdentity } from '../service/rulesource/tingyou/TingYouSourceIdentity';
+import { HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
@@ -255,11 +255,11 @@ export struct SearchPage {
       const seen = new Set<string>();
 
       for (const source of orderedSources) {
-        if (!TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl)) continue;
+        if (!(source instanceof LocalRuleSource) || !HomeSourceService.isEligible(source)) continue;
         try {
-          const blocks = await BookSourceService.getHomeBlocks(source);
+          const content = await HomeSourceService.loadHome(source);
           if (generation !== this.recommendationGen) return;
-          this.appendHomeRecommendationBooks(source, blocks, books, seen);
+          this.appendHomeRecommendationBooks(source, content.blocks, books, seen);
         } catch (error) {
           hilog.warn(DOMAIN, TAG, 'load source home recommendations failed: %{public}s', String(error));
         }
@@ -568,6 +568,9 @@ export struct SearchPage {
       cover: book.cover,
       category: book.category,
       intro: book.intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      updateTime: book.updateTime,
       totalDuration: book.totalDuration,
       chapterCount: book.chapterCount,
       rating: book.rating,
@@ -615,6 +618,9 @@ export struct SearchPage {
       category: result.kind || (contentType === 'text' ? '电子书' : '有声书'),
       contentType,
       intro: result.intro || '',
+      wordCount: result.wordCount,
+      latestChapterTitle: result.lastChapter,
+      updateTime: result.updateTime,
       totalDuration: 0,
       chapterCount: 0,
       rating: 0,

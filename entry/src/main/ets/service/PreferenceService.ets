@@ -278,6 +278,20 @@ export class PreferenceService {
     return list.includes(bookId);
   }
 
+  /** 批量移出书架只落盘、通知一次，保留阅读记录、进度及本地文件。 */
+  static async removeFavorites(bookIds: string[]): Promise<void> {
+    if (bookIds.length === 0) return;
+    const selected = new Set<string>(bookIds);
+    const s = await PreferenceService.ensureStore();
+    const list = await PreferenceService.getFavorites();
+    const remaining = list.filter((id: string): boolean => !selected.has(id));
+    if (remaining.length === list.length) return;
+    await s.put(KEY_FAVORITES, JSON.stringify(remaining));
+    await s.flush();
+    PreferenceService.notifyFavoriteChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });
+  }
+
   // ===== 华为账号登录身份标识 =====
 
   static async getHwAccount(): Promise<HwAccount | null> {
@@ -420,6 +434,8 @@ export class PreferenceService {
     const s = await PreferenceService.ensureStore();
     await s.delete(KEY_PROGRESS_PREFIX + bookId);
     await s.delete(KEY_CHAPTER_PROGRESS_PREFIX + bookId);
+    const lastPlayed = await PreferenceService.getLastPlayed();
+    if (lastPlayed?.bookId === bookId) await s.delete(KEY_LAST_PLAYED);
     await s.flush();
   }
 

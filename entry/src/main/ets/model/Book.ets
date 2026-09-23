@@ -33,6 +33,10 @@ export interface Book {
   cover: string;
   category: string;
   intro: string;
+  /** 保留书源返回的文本，不将字数误当作目录章节数。 */
+  wordCount?: string;
+  latestChapterTitle?: string;
+  updateTime?: string;
   totalDuration: number;
   chapterCount: number;
   rating: number;
@@ -49,6 +53,6 @@ export interface Book {
   skipOutro?: number;
   /** 目录倒序（每本书独立设置）：详情页/播放页/阅读页统一按该顺序展示与前进 */
   chaptersDescending?: boolean;
-  /** 是否完结；不同来源状态值语义不同，听友协议中 status=0 表示已完结。 */
+  /** 是否完结；由通用规则或来源返回的状态归一化。 */
   completed?: boolean;
 }

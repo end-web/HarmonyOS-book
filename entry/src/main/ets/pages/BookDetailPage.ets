@@ -7,6 +7,7 @@ import { AppColor, AppRadius, AppSpace, AppFont, AppMotion, AppMaterial, AppCurv
 import { Book, Chapter } from '../model/Book';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
+import { LocalRuleMetadataText } from '../service/rulesource/LocalRuleMetadataText';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
@@ -44,6 +45,14 @@ export struct BookDetailPage {
   @Local lastHistory: PlayHistoryItem | null = null;
   @Local textReadingProgress: TextReadingPosition | null = null;
   @Local introExpanded: boolean = false;
+  @Computed
+  get displayIntro(): string {
+    return LocalRuleMetadataText.intro(this.book?.intro ?? '');
+  }
+  @Computed
+  get displayUpdateTime(): string {
+    return LocalRuleMetadataText.intro(this.book?.updateTime ?? '').trim();
+  }
   @Local debugInfo: string = '';
   /** 节目搜索关键词。 */
   @Local chapterQuery: string = '';
@@ -285,6 +294,9 @@ export struct BookDetailPage {
       cover: book.cover,
       category: book.category,
       intro: book.intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      updateTime: book.updateTime,
       totalDuration: book.totalDuration,
       chapterCount: book.chapterCount,
       rating: book.rating,
@@ -336,6 +348,9 @@ export struct BookDetailPage {
         cached.tocComplete = stored.tocComplete;
         cached.chapterCount = Math.max(cached.chapterCount, stored.chapterCount, stored.chapters.length);
         cached.variables = stored.variables ?? cached.variables;
+        cached.wordCount = cached.wordCount || stored.wordCount;
+        cached.latestChapterTitle = cached.latestChapterTitle || stored.latestChapterTitle;
+        cached.updateTime = cached.updateTime || stored.updateTime;
       }
       return cached;
     }
@@ -499,13 +514,7 @@ export struct BookDetailPage {
         await this.loadTocFromSource(this.book);
       }
       await DataService.upsertCachedBook(SearchCache.get(this.book.id) ?? this.book);
-    } else if (!this.bookId.startsWith('import_')) {
-      // 取消收藏后,如果没有播放历史,也清掉缓存避免堆积
-      const history = await PreferenceService.getHistory();
-      const stillNeeded = history.some((h) => h.bookId === this.book!.id);
-      if (!stillNeeded) {
-        await DataService.removeCachedBook(this.book.id);
-      }
+
     }
   }
 
@@ -1006,6 +1015,15 @@ export struct BookDetailPage {
           }
         }
         .width('100%')
+        if (this.displayUpdateTime) {
+          Text($r('app.string.book_detail_latest_update', this.displayUpdateTime))
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_secondary'))
+            .lineHeight(18)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+        }
       }
       .width(0)
       .layoutWeight(1)
@@ -1049,8 +1067,8 @@ export struct BookDetailPage {
   @Builder
   buildIntroSection() {
     Column({ space: AppSpace.Xs }) {
-      if (this.book!.intro) {
-        Text(this.book!.intro)
+      if (this.displayIntro) {
+        Text(this.displayIntro)
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
           .lineHeight(22)
@@ -1060,9 +1078,9 @@ export struct BookDetailPage {
           .width('100%')
           .onClick(() => {
             if (this.introExpanded) { this.introExpanded = false; }
-            else if (this.book!.intro.length > 60) { this.introExpanded = true; }
+            else if (this.displayIntro.length > 60) { this.introExpanded = true; }
           })
-        if (!this.introExpanded && this.book!.intro.length > 60) {
+        if (!this.introExpanded && this.displayIntro.length > 60) {
           Text('查看更多')
             .fontSize(AppFont.Caption)
             .fontColor(AppColor.Brand)

@@ -18,11 +18,14 @@ import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem, EVT_FAVORITES_CHANGED } from '../service/PreferenceService';
 import { SourceDataService } from '../service/SourceDataService';
-import { EVT_HISTORY_UPDATED } from '../service/AudioService';
+import { AudioService, EVT_HISTORY_UPDATED } from '../service/AudioService';
+import { StatsService } from '../service/StatsService';
+import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
+import { ShelfBatchActions } from '../components/ShelfBatchActions';
 import { DownloadService } from '../service/DownloadService';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
 import { TextReadingProgressService, EVT_TEXT_READING_PROGRESS_CHANGED } from '../service/text/TextReadingProgressService';
@@ -71,6 +74,9 @@ function cloneBook(book: Book): Book {
     cover: book.cover,
     category: book.category,
     intro: book.intro,
+    wordCount: book.wordCount,
+    latestChapterTitle: book.latestChapterTitle,
+    updateTime: book.updateTime,
     totalDuration: book.totalDuration,
     chapterCount: book.chapterCount,
     rating: book.rating,
@@ -116,6 +122,14 @@ export struct FavoritePage {
   @Param visible: boolean = false;
   @Local showBookActions: boolean = false;
   @Local removingBook: boolean = false;
+  @Local isManaging: boolean = false;
+  @Local selectedBookIds: Set<string> = new Set();
+  @Local showBatchDelete: boolean = false;
+  @Local deleteLocalFiles: boolean = false;
+  private pendingSelection: string = '';
+  private pendingManagementExit: boolean = false;
+  private favoriteIdsByBookId: Map<string, string[]> = new Map();
+  private favoritesLoadSerial: number = 0;
   private pendingRemoval: Book | null = null;
   private pendingDeleteFiles: boolean = false;
 
@@ -123,13 +137,16 @@ export struct FavoritePage {
   @Event onBookTap: (id: string) => void = () => {};
   @Event onGotoStore: () => void = () => {};
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
+  @Event onBackHandlerChange: (handler: (() => boolean) | undefined) => void = () => {};
 
   private context: common.UIAbilityContext | null = null;
   private listScroller: Scroller = new Scroller();
   private bookDataSource: BookDataSource = new BookDataSource();
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
   /** 加入/移出书架后重新拉书清单。 */
-  private favoritesChangedHandler: () => void = () => { this.loadFavorites(); };
+  private favoritesChangedHandler: () => void = () => {
+    if (!this.removingBook) this.loadFavorites();
+  };
   private textProgressLoadSerial: number = 0;
   private textProgressChangedHandler: () => void = () => { this.refreshTextProgress(); };
 
@@ -192,6 +209,7 @@ export struct FavoritePage {
   }
 
   aboutToAppear(): void {
+    this.onBackHandlerChange((): boolean => this.handleManageBack());
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadFavorites();
     emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
@@ -201,6 +219,8 @@ export struct FavoritePage {
   }
 
   aboutToDisappear(): void {
+    this.onBackHandlerChange(undefined);
+    this.favoritesLoadSerial++;
     emitter.off(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
     emitter.off(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     emitter.off(EVT_TEXT_READING_PROGRESS_CHANGED, this.textProgressChangedHandler);
@@ -211,6 +231,8 @@ export struct FavoritePage {
   onVisibleChange(): void {
     if (this.visible) {
       this.loadFavorites();
+    } else if (!this.removingBook) {
+      this.exitManagement();
     }
   }
 
@@ -231,6 +253,7 @@ export struct FavoritePage {
 
   async loadFavorites(): Promise<void> {
     if (!this.context) return;
+    const serial = ++this.favoritesLoadSerial;
     // 刷新已导入规则源索引，来源库不可用时在线收藏不会被误判为可用。
     await SourceDataService.getSources();
     const ids = await PreferenceService.getFavorites();
@@ -252,11 +275,15 @@ export struct FavoritePage {
 
     const lastPlayed = await PreferenceService.getLastPlayed();
     const books: Book[] = [];
+    const aliases: Map<string, string[]> = new Map();
     let missingCount = 0;
     for (const id of ids) {
       const book = byId.get(id);
       if (book) {
-        if (this.isSupportedBook(book)) books.push(book);
+        if (this.isSupportedBook(book)) {
+          if (!aliases.has(book.id)) books.push(book);
+          aliases.set(book.id, (aliases.get(book.id) ?? []).concat(id));
+        }
         continue;
       }
       const progress = await PreferenceService.getProgress(id);
@@ -267,10 +294,12 @@ export struct FavoritePage {
       const chapterIndex = progress?.chapterIndex ?? this.parseLegacyChapterIndex(chapterId);
       const alias = this.findFavoriteAlias(id, chapterTitle, chapterIndex, allBooks);
       if (alias && this.isSupportedBook(alias)) {
-        books.push(alias);
+        if (!aliases.has(alias.id)) books.push(alias);
+        aliases.set(alias.id, (aliases.get(alias.id) ?? []).concat(id));
         continue;
       }
       books.push(this.createMissingFavoriteBook(id, chapterTitle));
+      aliases.set(id, [id]);
       missingCount++;
     }
     this.missingFavoriteCount = missingCount;
@@ -304,9 +333,14 @@ export struct FavoritePage {
 
     // 预算每本书的最新章节序号，避免 build / click 反复解析，也兼容章节 ID 已变化的旧进度。
     const idxMap = await this.buildChapterIndexMap(books, map);
+    if (serial !== this.favoritesLoadSerial) return;
+    this.favoriteIdsByBookId = aliases;
     this.favoriteBooks = books;
     await this.refreshTextProgress();
+    if (serial !== this.favoritesLoadSerial) return;
     this.bookDataSource.setBooks(this.filteredBooks(books));
+    const visibleIds = new Set(this.filteredBooks(books).map((book: Book): string => book.id));
+    this.selectedBookIds = new Set(Array.from(this.selectedBookIds).filter((id: string): boolean => visibleIds.has(id)));
     this.historyMap = map;
     this.chapterIdxMap = idxMap;
     this.loading = false;
@@ -477,6 +511,18 @@ export struct FavoritePage {
             hasChange = true;
           }
           // 合并变量
+          if (bookInfo.wordCount && bookInfo.wordCount !== nextBook.wordCount) {
+            nextBook.wordCount = bookInfo.wordCount;
+            hasChange = true;
+          }
+          if (bookInfo.lastChapter && bookInfo.lastChapter !== nextBook.latestChapterTitle) {
+            nextBook.latestChapterTitle = bookInfo.lastChapter;
+            hasChange = true;
+          }
+          if (bookInfo.updateTime && bookInfo.updateTime !== nextBook.updateTime) {
+            nextBook.updateTime = bookInfo.updateTime;
+            hasChange = true;
+          }
           if (bookInfo.variables) {
             if (!nextBook.variables) nextBook.variables = {};
             for (const k of Object.keys(bookInfo.variables)) {
@@ -611,12 +657,19 @@ export struct FavoritePage {
   }
 
   private selectShelfFilter(index: number): void {
+    if (this.removingBook || this.showBatchDelete) return;
     if (index < 0 || index > 2 || this.shelfFilter === index) return;
     this.shelfFilter = index;
+    this.selectedBookIds = new Set();
     this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
   }
 
   private handleBookTap(book: Book): void {
+    if (this.removingBook) return;
+    if (this.isManaging) {
+      this.toggleBookSelection(book.id);
+      return;
+    }
     if (this.isMissingCachedBook(book)) {
       try {
         this.getUIContext().getPromptAction().showToast({ message: '这本书的缓存快照缺失，请重新搜索后加入书架' });
@@ -779,6 +832,137 @@ export struct FavoritePage {
     finally { this.removingBook = false; this.showBookActions = false; }
   }
 
+  private async deleteBookFilesAndRecords(bookId: string): Promise<void> {
+    if (!this.context) return;
+    const ids = new Set<string>(this.favoriteIdsByBookId.get(bookId) ?? []);
+    ids.add(bookId);
+    // 兼容同一有声书由首页/搜索产生的旧 id，避免未收藏页残留重复记录。
+    for (const id of Array.from(ids)) {
+      if (id.startsWith('search_audio_')) ids.add(id.replace('search_audio_', 'home_audio_'));
+      if (id.startsWith('home_audio_')) ids.add(id.replace('home_audio_', 'search_audio_'));
+    }
+    const audio = AudioService.getInstance();
+    const stopAudio = ids.has(PlaybackStore.getInstance().getCurrentBookId());
+    const speech = TextToSpeechService.getInstance();
+    if (ids.has(speech.state.bookId)) speech.stop();
+    try {
+      if (stopAudio) await audio.stopForClear();
+      await DownloadService.getInstance().deleteBookDownload(bookId);
+      if (bookId.startsWith('import_')) await DataService.removeImportedBook(bookId);
+      for (const id of ids) {
+        await PreferenceService.removeHistory(id);
+        await PreferenceService.removeProgress(id);
+        await TextReadingProgressService.remove(this.context, id);
+      }
+      await speech.removeSavedPositions(this.context, Array.from(ids));
+      await StatsService.removeBookStats(Array.from(ids));
+    } finally {
+      if (stopAudio) audio.unfreezePersist();
+    }
+  }
+
+  private enterManagement(bookId: string = ''): void {
+    if (this.removingBook || this.isRefreshing || this.resolvingTocId.length > 0 ||
+      this.filteredBooks(this.favoriteBooks).length === 0) return;
+    if (this.showBookActions) {
+      this.pendingSelection = bookId;
+      return;
+    }
+    this.isManaging = true;
+    if (bookId.length > 0) {
+      const selected = new Set(this.selectedBookIds);
+      selected.add(bookId);
+      this.selectedBookIds = selected;
+    }
+  }
+
+  private exitManagement(): void {
+    if (this.removingBook) return;
+    this.showBatchDelete = false;
+    this.isManaging = false;
+    this.selectedBookIds = new Set();
+  }
+
+  private handleManageBack(): boolean {
+    if (this.removingBook) return true;
+    if (this.showBatchDelete) {
+      this.showBatchDelete = false;
+      return true;
+    }
+    if (!this.isManaging) return false;
+    this.exitManagement();
+    return true;
+  }
+
+  private toggleBookSelection(bookId: string): void {
+    if (this.removingBook || this.showBatchDelete) return;
+    const selected = new Set(this.selectedBookIds);
+    if (selected.has(bookId)) selected.delete(bookId);
+    else selected.add(bookId);
+    this.selectedBookIds = selected;
+  }
+
+  private allVisibleBooksSelected(): boolean {
+    const books = this.filteredBooks(this.favoriteBooks);
+    return books.length > 0 && books.every((book: Book): boolean => this.selectedBookIds.has(book.id));
+  }
+
+  private toggleSelectAllBooks(): void {
+    if (this.removingBook || this.showBatchDelete) return;
+    this.selectedBookIds = this.allVisibleBooksSelected() ? new Set() :
+      new Set(this.filteredBooks(this.favoriteBooks).map((book: Book): string => book.id));
+  }
+
+  private confirmBatchDelete(): void {
+    if (this.selectedBookIds.size === 0 || this.removingBook) return;
+    this.deleteLocalFiles = false;
+    this.showBatchDelete = true;
+  }
+
+  private async deleteSelectedBooks(): Promise<void> {
+    if (this.removingBook || !this.showBatchDelete || !this.context) return;
+    const books = this.filteredBooks(this.favoriteBooks).filter((book: Book): boolean =>
+      this.selectedBookIds.has(book.id));
+    if (books.length === 0) { this.showBatchDelete = false; return; }
+    const deleteFiles = this.deleteLocalFiles;
+    this.removingBook = true;
+    this.favoritesLoadSerial++;
+    const removedBooks: string[] = [];
+    const removedFavoriteIds: string[] = [];
+    const failedIds: Set<string> = new Set();
+    try {
+      // 文件操作串行，避免多个删除同时覆盖本地书籍索引；一项失败不阻断其他项。
+      for (const book of books) {
+        try {
+          if (deleteFiles) {
+            await this.deleteBookFilesAndRecords(book.id);
+          }
+          removedBooks.push(book.id);
+          removedFavoriteIds.push(...(this.favoriteIdsByBookId.get(book.id) ?? [book.id]));
+        } catch (_error) {
+          failedIds.add(book.id);
+        }
+      }
+      await PreferenceService.removeFavorites(removedFavoriteIds);
+      this.selectedBookIds = failedIds;
+      this.isManaging = failedIds.size > 0;
+      this.showBatchDelete = false;
+      this.getUIContext().getPromptAction().showToast({
+        message: failedIds.size > 0 ? $r('app.string.shelf_batch_partial', removedBooks.length, failedIds.size) :
+          $r('app.string.shelf_batch_removed', removedBooks.length)
+      });
+    } catch (_error) {
+      this.showBatchDelete = false;
+      this.getUIContext().getPromptAction().showToast({ message: deleteFiles ?
+        $r('app.string.shelf_batch_files_failed') : $r('app.string.shelf_batch_failed') });
+    } finally {
+      try { await this.loadFavorites(); }
+      catch (_error) { /* 保留当前选择，允许重试刷新。 */ }
+      this.removingBook = false;
+      if (!this.visible) this.exitManagement();
+    }
+  }
+
   private bookMenuOptions(): ContextMenuOptions {
     const options: ContextMenuOptions = {
       preview: MenuPreviewMode.NONE,
@@ -787,6 +971,13 @@ export struct FavoritePage {
       onAppear: (): void => { this.showBookActions = true; },
       onDisappear: (): void => {
         this.showBookActions = false;
+        const selectedId = this.pendingSelection;
+        this.pendingSelection = '';
+        if (selectedId.length > 0) this.enterManagement(selectedId);
+        if (this.pendingManagementExit) {
+          this.pendingManagementExit = false;
+          this.exitManagement();
+        }
         const book = this.pendingRemoval;
         this.pendingRemoval = null;
         if (book !== null) this.removeActionBook(book, this.pendingDeleteFiles);
@@ -799,12 +990,20 @@ export struct FavoritePage {
   @Builder
   bookActions(book: Book) {
     Menu() {
+      MenuItem({ content: this.isManaging ? $r('app.string.common_done') : $r('app.string.shelf_manage') })
+        .enabled(!this.removingBook && !this.isRefreshing)
+        .onClick((): void => {
+          if (this.isManaging) this.pendingManagementExit = true;
+          else this.enterManagement(book.id);
+        })
+      if (!this.isManaging) {
       MenuItem({ content: $r('app.string.shelf_delete_only') })
         .contentFontColor(AppColor.Brand)
         .onClick((): void => { this.removeActionBook(book, false); })
       MenuItem({ content: $r('app.string.shelf_delete_local') })
         .contentFontColor($r('sys.color.ohos_id_color_warning'))
         .onClick((): void => { this.removeActionBook(book, true); })
+      }
     }
   }
 
@@ -812,15 +1011,10 @@ export struct FavoritePage {
     if (!this.context) return;
     try {
       if (deleteFiles) {
-        await DownloadService.getInstance().deleteBookDownload(bookId);
-        if (bookId.startsWith('import_')) {
-          await DataService.removeImportedBook(bookId);
-        }
+        await this.deleteBookFilesAndRecords(bookId);
       }
-      await PreferenceService.removeFavorite(bookId);
-      if (!bookId.startsWith('import_')) {
-        await DataService.removeCachedBook(bookId);
-      }
+      await PreferenceService.removeFavorites(this.favoriteIdsByBookId.get(bookId) ?? [bookId]);
+      // 移出书架保留书籍身份，未收藏记录仍需续读。
       await this.loadFavorites();
     } catch (_e) {
       try {
@@ -857,8 +1051,8 @@ export struct FavoritePage {
                 // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
                 // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
               }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-              ListItem() {
-                this.buildAddTile()
+              if (!this.isManaging) {
+                ListItem() { this.buildAddTile() }
               }
             }
             .lanes(3, AppSpace.Sm)
@@ -871,7 +1065,7 @@ export struct FavoritePage {
             })
             .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
               SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
-            .contentEndOffset(WindowUtils.getFloatingTabBottomVp())
+            .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + (this.isManaging ? 72 : 0))
             .scrollBar(BarState.Off)
             // 空书架只有添加入口，也需要在上下边界提供原生回弹。
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
@@ -883,8 +1077,8 @@ export struct FavoritePage {
                   this.buildListItem(book)
                 }
               }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-              ListItem() {
-                this.buildAddListItem()
+              if (!this.isManaging) {
+                ListItem() { this.buildAddListItem() }
               }
             }
             .cachedCount(6)
@@ -896,7 +1090,7 @@ export struct FavoritePage {
             })
             .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
               SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
-            .contentEndOffset(WindowUtils.getFloatingTabBottomVp())
+            .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + (this.isManaging ? 72 : 0))
             .divider({
               strokeWidth: 1,
               color: $r('sys.color.comp_divider'),
@@ -911,7 +1105,7 @@ export struct FavoritePage {
           this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
         })
         .refreshOffset(64)
-        .pullToRefresh(true)
+        .pullToRefresh(!this.isManaging && !this.removingBook)
         .width('100%')
         .layoutWeight(1)
         .backgroundColor(Color.Transparent)
@@ -921,7 +1115,8 @@ export struct FavoritePage {
         avoidLayoutSafeArea: true,
         content: {
           title: {
-            mainTitle: '书架'
+            mainTitle: this.isManaging ? $r('app.string.shelf_selected_count', this.selectedBookIds.size) :
+              $r('app.string.shelf_title')
           },
           bottomBuilder: {
             builder: (): void => this.buildShelfFilter(),
@@ -934,7 +1129,7 @@ export struct FavoritePage {
                   ? $r('sys.symbol.list_bullet')
                   : $r('sys.symbol.square_grid_2x2'),
                 label: this.viewMode === 0 ? '切换为列表' : '切换为网格',
-                action: () => this.toggleViewMode()
+                action: () => { if (!this.removingBook && !this.showBatchDelete) this.toggleViewMode(); }
               }
             }]
           }
@@ -979,12 +1174,101 @@ export struct FavoritePage {
       .height('100%')
       .backgroundColor(Color.Transparent)
 
-
+      if (this.isManaging) {
+        Stack({ alignContent: Alignment.Bottom }) {
+          this.buildBatchActions()
+        }
+        .width('100%')
+        .height('100%')
+        .hitTestBehavior(HitTestMode.Transparent)
+      }
     }
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .bindSheet($$this.showBatchDelete, this.buildBatchDeleteSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      preferType: SheetType.BOTTOM,
+      showClose: false,
+      dragBar: true,
+      backgroundColor: AppMaterial.SheetBackground,
+      blurStyle: AppMaterial.SheetBlur,
+      systemMaterial: PlatformCompat.immersiveMaterial ? AppMaterial.Sheet : undefined,
+      onWillDismiss: (action: DismissSheetAction): void => {
+        if (!this.removingBook) action.dismiss();
+      }
+    })
+  }
 
+  @Builder
+  buildSelectionMark(book: Book) {
+    Stack() {
+      if (this.selectedBookIds.has(book.id)) {
+        SymbolGlyph($r('sys.symbol.checkmark')).fontSize(14).fontColor([AppColor.OnBrand])
+      }
+    }
+    .width(26).height(26)
+    .borderRadius(AppRadius.Pill)
+    .backgroundColor(this.selectedBookIds.has(book.id) ? AppColor.Brand : $r('sys.color.comp_background_primary'))
+    .border({ width: 1.5, color: this.selectedBookIds.has(book.id) ? AppColor.Brand : $r('sys.color.font_tertiary') })
+    .hitTestBehavior(HitTestMode.None)
+  }
+
+  @Builder
+  buildBatchActions() {
+    ShelfBatchActions({
+      selectedCount: this.selectedBookIds.size,
+      totalCount: this.filteredBooks(this.favoriteBooks).length,
+      allSelected: this.allVisibleBooksSelected(),
+      busy: this.removingBook,
+      onSelectAll: (): void => this.toggleSelectAllBooks(),
+      onDelete: (): void => this.confirmBatchDelete()
+    })
+      .width(`calc(100% - ${AppSpace.Md * 2}vp)`)
+      .margin({ bottom: WindowUtils.getFloatingTabBottomVp() })
+  }
+
+  @Builder
+  buildBatchDeleteSheet() {
+    Column({ space: AppSpace.Md }) {
+      Text($r('app.string.shelf_batch_title', this.selectedBookIds.size))
+        .fontSize(AppFont.Title).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
+        .width('100%')
+      Text($r('app.string.shelf_batch_description'))
+        .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).width('100%')
+      Row({ space: AppSpace.Sm }) {
+        Checkbox({ name: 'shelfDeleteLocalFiles' })
+          .select(this.deleteLocalFiles).selectedColor(AppColor.Brand)
+          .enabled(!this.removingBook)
+          .onChange((checked: boolean): void => { this.deleteLocalFiles = checked; })
+          .accessibilityText($r('app.string.shelf_batch_delete_files'))
+        Column({ space: 4 }) {
+          Text($r('app.string.shelf_batch_delete_files'))
+            .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary')).width('100%')
+          Text($r('app.string.shelf_batch_files_hint'))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).width('100%')
+        }.layoutWeight(1)
+        .onClick((): void => { if (!this.removingBook) this.deleteLocalFiles = !this.deleteLocalFiles; })
+      }.width('100%').padding(AppSpace.Sm)
+      .backgroundColor($r('sys.color.comp_background_secondary')).borderRadius(AppRadius.Md)
+      Row({ space: AppSpace.Md }) {
+        Button($r('app.string.common_cancel'), { type: ButtonType.Capsule })
+          .layoutWeight(1).height(48).fontColor(AppColor.Brand).backgroundColor(AppColor.BrandSoft)
+          .enabled(!this.removingBook).onClick((): void => { this.showBatchDelete = false; })
+        Button({ type: ButtonType.Capsule }) {
+          Row({ space: AppSpace.Xs }) {
+            if (this.removingBook) {
+              LoadingProgress().width(20).height(20).color(AppColor.Brand)
+            }
+            Text(this.removingBook ? $r('app.string.shelf_batch_deleting') :
+              $r('app.string.shelf_delete_count', this.selectedBookIds.size))
+              .fontSize(AppFont.Body).fontColor(Color.White)
+          }
+        }.layoutWeight(1).height(48).backgroundColor($r('sys.color.ohos_id_color_warning'))
+        .enabled(!this.removingBook && this.selectedBookIds.size > 0)
+        .onClick((): void => { this.deleteSelectedBooks(); })
+      }.width('100%')
+    }.width('100%').padding({ left: 24, right: 24, top: 12, bottom: 24 + WindowUtils.getBottomSafeVp() })
   }
 
   @Builder
@@ -1042,6 +1326,7 @@ export struct FavoritePage {
         .hitTestBehavior(HitTestMode.None)
       }
       .layoutWeight(1)
+
     }
     .width('100%')
     .height(SHELF_FILTER_ROW_HEIGHT)
@@ -1109,10 +1394,18 @@ export struct FavoritePage {
             .objectFit(ImageFit.Cover)
         }
         this.buildTypeBadge(false, book.contentType === 'text')
+        if (this.isManaging) {
+          Row() {
+            Blank()
+            this.buildSelectionMark(book)
+          }.width('100%').padding(6)
+        }
       }
       .width('100%')
       .borderRadius(AppRadius.Md)
       .clip(true)
+      .border({ width: this.isManaging && this.selectedBookIds.has(book.id) ? 2 : 0,
+        color: AppColor.Brand, radius: AppRadius.Md })
       .shadow({ radius: 4, color: '#1A000000', offsetY: 1 })
       // 展示子树不参与触摸命中，封面/占位图的原生长按不能抢走书卡菜单。
       .hitTestBehavior(HitTestMode.None)
@@ -1222,9 +1515,14 @@ export struct FavoritePage {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .justifyContent(FlexAlign.Center)
+      if (this.isManaging) {
+        this.buildSelectionMark(book)
+      }
     }
     .width('100%')
     .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
+    .backgroundColor(this.isManaging && this.selectedBookIds.has(book.id) ? AppColor.BrandSoft : Color.Transparent)
+    .borderRadius(AppRadius.Sm)
     .draggable(false)
     .bindContextMenu(this.bookActions(book), ResponseType.LongPress, this.bookMenuOptions())
     .onClick((): void => {

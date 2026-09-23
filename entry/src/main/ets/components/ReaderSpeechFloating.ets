@@ -24,7 +24,7 @@ export struct ReaderSpeechFloating {
   @Builder
   label() {
     Text($r('app.string.reader_listen_short'))
-      .fontSize(18).fontWeight(this.playing ? FontWeight.Bold : FontWeight.Medium)
+      .fontSize(22).fontWeight(this.playing ? FontWeight.Bold : FontWeight.Medium)
       .fontColor($r('sys.color.font_primary')).hitTestBehavior(HitTestMode.None)
   }
 

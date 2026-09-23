@@ -23,12 +23,20 @@ function load(relative, dependencies = {}, globals = {}) {
 const { SpeechTextSegmenter } = load('service/text/SpeechTextSegmenter.ets');
 const model = load('model/TextToSpeechState.ets');
 const { SpeechTextHighlighter } = load('service/text/SpeechTextHighlighter.ets');
+const { CustomTtsConfig } = load('model/CustomTtsConfig.ets');
+const { LocalRuleTemplate } = load('service/rulesource/LocalRuleTemplate.ets');
+const { CustomTtsConfigParser } = load('service/text/CustomTtsConfigParser.ets', {
+  '@kit.NetworkKit': { http: {} },
+  '../../model/CustomTtsConfig': { CustomTtsConfig },
+  '../rulesource/LocalRuleTemplate': { LocalRuleTemplate },
+  '../rulesource/LocalRuleQuickJsRuntime': {}
+});
 const settle = async () => { for (let i = 0; i < 45; i++) await Promise.resolve(); };
 const book = (id = 'book', texts = ['第一句。第二句！', '第三句。']) => ({ id, contentType: 'text', title: id,
   sourceUrl: 'https://source.example', bookUrl: `https://book.example/${id}`, author: 'author', cover: '',
   chapters: texts.map((text, index) => ({ id: String(index), title: `章节${index}`, source: { value: `${id}/${index}`, type: 'url' }, text })) });
 function harness(memory = new Map()) {
-  const engines = [], spoken = [], timers = new Map(), cached = new Map(), stats = [];
+  const engines = [], spoken = [], timers = new Map(), cached = new Map(), stats = [], httpSpoken = [], httpPrepared = [];
   let id = 0, failContent = false, createDeferred = null, focusCallback = null, deviceCallback = null;
   const coordinator = load('service/PlaybackCoordinator.ets');
   const session = { callbacks: null, paused: false, setSpeechCallbacks(cbs) { this.callbacks = cbs; },
@@ -48,8 +56,28 @@ function harness(memory = new Map()) {
       engines.push(engine); return engine;
     } };
   const dependencies = {
+    '../../model/CustomTtsConfig': { CustomTtsConfig },
+    './CustomTtsConfigParser': { CustomTtsConfigParser },
+    './HttpTtsPlayer': { HttpTtsAudioOutput: class { async release() {} }, HttpTtsPlayer: class {
+      ready = false;
+      prepare(config, text, speed) {
+        if (!this.preparation) this.preparation = Promise.resolve().then(() => {
+          if (this.cancelled) throw new Error('cancelled');
+          this.ready = true; httpPrepared.push({ config, text, speed, task: this });
+        });
+        return this.preparation;
+      }
+      async speak(_ctx, config, text, speed, id, onStart) {
+        await this.prepare(config, text, speed);
+        await new Promise((resolve, reject) => {
+          this.reject = reject;
+          httpSpoken.push({ config, text, speed, id, onStart, complete: resolve, fail: reject, task: this });
+        });
+      }
+      cancel() { this.cancelled = true; this.ready = false; this.reject?.(new Error('cancelled')); }
+    } },
     '@kit.ArkData': { preferences: { getPreferences: async () => ({ getSync: (key, fallback) => memory.get(key) ?? fallback,
-      putSync: (key, value) => memory.set(key, value), flush: async () => {} }) } },
+      putSync: (key, value) => memory.set(key, value), deleteSync: key => memory.delete(key), flush: async () => {} }) } },
     '@kit.CoreSpeechKit': { textToSpeech: tts },
     '@kit.AudioKit': { audio: { getAudioManager: () => ({ getSessionManager: () => audioSession, getRoutingManager: () => routing }),
       AudioSessionDeactivatedReason: { DEACTIVATED_TIMEOUT: 1 }, DeviceFlag: { OUTPUT_DEVICES_FLAG: 1 }, DeviceChangeType: { DISCONNECT: 1 }, AudioConcurrencyMode: { CONCURRENCY_DEFAULT: 0 } } },
@@ -70,7 +98,6 @@ function harness(memory = new Map()) {
     './OnlineTextContentCache': { OnlineTextContentCache: { key: (...parts) => parts.join('|'),
       read: async (_ctx, key) => cached.get(key), write: async (_ctx, key, text) => cached.set(key, text) } },
     './OnlineTextPaginator': { OnlineTextPaginator: { normalizeContent: value => value } },
-    './SpeechTextHighlighter': { SpeechTextHighlighter },
     './SpeechTextSegmenter': { SpeechTextSegmenter }
   };
   const { TextToSpeechService } = load('service/text/TextToSpeechService.ets', dependencies, {
@@ -80,7 +107,7 @@ function harness(memory = new Map()) {
   });
   const service = TextToSpeechService.getInstance();
   const context = { resourceManager: { getStringSync: key => key } };
-  return { service, tts, memory, spoken, engines, timers, session, coordinator: coordinator.PlaybackCoordinator,
+  return { service, tts, memory, spoken, engines, timers, session, httpSpoken, httpPrepared, coordinator: coordinator.PlaybackCoordinator,
     init: () => service.initialize(context), reloadSettings: () => TextToSpeechService.reloadSettings(context),
     failContent: value => { failContent = value; },
     deferEngine: value => { createDeferred = value; }, focus: (reason = 0) => focusCallback?.({ reason }),
@@ -268,13 +295,142 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
     h.complete(); assert.equal(h.spoken.length, 2);
     h.focus(0); assert.equal(h.service.state.playing, false); h.service.stop();
   });
-  await check('逐字游标映射段首缩进、跨段与表情，停在当前句末尾', async () => {
-    const source = '你好。\n  世界😀！';
-    const display = '　　你好。\n　　世界😀！';
-    assert.equal(SpeechTextHighlighter.displayOffset(display, source, source.indexOf('世')), display.indexOf('世'));
-    assert.equal(SpeechTextHighlighter.displayOffset(display, source, source.indexOf('😀')), display.indexOf('😀'));
-    assert.equal(SpeechTextHighlighter.offsetAt('甲乙丙', 300, 260), 1);
-    assert.equal(SpeechTextHighlighter.offsetAt('甲乙丙', 99999, 260), 2);
+  await check('自然段高亮映射缩进、跨页交集和表情，不波及相邻段落', async () => {
+    const source = '你好。\n  世界😀！\n下一段。';
+    const display = '　　你好。\n　　世界😀！\n　　下一段。';
+    const start = source.indexOf('世');
+    const end = source.indexOf('\n下一段');
+    const range = SpeechTextHighlighter.displayRange(display, source, start, end);
+    assert.equal(display.slice(range.start, range.end), '世界😀！');
+    const continued = SpeechTextHighlighter.displayRange('　　后半段。\n　　下一段。', '后半段。\n下一段。', -8, 4);
+    assert.equal(continued.start, 2); assert.equal(continued.end, 6);
+    const nextPage = SpeechTextHighlighter.displayRange('这一页。', '这一页。', 10, 20);
+    assert.equal(nextPage.start, -1);
+    const previousPage = SpeechTextHighlighter.displayRange('这一页。', '这一页。', -20, -1);
+    assert.equal(previousPage.start, -1);
+    const emoji = SpeechTextHighlighter.displayRange('😀！', '😀！', 1, 2);
+    assert.equal(emoji.start, 0); assert.equal(emoji.end, 2);
+  });
+  await check('同段多句保持整段选中，下一段才换高亮且没有逐字刷新定时器', async () => {
+    const h = harness(); await h.init();
+    const content = '第一句。第二句。\n\n  第三句😀！';
+    const listener = () => {};
+    h.service.addListener(listener);
+    await h.service.start(book('paragraph', [content]), 0, 0);
+    assert.equal(h.service.state.highlightOffset, 0);
+    assert.equal(h.service.state.highlightEnd, content.indexOf('\n'));
+    const firstEnd = h.service.state.highlightEnd;
+    h.complete();
+    assert.equal(h.service.state.highlightOffset, 0);
+    assert.equal(h.service.state.highlightEnd, firstEnd);
+    assert.equal(h.service.state.charOffset, content.indexOf('第二句'));
+    h.complete();
+    assert.equal(h.service.state.highlightOffset, content.lastIndexOf('\n') + 1);
+    assert.equal(h.service.state.highlightEnd, content.length);
+    assert.ok([...h.timers.values()].every(timer => timer.delay !== 80));
+    h.service.setForeground(false); h.service.setForeground(true);
+    assert.ok([...h.timers.values()].every(timer => timer.delay !== 80));
+    h.service.pause(); assert.equal(h.service.state.highlightEnd, content.length);
+    h.service.stop(); assert.equal(h.service.state.highlightOffset, -1); assert.equal(h.service.state.highlightEnd, -1);
+    h.service.removeListener(listener);
+  });
+  await check('自定义音色导入去重、保存选中项、重启恢复及删除回退', async () => {
+    const h = harness(); await h.init();
+    const configs = CustomTtsConfigParser.parse(JSON.stringify([
+      { name: '关山', url: 'https://tts.example?text={{speakText}}&voice=1' },
+      { name: '筱潇', url: 'https://tts.example?text={{speakText}}&voice=2' }
+    ]));
+    await h.service.importCustomTts(configs); await h.service.importCustomTts([configs[1]]);
+    assert.equal(h.service.state.customTtsConfigs.length, 2);
+    assert.equal(h.service.state.customTtsId, configs[1].id);
+    const restored = harness(h.memory); await restored.init();
+    assert.equal(restored.service.state.customTtsId, configs[1].id);
+    await restored.service.removeCustomTts(configs[1].id);
+    assert.equal(restored.service.state.customTtsId, '');
+    assert.equal(restored.service.state.customTtsConfigs.length, 1);
+    h.service.stop(); restored.service.stop();
+  });
+  await check('HTTP 音色等待音频出声才进入播放；切换和暂停隔离迟到回调', async () => {
+    const h = harness(); await h.init();
+    const configs = CustomTtsConfigParser.parse(JSON.stringify([
+      { name: '甲', url: 'https://tts.example?text={{speakText}}&voice=1' },
+      { name: '乙', url: 'https://tts.example?text={{speakText}}&voice=2' }
+    ]));
+    await h.service.importCustomTts(configs);
+    await h.service.start(book('book', ['第一句。\n第二句！', '第三句。']), 0, 0); await settle();
+    assert.equal(h.engines.length, 0); assert.equal(h.service.state.loading, true);
+    assert.equal(h.service.state.playing, false);
+    const old = h.httpSpoken.at(-1);
+    old.onStart(); assert.equal(h.service.state.playing, true);
+    await h.service.selectCustomTts(configs[0].id); await settle();
+    assert.equal(old.task.cancelled, true);
+    old.onStart(); old.complete(); await settle();
+    assert.equal(h.service.state.playing, false);
+    const current = h.httpSpoken.at(-1);
+    assert.equal(current.config.id, configs[0].id);
+    current.onStart(); current.complete(); await settle();
+    assert.equal(h.httpSpoken.at(-1).text, '第二句！');
+    h.service.pause(); const paused = h.httpSpoken.length;
+    h.httpSpoken.at(-1).onStart(); await settle();
+    assert.equal(h.service.state.playing, false); assert.equal(h.httpSpoken.length, paused);
+    h.service.stop();
+  });
+  await check('自定义请求失败保留位置与选择，重试成功后可以切回系统语音', async () => {
+    const h = harness(); await h.init();
+    const configs = CustomTtsConfigParser.parse('{"name":"甲","url":"https://tts.example?text={{text}}"}');
+    await h.service.importCustomTts(configs); await h.service.start(book('book', ['第一句。\n第二句！', '第三句。']), 0, 0); await settle();
+    h.httpSpoken.at(-1).fail(new Error('offline')); await settle();
+    assert.equal(h.service.state.playing, false); assert.equal(h.service.state.loading, false);
+    assert.equal(h.service.state.customTtsId, configs[0].id); assert.ok(h.service.state.error);
+    await h.service.resume(); await settle(); h.httpSpoken.at(-1).onStart();
+    await h.service.selectCustomTts(''); await settle();
+    assert.equal(h.service.state.customTtsId, ''); assert.equal(h.spoken.at(-1).text, '第一句。');
+    h.service.stop();
+  });
+  await check('删除本地书清除朗读位置，停止后的迟到回调不能复活记录', async () => {
+    const h = harness(); await h.init();
+    const b = book();
+    await h.service.start(b, 0, 0); await settle();
+    h.memory.set('position_other', 'keep');
+    await h.service.removeSavedPositions({}, [b.id]);
+    assert.equal(h.service.state.active, false);
+    assert.equal(h.service.state.bookId, '');
+    h.service.stop(); await settle();
+    assert.equal(h.memory.has('position_' + b.id), false);
+    assert.equal(h.memory.get('position_other'), 'keep');
+  });
+  await check('句号前已预取后续两句，切句直接使用音频且不闪加载', async () => {
+    const h = harness(); await h.init();
+    const configs = CustomTtsConfigParser.parse('{"name":"甲","url":"https://tts.example?text={{text}}"}');
+    await h.service.importCustomTts(configs);
+    await h.service.start(book('prefetch', ['第一句。\n第二句。\n第三句。\n第四句。']), 0, 0); await settle();
+    assert.deepEqual(h.httpPrepared.map(item => item.text), ['第一句。', '第二句。', '第三句。']);
+    assert.equal(h.httpSpoken.length, 1); // prefetch never starts another player
+    h.httpSpoken[0].onStart(); h.httpSpoken[0].complete(); await settle();
+    assert.equal(h.httpSpoken.at(-1).text, '第二句。');
+    assert.equal(h.service.state.loading, false);
+    assert.equal(h.httpPrepared.filter(item => item.text === '第二句。').length, 1);
+    assert.equal(h.httpPrepared.at(-1).text, '第四句。');
+    assert.equal(h.service.httpTasks.size, 3);
+    h.service.pause(); await settle();
+    assert.equal(h.service.httpTasks.size, 0);
+    assert.ok(h.httpPrepared.slice(1).every(item => item.task.cancelled));
+    await h.service.resume(); await settle();
+    assert.equal(h.httpSpoken.at(-1).text, '第二句。');
+    h.service.stop();
+  });
+  await check('HTTP 同段短句合并，保留自然段和字符位置，跳过纯标点请求', async () => {
+    const content = '“嘶！”有人惊呼。怎么回事？他愣住了。\n下一段。还有一句！\n……\n最后。';
+    const segments = SpeechTextSegmenter.split(content, true);
+    assert.equal(segments.length, 3);
+    assert.equal(segments[0].text, '“嘶！”有人惊呼。怎么回事？他愣住了。');
+    assert.equal(segments[1].text, '下一段。还有一句！');
+    assert.equal(segments[1].start, content.indexOf('下一段'));
+    assert.equal(segments[2].text, '最后。');
+    assert.equal(segments[2].paragraphStart, content.indexOf('最后'));
+    const long = SpeechTextSegmenter.split('长'.repeat(179) + '😀。短句。再一句。', true);
+    assert.equal(long.map(item => item.text).join(''), '长'.repeat(179) + '😀。短句。再一句。');
+    assert.ok(long.every(item => item.text.length <= 182));
   });
   console.log(`${passed} TTS regressions passed`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

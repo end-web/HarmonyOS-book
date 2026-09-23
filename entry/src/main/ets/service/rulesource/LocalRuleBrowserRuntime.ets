@@ -47,7 +47,7 @@ export class LocalRuleBrowserRuntime {
   }
 
   async render(source: LocalRuleSource, plan: LocalRuleRequestPlan, initial: LocalRuleFetchResult,
-    variables: Record<string, string>): Promise<LocalRuleFetchResult> {
+    variables: Record<string, string>, audioResult: boolean = false): Promise<LocalRuleFetchResult> {
     const deadline = Date.now() + plan.timeoutMs;
     const lease = await LocalRuleWebSession.acquire(plan.timeoutMs);
     const snapshots: Record<string, string> = {};
@@ -92,13 +92,19 @@ export class LocalRuleBrowserRuntime {
       });
       if (plan.webJs) {
         const session = '__localRuleDom_' + Date.now().toString(36) + Math.random().toString(36).substring(2);
-        result.body = await LocalRuleScriptRuntime.evaluateBrowserSnapshot(source, result, plan.webJs, variables,
+        const code = audioResult ? LocalRuleBrowserRuntime.audioPollingScript(plan.webJs) : plan.webJs;
+        const scriptResult = await LocalRuleScriptRuntime.evaluateBrowserSnapshot(source, result, code, variables,
           (address: string): Promise<string> => LocalRuleBrowserActions.execute(controller, address, session,
             deadline, variables, (): boolean => this.active === current));
         if (this.active !== current || Date.now() >= deadline) throw new Error('网页交互超时');
         result.resourceUrls = Array.from(current.urls);
         const finalSnapshot = await this.snapshot(controller, deadline);
         result.renderedHtml = String(finalSnapshot['html'] ?? '');
+        if (audioResult && !new RegExp('^https?://[^\\s<>]+$', 'i').test(scriptResult.trim())) {
+          throw new Error('网页音频规则未返回 HTTP(S) 音频地址');
+        }
+        result.body = audioResult ? scriptResult.trim() :
+          (scriptResult.trim().length > 0 ? scriptResult : result.renderedHtml);
         result.requestUrl = String(finalSnapshot['url'] ?? result.requestUrl);
         result.browserState = String(finalSnapshot['state'] ?? '{}');
         const media: string[] = JSON.parse(JSON.stringify(finalSnapshot['media'] ?? []));
@@ -131,6 +137,19 @@ export class LocalRuleBrowserRuntime {
         LocalRuleWebSession.release(lease);
       }
     }
+  }
+
+  /** 一次 QuickJS 评估内重放动作，等待期间不会重复执行已完成的点击。 */
+  static audioPollingScript(code: string): string {
+    return `(function(){for(var attempt=0;attempt<10;attempt++){
+      var value=eval(${JSON.stringify(code)});
+      if(value!==null&&value!==undefined&&String(value).trim()!==''){
+        if(typeof value!=='string'||value.length>${LocalRuleExecutionLimits.MAX_URL_CHARS}||
+          !/^https?:\\/\\/[^\\s<>]+$/i.test(value.trim()))throw new Error('网页音频规则需返回 HTTP(S) 音频地址');
+        return value.trim();
+      }
+      if(attempt<9)java.sleep(750);
+    }throw new Error('网页音频规则等待超时，未取得可播放地址');})()`;
   }
 
   private injectCookies(origin: string, cookies: string): void {

@@ -23,6 +23,12 @@ class LocalRuleScriptStep {
   sourceState: string = '';
 }
 
+class LocalRuleScriptNetworkFailure {
+  code: number = 599;
+  message: string = '';
+  data: string | null = null;
+}
+
 /**
  * 本地规则脚本的受控 QuickJS 运行时。
  *
@@ -47,10 +53,18 @@ export class LocalRuleScriptRuntime {
     const lower = value.toLowerCase();
     if (lower.startsWith('@js:')) return value.substring(4).trim();
     if (lower.startsWith('js:')) return value.substring(3).trim();
-    if (lower.startsWith('<js>') && lower.endsWith('</js>')) {
+    if (lower.startsWith('<js>') && lower.indexOf('</js>') === value.length - 5) {
       return value.substring(4, value.length - 5).trim();
     }
     return '';
+  }
+
+  /** 轻页的纯 match 索引字段在未匹配时为空；只转换这一表达式，不改变一般 JS 异常语义。 */
+  private static normalizeFieldExpression(code: string): string {
+    const match = code.trim().match(new RegExp(
+      '^result\\s*\\.\\s*match\\s*\\(\\s*(/(?:\\\\.|[^/\\\\])+/[gimsuy]*)\\s*\\)\\s*\\[\\s*(\\d+)\\s*\\]\\s*;?$'));
+    if (match === null) return code;
+    return `((result.match(${match[1]}) || [])[${match[2]}] ?? '')`;
   }
 
   static async resolveAddress(rawRule: string, source: LocalRuleSource,
@@ -193,7 +207,8 @@ export class LocalRuleScriptRuntime {
     }
     for (let stepIndex = 0; stepIndex <= LocalRuleScriptRuntime.MAX_REPLAY_STEPS; stepIndex++) {
       LocalRuleDiagnostics.check(variables);
-      const script = LocalRuleScriptRuntime.buildScript(content, baseUrl, code, source,
+      const script = LocalRuleScriptRuntime.buildScript(content, baseUrl,
+        LocalRuleScriptRuntime.normalizeFieldExpression(code), source,
         initialVariables, initialResult, responses, sourceState, library);
       const request = new LocalRuleQuickJsRequest();
       request.script = script;
@@ -248,8 +263,14 @@ export class LocalRuleScriptRuntime {
         }
         const response: LocalRuleFetchResult = await LocalRuleHttpClient.fetch(
           source, step.pendingAddress, actionVariables);
+        LocalRuleDiagnostics.check(variables);
         if (!response.ok && response.statusCode === 0) {
-          throw new Error(`书源脚本请求失败：${response.errorMessage || '未知错误'}`);
+          const message = response.errorMessage || '网络连接失败';
+          LocalRuleDiagnostics.record(variables, 'warn', '书源脚本请求失败', message);
+          const failure = new LocalRuleScriptNetworkFailure();
+          failure.message = message;
+          response.statusCode = 599;
+          response.body = JSON.stringify(failure);
         }
         responseCharacters += response.body.length;
         if (responseCharacters > LocalRuleScriptRuntime.MAX_ACTION_RESPONSE_CHARS) {
@@ -363,7 +384,10 @@ export class LocalRuleScriptRuntime {
       `const responseObject=function(spec){const data=responseData(spec);return {body:function(){return String(data.body??'');},` +
       `header:function(name){const h=data.headers||{},key=Object.keys(h).find(function(k){return k.toLowerCase()===String(name).toLowerCase();});return key===undefined?null:String(h[key]);},` +
       `code:function(){return Number(data.statusCode||0);},isSuccessful:function(){const c=Number(data.statusCode||0);return c>=200&&c<400;},` +
-      `headers:function(name){const h=Object.assign({},data.headers||{});Object.keys(h).forEach(function(k){h[k.toLowerCase()]=h[k];});if(name===undefined)return h;const expected=String(name).toLowerCase();` +
+      `headers:function(name){const original=data.headers||{},h=Object.assign({},original),names=Object.keys(original);` +
+      `const get=function(n){const key=names.find(k=>k.toLowerCase()===String(n).toLowerCase());return key===undefined?null:String(original[key]);};` +
+      `Object.keys(h).forEach(function(k){h[k.toLowerCase()]=h[k];});if(name===undefined){` +
+      `Object.defineProperties(h,{get:{value:get},names:{value:function(){return listMethods(names.slice());}}});return h;}const expected=String(name).toLowerCase();` +
       `const keys=Object.keys(h);for(let i=0;i<keys.length;i++)if(keys[i].toLowerCase()===expected)return [String(h[keys[i]]??'')];` +
       `return [];},cookies:function(){const h=data.headers||{},name=Object.keys(h).find(k=>k.toLowerCase()==='set-cookie');` +
       `const raw=name===undefined?cookieRead(data.requestUrl):String(h[name]);const values=[];` +
@@ -501,6 +525,7 @@ export class LocalRuleScriptRuntime {
       `'\\n;(function(){'+code+'\\n;return typeof result===\\'undefined\\'?\\'\\':result;}).call(globalThis)');}else if(!pending)throw e;}` +
       `const finish=function(value){try{if(!pending&&typeof globalThis.__drainBrowserTimers==='function')globalThis.__drainBrowserTimers();}catch(e){if(!pending)throw e;}` +
       `syncCompatState();` +
+      `if(Object.prototype.hasOwnProperty.call(SV,'type'))V.__sourceContentType=stringify(SV.type);` +
       `if(value===undefined)value=globalThis.result;value=stringify(value);` +
       `if(value.length>${maxOutput})throw new Error('脚本输出超过预算');` +
       `return JSON.stringify({value:value,pendingAddress:pending,variables:V,errorMessage:'',` +
@@ -573,7 +598,8 @@ export class LocalRuleScriptRuntime {
     const keys = Object.keys(source);
     for (const key of keys) {
       if (!includeInternal && key.startsWith('__') &&
-        key !== '__refreshExplore' && key !== '__searchBook' && key !== '__toast' && key !== '__openBrowser') continue;
+        key !== '__refreshExplore' && key !== '__searchBook' && key !== '__toast' && key !== '__openBrowser' &&
+        key !== '__sourceContentType') continue;
       target[key] = source[key] ?? '';
     }
   }

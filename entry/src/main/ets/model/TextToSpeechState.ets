@@ -1,3 +1,5 @@
+import { CustomTtsConfig } from './CustomTtsConfig';
+
 @ObservedV2
 export class TextToSpeechState {
   @Trace active: boolean = false;
@@ -5,6 +7,7 @@ export class TextToSpeechState {
   @Trace bookTitle: string = '';
   @Trace cover: string = '';
   @Trace highlightOffset: number = -1;
+  @Trace highlightEnd: number = -1;
   @Trace chapterIndex: number = 0;
   @Trace chapterTitle: string = '';
   @Trace chapterCount: number = 0;
@@ -19,6 +22,8 @@ export class TextToSpeechState {
   @Trace language: string = 'zh-CN';
   @Trace voices: SpeechVoice[] = [];
   @Trace downloadingVoice: string = '';
+  @Trace customTtsId: string = '';
+  @Trace customTtsConfigs: CustomTtsConfig[] = [];
   @Trace follow: boolean = true;
   @Trace stopAtChapterEnd: boolean = false;
   @Trace remainingSeconds: number = 0;

@@ -17,6 +17,9 @@ import {
 } from '../service/PreferenceService';
 import { Book } from '../model/Book';
 import { DataService } from '../service/DataService';
+import { BookSourceService } from '../service/BookSourceService';
+import { SearchCache } from '../utils/SearchCache';
+import { OnlineTextContentCache } from '../service/text/OnlineTextContentCache';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
 import { TextReadingProgressService, EVT_TEXT_READING_PROGRESS_CHANGED } from '../service/text/TextReadingProgressService';
 import {
@@ -103,6 +106,9 @@ export struct ReadingStatsPage {
 
   private scroller: Scroller = new Scroller();
   private recordDataSource: ListeningRecordDataSource = new ListeningRecordDataSource();
+  private recoveryRunning: boolean = false;
+  private recoveryActive: boolean = false;
+  private recoveryAttempted: Set<string> = new Set();
   private loadingStats: boolean = false;
   private reloadPending: boolean = false;
   private statsHandler = (_evt: emitter.EventData): void => {
@@ -113,6 +119,8 @@ export struct ReadingStatsPage {
   };
 
   aboutToAppear(): void {
+    this.recoveryActive = true;
+    this.recoveryAttempted.clear();
     const cached = StatsService.getCachedStatsBundle(1);
     if (cached !== undefined) this.applyStatsBundle(cached);
     this.onScrollerReady(this.scroller);
@@ -124,6 +132,7 @@ export struct ReadingStatsPage {
   }
 
   aboutToDisappear(): void {
+    this.recoveryActive = false;
     try {
       emitter.off(EVT_USAGE_STATS_UPDATED, this.statsHandler);
     } catch (_e) {
@@ -161,6 +170,7 @@ export struct ReadingStatsPage {
       this.records = allRecords.filter((item: ListenRecordView): boolean =>
         this.shouldShowRecord(item, favoriteIds));
       this.recordDataSource.setRecords(this.records);
+      this.recoverReadingBooks(ctx, reading).catch(() => {});
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
       if (this.selectedIds.size === 0) this.selectMode = false;
@@ -175,6 +185,64 @@ export struct ReadingStatsPage {
         this.reloadPending = false;
         this.loadStats();
       }
+    }
+  }
+
+  /** 先展示历史，后台修复旧版本未保存的书籍，网络失败不阻塞记录页。 */
+  private async recoverReadingBooks(context: common.Context, reading: TextReadingPosition[]): Promise<void> {
+    if (this.recoveryRunning || !this.recoveryActive) return;
+    this.recoveryRunning = true;
+    let changed = false;
+    try {
+      const missing: string[] = [];
+      for (const position of reading) {
+        if (!this.recoveryActive) return;
+        if (position.bookId.startsWith('import_') || this.recoveryAttempted.has(position.bookId)) continue;
+        this.recoveryAttempted.add(position.bookId);
+        if (await DataService.getBookById(context, position.bookId)) continue;
+        const cached = SearchCache.get(position.bookId);
+        if (cached) {
+          await DataService.upsertCachedBook(cached);
+          changed = true;
+        } else {
+          missing.push(position.bookId);
+        }
+      }
+      // 兼容旧版 Preferences 索引仍留有完整书籍的情况。
+      if (missing.length > 0) {
+        try {
+          const legacy: Book[] = JSON.parse(await PreferenceService.getCachedBooks());
+          if (Array.isArray(legacy)) {
+            for (const book of legacy) {
+              const index = book ? missing.indexOf(book.id) : -1;
+              if (index < 0 || !book.title || !book.sourceUrl || !book.bookUrl) continue;
+              await DataService.upsertCachedBook(book);
+              missing.splice(index, 1);
+              changed = true;
+            }
+          }
+        } catch (_e) { /* 旧索引不可用时尝试正文身份 */ }
+      }
+      const identities = await OnlineTextContentCache.recoverBookIdentities(context, missing);
+      for (const identity of identities) {
+        if (!this.recoveryActive) break;
+        try {
+          const shell: Book = {
+            id: identity.bookId, contentType: 'text', title: '', author: '', narrator: '',
+            cover: '', category: '', intro: '', totalDuration: 0, chapterCount: 0,
+            rating: 0, tags: [], chapters: [], sourceUrl: identity.sourceUrl, bookUrl: identity.bookUrl
+          };
+          const book = await BookSourceService.loadTextBook(shell, undefined, true);
+          if (!book.title.trim()) continue;
+          await DataService.upsertCachedBook(book);
+          changed = true;
+          // 每本成功就刷新，无需等待所有书源响应。
+          if (this.recoveryActive) this.loadStats();
+        } catch (_e) { /* 缺源、离线或单本失效均保留原记录 */ }
+      }
+    } finally {
+      this.recoveryRunning = false;
+      if (changed && this.recoveryActive) this.loadStats();
     }
   }
 
@@ -236,7 +304,7 @@ export struct ReadingStatsPage {
         candidate.setProgress(progress.chapterId, progress.chapterTitle, progress.positionMs, progress.durationMs,
           progress.chapterIndex, progress.updatedAt, progress.sourceUrl, progress.bookUrl);
       }
-      const book = await DataService.getBookById(context, bookId) ?? null;
+      const book = await DataService.getBookById(context, bookId) ?? SearchCache.get(bookId);
       if (book) {
         books.set(bookId, book);
         candidate.setBook(book.sourceUrl, book.bookUrl, book.title, book.author || book.narrator, book.cover);

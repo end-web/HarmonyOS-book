@@ -83,10 +83,10 @@ const stubs = {
     isInitialized: () => false, getLoginRevision: () => loginRevision
   } },
   'service/rulesource/LocalRuleHttpClient': { LocalRuleHttpClient: {
+    hydrateCookies: async () => {},
+    prepareRequest: (_source, url) => ({ url, method: 'GET', headers: {} }),
     fetch: async (_source, url) => responseFetch ? responseFetch(url) : ({ ok: true, body: responseHtml, requestUrl: url })
   } },
-  'service/rulesource/tingyou/TingYouSourceAdapter': { TingYouSourceAdapter: {} },
-  'service/rulesource/tingyou/TingYouSourceIdentity': { TingYouSourceIdentity: { isSourceUrl: () => false } },
   'service/rulesource/talebook/TalebookSourceAdapter': { TalebookSourceAdapter: {} },
   'service/rulesource/talebook/TalebookSourceIdentity': { TalebookSourceIdentity: { isSourceUrl: () => false } },
   'service/SourceDataService': { SourceDataService: { getInvalidationCounter: () => sourceRevision } },
@@ -202,6 +202,135 @@ async function testDom() {
   source.ruleToc.nextTocUrl = '';
   console.log('PASS: first batch before completion; failed later page does not masquerade as a complete TOC');
 }
+async function testLegacySelectors() {
+  const { LocalRuleStageExtractor: extractor } = load('service/rulesource/LocalRuleStageExtractor');
+  const { LocalRuleSource } = load('model/LocalRuleSource');
+  const source = LocalRuleSource.descriptor('https://fixture.invalid/', '轻页规则兼容');
+  const row = '<tr id="nr"><td><a href="/book/1">书名</a></td><td>分类</td>' +
+    '<td>作者甲</td><td>十万字</td><td>2026-09-23</td><td>连载</td></tr>';
+  const rowDoc = extractor.createDocument(row, source.bookSourceUrl);
+  assert.equal(await extractor.extract(rowDoc, 'td.2@text', source), '作者甲', 'Detached table rows retain cells');
+  assert.equal(await extractor.extract(rowDoc, 'td.5@text', source), '连载');
+  const rowFields = ['td.2@text', 'td.5@text', 'a.0@href'];
+  await extractor.prefetchHtmlFields([rowDoc], rowFields);
+  assert.equal(await extractor.extract(rowDoc, 'td.2@text', source), '作者甲', 'Batch table parsing matches scalar');
+  assert.equal(await extractor.extract(rowDoc, 'a.0@href', source, {}, true), 'https://fixture.invalid/book/1');
+  const cell = extractor.createDocument('<td data-title="保存"><a>单元格</a></td>', source.bookSourceUrl);
+  assert.equal(await extractor.extract(cell, '@data-title', source), '保存', 'Current node remains the original cell');
+  const html = '<section><span class="mr-4">作者</span><span class="mr-4">更新</span><span class="mr-4">完结</span>' +
+    '<p>第一段<br>第二段<span>广告</span>第三段</p><a href="/next"> 下一页 </a></section>';
+  const document = extractor.createDocument(html, source.bookSourceUrl);
+  for (const [rule, expected] of [
+    ['span.mr-4.1@text', '更新'], ['span.mr-4.2@text', '完结'],
+    ['span.0,span.2@text', '作者\n完结'], ['span!0@text', '更新\n完结\n广告'],
+    ['span.mr-4:last@text', '完结'], ['span.mr-4:first@text', '作者'],
+    ['span.0:2@text', '作者\n更新'], ['span.1:-1@text', '更新\n完结'],
+    ['span.2:0:-1:2@text', '完结\n作者\n广告'], ['span.0:99@text', '作者\n更新\n完结\n广告'],
+    ['span.9:12@text', ''], ['span!0:-1:-2@text', '更新'],
+    ['a:contains(下一页)@href', '/next'], ['text.下一页@href', '/next'],
+    ['p@textNodes', '第一段\n第二段\n第三段']
+  ]) assert.equal(await extractor.extract(document, rule, source), expected, rule);
+  const categories = extractor.createDocument('<article class="excerpt"><header><h2><a href="/one">书名_作者【完结】</a>' +
+    '</h2></header></article><article class="excerpt">无关卡片</article>' +
+    '<div class="hot-posts"><ul><li><a>分类</a><a href="/two">推荐_作者【连载】</a></li></ul></div>' +
+    '<ul><h3><a href="/three">排行_作者【完结】</a></h3></ul>', source.bookSourceUrl);
+  const cards = await extractor.selectList(categories,
+    'article.excerpt:contains(【), .hot-posts li:contains(【), ul h3:contains(【)', source);
+  assert.equal(cards.length, 3, '52书库 all three layouts filter irrelevant cards');
+  assert.equal(await extractor.extract(cards[1], 'a:eq(1)@href', source), '/two');
+  assert.equal(await extractor.extract(cards[0], 'header h2 a@text', source), '书名_作者【完结】');
+  console.log('PASS: source table fragments, batch fields, compound indexes, groups, exclusions and text nodes');
+}
+async function testImportedDefinitions() {
+  const files = process.argv.slice(2).filter(file => file.endsWith('.json'));
+  if (!files.length) return;
+  const prefix = 'service/rulesource/';
+  const previousRuntime = stubs[prefix + 'LocalRuleScriptRuntime'];
+  delete stubs[prefix + 'LocalRuleScriptRuntime'];
+  stubs[prefix + 'LocalRuleQuickJsRuntime'] = { LocalRuleQuickJsRequest: class {},
+    LocalRuleQuickJsRuntime: { execute: async request => ({ success: true,
+      value: await vm.runInNewContext(request.script, {}, { timeout: 2000 }) }) } };
+  stubs[prefix + 'LocalRuleScriptActions'] = { LocalRuleScriptActions: { PREFIX: 'local-rule-action:' } };
+  stubs[prefix + 'LocalRuleBrowserActions'] = { LocalRuleBrowserActions: { PREFIX: 'local-rule-browser:' } };
+  stubs['@kit.ArkTS'].util.TextDecoder = { create: (charset, options) => {
+    const decoder = new TextDecoder(charset, options);
+    return { decodeToString: bytes => decoder.decode(bytes) };
+  } };
+  const http = stubs[prefix + 'LocalRuleHttpClient'].LocalRuleHttpClient;
+  http.getCookieSnapshot = async () => ({});
+  http.getCookieHeader = () => '';
+  Object.assign(previousRuntime, load(prefix + 'LocalRuleScriptRuntime'));
+  const { LocalRuleSourceImportParser: parser } = load(prefix + 'LocalRuleSourceImportParser');
+  const { LocalRuleStageExtractor: extractor } = load(prefix + 'LocalRuleStageExtractor');
+  const { LocalRuleUrlAnalyzer: urls } = load(prefix + 'LocalRuleUrlAnalyzer');
+  let sourceCount = 0, fields = 0, scripts = 0;
+  const html = '<main><h1>测试书_作者【完结】</h1><a href="/book/123456/">测试书_作者【完结】</a>' +
+    '<a href="/book/123457/">第二章</a><a href="/book/123458/">第三章</a>' +
+    '<table><tbody><tr id="nr">' + Array.from({ length: 8 }, (_, i) => `<td>${i === 4 ? '1700000000' : '测试字段'}</td>`).join('') +
+    '</tr></tbody></table><div id="content">第一段<br>第二段</div>' +
+    '<div id="PageSet"><a href="/chapter-2.html">下一页</a></div>' +
+    '<span class="page-link">1/2</span><select><option value="/page1" selected="selected">1</option>' +
+    '<option value="/page2">2</option></select></main>';
+  for (const file of files) {
+    const report = parser.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(report.sources.length, `Import original definitions: ${file}`);
+    for (const source of report.sources) {
+      sourceCount++;
+      for (const group of ['ruleSearch', 'ruleExplore', 'ruleBookInfo', 'ruleToc', 'ruleContent']) {
+        for (const [field, rule] of Object.entries(source[group])) {
+          if (typeof rule !== 'string' || !rule.trim()) continue;
+          // Keywords and images/audio regular expressions are configuration, not selector rules.
+          if (['checkKeyWord', 'imageStyle', 'sourceRegex', 'imageDecode', 'payAction'].includes(field)) continue;
+          const label = `${source.bookSourceName}.${group}.${field}`;
+          const document = extractor.createDocument(html, source.bookSourceUrl + '/book/123456/');
+          try {
+            if (field === 'replaceRegex') extractor.applyCleanup('测试正文\n最新网址：fixture', rule);
+            else if (field === 'bookList' || field === 'chapterList') await extractor.selectList(document, rule, source);
+            else await extractor.extract(document, rule, source, { bookUrl: document.baseUrl });
+          } catch (error) { throw new Error(`${label}: ${error.message}`, { cause: error }); }
+          fields++;
+          if (/@js:|<js>/i.test(rule)) scripts++;
+        }
+      }
+      const address = await previousRuntime.LocalRuleScriptRuntime.resolveAddress(source.searchUrl, source, {}, '测试', 1);
+      assert.ok(urls.analyze(source, address, {}, '测试', 1).url.startsWith('http'), source.bookSourceName);
+    }
+  }
+  console.log(`PASS: ${sourceCount} original imported definitions, ${fields} field rules (${scripts} script rules), search request plans; synthetic DOM, no live-site claim`);
+}
+async function testScriptElementObjects() {
+  const prefix = 'service/rulesource/';
+  const previousRuntime = stubs[prefix + 'LocalRuleScriptRuntime'];
+  delete stubs[prefix + 'LocalRuleScriptRuntime'];
+  stubs[prefix + 'LocalRuleQuickJsRuntime'] = { LocalRuleQuickJsRequest: class {},
+    LocalRuleQuickJsRuntime: { execute: async request => ({ success: true,
+      value: await vm.runInNewContext(request.script, {}, { timeout: 2000 }) }) } };
+  stubs[prefix + 'LocalRuleBrowserActions'] = { LocalRuleBrowserActions: { PREFIX: 'local-rule-browser:' } };
+  const { LocalRuleStageExtractor: extractor } = load(prefix + 'LocalRuleStageExtractor');
+  const { LocalRuleSource } = load('model/LocalRuleSource');
+  const actions = stubs[prefix + 'LocalRuleScriptActions'] || { LocalRuleScriptActions: { PREFIX: 'local-rule-action:' } };
+  stubs[prefix + 'LocalRuleScriptActions'] = actions;
+  actions.LocalRuleScriptActions.execute = async (address, source, variables, baseUrl) => {
+    const args = JSON.parse(address.substring(actions.LocalRuleScriptActions.PREFIX.length));
+    assert.equal(args.operation, 'extract', 'Only bounded DOM extraction belongs in this regression');
+    const document = extractor.createDocument(args.content, baseUrl);
+    const value = args.elements ? (await extractor.selectList(document, args.rule, source, variables)).map(item => item.payload)
+      : await extractor.extractValues(document, args.rule, source, variables);
+    return JSON.stringify({ value });
+  };
+  const http = stubs[prefix + 'LocalRuleHttpClient'].LocalRuleHttpClient;
+  http.getCookieSnapshot = async () => ({});
+  http.getCookieHeader = () => '';
+  const loaded = load(prefix + 'LocalRuleScriptRuntime');
+  if (previousRuntime) Object.assign(previousRuntime, loaded);
+  const source = LocalRuleSource.descriptor('https://fixture.invalid/', 'element object');
+  const result = await loaded.LocalRuleScriptRuntime.evaluate(
+    '<div data-empty="">leading<span data-child="">nested</span>trailing</div>', source.bookSourceUrl,
+    `const element=java.getElement('div');JSON.stringify([element.attr('data-empty'),element.hasAttr('data-empty'),
+      element.hasAttr('missing'),element.hasAttr('data-child'),element.ownText(),element.text()]);`, source, {});
+  assert.deepEqual(JSON.parse(result), ['', true, false, false, 'leading trailing', 'leadingnestedtrailing']);
+  console.log('PASS: element ownText and attribute existence preserve empty attributes and exclude descendants');
+}
 async function testHome() {
   const { HomeSourceService: home } = load('service/rulesource/HomeSourceService');
   const { LocalRuleSource } = load('model/LocalRuleSource');
@@ -243,7 +372,47 @@ async function testHome() {
   const failures = exploreCalls;
   await assert.rejects(home.loadHome(source), /fixture failure/);
   assert.equal(exploreCalls, failures + 2, 'Failures must remain retryable');
+  const imported = LocalRuleSource.descriptor('https://tingyou.fm', '导入音频规则');
+  imported.bookSourceType = 1;
+  imported.enabledExplore = true;
+  imported.exploreUrl = 'fixture';
+  const requested = [];
+  categoryResponse = async url => {
+    requested.push(url);
+    return { books: [{ bookUrl: url, name: '源定义推荐' }] };
+  };
+  const importedContent = await home.loadHome(imported);
+  assert.deepEqual(normalized(importedContent.blocks.map(block => block.title)), ['第一类', '第二类']);
+  assert.deepEqual(requested.sort(), ['/fast', '/slow'], 'All hosts use only imported discovery categories');
+  imported.exploreUrl = '';
+  assert.equal(home.hasHomeContent(imported), false, 'A known host cannot invent discovery content');
+  assert.equal(home.isEligible(imported), false);
   console.log('PASS: progressive home, in-flight reuse, source cache, refresh, invalidation and isolated failures');
+}
+async function testImportedRuleDispatch() {
+  const { LocalRuleDispatcher: dispatcher } = load('service/rulesource/LocalRuleDispatcher');
+  const { LocalRuleSource } = load('model/LocalRuleSource');
+  const source = LocalRuleSource.descriptor('https://tingyou.fm', '用户音频源');
+  source.bookSourceType = 1;
+  source.ruleBookInfo.name = 'h1@text';
+  source.ruleBookInfo.intro = '.intro@text';
+  source.ruleContent.audioUrl = 'audio@src';
+  const requested = [];
+  responseFetch = async url => {
+    requested.push(url);
+    return { ok: true, requestUrl: url, resourceUrls: [], body:
+      '<h1>用户规则书名</h1><p class="intro">源返回的简介</p><audio src="https://media.invalid/chapter.mp3"></audio>' };
+  };
+  try {
+    const info = await dispatcher.getBookInfo(source, 'https://tingyou.fm/albums/123');
+    assert.equal(info.name, '用户规则书名');
+    assert.equal(info.intro, '源返回的简介');
+    assert.equal(await dispatcher.getAudioUrl(source, 'https://tingyou.fm/audios/123/1'),
+      'https://media.invalid/chapter.mp3');
+    assert.deepEqual(requested, ['https://tingyou.fm/albums/123', 'https://tingyou.fm/audios/123/1'],
+      'Known domains must execute imported detail and audio rules without native API calls');
+  } finally { responseFetch = undefined; }
+  console.log('PASS: imported detail and audio rules apply identically on known domains');
 }
 async function testDetailCache() {
   const page = fs.readFileSync(path.join(root, 'pages/BookDetailPage.ets'), 'utf8');
@@ -299,8 +468,10 @@ async function testAudioLoad() {
   source.ruleToc.chapterName = 'a@text';
   source.ruleToc.chapterUrl = 'a@href';
   stubs['service/rulesource/LocalRuleSourceRepository'].LocalRuleSourceRepository.getByUrl = async () => source;
-  service.getBookInfo = async () => null;
+  service.getBookInfo = async () => ({ name: '', author: '', coverUrl: '', intro: '', kind: '',
+    tocUrl: '', wordCount: '123万字', lastChapter: '最新一章', updateTime: '2026-09-23', variables: {} });
   const makeBook = id => ({ id, title: '测试书', author: '', narrator: '', cover: '', category: '', intro: '',
+    wordCount: '原字数', latestChapterTitle: '原最新章', updateTime: '原更新时间',
     totalDuration: 0, chapterCount: 0, rating: 0, tags: [], chapters: [], bookUrl: 'https://fixture.invalid/book/1',
     sourceUrl: source.bookSourceUrl, chaptersDescending: true });
   const first = deferred();
@@ -311,6 +482,10 @@ async function testAudioLoad() {
   const playerChapters = playable.chapters;
   assert.equal(playable.tocComplete, false);
   assert.equal(playable.chapters.length, 16);
+  assert.equal(playable.chapterCount, 16, 'Word count must not be mistaken for chapter count');
+  assert.equal(playable.wordCount, '123万字');
+  assert.equal(playable.latestChapterTitle, '最新一章');
+  assert.equal(playable.updateTime, '2026-09-23');
   assert.equal(saved.length, 0, 'No partial catalog saved');
   assert.equal(cache.get('progressive'), playable, 'Player receives canonical growing book');
   const reentered = service.loadAudioBook(makeBook('progressive'), () => {});
@@ -322,6 +497,8 @@ async function testAudioLoad() {
   assert.equal(completed.chaptersDescending, true);
   assert.deepEqual(saved, [{ count: 1024, complete: true }]);
   assert.equal(service.pendingAudioBook('progressive'), undefined);
+  service.getBookInfo = async () => ({ name: '', author: '', coverUrl: '', intro: '', kind: '',
+    tocUrl: '', wordCount: '', lastChapter: '', updateTime: '', variables: {} });
   source.ruleToc.nextTocUrl = 'a.next@href';
   responseFetch = async url => {
     if (url.endsWith('/page2')) throw new Error('page two failed');
@@ -332,7 +509,10 @@ async function testAudioLoad() {
   assert.equal(saved.length, 1, 'Failed partial TOC never persisted');
   responseFetch = undefined;
   source.ruleToc.nextTocUrl = '';
-  await service.loadAudioBook(makeBook('failure'), () => {});
+  const retained = await service.loadAudioBook(makeBook('failure'), () => {});
+  assert.equal(retained.wordCount, '原字数');
+  assert.equal(retained.latestChapterTitle, '原最新章');
+  assert.equal(retained.updateTime, '原更新时间', 'Copying and blank detail metadata preserve existing fields');
   assert.equal(saved.length, 2, 'Failed task can be retried');
   stubs['service/BookSourceService'] = homeFacade;
   console.log('PASS: playable partial catalog, reentry coalescing, canonical array growth, complete-only persistence and retry');
@@ -341,16 +521,23 @@ async function testAudioLoad() {
   try {
     await connect();
     await testDom();
+    await testLegacySelectors();
     await testHome();
+    await testImportedRuleDispatch();
     await testDetailCache();
     await testAudioLoad();
+    await testImportedDefinitions();
+    await testScriptElementObjects();
   } finally {
     if (socket) {
       try { await send('Browser.close', {}, undefined); } catch (_) { /* Browser may close before replying. */ }
       socket.close();
     }
-    browser.kill();
-    await delay(200);
-    fs.rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    if (browser.exitCode === null) {
+      const closed = new Promise(resolve => browser.once('exit', resolve));
+      browser.kill();
+      await Promise.race([closed, delay(2000)]);
+    }
+    await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

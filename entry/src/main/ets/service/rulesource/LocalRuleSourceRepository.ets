@@ -362,7 +362,7 @@ export class LocalRuleSourceRepository {
     await LocalRuleSourceRepository.upsertBatch(sources);
   }
 
-  /** 重导保留本机管理状态，并跳过锁定书源。 */
+  /** 导入排在未置顶分区前面；重导保留置顶顺序和本机管理状态，跳过锁定书源。 */
   static async upsertImportedBatch(sources: LocalRuleSource[]): Promise<number> {
     return LocalRuleSourceRepository.writeBatch(sources, true);
   }
@@ -408,10 +408,14 @@ export class LocalRuleSourceRepository {
     const now = Date.now();
     let writtenCount = 0;
     try {
-      const orderRows = await transaction.querySql(`SELECT MAX(custom_order) FROM ${TABLE_NAME}`);
+      const orderRows = await transaction.querySql(`SELECT MAX(custom_order), MIN(custom_order) FROM ${TABLE_NAME}`);
       let nextOrder = 0;
+      let importOrder = -prepared.length;
       try {
-        if (orderRows.goToFirstRow()) nextOrder = orderRows.getLong(0) + 1;
+        if (orderRows.goToFirstRow()) {
+          nextOrder = orderRows.getLong(0) + 1;
+          importOrder = orderRows.getLong(1) - prepared.length;
+        }
       } finally {
         orderRows.close();
       }
@@ -440,6 +444,10 @@ export class LocalRuleSourceRepository {
           item.source.customOrder = previous.customOrder;
         } else if (item.source.customOrder === 0) {
           item.source.customOrder = nextOrder++;
+        }
+        if (importing && !item.source.isPinned) {
+          // 忽略导入文件的普通排序值，同批次保持文件顺序，已有置顶来源原位不动。
+          item.source.customOrder = importOrder++;
         }
         item = LocalRuleSourceRepository.prepare(item.source);
         const values = LocalRuleSourceRepository.toValues(item, now - index, now, createdAt);

@@ -1,7 +1,7 @@
 /**
  * 听书源与页面之间的最小数据契约。
  *
- * 在线内容只由内置音频源提供，因此这里不再携带 Legado 规则、登录或订阅字段。
+ * 规则与登录状态保存在导入源模型，这里只传递页面需要的结果。
  */
 export interface BookSource {
   bookSourceUrl: string;
@@ -25,6 +25,7 @@ export interface SearchResult {
   completed?: boolean;
   lastChapter: string;
   wordCount?: string;
+  updateTime?: string;
   sourceName: string;
   sourceUrl: string;
   variables?: Record<string, string>;
@@ -53,6 +54,7 @@ export interface BookInfo {
   wordCount: string;
   lastChapter: string;
   tocUrl: string;
+  updateTime?: string;
   variables?: Record<string, string>;
 }
 

@@ -84,7 +84,6 @@ export class LocalRuleSourceImportParser {
     source.bookSourceGroup = LocalRuleSourceImportParser.readGroupString(record, 'bookSourceGroup');
     source.bookSourceComment = LocalRuleSourceImportParser.readString(record, 'bookSourceComment');
     source.enabled = LocalRuleSourceImportParser.readBoolean(record, 'enabled', true);
-    source.enabledExplore = LocalRuleSourceImportParser.readBoolean(record, 'enabledExplore', false);
     source.isLocked = LocalRuleSourceImportParser.readBoolean(record, 'isLocked',
       LocalRuleSourceImportParser.readBoolean(record, 'locked', false));
     source.isPinned = LocalRuleSourceImportParser.readBoolean(record, 'isPinned', false);
@@ -92,6 +91,7 @@ export class LocalRuleSourceImportParser {
     source.enabledCookieJar = LocalRuleSourceImportParser.readBoolean(record, 'enabledCookieJar', true);
     source.searchUrl = LocalRuleSourceImportParser.readString(record, 'searchUrl');
     source.exploreUrl = LocalRuleSourceImportParser.readString(record, 'exploreUrl');
+    source.enabledExplore = LocalRuleSourceImportParser.readBoolean(record, 'enabledExplore', source.exploreUrl.length > 0);
     source.header = LocalRuleSourceImportParser.readJsonString(record, 'header');
     source.loginUrl = LocalRuleSourceImportParser.readString(record, 'loginUrl');
     source.loginUi = LocalRuleSourceImportParser.readJsonString(record, 'loginUi');

@@ -6,6 +6,7 @@ import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
+import { TechnicalSupportPage } from './TechnicalSupportPage';
 import { AccountPage } from './AccountPage';
 import { GuidePage } from './GuidePage';
 import { ImportPage } from './ImportPage';
@@ -366,6 +367,10 @@ struct Index {
     } else if (name === 'about') {
       ProfileMenuDestination() {
         AboutPage({ navStack: this.navStack })
+      }
+    } else if (name === 'technicalSupport') {
+      ProfileMenuDestination() {
+        TechnicalSupportPage({ navStack: this.navStack })
       }
     } else if (name === 'guide') {
       ProfileMenuDestination() {

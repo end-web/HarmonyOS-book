@@ -3,13 +3,18 @@ export class SpeechSegment {
   end: number = 0;
   text: string = '';
   leadingWhitespace: number = 0;
+  paragraphStart: number = 0;
+  paragraphEnd: number = 0;
 }
 
 /** 偏移始终对应阅读器规范化正文，分段不删除或重排原文。 */
 export class SpeechTextSegmenter {
-  static split(content: string): SpeechSegment[] {
+  static split(content: string, mergeShort: boolean = false): SpeechSegment[] {
     const result: SpeechSegment[] = [];
     let start = 0;
+    let paragraphStart = 0;
+    let paragraphEnd = content.indexOf('\n');
+    if (paragraphEnd < 0) paragraphEnd = content.length;
     for (let i = 0; i < content.length; i++) {
       const ch = content.charAt(i);
       const boundary = '。！？!?；;\n'.includes(ch) ||
@@ -26,9 +31,37 @@ export class SpeechTextSegmenter {
         const raw = content.substring(start, end);
         segment.leadingWhitespace = Math.max(0, raw.search(new RegExp('\\S')));
         segment.text = raw.trim();
-        if (segment.text.length > 0) result.push(segment);
+        if (segment.text.length > 0) {
+          const readStart = start + segment.leadingWhitespace;
+          while (readStart >= paragraphEnd && paragraphEnd < content.length) {
+            paragraphStart = paragraphEnd + 1;
+            paragraphEnd = content.indexOf('\n', paragraphStart);
+            if (paragraphEnd < 0) paragraphEnd = content.length;
+          }
+          segment.paragraphStart = paragraphStart;
+          segment.paragraphEnd = paragraphEnd;
+          result.push(segment);
+        }
         start = end;
         i = end - 1;
+      }
+    }
+    return mergeShort ? SpeechTextSegmenter.mergeShortSegments(content, result) : result;
+  }
+
+  /** HTTP 同段短句合并到约 64 字、上限约 180 字，允许附带尾部标点；不跨自然段。 */
+  private static mergeShortSegments(content: string, segments: SpeechSegment[]): SpeechSegment[] {
+    const result: SpeechSegment[] = [];
+    const punctuationOnly = new RegExp('^[\\s。，、！？!?；;：:“”‘’「」『』（）()…—.\\-]+$');
+    for (const segment of segments) {
+      const previous = result.length > 0 ? result[result.length - 1] : null;
+      const punctuation = punctuationOnly.test(segment.text);
+      if (previous !== null && previous.paragraphStart === segment.paragraphStart &&
+        (previous.text.length < 64 || punctuation) && segment.end - previous.start <= (punctuation ? 196 : 180)) {
+        previous.end = segment.end;
+        previous.text = content.substring(previous.start, previous.end).trim();
+      } else if (!punctuation) {
+        result.push(segment);
       }
     }
     return result;

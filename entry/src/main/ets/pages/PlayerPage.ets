@@ -409,6 +409,9 @@ export struct PlayerPage {
       cover: book.cover,
       category: book.category,
       intro: intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      updateTime: book.updateTime,
       totalDuration: book.totalDuration,
       chapterCount: chapters.length,
       rating: book.rating,
@@ -1852,6 +1855,7 @@ export struct PlayerPage {
     const cloned: Book = {
       id: b.id, title: b.title, author: b.author, narrator: b.narrator,
       cover: b.cover, category: b.category, intro: b.intro,
+      wordCount: b.wordCount, latestChapterTitle: b.latestChapterTitle, updateTime: b.updateTime,
       totalDuration: b.totalDuration, chapterCount: b.chapterCount,
       rating: b.rating, tags: b.tags, chapters: b.chapters,
       bookUrl: b.bookUrl, sourceUrl: b.sourceUrl,

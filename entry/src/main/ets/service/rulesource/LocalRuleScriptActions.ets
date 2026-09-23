@@ -11,6 +11,7 @@ import { LocalRuleBrowserLoginCoordinator } from './LocalRuleBrowserLoginCoordin
 import { LocalRuleBrowserRuntime } from './LocalRuleBrowserRuntime';
 import { LocalRuleHttpClient } from './LocalRuleHttpClient';
 import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
+import { LocalRuleChaCha20Poly1305 } from './LocalRuleChaCha20Poly1305';
 
 /** Typed, bounded operations requested by QuickJS. No platform object crosses the bridge. */
 export class LocalRuleScriptActions {
@@ -148,6 +149,10 @@ export class LocalRuleScriptActions {
   }
 
   private static async cipher(args: Record<string, Object>): Promise<string> {
+    if (String(args['algorithm'] ?? '').toUpperCase() === 'CHACHA20-POLY1305') {
+      return LocalRuleChaCha20Poly1305.execute(String(args['key'] ?? ''), String(args['iv'] ?? ''),
+        String(args['data'] ?? ''), String(args['aad'] ?? ''), Number(args['tagLength'] ?? 128), args['encrypt'] === true);
+    }
     const parts = String(args['algorithm'] ?? 'AES/CBC/PKCS5Padding').toUpperCase().split('/');
     const mode = parts[1] ?? 'CBC';
     const padding = parts[2] ?? 'PKCS5PADDING';

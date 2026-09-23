@@ -156,12 +156,13 @@ export class LocalRuleWebRuntime {
 
   private buildScript(task: LocalRuleWebTask): string {
     const extractor = this.buildExtractorScript();
+    const parser = this.buildDocumentParser();
     if (task.htmlBatch.length > 0) {
       return `(function(){try{
         var html=${JSON.stringify(task.htmlBatch)}, specs=${JSON.stringify(task.selectors)};
-        var extract=${extractor}, out=[], total=0;
+        var extract=${extractor}, parseHtml=${parser}, out=[], total=0;
         for(var i=0;i<html.length;i++){
-          var doc=(new DOMParser()).parseFromString(html[i],'text/html');
+          var doc=parseHtml(html[i]);
           for(var j=0;j<specs.length;j++){
             var spec=specs[j], value=JSON.stringify(extract(doc,spec.selector,spec.mode,spec.attribute,spec.xpath));
             total+=value.length;
@@ -178,9 +179,23 @@ export class LocalRuleWebRuntime {
     const attribute = JSON.stringify(task.attribute);
     const xpath = task.xpath ? 'true' : 'false';
     return `(function(){try{
-      var doc=(new DOMParser()).parseFromString(${html},'text/html');
+      var parseHtml=${parser},doc=parseHtml(${html});
       return JSON.stringify((${extractor})(doc,${selector},${mode},${attribute},${xpath}));
     }catch(e){return JSON.stringify(['__LOCAL_RULE_ERROR__'+String(e&&e.message?e.message:e)]);}})()`;
+  }
+
+  /** 表格行/单元格是列表上下文；直接当完整 HTML 解析会被浏览器丢掉标签。 */
+  private buildDocumentParser(): string {
+    return `(function(html){
+      var doc=(new DOMParser()).parseFromString(html,'text/html');
+      if(/^\\s*<(?:tr|td|th|tbody|thead|tfoot|caption|colgroup|col)(?:\\s|>)/i.test(html)){
+        var fragment=doc.createElement('template');
+        fragment.innerHTML=html;
+        doc.body.textContent='';
+        doc.body.appendChild(fragment.content);
+      }
+      return doc;
+    })`;
   }
 
   private buildExtractorScript(): string {
@@ -204,7 +219,8 @@ export class LocalRuleWebRuntime {
       }else{
         var nodeLimit=${maxNodes};
         var hasLegacy=/:contains\\(/i.test(selector)||/:(?:eq|lt|gt)\\s*\\(/i.test(selector)||
-          /:(?:first|last)(?![-\\w(])/i.test(selector)||/\\.?!-?\\d+(?::-?\\d+)*/.test(selector);
+          /:(?:first|last)(?![-\\w(])/i.test(selector)||/\\.?!-?\\d+(?::-?\\d+)*/.test(selector)||
+          /\\.-?\\d+(?::-?\\d+)+(?=$|[\\s>+~,])/.test(selector);
         if(!hasLegacy){
           var nativeSelected=doc.querySelectorAll(selector);
           for(var ni=0;ni<nativeSelected.length&&nodes.length<nodeLimit;ni++)nodes.push(nativeSelected[ni]);
@@ -286,7 +302,7 @@ export class LocalRuleWebRuntime {
           for(var groupIndex=0;groupIndex<groups.length&&nodes.length<nodeLimit;groupIndex++){
             var stages=parseStages(groups[groupIndex]), currentNodes=[doc];
             for(var stageIndex=0;stageIndex<stages.length;stageIndex++){
-              var stage=stages[stageIndex], containsTexts=[], indexOps=[], excludedText='';
+              var stage=stages[stageIndex], containsTexts=[], indexOps=[], excludedText='', selectedText='';
               var nativeSelector=stage.selector.replace(
                 /:contains\\(\\s*(["']?)(.*?)\\1\\s*\\)/gi,function(_all,_quote,text){
                   containsTexts.push(String(text||''));return '';
@@ -302,6 +318,10 @@ export class LocalRuleWebRuntime {
               nativeSelector=nativeSelector.replace(
                 /\\.?!(\\-?\\d+(?::\\-?\\d+)*)\\s*$/i,function(_all,indexes){
                   excludedText=String(indexes||'');return '';
+                }).trim()||'*';
+              nativeSelector=nativeSelector.replace(
+                /\\.(-?\\d+(?::-?\\d+)+)\\s*$/,function(_all,indexes){
+                  selectedText=String(indexes||'');return '';
                 }).trim()||'*';
               var candidates=[];
               for(var contextIndex=0;contextIndex<currentNodes.length&&candidates.length<nodeLimit;contextIndex++){
@@ -330,6 +350,22 @@ export class LocalRuleWebRuntime {
                   for(var gi=gtStart+1;gi<filtered.length;gi++)if(gi>=0)narrowed.push(filtered[gi]);
                 }
                 filtered=narrowed;
+              }
+              if(selectedText){
+                var selectedParts=selectedText.split(':'), picked=[];
+                if(selectedParts.length===2){
+                  var begin=Number(selectedParts[0]),end=Number(selectedParts[1]);
+                  if(begin<0)begin+=filtered.length;
+                  if(end<0)end+=filtered.length;
+                  picked=filtered.slice(Math.max(0,begin),Math.max(0,Math.min(filtered.length,end)));
+                }else{
+                  for(var si=0;si<selectedParts.length;si++){
+                    var selectedIndex=Number(selectedParts[si]);
+                    if(selectedIndex<0)selectedIndex+=filtered.length;
+                    if(selectedIndex>=0&&selectedIndex<filtered.length)appendUnique(picked,filtered[selectedIndex]);
+                  }
+                }
+                filtered=picked;
               }
               if(excludedText){
                 var excludedParts=excludedText.split(':'), excludedIndexes={};

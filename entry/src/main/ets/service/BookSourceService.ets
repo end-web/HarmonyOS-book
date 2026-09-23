@@ -1,7 +1,7 @@
 import { DataService } from './DataService';
 /** 用户导入规则源的统一内容门面。 */
 import { AudioSource, Book, Chapter } from '../model/Book';
-import { BookInfo, BookSource, HomeBlockSection, SearchResult, TocItem } from '../model/BookSource';
+import { BookInfo, BookSource, SearchResult, TocItem } from '../model/BookSource';
 import { LocalRuleSource, LocalRuleSourceHealth, LocalRuleSourceStatus } from '../model/LocalRuleSource';
 import { TextChapterContent, TextSourceError } from '../model/TextReading';
 import { ChapterTitleFormatter } from '../utils/ChapterTitleFormatter';
@@ -10,8 +10,6 @@ import { LocalRuleContentResult } from './rulesource/LocalRuleRuntimeTypes';
 import { LocalRuleDispatcher } from './rulesource/LocalRuleDispatcher';
 import { NativeRuleSourceDispatcher } from './rulesource/NativeRuleSourceDispatcher';
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
-import { TingYouSourceAdapter } from './rulesource/tingyou/TingYouSourceAdapter';
-import { TingYouSourceIdentity } from './rulesource/tingyou/TingYouSourceIdentity';
 import { LocalRulePanelService } from './rulesource/LocalRulePanelService';
 import { LocalRuleDiagnostics } from './rulesource/LocalRuleDiagnostics';
 import { TalebookSourceIdentity } from './rulesource/talebook/TalebookSourceIdentity';
@@ -125,8 +123,9 @@ export class BookSourceService {
       else if (['=.=','==', '暂无', '暂无简介', '暂无介绍', '无'].includes(book.intro.replace(/\s+/g, ''))) book.intro = '';
       if (info.kind.trim()) book.category = info.kind;
       if (info.completed !== undefined) book.completed = info.completed;
-      const count = Number(info.wordCount.match(/[0-9]+/)?.[0] ?? '0');
-      if (Number.isSafeInteger(count) && count > 0) book.chapterCount = count;
+      if (info.wordCount.trim()) book.wordCount = info.wordCount;
+      if (info.lastChapter.trim()) book.latestChapterTitle = info.lastChapter;
+      if (info.updateTime?.trim()) book.updateTime = info.updateTime;
       book.variables = BookSourceService.mergeVariables(BookSourceService.copyVariables(book.variables), info.variables);
     }
     BookSourceService.notifyAudioBook(task);
@@ -263,10 +262,10 @@ export class BookSourceService {
       return '搜索请求正常，当前关键词暂无匹配，已保留书源';
     }
 
-    const contentType: 'audio' | 'text' = source.isAudio() ? 'audio' : 'text';
+    const contentType: 'audio' | 'text' = results[0].contentType ?? (source.isAudio() ? 'audio' : 'text');
     const bookName = await BookSourceService.validateCandidates(
       source, results, contentType, false);
-    return source.isAudio()
+    return contentType === 'audio'
       ? `搜索、详情、目录与音频解析正常：${bookName}`
       : `搜索、详情、目录与正文解析正常：${bookName}`;
   }
@@ -310,7 +309,7 @@ export class BookSourceService {
             source.isAudio() ? 'audio' : 'text', isCancelled, true);
           BookSourceService.checkHealthCancellation(isCancelled);
           health.status = LocalRuleSourceStatus.READY;
-          health.message = `发现、详情、目录与${source.isAudio() ? '音频' : '正文'}解析正常：${candidate.name}`;
+          health.message = `发现、详情、目录与${(candidate.contentType ?? (source.isAudio() ? 'audio' : 'text')) === 'audio' ? '音频' : '正文'}解析正常：${candidate.name}`;
           return health;
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
@@ -428,6 +427,8 @@ export class BookSourceService {
     if (info === null) throw new Error(`详情解析失败：${result.name}`);
 
     const variables = BookSourceService.mergeVariables(searchVariables, info.variables);
+    const resolvedType = result.contentType ?? contentType;
+    variables['__bookContentType'] = resolvedType;
     const tocUrl = info.tocUrl.trim().length > 0 ? info.tocUrl : result.bookUrl;
     const toc = await BookSourceService.getBookToc(source, tocUrl, variables, result.name);
     BookSourceService.checkHealthCancellation(isCancelled);
@@ -435,7 +436,7 @@ export class BookSourceService {
     const chapters = publicOnly ? toc.filter((chapter: TocItem): boolean =>
       !chapter.isVolume && !chapter.isVip && !chapter.isPay) : toc;
     if (chapters.length === 0) throw new Error('目录正常，但没有可校验的免费章节');
-    await BookSourceService.validateChapterCandidates(source, chapters, variables, contentType, isCancelled);
+    await BookSourceService.validateChapterCandidates(source, chapters, variables, resolvedType, isCancelled);
   }
 
   private static async validateChapterCandidates(source: LocalRuleSource, toc: TocItem[],
@@ -593,15 +594,17 @@ export class BookSourceService {
     return { url: chapterUrl, headers: emptyHeaders };
   }
 
-  static async loadTextBook(book: Book, onMetadata?: (book: Book) => void): Promise<Book> {
+  static async loadTextBook(book: Book, onMetadata?: (book: Book) => void,
+    metadataOnly: boolean = false): Promise<Book> {
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
     const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
-    if (localSource === undefined || (!usesNativeAdapter && !localSource.isText()) ||
+    if (localSource === undefined || (!usesNativeAdapter && !localSource.isText() && book.contentType !== 'text') ||
       !localSource.canExecute()) {
       throw new TextSourceError('SOURCE_NOT_FOUND', '本地书源不可用或已被删除');
     }
 
     const variables = BookSourceService.copyVariables(book.variables);
+    variables['__bookContentType'] = 'text';
     const info = usesNativeAdapter
       ? await NativeRuleSourceDispatcher.getBookInfo(book.sourceUrl, book.bookUrl)
       : await LocalRuleDispatcher.getBookInfo(localSource, book.bookUrl, variables);
@@ -619,8 +622,12 @@ export class BookSourceService {
       if (info.intro.length > 0) value.intro = info.intro;
       if (info.kind.length > 0) value.category = info.kind;
       if (info.completed !== undefined) value.completed = info.completed;
+      if (info.wordCount.trim()) value.wordCount = info.wordCount;
+      if (info.lastChapter.trim()) value.latestChapterTitle = info.lastChapter;
+      if (info.updateTime?.trim()) value.updateTime = info.updateTime;
       value.variables = resolvedVariables;
     }
+    if (metadataOnly) return value;
     if (onMetadata !== undefined) onMetadata(BookSourceService.copyBook(value));
     const toc = usesNativeAdapter
       ? await NativeRuleSourceDispatcher.getBookToc(book.sourceUrl, tocUrl)
@@ -653,12 +660,13 @@ export class BookSourceService {
     }
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
     const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
-    if (localSource === undefined || (!usesNativeAdapter && !localSource.isText()) ||
+    if (localSource === undefined || (!usesNativeAdapter && !localSource.isText() && book.contentType !== 'text') ||
       !localSource.canExecute()) {
       throw new TextSourceError('SOURCE_NOT_FOUND', '本地书源不可用或已被删除');
     }
     const scopedVariables = BookSourceService.mergeVariables(
       BookSourceService.copyVariables(book.variables), chapterVariables);
+    scopedVariables['__bookContentType'] = 'text';
     const result = usesNativeAdapter
       ? await NativeRuleSourceDispatcher.resolveContent(book.sourceUrl, chapterUrl)
       : await LocalRuleDispatcher.resolveContent(localSource, chapterUrl, scopedVariables);
@@ -671,33 +679,11 @@ export class BookSourceService {
   static async getExploreBooksByUrl(source: BookSource, categoryUrl: string,
     _page: number = 1, resultLimit: number = 50): Promise<ExploreFetchResult> {
     const localSource = await BookSourceService.resolveLocalSource(source);
-    if (localSource !== undefined && TingYouSourceIdentity.isSourceUrl(localSource.bookSourceUrl)) {
-      const category = await TingYouSourceAdapter.getCategory(localSource, categoryUrl, _page);
-      const result: ExploreFetchResult = {
-        books: category.books,
-        nextUrl: category.nextUrl
-      };
-      return result;
-    }
     if (localSource !== undefined) {
       const result = await LocalRuleDispatcher.explore(localSource, categoryUrl, _page, {}, resultLimit);
       return { books: result.books, nextUrl: result.nextUrl, nextPage: _page + 1 };
     }
     return { books: [], nextUrl: '' };
-  }
-
-  static async getExploreBooks(source: BookSource): Promise<SearchResult[]> {
-    const result = await BookSourceService.getExploreBooksByUrl(
-      source, 'types/46/popular/p1', 1);
-    return result.books;
-  }
-
-  static async getHomeBlocks(source: BookSource): Promise<HomeBlockSection[]> {
-    const localSource = await BookSourceService.resolveLocalSource(source);
-    if (localSource !== undefined && TingYouSourceIdentity.isSourceUrl(localSource.bookSourceUrl)) {
-      return TingYouSourceAdapter.getHomeBlocks(localSource);
-    }
-    return [];
   }
 
   private static async resolveLocalSource(source: BookSource): Promise<LocalRuleSource | undefined> {
@@ -736,6 +722,9 @@ export class BookSourceService {
       cover: book.cover,
       category: book.category,
       intro: book.intro,
+      wordCount: book.wordCount,
+      latestChapterTitle: book.latestChapterTitle,
+      updateTime: book.updateTime,
       totalDuration: book.totalDuration,
       chapterCount: book.chapterCount,
       rating: book.rating,

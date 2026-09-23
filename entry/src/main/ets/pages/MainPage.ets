@@ -50,6 +50,7 @@ export struct MainPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBackHandlerChange: (handler: (() => boolean) | undefined) => void = () => {};
   private homeBackHandler: (() => boolean) | undefined = undefined;
+  private shelfBackHandler: (() => boolean) | undefined = undefined;
   @Local currentTab: number = 0;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
   /** 当前迷你栏样式,折叠态下让 MiniPlayer 只渲染封面 */
@@ -81,6 +82,7 @@ export struct MainPage {
 
   aboutToAppear(): void {
     this.onBackHandlerChange((): boolean => {
+      if (this.currentTab === 1) return this.shelfBackHandler?.() ?? false;
       return this.currentTab === 0 && (this.homeBackHandler?.() ?? false);
     });
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -343,6 +345,9 @@ export struct MainPage {
 
         TabContent() {
           FavoritePage({
+            onBackHandlerChange: (handler: (() => boolean) | undefined): void => {
+              this.shelfBackHandler = handler;
+            },
             visible: this.currentTab === 1,
             navStack: this.navStack,
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),

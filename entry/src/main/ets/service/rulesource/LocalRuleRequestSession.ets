@@ -3,11 +3,18 @@ import { LocalRuleRequestPlan } from './LocalRuleRuntimeTypes';
 
 /** Declarative request sessions operate only on the current source and destination. */
 export class LocalRuleRequestSession {
-  static apply(plan: LocalRuleRequestPlan): string {
+  static apply(plan: LocalRuleRequestPlan, storedCookieHeader: string = ''): string {
     const config = plan.session;
     if (Object.keys(config).length === 0) return '';
     const destination = new url.URL(plan.url);
     const cookies: Record<string, string> = {};
+    for (const part of storedCookieHeader.split(';')) {
+      const separator = part.indexOf('=');
+      if (separator <= 0) continue;
+      const name = part.substring(0, separator).trim();
+      const value = part.substring(separator + 1).trim();
+      if (LocalRuleRequestSession.validName(name) && LocalRuleRequestSession.validValue(value)) cookies[name] = value;
+    }
     let cookieKey = 'Cookie';
     let hasReferer = false;
     for (const key of Object.keys(plan.headers)) {
@@ -37,10 +44,9 @@ export class LocalRuleRequestSession {
         : rule.toLowerCase() === 'request' ? plan.url : LocalRuleRequestSession.expand(rule, destination);
       if (new RegExp('^https?://', 'i').test(referer) && !new RegExp('[\\r\\n]').test(referer)) plan.headers['Referer'] = referer;
     }
-    if (!changed) return '';
     const header = Object.keys(cookies).map((name: string): string => `${name}=${cookies[name]}`).join('; ');
-    plan.headers[cookieKey] = header;
-    return header;
+    if (header) plan.headers[cookieKey] = header;
+    return changed ? header : '';
   }
 
   private static names(value: Object | undefined): Record<string, string> {

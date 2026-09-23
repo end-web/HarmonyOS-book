@@ -308,13 +308,15 @@ export struct ReaderPage {
       }
       if (this.isOnlineTextBookValue(value) && value.chapters.length === 0) {
         value = await BookSourceService.loadTextBook(value);
-        if (value.chapters.length > 0) await DataService.upsertCachedBook(value);
+
       }
       if (this.isOnlineTextBookValue(value) && value.chapters.length === 0) {
         this.failReader('这本书暂时没有可读章节');
         return;
       }
       if (this.leaving) return;
+      // 阅读记录依赖持久书籍身份，已有目录时也必须保存。
+      await DataService.upsertCachedBook(value);
       await PreferenceService.applyTocOrder(value);
       this.book = value;
       this.chapterDataSource.setChapters(PreferenceService.orderedChapters(value));
@@ -1416,7 +1418,8 @@ export struct ReaderPage {
     const state = this.speechState;
     if (this.leaving || !state.active || !state.follow || state.bookId !== this.bookId ||
       !state.playing || this.followingSpeech || this.onlineTextTurnPreview !== null) return;
-    const readOffset = Math.max(state.charOffset, state.highlightOffset);
+    // 自然段跨页时仍按实际朗读句起点跟随，整段高亮不把页面拉回段首。
+    const readOffset = state.charOffset;
     if (state.chapterIndex !== this.currentResourceIndex) {
       if (this.onlineTextLoading || this.speechFollowChapter === state.chapterIndex) return;
       this.followingSpeech = true;
@@ -1516,7 +1519,7 @@ export struct ReaderPage {
                 onOpen: (): void => { this.openSpeechSheet(); } })
             }
             .width('100%').justifyContent(FlexAlign.End)
-            .padding({ right: 16 }).margin({ bottom: this.bottomSafeVp + 110 })
+            .padding({ right: 16 }).margin({ bottom: this.bottomSafeVp + 86 })
             .hitTestBehavior(HitTestMode.Transparent)
           }
         }

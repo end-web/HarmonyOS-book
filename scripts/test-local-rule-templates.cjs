@@ -37,7 +37,6 @@ const stubs = {
   },
   [prefix + 'LocalRuleScriptActions']: { LocalRuleScriptActions: { PREFIX: 'local-rule-action:' } },
   [prefix + 'LocalRuleBrowserActions']: { LocalRuleBrowserActions: { PREFIX: 'local-rule-browser:' } },
-  [prefix + 'tingyou/TingYouSourceAdapter']: { TingYouSourceAdapter: { canResolveBook: () => false, canResolve: () => false } },
   [prefix + 'talebook/TalebookSourceIdentity']: { TalebookSourceIdentity: { isSourceUrl: () => false } },
   [prefix + 'talebook/TalebookSourceAdapter']: { TalebookSourceAdapter: {} },
   [prefix + 'LocalRuleWebRuntime']: {
@@ -67,11 +66,70 @@ const { LocalRuleStageExtractor: extractor } = load(prefix + 'LocalRuleStageExtr
 const { LocalRuleDispatcher: dispatcher } = load(prefix + 'LocalRuleDispatcher');
 const { LocalRuleUrlAnalyzer: urls } = load(prefix + 'LocalRuleUrlAnalyzer');
 const { LocalRuleSourceImportParser: parser } = load(prefix + 'LocalRuleSourceImportParser');
+const { LocalRuleMetadataText: metadataText } = load(prefix + 'LocalRuleMetadataText');
 const origin = 'https://rules.example.com';
 const bookUrl = origin + '/book/123456.html';
 
 async function run() {
+  for (const [input, expected] of [
+    ['第一段</br>第二段<br />第三段', '第一段\n第二段\n第三段'],
+    ['&lt;p&gt;简介&amp;nbsp;第一段&lt;/p&gt;&lt;p&gt;第二段&lt;/p&gt;', '简介 第一段\n\n第二段'],
+    ['&amp;lt;br&amp;gt;正文&#x4E2D;&#25991;&#x1F4D6;', '正文中文📖'],
+    ['<script>不应显示</script><style>.x{}</style><p>保留<b>内容</b></p>', '保留内容'],
+    ['&ldquo;书名&rdquo;&mdash;作者&hellip;', '“书名”—作者…'],
+    ['3 < 5，A & B，<未来世界>', '3 < 5，A & B，<未来世界>'],
+    ['<p>&nbsp;暂无简介</p>', ''], ['&#x110000;&#xD800;', '��']
+  ]) assert.equal(metadataText.intro(input), expected, `metadata: ${input}`);
+  const directAudio = LocalRuleSource.descriptor(origin, 'Explicit direct audio');
+  directAudio.bookSourceType = 1;
+  const signedStream = origin + '/stream?sign=fixture';
+  assert.equal(dispatcher.resolveDirectAudioRequest(directAudio, signedStream).audioUrl, signedStream,
+    'An audio source without content extraction may use an extensionless signed URL');
+  directAudio.ruleContent.content = '$.audioUrl';
+  assert.equal(dispatcher.resolveDirectAudioRequest(directAudio, signedStream), undefined,
+    'Configured content extraction remains active');
+  directAudio.ruleContent.content = '';
+  assert.equal(dispatcher.resolveDirectAudioRequest(directAudio, signedStream + ',{"webView":true}'), undefined,
+    'Explicit browser requests must not be bypassed by direct audio');
   const source = LocalRuleSource.descriptor(origin, 'Template compatibility');
+  const compatDocument = extractor.createDocument('', bookUrl);
+  assert.equal(await extractor.extract(compatDocument, `<js>
+    var stream = new Packages.java.io.ByteArrayOutputStream();
+    stream.write([65, 255, 66], 0, 2); stream.write(256); stream.close();
+    var first = stream.toByteArray(); first[0] = 0;
+    var actual = stream.toByteArray(); var size = stream.size(); stream.reset();
+    'bytes=' + JSON.stringify([actual, size, stream.size()]);</js>`, source), 'bytes=[[65,255,0],3,0]');
+  assert.equal(await extractor.extract(compatDocument, `<js>
+    var p = new javax.crypto.spec.GCMParameterSpec(128, [1,2,3,4], 1, 2);
+    var copy = p.getIV(); copy[0] = 9;
+    'params=' + JSON.stringify([p.getTLen(), p.getIV()]);</js>`, source), 'params=[128,[2,3]]');
+  await assert.rejects(() => extractor.extract(compatDocument,
+    '<js>new javax.crypto.spec.GCMParameterSpec(128,[1],0,2)</js>', source), /Invalid nonce range/);
+  const { LocalRuleRegexCompat: regex } = load(prefix + 'LocalRuleRegexCompat');
+  assert.equal(extractor.applyCleanup('广告\n中间\n结束 正文', '(?s)广告.*?结束'), ' 正文');
+  assert.equal(extractor.applyCleanup('ABC abc', '(?i)abc##[$0]'), '[ABC] [abc]');
+  assert.equal(extractor.applyCleanup('a.b [x]', String.raw`\Qa.b\E##保留`), '保留 [x]');
+  assert.equal(extractor.applyCleanup(' a\t b\r\nc', String.raw`\h+|\R##/`), '/a/b/c');
+  assert.equal(extractor.applyCleanup('汉字123', String.raw`\p{L}+##文字`), '文字123');
+  assert.equal(extractor.applyCleanup('aaaa!', 'a++##A'), 'A!');
+  assert.equal(extractor.applyCleanup('aaaa!', '(?>a+)##A'), 'A!');
+  assert.equal(extractor.applyCleanup('ab', String.raw`(a)(b)##$2\$1`), 'b$1');
+  assert.equal(regex.compile(String.raw`end\z`).test('end\n'), false);
+  assert.equal(regex.compile(String.raw`end\Z`).test('end\n'), true);
+  assert.equal(regex.compile('(?x)a  #comment\n b').test('ab'), true);
+  assert.throws(() => regex.compile('(a++)+'), /嵌套重复/);
+  assert.throws(() => regex.compile('a'.repeat(32769)), /32 KiB/);
+  const regexDocument = extractor.createDocument('<item>12:第一章</item><item>34:第二章</item>', bookUrl);
+  const captured = await extractor.selectList(regexDocument, String.raw`:<item>.*?</item>&&(\d+):([^<]+)`, source);
+  assert.equal(captured.length, 2);
+  assert.equal(await extractor.extract(captured[0], "$['$0']", source), '12:第一章');
+  assert.equal(await extractor.extract(captured[1], "$['$1']", source), '34');
+  assert.equal(await extractor.extract(captured[1], "$['$2']", source), '第二章');
+  assert.equal(await extractor.extract(captured[1], '<js>result.$1 + ":" + result.$2</js>', source), '34:第二章');
+  assert.equal((await extractor.selectList(regexDocument, ':not-matched', source)).length, 0);
+  assert.equal((await extractor.selectList(extractor.createDocument('ab', bookUrl), ':^|$', source)).length, 2);
+  assert.equal(await extractor.extract(extractor.createDocument('AB 12', bookUrl), '%(AB) (\\d+)', source), 'AB 12\nAB\n12');
+  console.log('PASS: Java regex dialect, replacement groups, bounded conversion and typed chained regex lists');
   const document = extractor.createDocument(JSON.stringify({ bookStatus: 1, wordCount: 10,
     'book-id': 'keep-hyphen', 'a?b': 'keep-question', items: [{ enabled: true, name: 'kept' }] }), bookUrl);
   for (const [rule, expected] of [
@@ -93,11 +151,19 @@ async function run() {
 
   // Exercise context before detail fields and persistence into the returned book.
   source.ruleBookInfo.name = '<js>book.bookUrl</js>';
+  source.ruleBookInfo.intro = '<js>"简介&lt;br&gt;第二段&#x3002;"</js>';
+  source.ruleBookInfo.wordCount = '<js>"123万字"</js>';
+  source.ruleBookInfo.lastChapter = '<js>"第十二章"</js>';
+  source.ruleBookInfo.updateTime = '<js>"2026-09-23 18:30"</js>';
   source.ruleBookInfo.tocUrl = '/book/indexList-{{id}}';
   responses.set(bookUrl, 'detail fixture');
   const info = await dispatcher.getBookInfo(source, bookUrl);
   assert.ok(info);
   assert.equal(info.name, bookUrl);
+  assert.equal(info.intro, '简介\n第二段。');
+  assert.equal(info.wordCount, '123万字');
+  assert.equal(info.lastChapter, '第十二章');
+  assert.equal(info.updateTime, '2026-09-23 18:30');
   assert.equal(info.tocUrl, origin + '/book/indexList-123456.html');
   assert.equal(info.variables.bookUrl, bookUrl);
   const custom = await dispatcher.getBookInfo(source, bookUrl, { id: 'explicit' });
@@ -124,6 +190,21 @@ async function run() {
   const audio = await dispatcher.resolveContent(source, chapterUrl, chapters[0].variables);
   assert.equal(audio.audioUrl, origin + '/audio/episode.mp3');
   assert.equal(requests.filter(url => url === origin + '/audio?id=123456').length, 1);
+
+  const mixed = LocalRuleSource.descriptor(origin + '/mixed', 'Declared media type');
+  mixed.searchUrl = origin + '/mixed/search';
+  mixed.ruleSearch.bookList = '$.books';
+  mixed.ruleSearch.name = '$.name<js>source.put("type","audio"); result</js>';
+  mixed.ruleSearch.bookUrl = '$.url';
+  mixed.ruleSearch.updateTime = '$.updated';
+  responses.set(mixed.searchUrl, { books: [{ name: '音频示例', url: '/stream', updated: '2026-09-23' }] });
+  const mixedResults = await dispatcher.search(mixed, '示例');
+  assert.equal(mixedResults[0].contentType, 'audio');
+  assert.equal(mixedResults[0].updateTime, '2026-09-23');
+  assert.equal(mixedResults[0].variables.__bookContentType, 'audio');
+  const audioVariables = { ...mixedResults[0].variables, __sourceContentType: 'text' };
+  assert.equal(dispatcher.resolveDirectAudioRequest(mixed, signedStream, audioVariables).audioUrl, signedStream,
+    'A saved audio book retains its declared type after the discovery source changes mode');
 
   // Optional user definitions stay outside the repository; execute their original rules.
   const files = process.argv.slice(2);

@@ -2,6 +2,10 @@ import { SpeechBookCover } from './SpeechBookCover';
 import { TextToSpeechState, SpeechVoice } from '../model/TextToSpeechState';
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { AppColor } from '../theme/Theme';
+import { ReaderTtsTabs } from './ReaderTtsTabs';
+import { CustomTtsConfig } from '../model/CustomTtsConfig';
+import { CustomTtsImportService } from '../service/text/CustomTtsImportService';
+import { CustomTtsConfigParser } from '../service/text/CustomTtsConfigParser';
 
 @ComponentV2
 export struct ReaderSpeechSheet {
@@ -13,7 +17,49 @@ export struct ReaderSpeechSheet {
   @Param canResume: boolean = false;
   @Event onStart: (restore: boolean) => void = (): void => {};
   @Event onClose: () => void = (): void => {};
+  @Local importing: boolean = false;
+  @Local showPaste: boolean = false;
+  @Local importText: string = '';
+  @Local importMessage: ResourceStr = '';
   private service: TextToSpeechService = TextToSpeechService.getInstance();
+
+  private async pickTts(): Promise<void> {
+    const context = this.getUIContext().getHostContext();
+    if (!context || this.importing) return;
+    this.importing = true;
+    this.importMessage = '';
+    try {
+      const result = await CustomTtsImportService.pick(context);
+      await this.service.importCustomTts(result.configs);
+      if (result.failedFiles > 0) {
+        this.importMessage = $r('app.string.tts_custom_import_partial', result.configs.length, result.failedFiles);
+      } else if (result.configs.length > 0) {
+        this.importMessage = $r('app.string.tts_custom_import_success', result.configs.length);
+      }
+    } catch (_error) { this.importMessage = $r('app.string.tts_custom_import_error'); }
+    finally { this.importing = false; }
+  }
+
+  private async pasteTts(): Promise<void> {
+    if (this.importing) return;
+    this.importing = true;
+    try {
+      const configs = CustomTtsConfigParser.parse(this.importText);
+      await this.service.importCustomTts(configs);
+      this.importText = '';
+      this.showPaste = false;
+      this.importMessage = $r('app.string.tts_custom_import_success', configs.length);
+    } catch (_error) { this.importMessage = $r('app.string.tts_custom_import_error'); }
+    finally { this.importing = false; }
+  }
+
+  private async deleteTts(config: CustomTtsConfig): Promise<void> {
+    if (this.importing) return;
+    this.importing = true;
+    try { await this.service.removeCustomTts(config.id); }
+    catch (_error) { this.importMessage = $r('app.string.tts_save_error'); }
+    finally { this.importing = false; }
+  }
 
   private toggle(): void {
     if (this.state.bookId !== this.bookId) { this.onStart(false); return; }
@@ -56,16 +102,22 @@ export struct ReaderSpeechSheet {
             .backgroundColor($r('sys.color.comp_background_tertiary')).fontColor($r('sys.color.font_primary'))
             .enabled(this.state.bookId === this.bookId && this.state.chapterIndex > 0)
             .onClick((): void => { this.service.moveChapter(-1); })
-          Button(this.state.bookId === this.bookId && (this.state.playing || this.state.loading)
-            ? $r('app.string.tts_pause') : $r('app.string.tts_play'))
-            .backgroundColor($r('sys.color.comp_background_tertiary')).fontColor($r('sys.color.font_primary'))
-            .onClick((): void => this.toggle()).id('tts-toggle')
+          Stack({ alignContent: Alignment.End }) {
+            Button(this.state.bookId === this.bookId && (this.state.playing || this.state.loading)
+              ? $r('app.string.tts_pause') : $r('app.string.tts_play'))
+              .padding({ left: 24, right: 24 })
+              .backgroundColor($r('sys.color.comp_background_tertiary')).fontColor($r('sys.color.font_primary'))
+              .onClick((): void => this.toggle()).id('tts-toggle')
+            if (this.state.bookId === this.bookId && this.state.loading) {
+              LoadingProgress().width(14).height(14).color(AppColor.Brand)
+                .margin({ right: 6 }).hitTestBehavior(HitTestMode.None)
+            }
+          }
           Button($r('app.string.tts_next'))
             .backgroundColor($r('sys.color.comp_background_tertiary')).fontColor($r('sys.color.font_primary'))
             .enabled(this.state.bookId === this.bookId && this.state.chapterIndex + 1 < this.state.chapterCount)
             .onClick((): void => { this.service.moveChapter(1); })
         }.width('100%').justifyContent(FlexAlign.SpaceBetween)
-        if (this.state.loading) { LoadingProgress().width(24).height(24).color(AppColor.Brand) }
         Row({ space: 8 }) {
           Button($r('app.string.tts_from_page')).fontSize(13).layoutWeight(1)
             .backgroundColor($r('sys.color.comp_background_tertiary')).fontColor($r('sys.color.font_primary'))
@@ -91,6 +143,37 @@ export struct ReaderSpeechSheet {
             .onChange((value: boolean): void => this.service.setFollow(value))
         }.width('100%')
 
+        Row({ space: 12 }) {
+          Text($r('app.string.tts_custom_title')).fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Medium).layoutWeight(1)
+          ReaderTtsTabs({ configs: this.state.customTtsConfigs, selectedId: this.state.customTtsId,
+            onSelect: (config: CustomTtsConfig): void => { this.service.selectCustomTts(config.id); },
+            onDelete: (config: CustomTtsConfig): void => { this.deleteTts(config); } })
+            .constraintSize({ maxWidth: '72%' })
+            .enabled(!this.importing && !this.state.downloadingVoice).id('tts-custom-select')
+        }.width('100%')
+        Row({ space: 8 }) {
+          Button($r('app.string.tts_custom_import')).fontSize(13).fontColor(AppColor.Brand)
+            .backgroundColor($r('sys.color.comp_background_tertiary')).enabled(!this.importing)
+            .onClick((): void => { this.pickTts(); }).id('tts-custom-import')
+          Button($r('app.string.tts_custom_paste')).fontSize(13).fontColor(AppColor.Brand)
+            .backgroundColor($r('sys.color.comp_background_tertiary')).enabled(!this.importing)
+            .onClick((): void => { this.showPaste = !this.showPaste; })
+          if (this.importing) { LoadingProgress().width(24).height(24).color(AppColor.Brand) }
+        }
+        if (this.showPaste) {
+          TextArea({ text: this.importText, placeholder: $r('app.string.tts_custom_paste_hint') })
+            .height(120).maxLength(1024 * 1024).onChange((value: string): void => { this.importText = value; })
+          Button($r('app.string.tts_custom_confirm')).fontColor(AppColor.Brand)
+            .backgroundColor($r('sys.color.comp_background_tertiary')).enabled(!this.importing && this.importText.trim().length > 0)
+            .onClick((): void => { this.pasteTts(); })
+        }
+        Text($r('app.string.tts_custom_hint')).fontSize(12).fontColor($r('sys.color.font_secondary')).width('100%')
+        if (this.importMessage !== '') {
+          Text(this.importMessage).fontSize(13).fontColor(AppColor.Brand).width('100%')
+        }
+
+        if (!this.state.customTtsId) {
         Row() {
           Text($r('app.string.tts_voice')).fontColor($r('sys.color.font_primary')).layoutWeight(1)
           Button($r('app.string.tts_refresh')).fontSize(13).fontColor(AppColor.Brand)
@@ -104,6 +187,9 @@ export struct ReaderSpeechSheet {
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             if (this.state.downloadingVoice === voice.id) {
               LoadingProgress().width(24).height(24).color(AppColor.Brand)
+            } else if (voice.installed && this.state.isVoiceSelected(voice)) {
+              SymbolGlyph($r('sys.symbol.checkmark')).fontSize(20).fontColor([AppColor.Brand])
+                .width(40).accessibilityText($r('app.string.tts_selected'))
             } else {
               Button(!voice.installed ? $r('app.string.tts_download') :
                 (this.state.isVoiceSelected(voice)
@@ -116,6 +202,7 @@ export struct ReaderSpeechSheet {
           }.width('100%').padding(10).borderRadius(12)
             .backgroundColor($r('sys.color.comp_background_tertiary'))
         }, (voice: SpeechVoice): string => voice.id)
+        }
 
         Text($r('app.string.tts_sleep')).fontColor($r('sys.color.font_primary')).width('100%').fontWeight(FontWeight.Medium)
         Row({ space: 6 }) {

@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { Book, Chapter } from '../model/Book';
 import { PreferenceService } from './PreferenceService';
+import { TextReadingProgressService } from './text/TextReadingProgressService';
 import { StorageMigrationService } from './StorageMigrationService';
 
 /** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
@@ -370,6 +371,10 @@ export class DataService {
       cover: b.cover,
       category: b.category,
       intro: '',
+      wordCount: b.wordCount,
+      latestChapterTitle: b.latestChapterTitle,
+      updateTime: b.updateTime,
+      completed: b.completed,
       totalDuration: b.totalDuration,
       chapterCount: b.chapterCount,
       rating: b.rating,
@@ -475,20 +480,25 @@ export class DataService {
     return fileIo.readText(chapterUrl);
   }
 
-  /** 把搜索 / 在线源的书写入缓存池(去重,新数据覆盖旧的;最多 200 本)。索引存壳,章节存 sidecar。 */
+  /** 把搜索 / 在线源的书写入缓存池(去重,新数据覆盖旧的;无历史引用的临时书最多 200 本)。索引存壳,章节存 sidecar。 */
   static async upsertCachedBook(book: Book): Promise<void> {
     if (!book || !book.id) return;
     if (book.id.startsWith('import_')) return;
+    const protectedIds = await DataService.historyBookIds();
     const list = await DataService.loadCachedBooks();
     const idx = list.findIndex((b) => b.id === book.id);
     if (idx >= 0) {
       list.splice(idx, 1);
     }
     list.unshift(book); // 内存保留完整书(含章节),本会话内访问瞬时
-    if (list.length > MAX_CACHED_BOOKS) {
-      const removed = list.splice(MAX_CACHED_BOOKS, list.length - MAX_CACHED_BOOKS);
-      for (const r of removed) {
-        if (r && r.id) await DataService.deleteToc(r.id); // 淘汰的书清掉其 sidecar,避免孤儿文件
+    if (protectedIds !== null) {
+      let disposableCount = 0;
+      for (let index = 0; index < list.length; index++) {
+        if (protectedIds.has(list[index].id)) continue;
+        disposableCount++;
+        if (disposableCount <= MAX_CACHED_BOOKS) continue;
+        const removed = list.splice(index--, 1)[0];
+        await DataService.deleteToc(removed.id);
       }
     }
     DataService.cachedBooksMem = list;
@@ -497,6 +507,17 @@ export class DataService {
     if (book.tocComplete !== false && book.chapters && book.chapters.length > 0) {
       await DataService.writeToc(book.id, book.chapters);
     }
+  }
+
+  /** 收藏/历史属于用户数据；读取引用失败时暂停淘汰，不能按空历史处理。 */
+  private static async historyBookIds(): Promise<Set<string> | null> {
+    if (!DataService.ctx) return null;
+    try {
+      const ids = new Set<string>(await PreferenceService.getFavorites());
+      for (const item of await PreferenceService.getHistory()) ids.add(item.bookId);
+      for (const item of await TextReadingProgressService.getAll(DataService.ctx)) ids.add(item.bookId);
+      return ids;
+    } catch (_e) { return null; }
   }
 
   /** 清空缓存书池(索引 + sidecar 目录 + 内存),用于"清空书架"。 */
@@ -550,7 +571,7 @@ export class DataService {
     const restored = books
       .filter((book: Book) => !!book && !!book.id && !book.id.startsWith('import_'))
       .map((book: Book): Book => DataService.slimBook(book));
-    const merged = DataService.mergeBookLists(restored, current).slice(0, MAX_CACHED_BOOKS);
+    const merged = DataService.mergeBookLists(restored, current);
     if (strict) {
       const path = DataService.cachedFilePath();
       if (!path || DataService.persistUnsafe) throw new Error('Book storage is unavailable');

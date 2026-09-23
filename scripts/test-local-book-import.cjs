@@ -37,7 +37,13 @@ const fileIo = {
   fsync: fd => handles.get(fd).sync()
 };
 const values = new Map();
+const favorites = new Set();
+const readingIds = new Set();
+const historyIds = new Set();
 const preference = {
+  async getFavorites() { return [...favorites]; },
+  async getHistory() { return [...historyIds].map(bookId => ({ bookId })); },
+  async getCachedBooks() { return '[]'; },
   async getImportedBooks() { return values.get('books') || '[]'; },
   async saveImportedBooks(json) { values.set('books', json); }
 };
@@ -63,6 +69,9 @@ function load(relative) {
         getCatalogList: () => [{ idRef: 'a', catalogName: '第一章' }, { idRef: 'b', catalogName: '第二章' }],
         getSpineItemContent: async index => `<body><p>章节 ${index + 1}</p><script>bad()</script></body>`
       })
+    } };
+    if (name.endsWith('/TextReadingProgressService')) return { TextReadingProgressService: {
+      async getAll() { return [...readingIds].map(bookId => ({ bookId })); }
     } };
     if (name.endsWith('/PreferenceService')) return { PreferenceService: preference };
     if (name.startsWith('@')) return {};
@@ -110,6 +119,26 @@ function load(relative) {
   assert.equal(epub.title, 'EPUB 标题');
   assert.equal(epub.chapters.map(ch => ch.title).join(','), '第一章,第二章');
   assert.equal(await fsp.readFile(epub.chapters[1].source.value, 'utf8'), '章节 2');
+
+  const online = { ...book, id: 'search_text_history', sourceUrl: 'source', bookUrl: 'book' };
+  // 未收藏直接阅读的书经过进程重启后仍可按进度 id 找回完整信息。
+  await data.upsertCachedBook(online);
+  readingIds.add(online.id);
+  await data.upsertCachedBook({ ...online, id: 'favorite' });
+  favorites.add('favorite');
+  await data.upsertCachedBook({ ...online, id: 'audio_history' });
+  historyIds.add('audio_history');
+  for (let i = 0; i < 205; i++) await data.upsertCachedBook({ ...online, id: 'temporary_' + i });
+  data.cachedBooksMem = null;
+  const readAgain = await data.getBookById(context, online.id);
+  assert.equal(readAgain.title, online.title);
+  assert.equal(readAgain.bookUrl, online.bookUrl);
+  assert.equal(readAgain.chapters.length, online.chapters.length);
+  assert.ok(await data.getBookById(context, 'favorite'));
+  assert.ok(await data.getBookById(context, 'audio_history'));
+  assert.equal(await data.getBookById(context, 'temporary_0'), undefined);
+  assert.equal(data.cachedBooksMem.length, 203);
+  console.log('PASS uncollected reading identity survives restart and 200-book cache eviction');
 
   free = 0;
   await assert.rejects(() => service.importBook(context, file, 'import_full', '', '', '', () => {}), /空间不足/);

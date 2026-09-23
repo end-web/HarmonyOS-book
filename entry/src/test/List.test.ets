@@ -2,7 +2,6 @@ import localUnitTest from './LocalUnit.test';
 import downloadPolicyTest from './DownloadPolicy.test';
 import asyncSingleFlightTest from './AsyncSingleFlight.test';
 import builtInAudioCapabilityTest from './BuiltInAudioCapability.test';
-import tingYouRequestPolicyTest from './TingYouRequestPolicy.test';
 import searchCacheTest from './SearchCache.test';
 import listeningHistoryPolicyTest from './ListeningHistoryPolicy.test';
 import chapterProgressPolicyTest from './ChapterProgressPolicy.test';
@@ -21,7 +20,6 @@ import shuShanSourceIdentityTest from './ShuShanSourceIdentity.test';
 import shuShanSourceAdapterTest from './ShuShanSourceAdapter.test';
 import ruleSourceChildServiceTest from './RuleSourceChildService.test';
 import readerThemeTest from './ReaderTheme.test';
-import tingYouExternalSourceTest from './TingYouExternalSource.test';
 import searchHistoryTest from './SearchHistory.test';
 
 export default function testsuite() {
@@ -29,7 +27,6 @@ export default function testsuite() {
   downloadPolicyTest();
   asyncSingleFlightTest();
   builtInAudioCapabilityTest();
-  tingYouRequestPolicyTest();
   searchCacheTest();
   listeningHistoryPolicyTest();
   chapterProgressPolicyTest();
@@ -48,6 +45,5 @@ export default function testsuite() {
   shuShanSourceAdapterTest();
   ruleSourceChildServiceTest();
   readerThemeTest();
-  tingYouExternalSourceTest();
   searchHistoryTest();
 }

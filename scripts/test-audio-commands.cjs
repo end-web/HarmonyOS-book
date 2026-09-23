@@ -61,6 +61,8 @@ async function fixture(initialState = 'paused') {
   };
   const playbackStore = { setPlaying() {}, update() {} };
   const cacheCalls = [];
+  const mediaSources = [];
+  const platformCompat = { supports: () => true };
   const cache = {
     suspendPreload() { cacheCalls.push('suspend'); },
     resumePreload() { cacheCalls.push('resume'); },
@@ -91,13 +93,20 @@ async function fixture(initialState = 'paused') {
     './LiveAudioService': { LiveAudioService: { isLive: async () => false } },
     './ChapterCacheService': { ChapterCacheService: { getInstance: () => cache } },
     './PlaybackCoordinator': coordinatorModule.exports,
-    '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 } } },
+    '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 },
+      createMediaSourceWithUrl(url, headers) {
+        const source = { url, headers, offlineCache: false,
+          enableOfflineCache(enable) { this.offlineCache = enable; } };
+        mediaSources.push(source);
+        return source;
+      }
+    } },
     '@kit.AudioKit': { audio },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },
     '@kit.BasicServicesKit': { emitter: { emit() {} } },
     '@kit.AVSessionKit': { avSession: {} },
     '@kit.CoreFileKit': { fileIo: {} },
-    '../utils/PlatformCompat': { PlatformCompat: {} },
+    '../utils/PlatformCompat': { PlatformCompat: platformCompat },
     '../model/PlayerState': { SleepMode: { Off: 0, Chapters: 2 }, PlayMode: { Sequence: 0, SingleLoop: 1, ListLoop: 2 } },
     './ExternalMediaWatcher': { ExternalMediaWatcher: Watcher },
     './AVSessionService': { AVSessionService: { getInstance: () => session } },
@@ -109,6 +118,12 @@ async function fixture(initialState = 'paused') {
     './WidgetUpdater': { WidgetUpdater: { async optimisticSetPlaying() {} } }
   };
   const module = { exports: {} };
+  const downloadPolicy = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(
+    path.join(path.dirname(source), 'DownloadPolicy.ets'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText, { module: downloadPolicy, exports: downloadPolicy.exports });
+  modules['./DownloadPolicy'] = downloadPolicy.exports;
   vm.runInNewContext(code, {
     module, exports: module.exports, console, setTimeout, clearTimeout, setInterval, clearInterval,
     require(name) {
@@ -128,7 +143,8 @@ async function fixture(initialState = 'paused') {
   service.stopTick = () => {};
   service.initAVSession();
   await service.ensurePlayer();
-  return { service, player, state, session, savedPositions, events, preference, cacheCalls };
+  return { service, player, state, session, savedPositions, events, preference, cacheCalls,
+    mediaSources, platformCompat };
 }
 
 let passed = 0;
@@ -139,6 +155,33 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('HLS and indexed containers bypass offline cache; ordinary audio keeps caching', async () => {
+    const f = await fixture();
+    const loaded = [];
+    f.player.setMediaSource = async source => { loaded.push(source); };
+    const headers = { 'User-Agent': 'radio-fixture', Referer: 'https://radio.test/' };
+    for (const live of [true, false]) {
+      f.service.liveSource = live;
+      assert.equal(await f.service.applySource(f.player,
+        { type: 'url', value: 'https://radio.test/stream.m3u8?session=fixture' }, headers), true);
+      assert.equal(loaded.at(-1).offlineCache, false);
+      assert.equal(loaded.at(-1).headers, headers);
+    }
+    f.service.liveSource = true;
+    await f.service.applySource(f.player, { type: 'url', value: 'https://radio.test/live' });
+    assert.equal(loaded.at(-1).offlineCache, false);
+    f.service.liveSource = false;
+    for (const suffix of ['chapter.m4a', 'chapter.M4A?token=test', 'chapter.m4b', 'chapter.mp4', 'chapter.mov']) {
+      await f.service.applySource(f.player, { type: 'url', value: 'https://audio.test/' + suffix }, headers);
+      assert.equal(loaded.at(-1).offlineCache, false, suffix);
+      assert.equal(loaded.at(-1).headers, headers);
+    }
+    await f.service.applySource(f.player, { type: 'url', value: 'https://radio.test/chapter.mp3' });
+    assert.equal(loaded.at(-1).offlineCache, true);
+    f.platformCompat.supports = () => false;
+    await f.service.applySource(f.player, { type: 'url', value: 'https://radio.test/chapter.mp3' });
+    assert.equal(loaded.at(-1).offlineCache, false);
+  });
   await check('HLS rolling-window duration remains live and normal audio replaces stalled radio', async () => {
     const f = await fixture('initialized');
     f.service.liveSource = true;

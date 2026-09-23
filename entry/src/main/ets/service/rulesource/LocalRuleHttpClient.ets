@@ -15,8 +15,15 @@ export class LocalRuleHttpClient {
   private static cookieJars: Map<string, Record<string, string>> = new Map<string, Record<string, string>>();
   private static hydratedSources: Set<string> = new Set<string>();
 
+  /** 显式 @webjs 音频规则复用隔离网页及其 Cookie，不改写保存的请求定义。 */
+  static async fetchWebAudio(source: LocalRuleSource, rawAddress: string, script: string,
+    variables: Record<string, string> = {}): Promise<LocalRuleFetchResult> {
+    return LocalRuleHttpClient.fetch(source, rawAddress, variables, '', 1, script);
+  }
+
   static async fetch(source: LocalRuleSource, rawAddress: string,
-    variables: Record<string, string> = {}, keyword: string = '', page: number = 1): Promise<LocalRuleFetchResult> {
+    variables: Record<string, string> = {}, keyword: string = '', page: number = 1,
+    webAudioScript: string = ''): Promise<LocalRuleFetchResult> {
     let plan: LocalRuleRequestPlan;
     try {
       LocalRuleDiagnostics.check(variables);
@@ -28,15 +35,21 @@ export class LocalRuleHttpClient {
         await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
       }
       plan = LocalRuleHttpClient.prepareRequest(source, rawAddress, variables, keyword, page);
+      if (webAudioScript) {
+        plan.webView = true;
+        plan.webJs = webAudioScript;
+      }
     } catch (error) {
       LocalRuleDiagnostics.record(variables, 'error', '请求准备失败', LocalRuleHttpClient.errorMessage(error));
       return LocalRuleFetchResult.failed('', LocalRuleHttpClient.errorMessage(error));
     }
     let result: LocalRuleFetchResult;
     try {
-      const sessionCookies = LocalRuleRequestSession.apply(plan);
+      const storedSessionCookies = Object.keys(plan.session).length > 0
+        ? await LocalRuleHttpClient.getStoredCookieHeader(source.bookSourceUrl, plan.url) : '';
+      const sessionCookies = LocalRuleRequestSession.apply(plan, storedSessionCookies);
       LocalRuleHttpClient.validateHeaders(plan.headers);
-      if (sessionCookies && source.enabledCookieJar) {
+      if (sessionCookies) {
         try { await LocalRuleHttpClient.saveWebCookies(source.bookSourceUrl, plan.url, sessionCookies); }
         catch (_error) { LocalRuleDiagnostics.record(variables, 'warn', '请求会话未能持久化'); }
       }
@@ -46,7 +59,7 @@ export class LocalRuleHttpClient {
         if (plan.inlineBody !== undefined) {
           result.headers['Content-Security-Policy'] = LocalRuleExecutionLimits.INLINE_HTML_CSP;
         }
-        result = await LocalRuleBrowserRuntime.instance.render(source, plan, result, variables);
+        result = await LocalRuleBrowserRuntime.instance.render(source, plan, result, variables, webAudioScript.length > 0);
       }
       if (result.ok && plan.bodyJs) {
         result.body = await LocalRuleScriptRuntime.transformResponse(source, result, plan.bodyJs, variables);
@@ -108,7 +121,7 @@ export class LocalRuleHttpClient {
         const headers: Record<string, string> = {};
         for (const name of Object.keys(plan.headers)) {
           const lower = name.toLowerCase();
-          if (crossOrigin && ['cookie', 'authorization', 'proxy-authorization', 'host'].includes(lower)) continue;
+          if (crossOrigin && ['cookie', 'authorization', 'proxy-authorization', 'host', 'origin', 'referer'].includes(lower)) continue;
           headers[name] = plan.headers[name];
         }
         plan.headers = headers;
@@ -117,7 +130,7 @@ export class LocalRuleHttpClient {
           plan.method = 'GET';
           plan.body = undefined;
         }
-        if (source.enabledCookieJar) LocalRuleHttpClient.applyCookies(source, plan);
+        if (source.enabledCookieJar || Object.keys(plan.session).length > 0) LocalRuleHttpClient.applyCookies(source, plan);
         LocalRuleHttpClient.applyVariableCookies(variables, plan);
         continue;
       }
@@ -384,7 +397,7 @@ export class LocalRuleHttpClient {
     if (separator <= 0) return;
     const name = firstPart.substring(0, separator).trim();
     const value = firstPart.substring(separator + 1).trim();
-    if (!new RegExp('^[A-Za-z0-9_\\-]+$').test(name) || name.length > 128 || value.length > 4096) return;
+    if (!new RegExp('^[A-Za-z0-9_.-]+$').test(name) || name.length > 128 || value.length > 4096) return;
     const lowerLine = line.toLowerCase();
     if (!value || lowerLine.includes('max-age=0')) {
       jar[name] = '';
@@ -402,7 +415,7 @@ export class LocalRuleHttpClient {
       if (separator <= 0) continue;
       const name = item.substring(0, separator).trim();
       const value = item.substring(separator + 1).trim();
-      if (!new RegExp('^[A-Za-z0-9_\\-]+$').test(name) || name.length > 128 ||
+      if (!new RegExp('^[A-Za-z0-9_.-]+$').test(name) || name.length > 128 ||
         value.length === 0 || value.length > 4096) continue;
       if (Object.keys(jar).length < 50 || jar[name] !== undefined) jar[name] = value;
     }

@@ -49,6 +49,16 @@ export default function localRuleSourceRepositoryTest() {
       expect(incoming.customOrder).assertEqual(7);
     });
 
+    it('preserves manually disabled discovery when an imported update omits the flag', 0, () => {
+      const incoming = LocalRuleSourceImportParser.parse('{"bookSourceUrl":"https://discovery.invalid",' +
+        '"bookSourceName":"Discovery","exploreUrl":"推荐::/books"}').sources[0];
+      expect(incoming.enabledExplore).assertTrue();
+      const previous = sourceOf(incoming.bookSourceUrl, true);
+      previous.enabledExplore = false;
+      LocalRuleSourceRepository.preserveEnabledStates([incoming], [previous]);
+      expect(incoming.enabledExplore).assertFalse();
+    });
+
     it('exports management flags and unknown rules without runtime credentials', 0, () => {
       const source = LocalRuleSourceImportParser.parse('{"bookSourceUrl":"https://export.invalid",' +
         '"bookSourceName":"Fixture","locked":true,"isPinned":true,"customOrder":12,' +

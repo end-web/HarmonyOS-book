@@ -14,6 +14,7 @@ let failMove = false;
 const handles = new Map();
 const fileIo = {
   OpenMode: { CREATE: 1, READ_WRITE: 2, TRUNC: 4 },
+  listFile: p => fs.promises.readdir(p),
   stat: p => fs.promises.stat(p),
   readText: p => fs.promises.readFile(p, 'utf8'),
   mkdir: p => fs.promises.mkdir(p),
@@ -62,6 +63,18 @@ function newProcess() {
   await cache.write(context, key, text);
   cache = newProcess();
   assert.equal(await cache.read(context, key), text);
+  const bookId = identity.BookIdentity.onlineTextBookId('source-a', 'book-a');
+  let recovered = await cache.recoverBookIdentities(context, [bookId, 'search_text_missing']);
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].sourceUrl, 'source-a');
+  assert.equal(recovered[0].bookUrl, 'book-a');
+  await cache.write(context, cache.key('source-a', 'book-a', 'chapter-2'), 'second');
+  assert.equal((await cache.recoverBookIdentities(context, [bookId])).length, 1);
+  fs.writeFileSync(path.join(root, 'online_text_content/search_text_broken.json'), '{broken');
+  fs.writeFileSync(path.join(root, 'online_text_content/search_text_wrong.json'), JSON.stringify({ version: 1, key }));
+  assert.equal((await cache.recoverBookIdentities(context, ['search_text_missing'])).length, 0);
+  assert.equal((await cache.recoverBookIdentities(context, [bookId])).length, 1);
+  console.log('PASS legacy book identity recovery, deduplication and corrupt cache isolation');
   console.log('PASS cold process restores complete UTF-8 text');
   assert.equal(await cache.read(context, cache.key('source-b', 'book-a', 'chapter-a')), undefined);
   assert.equal(await cache.read(context, cache.key('source-a', 'book-b', 'chapter-a')), undefined);

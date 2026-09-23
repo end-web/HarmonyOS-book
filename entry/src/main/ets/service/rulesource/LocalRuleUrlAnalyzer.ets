@@ -45,7 +45,7 @@ export class LocalRuleUrlAnalyzer {
     const parts = LocalRuleUrlAnalyzer.splitOptions(rawAddress.trim());
     const plan = new LocalRuleRequestPlan();
     let address = LocalRuleUrlAnalyzer.expandTemplate(
-      parts.address, source, variables, keyword, page).trim();
+      LocalRuleUrlAnalyzer.expandPageAlternatives(parts.address, page), source, variables, keyword, page).trim();
     const inlineHeaders: Record<string, string> = {};
 
     const headerStart = address.toLowerCase().indexOf('@header:');
@@ -213,6 +213,23 @@ export class LocalRuleUrlAnalyzer {
     return output + value.substring(position);
   }
 
+  /** 阅读的 <首页,第二页,后续页> URL 分支；只处理地址，避免误改 POST 正文与内联 HTML。 */
+  private static expandPageAlternatives(value: string, page: number): string {
+    if (value.trim().toLowerCase().startsWith('data:')) return value;
+    const pattern = new RegExp('<([^<>]*,[^<>]*)>', 'g');
+    let output = '';
+    let position = 0;
+    let match: RegExpExecArray | null = pattern.exec(value);
+    while (match !== null) {
+      const choices = match[1].split(',');
+      const index = Math.min(choices.length - 1, Math.max(0, Math.trunc(page) - 1));
+      output += value.substring(position, match.index) + choices[index].trim();
+      position = pattern.lastIndex;
+      match = pattern.exec(value);
+    }
+    return output + value.substring(position);
+  }
+
   static safeLogUrl(value: string): string {
     const queryIndex = value.indexOf('?');
     const clean = queryIndex >= 0 ? value.substring(0, queryIndex) : value;
@@ -299,7 +316,8 @@ export class LocalRuleUrlAnalyzer {
             ? LocalRuleUrlAnalyzer.expandBodyTemplate(bodyTemplate, source, variables, keyword, page)
             : JSON.stringify(LocalRuleUrlAnalyzer.expandBodyValue(structured, source, variables, keyword, page, 0));
         } else {
-          plan.body = LocalRuleUrlAnalyzer.expandTemplate(bodyTemplate, source, variables, keyword, page);
+          plan.body = LocalRuleUrlAnalyzer.expandTemplateWithKeyword(bodyTemplate, source, variables,
+            encodeURIComponent(keyword).replace(new RegExp('%20', 'g'), '+'), keyword, page);
         }
       }
     }
@@ -392,7 +410,8 @@ export class LocalRuleUrlAnalyzer {
         normalized.push(segment);
       }
     }
-    return `${origin}/${normalized.join('/')}${suffix}`;
+    const directory = normalized.length > 0 && (path.endsWith('/') || path.endsWith('/.') || path.endsWith('/..'));
+    return `${origin}/${normalized.join('/')}${directory ? '/' : ''}${suffix}`;
   }
 
   private static firstSuffixIndex(value: string): number {

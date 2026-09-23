@@ -45,20 +45,42 @@ const RULE_SOURCE_IMPORT_MAX_LENGTH: number = 10 * 1024 * 1024;
 const RULE_SOURCE_TEST_KEYWORD: string = '我的';
 const RULE_SOURCE_MIN_BOTTOM_INSET: number = 28;
 
+@ObservedV2
+class RuleSourceListItem {
+  readonly sourceUrl: string;
+  @Trace source: LocalRuleSource;
+  @Trace index: number;
+
+  constructor(source: LocalRuleSource, index: number) {
+    this.sourceUrl = source.bookSourceUrl;
+    this.source = source;
+    this.index = index;
+  }
+}
+
 class RuleSourceDataSource implements IDataSource {
-  private sources: LocalRuleSource[] = [];
+  private sources: RuleSourceListItem[] = [];
   private listeners: DataChangeListener[] = [];
 
   totalCount(): number {
     return this.sources.length;
   }
 
-  getData(index: number): LocalRuleSource {
+  getData(index: number): RuleSourceListItem {
     return this.sources[index];
   }
 
   setSources(sources: LocalRuleSource[]): void {
-    this.sources = sources;
+    // LazyForEach 会复用同一 URL 的节点；必须更新它正在观察的条目，不能只替换数组。
+    const previous: Map<string, RuleSourceListItem> = new Map();
+    for (const item of this.sources) previous.set(item.sourceUrl, item);
+    this.sources = sources.map((source: LocalRuleSource, index: number): RuleSourceListItem => {
+      const item = previous.get(source.bookSourceUrl);
+      if (item === undefined) return new RuleSourceListItem(source, index);
+      item.source = source;
+      item.index = index;
+      return item;
+    });
     this.listeners.forEach((listener: DataChangeListener) => listener.onDataReloaded());
   }
 
@@ -153,6 +175,7 @@ export struct RuleSourcePage {
   private filteredSources: LocalRuleSource[] = [];
   private lastInvalidationCounter: number = 0;
   private refreshCheckTimer: number = -1;
+  private loadRevision: number = 0;
   private safeAreaListener: (top: number, bottom: number) => void = (top: number, bottom: number): void => {
     this.safeTop = top;
     this.safeBottom = bottom;
@@ -166,6 +189,7 @@ export struct RuleSourcePage {
   }
 
   aboutToDisappear(): void {
+    this.loadRevision++;
     WindowUtils.removeSafeAreaListener(this.safeAreaListener);
     this.stopRefreshCheck();
     this.activeTester?.cancel();
@@ -196,18 +220,24 @@ export struct RuleSourcePage {
   }
 
   private async loadSources(showLoading: boolean = true): Promise<void> {
+    const revision = ++this.loadRevision;
+    const invalidationCounter = SourceDataService.getInvalidationCounter();
     if (showLoading) {
       this.isLoading = true;
     }
     try {
       const sources = await LocalRuleSourceRepository.list();
+      const groups = await LocalRuleSourceRepository.listGroups();
+      if (revision !== this.loadRevision) return;
       this.allSources = sources;
-      this.sourceGroups = await LocalRuleSourceRepository.listGroups();
+      this.sourceGroups = groups;
       this.sourceCount = sources.length;
-      await this.refreshLoginStatuses();
       if (sources.length === 0) this.showImportPanel = true;
       this.applyFilters();
+      if (this.managementView === 'order') this.refreshOrderSources();
       this.loadFailed = false;
+      this.lastInvalidationCounter = invalidationCounter;
+      this.refreshLoginStatuses().catch((): void => {});
       if (this.importFileUri.length > 0 && !this.externalImportConsumed) {
         this.externalImportConsumed = true;
         this.isImporting = true;
@@ -218,6 +248,7 @@ export struct RuleSourcePage {
         } finally { this.isImporting = false; }
       }
     } catch (_error) {
+      if (revision !== this.loadRevision) return;
       this.sourceCount = 0;
       this.filteredSourceCount = 0;
       this.allSources = [];
@@ -225,7 +256,7 @@ export struct RuleSourcePage {
       this.dataSource.setSources([]);
       this.loadFailed = true;
     } finally {
-      this.isLoading = false;
+      if (revision === this.loadRevision) this.isLoading = false;
     }
   }
 
@@ -345,18 +376,22 @@ export struct RuleSourcePage {
   private async openManagement(view: string): Promise<void> {
     if (this.isImporting || this.busySourceUrl.length > 0) return;
     if (view === 'order') {
-      this.orderedSources = this.allSources.slice().sort((left: LocalRuleSource, right: LocalRuleSource): number => {
-        if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
-        return left.customOrder - right.customOrder;
-      });
-      this.orderCount = this.orderedSources.length;
-      this.orderDataSource.setSources(this.orderedSources);
+      this.refreshOrderSources();
     }
     if (view === 'tls') {
       try { this.trustedHosts = await LocalRuleTlsTrustStore.listTrustedHosts(); }
       catch (_error) { this.showToast($r('app.string.rule_source_operation_failed')); return; }
     }
     this.managementView = view;
+  }
+
+  private refreshOrderSources(): void {
+    this.orderedSources = this.allSources.slice().sort((left: LocalRuleSource, right: LocalRuleSource): number => {
+      if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
+      return left.customOrder - right.customOrder;
+    });
+    this.orderCount = this.orderedSources.length;
+    this.orderDataSource.setSources(this.orderedSources);
   }
 
   private async runSelectedAction(action: string): Promise<void> {
@@ -808,6 +843,7 @@ export struct RuleSourcePage {
       return false;
     }
     const importedCount = await LocalRuleSourceRepository.upsertImportedBatch(report.sources);
+    if (importedCount > 0) this.sortMode = 0;
     SourceDataService.invalidateLocalSources();
     await this.loadSources(false);
     this.showToast($r('app.string.source_manage_import_result', importedCount, report.sources.length - importedCount));
@@ -850,6 +886,7 @@ export struct RuleSourcePage {
     try {
       await LocalRuleSourceRepository.setEnabled(source.bookSourceUrl, enabled);
       SourceDataService.invalidateLocalSources(source.bookSourceUrl);
+      await this.loadSources(false);
     } catch (_error) {
       source.enabled = previousEnabled;
       this.showToast($r('app.string.rule_source_operation_failed'));
@@ -859,13 +896,13 @@ export struct RuleSourcePage {
   }
 
   private createNewSource(): void {
-    this.navStack.pushPathByName('RuleSourceEditPage', null);
+    this.navStack.pushPathByName('RuleSourceEditPage', null, () => this.refresh());
   }
 
   private editSource(source: LocalRuleSource): void {
     if (source.isLocked) { this.showToast($r('app.string.source_manage_locked_message')); return; }
     const params: RuleSourceEditParams = { sourceUrl: source.bookSourceUrl };
-    this.navStack.pushPathByName('RuleSourceEditPage', params);
+    this.navStack.pushPathByName('RuleSourceEditPage', params, () => this.refresh());
   }
 
   private debugSource(source: LocalRuleSource): void {
@@ -1273,11 +1310,11 @@ export struct RuleSourcePage {
               this.buildNoMatchState()
             }
           } else {
-            LazyForEach(this.dataSource, (source: LocalRuleSource) => {
+            LazyForEach(this.dataSource, (item: RuleSourceListItem) => {
               ListItem() {
-                this.buildSourceItem(source)
+                this.buildSourceItem(item)
               }
-            }, (source: LocalRuleSource) => source.bookSourceUrl)
+            }, (item: RuleSourceListItem) => item.sourceUrl)
           }
         }
         .width('100%')
@@ -1592,21 +1629,21 @@ export struct RuleSourcePage {
   }
 
   @Builder
-  buildSourceMenu(source: LocalRuleSource) {
+  buildSourceMenu(item: RuleSourceListItem) {
     Menu() {
-      MenuItem({ content: source.isPinned ? $r('app.string.source_manage_unpin') : $r('app.string.source_manage_pin') })
-        .onClick(() => this.changeSourceFlag(source, 'pin'))
-      MenuItem({ content: source.isLocked ? $r('app.string.source_manage_unlock') : $r('app.string.source_manage_lock') })
-        .onClick(() => this.changeSourceFlag(source, 'lock'))
-      MenuItem({ content: source.enabledExplore ? $r('app.string.source_manage_explore_disable') :
+      MenuItem({ content: item.source.isPinned ? $r('app.string.source_manage_unpin') : $r('app.string.source_manage_pin') })
+        .onClick(() => this.changeSourceFlag(item.source, 'pin'))
+      MenuItem({ content: item.source.isLocked ? $r('app.string.source_manage_unlock') : $r('app.string.source_manage_lock') })
+        .onClick(() => this.changeSourceFlag(item.source, 'lock'))
+      MenuItem({ content: item.source.enabledExplore ? $r('app.string.source_manage_explore_disable') :
         $r('app.string.source_manage_explore_enable') })
-        .enabled(!source.isLocked).onClick(() => this.changeSourceFlag(source, 'explore'))
-      MenuItem({ content: $r('app.string.source_manage_group_assign') }).enabled(!source.isLocked)
+        .enabled(!item.source.isLocked).onClick(() => this.changeSourceFlag(item.source, 'explore'))
+      MenuItem({ content: $r('app.string.source_manage_group_assign') }).enabled(!item.source.isLocked)
         .onClick(() => {
-          this.isEditMode = true; this.resetSelection(); this.toggleSelectSource(source.bookSourceUrl);
-          this.groupDraft = source.bookSourceGroup; this.managementView = 'groupAssign';
+          this.isEditMode = true; this.resetSelection(); this.toggleSelectSource(item.source.bookSourceUrl);
+          this.groupDraft = item.source.bookSourceGroup; this.managementView = 'groupAssign';
         })
-      MenuItem({ content: $r('app.string.source_manage_move_bottom') }).onClick(() => this.changeSourceFlag(source, 'bottom'))
+      MenuItem({ content: $r('app.string.source_manage_move_bottom') }).onClick(() => this.changeSourceFlag(item.source, 'bottom'))
       MenuItem({ content: $r('app.string.source_manage_tls') }).onClick(() => this.openManagement('tls'))
     }
   }
@@ -1704,25 +1741,25 @@ export struct RuleSourcePage {
   @Builder
   buildOrderManager() {
     List() {
-      LazyForEach(this.orderDataSource, (source: LocalRuleSource, index: number) => {
+      LazyForEach(this.orderDataSource, (item: RuleSourceListItem) => {
         ListItem() {
           Row({ space: AppSpace.Sm }) {
             SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(20).fontColor([$r('sys.color.font_tertiary')])
               .accessibilityText($r('app.string.source_manage_drag'))
-            if (source.isPinned) { SymbolGlyph($r('sys.symbol.pin')).fontSize(16).fontColor([AppColor.Brand]) }
-            Text(source.bookSourceName).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+            if (item.source.isPinned) { SymbolGlyph($r('sys.symbol.pin')).fontSize(16).fontColor([AppColor.Brand]) }
+            Text(item.source.bookSourceName).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
               .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
             Button() { SymbolGlyph($r('sys.symbol.arrow_up')).fontSize(20).fontColor([AppColor.Brand]) }
               .width(40).height(44).padding(0).backgroundColor(Color.Transparent)
-              .enabled(this.canMoveSourceOrder(index, index - 1))
-              .accessibilityText($r('app.string.source_manage_move_up')).onClick(() => this.moveSourceOrder(index, index - 1))
+              .enabled(this.canMoveSourceOrder(item.index, item.index - 1))
+              .accessibilityText($r('app.string.source_manage_move_up')).onClick(() => this.moveSourceOrder(item.index, item.index - 1))
             Button() { SymbolGlyph($r('sys.symbol.arrow_down')).fontSize(20).fontColor([AppColor.Brand]) }
               .width(40).height(44).padding(0).backgroundColor(Color.Transparent)
-              .enabled(this.canMoveSourceOrder(index, index + 1))
-              .accessibilityText($r('app.string.source_manage_move_down')).onClick(() => this.moveSourceOrder(index, index + 1))
+              .enabled(this.canMoveSourceOrder(item.index, item.index + 1))
+              .accessibilityText($r('app.string.source_manage_move_down')).onClick(() => this.moveSourceOrder(item.index, item.index + 1))
           }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: AppSpace.Md, right: AppSpace.Md })
         }
-      }, (source: LocalRuleSource) => source.bookSourceUrl)
+      }, (item: RuleSourceListItem) => item.sourceUrl)
     }
     .width('100%').layoutWeight(1).divider({ strokeWidth: 0.5, color: $r('sys.color.comp_divider') })
     .onItemDragStart((_event: ItemDragInfo, itemIndex: number) => {
@@ -1785,28 +1822,28 @@ export struct RuleSourcePage {
               .bindMenu(this.buildFailureActions())
           }.width('100%')
         }
-        LazyForEach(this.failureDataSource, (source: LocalRuleSource) => {
+        LazyForEach(this.failureDataSource, (item: RuleSourceListItem) => {
           ListItem() {
             Column({ space: AppSpace.Xs }) {
               Row({ space: AppSpace.Sm }) {
-                Text(source.bookSourceName).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+                Text(item.source.bookSourceName).fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
                   .layoutWeight(1).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                 Button() { SymbolGlyph($r('sys.symbol.scope')).fontSize(20).fontColor([AppColor.Brand]) }
                   .width(44).height(44).padding(0).backgroundColor(Color.Transparent)
-                  .accessibilityText($r('app.string.source_manage_debug')).onClick(() => this.debugSource(source))
+                  .accessibilityText($r('app.string.source_manage_debug')).onClick(() => this.debugSource(item.source))
               }.width('100%')
-              Text(source.validationMessage).fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+              Text(item.source.validationMessage).fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
                 .width('100%')
-              if (this.certificateFailureHost(source).length > 0) {
+              if (this.certificateFailureHost(item.source).length > 0) {
                 Button($r('app.string.source_manage_tls_retry'), { type: ButtonType.Normal })
                   .width('100%').height(40).fontColor(AppColor.Brand).backgroundColor(AppColor.BrandSoft)
                   .borderRadius(AppRadius.Sm).enabled(this.busySourceUrl.length === 0)
-                  .onClick(() => this.confirmTrustHosts([this.certificateFailureHost(source)], [source]))
+                  .onClick(() => this.confirmTrustHosts([this.certificateFailureHost(item.source)], [item.source]))
               }
               Divider().color($r('sys.color.comp_divider')).margin({ top: AppSpace.Sm })
             }.width('100%')
           }
-        }, (source: LocalRuleSource) => source.bookSourceUrl)
+        }, (item: RuleSourceListItem) => item.sourceUrl)
       }
     }.width('100%').layoutWeight(1).padding(AppSpace.Md)
   }
@@ -2116,12 +2153,12 @@ export struct RuleSourcePage {
   }
 
   @Builder
-  buildSourceItem(source: LocalRuleSource) {
+  buildSourceItem(item: RuleSourceListItem) {
     Column({ space: AppSpace.Xs }) {
       Row({ space: AppSpace.Sm }) {
         if (this.isEditMode) {
           Stack({ alignContent: Alignment.Center }) {
-            if (this.isSourceSelected(source.bookSourceUrl, this.selectionRevision)) {
+            if (this.isSourceSelected(item.source.bookSourceUrl, this.selectionRevision)) {
               SymbolGlyph($r('sys.symbol.checkmark'))
                 .fontSize(16)
                 .fontColor([AppColor.OnBrand])
@@ -2129,29 +2166,29 @@ export struct RuleSourcePage {
           }
             .width(24)
             .height(24)
-            .backgroundColor(this.isSourceSelected(source.bookSourceUrl, this.selectionRevision) ?
+            .backgroundColor(this.isSourceSelected(item.source.bookSourceUrl, this.selectionRevision) ?
               AppColor.Brand : Color.Transparent)
             .border({
               width: 1.5,
-              color: this.isSourceSelected(source.bookSourceUrl, this.selectionRevision) ?
+              color: this.isSourceSelected(item.source.bookSourceUrl, this.selectionRevision) ?
                 AppColor.Brand : $r('sys.color.font_tertiary')
             })
             .borderRadius(AppRadius.Pill)
             .accessibilityText($r('app.string.rule_source_select_hint'))
-            .onClick(() => this.toggleSelectSource(source.bookSourceUrl))
+            .onClick(() => this.toggleSelectSource(item.source.bookSourceUrl))
         }
 
         Column({ space: 6 }) {
           Row({ space: AppSpace.Xs }) {
-            if (source.isPinned) {
+            if (item.source.isPinned) {
               SymbolGlyph($r('sys.symbol.pin')).fontSize(16).fontColor([AppColor.Brand])
                 .accessibilityText($r('app.string.source_manage_pin'))
             }
-            if (source.isLocked) {
+            if (item.source.isLocked) {
               SymbolGlyph($r('sys.symbol.lock')).fontSize(16).fontColor([$r('sys.color.font_secondary')])
                 .accessibilityText($r('app.string.source_manage_locked'))
             }
-            Text(source.bookSourceName)
+            Text(item.source.bookSourceName)
               .fontSize(AppFont.BodyL)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Medium)
@@ -2163,18 +2200,18 @@ export struct RuleSourcePage {
                 .width(32).height(32).padding(0).backgroundColor(Color.Transparent)
                 .accessibilityText($r('app.string.source_manage_actions'))
                 .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-                .bindMenu(this.buildSourceMenu(source))
+                .bindMenu(this.buildSourceMenu(item))
             }
           }
           .width('100%')
 
           Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Center, wrap: FlexWrap.Wrap }) {
-            Text(this.sourceTypeLabel(source))
+            Text(this.sourceTypeLabel(item.source))
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_secondary'))
 
-            if (this.sourceGroupLabels(source).length > 0) {
-              ForEach(this.sourceGroupLabels(source), (groupName: string) => {
+            if (this.sourceGroupLabels(item.source).length > 0) {
+              ForEach(this.sourceGroupLabels(item.source), (groupName: string) => {
                 Text(groupName)
                   .fontSize(AppFont.Caption)
                   .fontColor($r('sys.color.font_tertiary'))
@@ -2189,7 +2226,7 @@ export struct RuleSourcePage {
           }
           .width('100%')
 
-          Text(source.bookSourceUrl)
+          Text(item.source.bookSourceUrl)
             .fontSize(AppFont.Caption)
             .fontColor(AppColor.Brand)
             .maxLines(1)
@@ -2200,11 +2237,11 @@ export struct RuleSourcePage {
         .layoutWeight(1)
 
         if (!this.isEditMode) {
-          Toggle({ type: ToggleType.Switch, isOn: source.enabled && source.canExecute() })
+          Toggle({ type: ToggleType.Switch, isOn: item.source.enabled && item.source.canExecute() })
             .selectedColor(AppColor.Brand)
-            .enabled(!source.isLocked && source.canExecute() && !this.isImporting && !this.isBulkTesting &&
+            .enabled(!item.source.isLocked && item.source.canExecute() && !this.isImporting && !this.isBulkTesting &&
               this.busySourceUrl.length === 0)
-            .onChange((isOn: boolean) => this.changeEnabled(source, isOn))
+            .onChange((isOn: boolean) => this.changeEnabled(item.source, isOn))
         }
       }
       .width('100%')
@@ -2214,13 +2251,13 @@ export struct RuleSourcePage {
         Column()
           .width(8)
           .height(8)
-          .backgroundColor(this.statusColor(source.validationStatus))
+          .backgroundColor(this.statusColor(item.source.validationStatus))
           .borderRadius(AppRadius.Pill)
-        Text(this.statusLabel(source.validationStatus))
+        Text(this.statusLabel(item.source.validationStatus))
           .fontSize(AppFont.Caption)
-          .fontColor(this.statusColor(source.validationStatus))
+          .fontColor(this.statusColor(item.source.validationStatus))
           .fontWeight(FontWeight.Medium)
-        Text(this.statusMessage(source))
+        Text(this.statusMessage(item.source))
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
           .layoutWeight(1)
@@ -2231,23 +2268,23 @@ export struct RuleSourcePage {
       .alignItems(VerticalAlign.Center)
 
       if (!this.isEditMode) {
-        if (source.exploreUrl.length > 0 || source.loginUi.length > 0 ||
-          RuleSourceAccountService.supports(source.bookSourceUrl) || this.canOpenSourceLogin(source)) {
+        if (item.source.exploreUrl.length > 0 || item.source.loginUi.length > 0 ||
+          RuleSourceAccountService.supports(item.source.bookSourceUrl) || this.canOpenSourceLogin(item.source)) {
           Row({ space: AppSpace.Xs }) {
-            if (source.exploreUrl.length > 0) {
+            if (item.source.exploreUrl.length > 0) {
               Button($r('app.string.rule_source_explore'), { type: ButtonType.Normal })
                 .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
                 .backgroundColor(AppColor.BrandSoft).fontColor(AppColor.Brand)
-                .enabled(source.enabledExplore && !this.isBulkTesting && !this.isImporting)
-                .onClick(() => this.navStack.pushPathByName('ruleSourceExplore', source.bookSourceUrl))
+                .enabled(item.source.enabledExplore && !this.isBulkTesting && !this.isImporting)
+                .onClick(() => this.navStack.pushPathByName('ruleSourceExplore', item.source.bookSourceUrl))
             }
-            if (source.loginUi.length > 0 || RuleSourceAccountService.supports(source.bookSourceUrl) ||
-              this.canOpenSourceLogin(source)) {
-              Button(this.sourceLoginLabel(source), { type: ButtonType.Normal })
+            if (item.source.loginUi.length > 0 || RuleSourceAccountService.supports(item.source.bookSourceUrl) ||
+              this.canOpenSourceLogin(item.source)) {
+              Button(this.sourceLoginLabel(item.source), { type: ButtonType.Normal })
                 .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
                 .backgroundColor($r('sys.color.comp_background_secondary')).fontColor(AppColor.Brand)
                 .enabled(!this.isBulkTesting && !this.isImporting && this.busySourceUrl.length === 0)
-                .onClick(() => this.openLoginEntry(source))
+                .onClick(() => this.openLoginEntry(item.source))
             }
           }.width('100%')
         }
@@ -2272,8 +2309,8 @@ export struct RuleSourcePage {
           .constraintSize({ minWidth: 0 })
           .backgroundColor(AppColor.BrandSoft)
           .borderRadius(AppRadius.Sm)
-          .enabled(!source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-          .onClick(() => this.editSource(source))
+          .enabled(!item.source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+          .onClick(() => this.editSource(item.source))
 
           Button() {
             Row({ space: AppSpace.Xxs }) {
@@ -2292,30 +2329,30 @@ export struct RuleSourcePage {
           .backgroundColor($r('sys.color.comp_background_secondary'))
           .borderRadius(AppRadius.Sm)
           .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-          .onClick(() => this.debugSource(source))
+          .onClick(() => this.debugSource(item.source))
 
           Button() {
             Row({ space: AppSpace.Xxs }) {
               SymbolGlyph($r('sys.symbol.bolt'))
                 .fontSize(16)
-                .fontColor([source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary')])
+                .fontColor([item.source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary')])
               Text($r('app.string.rule_source_test_action'))
                 .fontSize(AppFont.Caption)
-                .fontColor(source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary'))
+                .fontColor(item.source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary'))
             }
             .justifyContent(FlexAlign.Center)
           }
           .layoutWeight(1)
           .height(36)
           .constraintSize({ minWidth: 0 })
-          .backgroundColor(source.canExecute() ? AppColor.BrandSoft : Color.Transparent)
+          .backgroundColor(item.source.canExecute() ? AppColor.BrandSoft : Color.Transparent)
           .borderRadius(AppRadius.Sm)
-          .enabled(source.canExecute() && !this.isImporting && !this.isBulkTesting &&
+          .enabled(item.source.canExecute() && !this.isImporting && !this.isBulkTesting &&
             this.busySourceUrl.length === 0)
           .accessibilityText($r('app.string.rule_source_test_action'))
-          .onClick(() => this.testSource(source))
+          .onClick(() => this.testSource(item.source))
 
-          if (RuleSourceChildService.supports(source.bookSourceUrl)) {
+          if (RuleSourceChildService.supports(item.source.bookSourceUrl)) {
             Button() {
               Row({ space: AppSpace.Xxs }) {
                 SymbolGlyph($r('sys.symbol.list_bullet'))
@@ -2334,7 +2371,7 @@ export struct RuleSourcePage {
             .borderRadius(AppRadius.Sm)
             .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
             .accessibilityText($r('app.string.rule_source_child_action'))
-            .onClick(() => this.openSourceChildren(source))
+            .onClick(() => this.openSourceChildren(item.source))
           }
 
           Button() {
@@ -2353,9 +2390,9 @@ export struct RuleSourcePage {
           .constraintSize({ minWidth: 0 })
           .backgroundColor(RULE_SOURCE_DANGER_SOFT)
           .borderRadius(AppRadius.Sm)
-          .enabled(!source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+          .enabled(!item.source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
           .accessibilityText($r('app.string.rule_source_delete_action'))
-          .onClick(() => this.confirmDelete(source))
+          .onClick(() => this.confirmDelete(item.source))
         }
         .width('100%')
         .height(36)

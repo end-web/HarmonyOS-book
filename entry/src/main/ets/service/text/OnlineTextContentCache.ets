@@ -10,6 +10,12 @@ class CachedTextChapter {
   content: string = '';
 }
 
+export class CachedTextBookIdentity {
+  bookId: string = '';
+  sourceUrl: string = '';
+  bookUrl: string = '';
+}
+
 /** 正文按章节落盘，不随进程退出丢失；损坏或缺失时由调用方重新获取。 */
 export class OnlineTextContentCache {
   private static writeChain: Promise<void> = Promise.resolve();
@@ -43,6 +49,50 @@ export class OnlineTextContentCache {
       }
     } catch (_e) { /* 缺失、损坏或读取失败均回退在线获取 */ }
     return undefined;
+  }
+
+  /** 旧进度只有 bookId，从正文的完整身份恢复地址；只扫描一次且限制总读取量。 */
+  static async recoverBookIdentities(context: common.Context,
+    bookIds: string[]): Promise<CachedTextBookIdentity[]> {
+    const wanted = new Set<string>(bookIds);
+    const found = new Map<string, CachedTextBookIdentity>();
+    const ambiguous = new Set<string>();
+    if (wanted.size === 0) return [];
+    const directory = `${context.cacheDir}/online_text_content`;
+    let names: string[];
+    try { names = await fileIo.listFile(directory); } catch (_e) { return []; }
+    let bytesRead = 0;
+    for (const name of names.slice(0, 10000)) {
+      if (!/^search_text_[a-z0-9]+\.json$/.test(name)) continue;
+      try {
+        const path = `${directory}/${name}`;
+        const stat = await fileIo.stat(path);
+        if (stat.size <= 0 || stat.size > OnlineTextContentCache.MAX_FILE_BYTES) continue;
+        bytesRead += stat.size;
+        if (bytesRead > 64 * 1024 * 1024) break;
+        const record: CachedTextChapter = JSON.parse(await fileIo.readText(path));
+        if (!record || record.version !== 1 || typeof record.key !== 'string') continue;
+        if (`${BookIdentity.onlineTextBookId(record.key, '')}.json` !== name) continue;
+        const parts: string[] = JSON.parse(record.key);
+        if (!Array.isArray(parts) || parts.length !== 3 ||
+          typeof parts[0] !== 'string' || typeof parts[1] !== 'string' ||
+          !parts[0] || !parts[1]) continue;
+        const id = BookIdentity.onlineTextBookId(parts[0], parts[1]);
+        if (!wanted.has(id) || ambiguous.has(id)) continue;
+        const previous = found.get(id);
+        if (previous && (previous.sourceUrl !== parts[0] || previous.bookUrl !== parts[1])) {
+          found.delete(id);
+          ambiguous.add(id);
+          continue;
+        }
+        const identity = new CachedTextBookIdentity();
+        identity.bookId = id;
+        identity.sourceUrl = parts[0];
+        identity.bookUrl = parts[1];
+        found.set(id, identity);
+      } catch (_e) { /* 单个坏缓存不能影响其余记录 */ }
+    }
+    return Array.from(found.values());
   }
 
   static write(context: common.Context, key: string, content: string): Promise<void> {

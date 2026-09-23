@@ -4,7 +4,6 @@ import { BookSourceService } from '../BookSourceService';
 import { PreferenceService } from '../PreferenceService';
 import { SourceDataService } from '../SourceDataService';
 import { LocalRulePanelService } from './LocalRulePanelService';
-import { TingYouSourceIdentity } from './tingyou/TingYouSourceIdentity';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 
 export class HomeSourceCategory {
@@ -137,8 +136,7 @@ export class HomeSourceService {
   }
 
   static hasHomeContent(source: LocalRuleSource): boolean {
-    return TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl) ||
-      (source.enabledExplore && source.exploreUrl.trim().length > 0);
+    return source.enabledExplore && source.exploreUrl.trim().length > 0;
   }
 
   static async getCategories(source: LocalRuleSource): Promise<HomeSourceCategory[]> {
@@ -157,9 +155,6 @@ export class HomeSourceService {
   static async getHomeBlocks(source: LocalRuleSource,
     categories: HomeSourceCategory[],
     onUpdate: (blocks: HomeBlockSection[]) => void = (): void => {}): Promise<HomeBlockSection[]> {
-    if (TingYouSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
-      return BookSourceService.getHomeBlocks(source);
-    }
     // 只预览前四个发现分类；各分类独立失败，避免一个分类阻断整个首页。
     let failureMessage: string = '';
     let failed: boolean = false;

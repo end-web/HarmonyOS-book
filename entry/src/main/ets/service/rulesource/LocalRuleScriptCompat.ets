@@ -63,7 +63,7 @@ java.strToBytes=toBytes;java.bytesToStr=fromBytes;
 java.digestHex=digestHex;
 java.hmac=function(algorithm,value,key){return String(action('hmac',{algorithm:String(algorithm).replace(/^Hmac/i,''),data:bytesHex(toBytes(value)),key:bytesHex(toBytes(key))})||'');};
 java.hmacSha256=function(value,key){return java.hmac('SHA256',value,key);};
-const createSymmetricCrypto=function(algorithm,key,iv){
+const createSymmetricCrypto=function(algorithm,key,iv,parameters){
   const spec=String(algorithm||'AES/CBC/PKCS5Padding'),parts=spec.toUpperCase().split('/');
   const run=function(data,encrypt){const input=toBytes(data),keyBytes=toBytes(key),ivBytes=toBytes(iv||[]);
     if(/^(DES|DESEDE|3DES|TRIPLEDES)$/.test(parts[0])){
@@ -80,8 +80,9 @@ const createSymmetricCrypto=function(algorithm,key,iv){
       if(!encrypt&&padding!=='NOPADDING'){const count=result[result.length-1];if(!count||count>8||count>result.length||result.slice(-count).some(v=>v!==count))throw new Error('Invalid legacy cipher padding');result.length-=count;}
       return result;
     }
-    return fromHex(action('cipher',{algorithm:parts.length===1?spec+'/ECB/PKCS5Padding':spec,
-      key:bytesHex(keyBytes),iv:bytesHex(ivBytes),data:bytesHex(input),encrypt:encrypt})||'');};
+    return fromHex(action('cipher',{algorithm:parts.length===1&&parts[0]!=='CHACHA20-POLY1305'?spec+'/ECB/PKCS5Padding':spec,
+      key:bytesHex(keyBytes),iv:bytesHex(ivBytes),data:bytesHex(input),encrypt:encrypt,
+      aad:bytesHex(toBytes(parameters&&parameters.aad||[])),tagLength:parameters&&parameters.tagLength||128})||'');};
   const encryptedBytes=function(value){if(typeof value!=='string')return value;const text=value.trim();
     if(text.length&&text.length%2===0&&/^[0-9a-f]+$/i.test(text))return fromHex(text);
     try{return decodeBase64(text);}catch(_error){return toBytes(text);}};
@@ -130,6 +131,9 @@ const listMethods=function(list){Object.defineProperties(list,{size:{value:funct
   isEmpty:{value:function(){return this.length===0;}},toArray:{value:function(){return Array.from(this);}}});return list;};
 const elementObject=function(html){return {toString:function(){return html;},toJSON:function(){return html;},outerHtml:function(){return html;},
   text:function(){return extractValues('@text',false,html).join(' ');},html:function(){return extractValues('@html',false,html).join('');},
+  ownText:function(){return extractValues('@ownText',false,html).join(' ');},
+  hasAttr:function(name){const key=String(name);if(!/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(key))return false;
+    return extractValues('@xpath:/html/body/*[1]/@'+key,true,html).length>0;},
   attr:function(name){return extractValues('@'+name,false,html)[0]||'';},
   select:function(rule){return listMethods(extractValues(rule,true,html).map(elementObject));}};};
 java.setContent=function(value){ruleContent=stringify(value);};
@@ -176,21 +180,30 @@ const MessageDigest={getInstance:function(algorithm){let input=[];return {update
   digest:function(v){if(v!==undefined)input.push(...toBytes(v));const result=fromHex(digestHex(algorithm,input));input=[];return result;},reset:function(){input=[];}};}};
 function SecretKeySpec(key,algorithm){this.bytes=toBytes(key);this.algorithm=String(algorithm||'AES');this.getEncoded=function(){return this.bytes;};}
 function IvParameterSpec(iv){this.bytes=toBytes(iv);this.getIV=function(){return this.bytes;};}
-const Cipher={ENCRYPT_MODE:1,DECRYPT_MODE:2,getInstance:function(algorithm){let encrypt=false,key=[],iv=[];
-  return {init:function(mode,k,v){encrypt=Number(mode)===1;key=k.bytes||k;iv=v?v.bytes||v:[];},
-    doFinal:function(v){const crypto=createSymmetricCrypto(algorithm,key,iv);return encrypt?crypto.encrypt(v):crypto.decrypt(v);}};}};
+function GCMParameterSpec(bits,iv,offset,length){this.tagLength=Number(bits);
+  if(!Number.isInteger(this.tagLength)||this.tagLength<=0)throw new Error('Invalid authentication tag length');
+  const bytes=toBytes(iv),start=offset===undefined?0:Number(offset),size=length===undefined?bytes.length-start:Number(length);
+  if(!Number.isInteger(start)||!Number.isInteger(size)||start<0||size<0||start+size>bytes.length)throw new Error('Invalid nonce range');
+  this.bytes=bytes.slice(start,start+size);this.getIV=function(){return this.bytes.slice();};this.getTLen=function(){return this.tagLength;};}
+const Cipher={ENCRYPT_MODE:1,DECRYPT_MODE:2,getInstance:function(algorithm){let encrypt=false,key=[],iv=[],aad=[],tagLength=128;
+  return {init:function(mode,k,v){if(![1,2].includes(Number(mode)))throw new Error('Unsupported cipher mode');
+      encrypt=Number(mode)===1;key=k.bytes||k;iv=v?v.bytes||v:[];aad=[];tagLength=v&&v.tagLength||128;},
+    updateAAD:function(value){const bytes=toBytes(value);if(aad.length+bytes.length>1048576)throw new Error('AAD exceeds 1 MiB');
+      for(const byte of bytes)aad.push(byte);},
+    doFinal:function(v){const crypto=createSymmetricCrypto(algorithm,key,iv,{aad:aad,tagLength:tagLength});return encrypt?crypto.encrypt(v):crypto.decrypt(v);}};}};
 java.lang={String:JavaString,StringBuilder:StringBuilder,System:{currentTimeMillis:function(){return fixedNow;}},
   Integer:{parseInt:function(v,radix){return parseInt(v,radix||10);},toHexString:function(v){return (Number(v)>>>0).toString(16);}},
   Long:{parseLong:function(v,radix){return parseInt(v,radix||10);}},Boolean:{parseBoolean:function(v){return String(v).toLowerCase()==='true';}}};
 java.util={HashMap:HashMap,LinkedHashMap:HashMap,ArrayList:ArrayList,Base64:javaBase64,UUID:{randomUUID:java.randomUUID}};
 java.net={URLEncoder:{encode:java.urlEncode},URLDecoder:{decode:java.urlDecode}};java.security={MessageDigest:MessageDigest};
-const android={util:{Base64:androidBase64}},javax={crypto:{Cipher:Cipher,spec:{SecretKeySpec:SecretKeySpec,IvParameterSpec:IvParameterSpec}}};
+const android={util:{Base64:androidBase64}},javax={crypto:{Cipher:Cipher,spec:{SecretKeySpec:SecretKeySpec,IvParameterSpec:IvParameterSpec,GCMParameterSpec:GCMParameterSpec}}};
 const Packages={java:java,javax:javax,android:android};
 const Java={type:function(name){const parts=String(name).split('.');let item=Packages;for(const part of parts)item=item&&item[part];
   if(item===undefined)throw new Error('Unsupported Java class: '+name);return item;},to:function(value){return Array.from(value);},from:function(value){return Array.from(value);}};
 Object.assign(globalThis,{android:android,javax:javax,Packages:Packages,Java:Java,createSymmetricCrypto:createSymmetricCrypto,
   Base64:androidBase64,URLEncoder:java.net.URLEncoder,URLDecoder:java.net.URLDecoder,System:java.lang.System,
-  StringBuilder:StringBuilder,HashMap:HashMap,ArrayList:ArrayList,MessageDigest:MessageDigest,Cipher:Cipher,SecretKeySpec:SecretKeySpec,IvParameterSpec:IvParameterSpec});
+  StringBuilder:StringBuilder,HashMap:HashMap,ArrayList:ArrayList,MessageDigest:MessageDigest,Cipher:Cipher,SecretKeySpec:SecretKeySpec,IvParameterSpec:IvParameterSpec,
+  GCMParameterSpec:GCMParameterSpec});
 globalThis.importClass=function(type){if(typeof type==='function'&&type.name)globalThis[type.name]=type;};
 globalThis.importPackage=function(pkg){if(!Object.values(Packages).includes(pkg)&&pkg!==java.util&&pkg!==java.lang)throw new Error('Unsupported Java package');Object.assign(globalThis,pkg);};
 java.androidId=function(){let id=source.get('__androidId');if(!id){id=java.randomUUID().replace(/-/g,'').slice(0,16);source.put('__androidId',id);}return id;};
