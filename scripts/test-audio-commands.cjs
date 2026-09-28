@@ -40,7 +40,7 @@ async function fixture(initialState = 'paused') {
     plays: 0, pauses: 0, seeks: [],
     on(name, callback) { events.set(name, callback); },
     off(name) { events.delete(name); },
-    emit(name, value) { events.get(name)?.(value); },
+    emit(name, ...values) { events.get(name)?.(...values); },
     transition(state) { this.state = state; this.emit('stateChange', state); },
     async play() { this.plays++; this.transition('playing'); },
     async pause() { this.pauses++; this.transition('paused'); },
@@ -68,7 +68,9 @@ async function fixture(initialState = 'paused') {
     suspendPreload() { cacheCalls.push('suspend'); },
     resumePreload() { cacheCalls.push('resume'); },
     ensureFileCached() { cacheCalls.push('current'); },
-    preloadAudioChapters() { cacheCalls.push('next'); }
+    rememberAudioRequest() { cacheCalls.push('remember'); },
+    preloadAudioChapters() { cacheCalls.push('next'); },
+    setPlayingFile() {}
   };
   const coordinatorModule = { exports: {} };
   const coordinatorCode = ts.transpileModule(fs.readFileSync(
@@ -95,6 +97,7 @@ async function fixture(initialState = 'paused') {
     './ChapterCacheService': { ChapterCacheService: { getInstance: () => cache } },
     './PlaybackCoordinator': coordinatorModule.exports,
     '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 },
+      BufferingInfoType: { BUFFERING_START: 1, BUFFERING_END: 2 },
       createMediaSourceWithUrl(url, headers) {
         const source = { url, headers, offlineCache: false,
           enableOfflineCache(enable) { this.offlineCache = enable; } };
@@ -283,6 +286,26 @@ async function check(name, test) {
     f.service.playGen++;
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.deepEqual(f.cacheCalls, []);
+  });
+  await check('online playback caches the current chapter before future chapters and buffering gates transfers', async () => {
+    const f = await fixture('playing');
+    f.state.currentChapter.source = { type: 'url', value: 'https://cdn.invalid/current.mp3' };
+    f.state.currentBook.chapters = [f.state.currentChapter];
+    f.service.triggerPreload(f.state.currentBook, f.state.currentChapter);
+    f.player.emit('bufferingUpdate', 1, 0);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.cacheCalls, ['suspend'], 'Already scheduled prefetch must not run during buffering');
+    f.cacheCalls.length = 0;
+    f.player.emit('bufferingUpdate', 2, 0);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.cacheCalls, ['resume', 'current', 'next']);
+    f.cacheCalls.length = 0;
+    await f.service.pause();
+    f.player.emit('bufferingUpdate', 2, 0);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(f.cacheCalls.includes('suspend'));
+    assert.equal(f.cacheCalls.includes('resume'), false, 'Buffering end cannot restart prefetch while paused');
+    assert.equal(f.cacheCalls.includes('current'), false);
   });
   await check('manual play recovers an errored player at the saved position', async () => {
     const f = await fixture('error');

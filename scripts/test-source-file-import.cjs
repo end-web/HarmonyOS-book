@@ -6,20 +6,23 @@ const vm = require('node:vm');
 const ts = require(path.join(process.env.DEVECO_HOME,
   'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const root = path.join(__dirname, '../entry/src/main/ets');
-let files = new Map(), handles = new Map(), writes = [], opened = [], yields = 0, active = 0, peak = 0;
+let files = new Map(), handles = new Map(), positions = new Map(), writes = [], opened = [], yields = 0, active = 0, peak = 0;
 const io = {
   OpenMode: { READ_ONLY: 0 },
   async open(uri) {
     if (!files.has(uri)) throw new Error('unreadable');
-    opened.push(uri); handles.set(uri, files.get(uri));
+    opened.push(uri); handles.set(uri, files.get(uri)); positions.set(uri, 0);
     peak = Math.max(peak, ++active); return { fd: uri };
   },
   async stat(fd) { return { size: handles.get(fd).length }; },
   async read(fd, output, options) {
     const data = handles.get(fd);
     // Simulate short reads to ensure files are fully reconstructed.
-    const length = Math.min(4093, output.byteLength, data.length - options.offset);
-    new Uint8Array(output).set(data.subarray(options.offset, options.offset + length));
+    // CoreFileKit offset is relative to the CURRENT file pointer, not an absolute position.
+    const start = positions.get(fd) + (options?.offset || 0);
+    const length = Math.max(0, Math.min(4093, output.byteLength, data.length - start));
+    new Uint8Array(output).set(data.subarray(start, start + length));
+    positions.set(fd, start + length);
     return length;
   },
   async close(file) { assert.ok(handles.delete(file.fd)); active--; }
@@ -57,7 +60,7 @@ const { LocalRuleSourceFileImporter: importer } = load(path.join(root,
 const source = id => ({ bookSourceName: `书源 ${id}`, bookSourceUrl: `https://${id}` });
 function reset(entries) {
   files = new Map(entries.map(([uri, body]) => [uri, Buffer.from(body)]));
-  handles = new Map(); writes = []; opened = []; yields = 0; active = 0; peak = 0;
+  handles = new Map(); positions = new Map(); writes = []; opened = []; yields = 0; active = 0; peak = 0;
 }
 async function run(uris = [...files.keys()]) {
   const result = await importer.importFiles(uris, () => {});
@@ -76,7 +79,8 @@ async function run(uris = [...files.keys()]) {
   result = await run(); assert.equal(result.imported, 1); assert.equal(result.skippedFiles, 1);
   reset(Array.from({ length: 6 }, (_, i) => [String(i),
     JSON.stringify(source(i)) + ' '.repeat(importer.MAX_FILE_BYTES - Buffer.byteLength(JSON.stringify(source(i))))]));
-  result = await run(); assert.equal(result.imported, 5); assert.equal(result.skippedFiles, 1);
+  result = await run(); assert.equal(result.imported, 3); assert.equal(result.skippedFiles, 3);
+  assert.equal(result.budgetFiles, 3);
   reset([['a', JSON.stringify(Array.from({ length: 600 }, (_, i) => source(i)))],
     ['b', JSON.stringify(Array.from({ length: 600 }, (_, i) => source(i + 600)))],
     ['c', JSON.stringify(source('last'))]]);

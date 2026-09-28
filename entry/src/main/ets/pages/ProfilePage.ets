@@ -189,7 +189,7 @@ export struct ProfilePage {
   @Builder
   buildAccountCard() {
     Row({ space: AppSpace.Sm }) {
-      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 28 })
+      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 48 })
       Column({ space: 2 }) {
         Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
           $r('app.string.hw_auth_login_title'))
@@ -222,7 +222,8 @@ export struct ProfilePage {
       }
     }
     .width('100%')
-    .padding({ left: ROW_INDENT, right: ROW_INDENT, top: AppSpace.Sm, bottom: AppSpace.Sm })
+    // 大头像与下方 28vp 图标的中心线对齐。
+    .padding({ left: ROW_INDENT - (48 - 28) / 2, right: ROW_INDENT, top: AppSpace.Sm, bottom: AppSpace.Sm })
     .constraintSize({ minHeight: 64 })
     .backgroundColor($r('sys.color.comp_background_primary'))
     .borderRadius(AppRadius.Lg)

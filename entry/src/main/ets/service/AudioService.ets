@@ -187,6 +187,7 @@ export class AudioService {
    *  正在解析音频 URL（耗时长，比如 WebView 嗅探）的旧任务跑完后会用这个比对，
    *  如果不是最新代次就直接丢弃，不再装载到 AVPlayer，避免"切了新章节但旧的还在响"。 */
   private playGen: number = 0;
+  private preloadBuffering: boolean = false;
   /** One automatic retry per user playback request; network timeouts must not restart indefinitely. */
   private autoRetryChapterId: string = '';
   /** 最近一次在线地址解析失败原因，用于把书源业务错误反馈给播放页。 */
@@ -449,6 +450,7 @@ export class AudioService {
         }
       } else if (newState === 'paused') {
         this.state.isPlaying = false;
+        ChapterCacheService.getInstance().suspendPreload();
         this.stopTick();
         // 立即落盘:暂停后 tick 停了,不存就会丢掉「上次 tick 到暂停」之间的进度,
         // 手动暂停 / 锁屏 / 电话打断后续播都会偏早。progressMs 此刻已是暂停位置,
@@ -556,6 +558,17 @@ export class AudioService {
     });
     p.on('bufferingUpdate', (type: media.BufferingInfoType, value: number): void => {
       if (this.player !== p) return;
+      if (!this.state?.isLive) {
+        if (type === media.BufferingInfoType.BUFFERING_START) {
+          this.preloadBuffering = true;
+          ChapterCacheService.getInstance().suspendPreload();
+        } else if (type === media.BufferingInfoType.BUFFERING_END) {
+          this.preloadBuffering = false;
+          if (this.state?.currentBook && this.state.currentChapter) {
+            this.triggerPreload(this.state.currentBook, this.state.currentChapter);
+          }
+        }
+      }
       if (type === media.BufferingInfoType.BUFFERING_START || type === media.BufferingInfoType.BUFFERING_END) {
         this.tracePlayback(`buffering:type=${type}:value=${value}`);
       }
@@ -981,6 +994,7 @@ export class AudioService {
   private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number, forceReload: boolean = false): Promise<void> {
     if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
     const myGen = ++this.playGen;
+    this.preloadBuffering = false;
     this.cancelLiveRecovery();
     const oldWasLive = this.liveSource || this.state.isLive;
     this.liveSource = false;
@@ -1200,6 +1214,8 @@ export class AudioService {
       // 必须校验后才算成功，否则假地址会被装进 AVPlayer 并报“音频源不可用”，
       // 还会跳过 doPlayChapter 的解析重试。
       if (DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl)) {
+        // 前台首次解析也进入共享缓存，快速回听无需再次请求书源。
+        if (!this.state?.isLive) cache.rememberAudioRequest(chapter.id, audioUrl, requestInfo.headers);
         chapter.source = { type: 'url', value: audioUrl };
         const r: AudioResolveResult = { headers: requestInfo.headers, success: true };
         return r;
@@ -1312,6 +1328,7 @@ export class AudioService {
       } else if (src.type === 'file') {
         // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）。
         // 缓存文件可能已被系统回收/过期删除，打开失败返回 false，不抛异常。
+        ChapterCacheService.getInstance().setPlayingFile(src.value);
         const f = await fileIo.open(src.value, fileIo.OpenMode.READ_ONLY);
         const stat = await fileIo.stat(f.fd);
         this.currentFile = f;
@@ -1330,6 +1347,7 @@ export class AudioService {
   }
 
   private closeCurrentFile(): void {
+    ChapterCacheService.getInstance().setPlayingFile();
     if (this.currentFile) {
       try {
         fileIo.closeSync(this.currentFile);
@@ -1600,6 +1618,7 @@ export class AudioService {
   }
 
   async release(): Promise<void> {
+    ChapterCacheService.getInstance().suspendPreload();
     this.cancelLiveRecovery();
     this.pauseRequested = true;
     this.cancelExternalMediaWatch();
@@ -1822,10 +1841,11 @@ export class AudioService {
   private triggerPreload(book: Book, chapter: Chapter): void {
     const generation = this.playGen;
     setTimeout((): void => {
-      if (generation !== this.playGen || !this.state?.isPlaying || this.state.isLoading) return;
+      if (generation !== this.playGen || !this.state?.isPlaying || this.state.isLoading || this.preloadBuffering) return;
       if (this.state.isLive) return;
       const cache = ChapterCacheService.getInstance();
       cache.resumePreload();
+      // 当前章先落盘，保证回听；与后续章节共用单个后台下载队列。
       if (chapter.source.type === 'url') {
         cache.ensureFileCached(book, chapter, chapter.source.value, this.currentAudioHeaders);
       }
@@ -1875,6 +1895,7 @@ export class AudioService {
 
   /** 系统播控、耳机和卡片共用的暂停入口，重复指令保持暂停。 */
   async pause(source: string = 'user'): Promise<void> {
+    ChapterCacheService.getInstance().suspendPreload();
     this.cancelLiveRecovery();
     this.pauseSource = source;
     this.tracePlayback('pause-request');

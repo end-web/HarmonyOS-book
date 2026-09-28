@@ -1079,7 +1079,12 @@
       "name": "rule_source_import_file_action",
       "value": "选择本地 JSON（可多选）"
     },
-    {"name": "rule_source_import_files_hint", "value": "每次最多 10 个文件，单个 2 MiB、合计 10 MiB，最多处理 1000 个书源。无效、超限或锁定的内容会跳过。"},
+    {"name": "rule_source_import_files_hint", "value": "每次最多 10 个文件，单个 10 MiB、合计 30 MiB，最多处理 1000 个书源。无效、超限或锁定的内容会跳过。"},
+    {"name": "rule_source_import_files_oversized", "value": "%d 个文件超过单文件 10 MiB 限制，请拆分后重试。"},
+    {"name": "rule_source_import_files_budget", "value": "%d 个文件超过本批 30 MiB 总量限制，请分批导入。"},
+    {"name": "rule_source_import_files_invalid", "value": "%d 个文件为空、格式无效或未包含可导入书源，请检查 JSON 内容。"},
+    {"name": "rule_source_import_files_read_failed", "value": "%d 个文件读取失败，请重新选择文件或保存到本地后重试。"},
+    {"name": "rule_source_import_files_write_failed", "value": "%d 个文件的书源保存失败，请检查书源定义和剩余存储空间后重试。"},
     {"name": "rule_source_import_files_progress", "value": "正在导入第 %d / %d 个文件…"},
     {"name": "rule_source_import_files_result", "value": "已导入 %d 个书源，跳过 %d 个书源、%d 个文件"},
     {

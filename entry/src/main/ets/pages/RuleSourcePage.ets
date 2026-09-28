@@ -6,7 +6,7 @@ import { BookSourceService } from '../service/BookSourceService';
 import { HttpClient, HttpResponse } from '../service/http/HttpClient';
 import { LocalRuleSourceImportParser } from '../service/rulesource/LocalRuleSourceImportParser';
 import { LocalRuleSourceImportService } from '../service/rulesource/LocalRuleSourceImportService';
-import { LocalRuleSourceFileImporter } from '../service/rulesource/LocalRuleSourceFileImporter';
+import { LocalRuleSourceFileImporter, RuleSourceFileImportResult } from '../service/rulesource/LocalRuleSourceFileImporter';
 import {
   LocalRuleSourceBulkTester,
   LocalRuleSourceBulkTestProgress,
@@ -113,6 +113,8 @@ export struct RuleSourcePage {
   @Local isImporting: boolean = false;
   @Local importFileCurrent: number = 0;
   @Local importFileTotal: number = 0;
+  @Local fileImportResult: RuleSourceFileImportResult = new RuleSourceFileImportResult();
+  @Local hasFileImportResult: boolean = false;
   @Local isBulkTesting: boolean = false;
   @Local isEditMode: boolean = false;
   @Local showImportPanel: boolean = false;
@@ -731,11 +733,19 @@ export struct RuleSourcePage {
     try {
       const uris = await this.pickLocalJsonUris();
       if (uris.length === 0) return;
+      this.hasFileImportResult = false;
       const result = await LocalRuleSourceFileImporter.importFiles(uris, (current: number, total: number) => {
         this.importFileCurrent = current;
         this.importFileTotal = total;
       });
-      if (result.imported > 0) this.sortMode = 0;
+      this.fileImportResult = result;
+      this.hasFileImportResult = true;
+      if (result.imported > 0) {
+        this.sortMode = 0;
+        this.searchKeyword = '';
+        this.selectedGroup = '';
+        this.statusFilter = 0;
+      }
       SourceDataService.invalidateLocalSources();
       await this.loadSources(false);
       this.showToast($r('app.string.rule_source_import_files_result',
@@ -1971,6 +1981,33 @@ export struct RuleSourcePage {
         Text($r('app.string.rule_source_import_files_progress', this.importFileCurrent, this.importFileTotal))
           .fontSize(AppFont.Caption)
           .fontColor(AppColor.Brand)
+      }
+      if (this.hasFileImportResult && !this.isImporting) {
+        Column({ space: 4 }) {
+          Text($r('app.string.rule_source_import_files_result', this.fileImportResult.imported,
+            this.fileImportResult.skippedSources, this.fileImportResult.skippedFiles))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          if (this.fileImportResult.oversizedFiles > 0) {
+            Text($r('app.string.rule_source_import_files_oversized', this.fileImportResult.oversizedFiles))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          }
+          if (this.fileImportResult.budgetFiles > 0) {
+            Text($r('app.string.rule_source_import_files_budget', this.fileImportResult.budgetFiles))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          }
+          if (this.fileImportResult.invalidFiles > 0) {
+            Text($r('app.string.rule_source_import_files_invalid', this.fileImportResult.invalidFiles))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          }
+          if (this.fileImportResult.readFailedFiles > 0) {
+            Text($r('app.string.rule_source_import_files_read_failed', this.fileImportResult.readFailedFiles))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          }
+          if (this.fileImportResult.writeFailedFiles > 0) {
+            Text($r('app.string.rule_source_import_files_write_failed', this.fileImportResult.writeFailedFiles))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+          }
+        }.width('100%').alignItems(HorizontalAlign.Start)
       }
 
       Button() {

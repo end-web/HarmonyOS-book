@@ -1,34 +1,27 @@
 import { fileIo } from '@kit.CoreFileKit';
-import { buffer, taskpool } from '@kit.ArkTS';
+import { taskpool } from '@kit.ArkTS';
 import { CharsetCodec } from '../../utils/CharsetCodec';
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleSourceImportParser } from './LocalRuleSourceImportParser';
 import { LocalRuleSourceImportService } from './LocalRuleSourceImportService';
-
-@Concurrent
-function parseImportFile(content: string): string[] {
-  const report = LocalRuleSourceImportParser.parse(content);
-  // 只跨线程传递字符串；主线程分段恢复带实例方法的书源模型。
-  const entries: string[] = [String(report.rejectedCount)];
-  for (const source of report.sources) {
-    if (buffer.byteLength(source.rawSourceJson, 'utf-8') > 512 * 1024) report.rejectedCount++;
-    else entries.push(source.rawSourceJson);
-  }
-  entries[0] = String(report.rejectedCount);
-  return entries;
-}
+import { parseImportFile } from './LocalRuleSourceImportWorker';
 
 export class RuleSourceFileImportResult {
   imported: number = 0;
   skippedSources: number = 0;
   skippedFiles: number = 0;
+  oversizedFiles: number = 0;
+  budgetFiles: number = 0;
+  invalidFiles: number = 0;
+  readFailedFiles: number = 0;
+  writeFailedFiles: number = 0;
 }
 
 /** 文件串行读取，后台解析，限制整批输入和同时驻留内存的数据。 */
 export class LocalRuleSourceFileImporter {
   static readonly MAX_FILES: number = 10;
-  static readonly MAX_FILE_BYTES: number = 2 * 1024 * 1024;
-  static readonly MAX_TOTAL_BYTES: number = 10 * 1024 * 1024;
+  static readonly MAX_FILE_BYTES: number = 10 * 1024 * 1024;
+  static readonly MAX_TOTAL_BYTES: number = 30 * 1024 * 1024;
   static readonly MAX_SOURCES: number = 1000;
 
   static async importFiles(uris: string[], progress: (current: number, total: number) => void):
@@ -47,12 +40,16 @@ export class LocalRuleSourceFileImporter {
         break;
       }
       let file: fileIo.File | undefined = undefined;
+      let stage: string = 'read';
       try {
         file = await fileIo.open(selected[index], fileIo.OpenMode.READ_ONLY);
         const stat = await fileIo.stat(file.fd);
         if (stat.size <= 0 || stat.size > LocalRuleSourceFileImporter.MAX_FILE_BYTES ||
           totalBytes + stat.size > LocalRuleSourceFileImporter.MAX_TOTAL_BYTES) {
           result.skippedFiles++;
+          if (stat.size <= 0) result.invalidFiles++;
+          else if (stat.size > LocalRuleSourceFileImporter.MAX_FILE_BYTES) result.oversizedFiles++;
+          else result.budgetFiles++;
           continue;
         }
         // 无效文件也计入读取预算，防止反复消耗解析资源。
@@ -61,16 +58,19 @@ export class LocalRuleSourceFileImporter {
         let offset = 0;
         while (offset < stat.size) {
           const chunk = new ArrayBuffer(Math.min(64 * 1024, stat.size - offset));
-          const read = await fileIo.read(file.fd, chunk, { offset: offset, length: chunk.byteLength });
+          // offset 相对当前文件指针；连续读取不能再次传入累计位置，否则会跳过正文。
+          const read = await fileIo.read(file.fd, chunk, { length: chunk.byteLength });
           if (read <= 0) throw new Error('Incomplete source file');
           new Uint8Array(buffer).set(new Uint8Array(chunk, 0, read), offset);
           offset += read;
         }
         await fileIo.close(file);
         file = undefined;
+        stage = 'parse';
         const parsed = await taskpool.execute(parseImportFile, CharsetCodec.decodeBuffer(buffer));
         if (!Array.isArray(parsed) || parsed.length <= 1) {
           result.skippedFiles++;
+          result.invalidFiles++;
           continue;
         }
         result.skippedSources += Number(parsed[0]);
@@ -92,11 +92,17 @@ export class LocalRuleSourceFileImporter {
           }
           if (item % 8 === 0) await LocalRuleSourceFileImporter.yieldToUi();
         }
+        stage = 'write';
         const imported = await LocalRuleSourceImportService.importSources(sources);
         result.imported += imported;
         result.skippedSources += sources.length - imported;
-      } catch (_error) {
+      } catch (error) {
         result.skippedFiles++;
+        if (stage === 'read') result.readFailedFiles++;
+        else if (stage === 'parse') result.invalidFiles++;
+        else result.writeFailedFiles++;
+        // 不记录原始 JSON、授权 URI 或账号字段。
+        console.error(`[SourceFileImport] ${stage} failed: ${error instanceof Error ? error.name : 'BusinessError'}`);
       } finally {
         if (file !== undefined) {
           try { await fileIo.close(file); } catch (_error) { /* 保留其他文件的导入结果。 */ }

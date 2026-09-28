@@ -47,6 +47,7 @@ export class AudioDownloadTransport {
       AudioDownloadTransport.ensureFreeSpace(options.finalPath, MIN_FREE_BYTES);
       file = await fileIo.open(partPath,
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+      if (this.cancelled) throw new Error('下载已取消');
       this.request = http.createHttp();
       this.request.on('headersReceive', (headers: Object) => {
         responseHeaders = AudioDownloadTransport.toHeaderRecord(headers);

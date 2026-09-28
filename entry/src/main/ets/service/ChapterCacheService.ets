@@ -19,9 +19,9 @@ export const EVT_CHAPTER_CACHE_UPDATED = 'app.chapter.cache.updated';
 
 let PRE_DOWNLOAD_FORWARD = 1;
 let PRE_DOWNLOAD_BACKWARD = 0;
-const MAX_CONCURRENT = 2;             // URL 解析（WebView/HTTP）最多 2 并发
-const MAX_FILE_CONCURRENT = 2;        // 音频文件下载最多 2 并发
+const MAX_CONCURRENT = 1; // 按播放距离串行解析并下载，给当前播放保留带宽。
 const MAX_URL_CACHE_SIZE = 50;
+const AUDIO_URL_TTL_MS = 5 * 60 * 1000;
 const MAX_FILE_CACHE_BYTES = 1024 * 1024 * 1024; // 章节临时音频缓存上限 1GB
 const PRELOAD_FAILURE_COOLDOWN_MS = 30000;
 
@@ -59,26 +59,38 @@ export class ChapterCacheService {
   /** 章节 → 解析出的真实时长（秒）。来自缓存音频文件的元数据 */
   private durationCache: Map<string, number> = new Map();
   private pendingTasks: Set<string> = new Set();
+  private runningTaskGenerations: Map<string, number> = new Map();
+  private invalidatedResolves: Set<string> = new Set();
   private preloadFailureAt: Map<string, number> = new Map();
   private runningCount: number = 0;
-  private queue: Array<() => Promise<void>> = [];
-  private fileRunningCount: number = 0;
-  private fileQueue: Array<() => Promise<void>> = [];
+  private queue: Map<string, () => Promise<void>> = new Map();
   private appContext: common.Context | null = null;
   private clearGen: number = 0;
   private preloadSuspended: boolean = false;
   private activeDownloads: Map<string, AudioDownloadTransport> = new Map();
   private fileTasks: Map<string, Promise<void>> = new Map();
   private priorityChapterId: string = '';
+  private preloadGen: number = 0;
+  private playingFilePath: string = '';
+  private activeFilePaths: Set<string> = new Set();
+  private diskCleanupTask: Promise<void> | null = null;
+  private diskCleanupRequested: boolean = false;
+
+  setPlayingFile(filePath: string = ''): void {
+    this.playingFilePath = filePath;
+  }
 
   suspendPreload(keepChapterId: string = ''): void {
     this.preloadSuspended = true;
     this.priorityChapterId = keepChapterId;
-    this.queue = [];
-    this.fileQueue = [];
+    this.queue.clear();
+    this.preloadGen++;
     if (!keepChapterId) this.clearGen++;
     for (const id of this.activeDownloads.keys()) {
-      if (id !== keepChapterId) this.activeDownloads.get(id)?.cancel();
+      if (id !== keepChapterId) {
+        this.activeDownloads.get(id)?.cancel();
+        this.activeDownloads.delete(id);
+      }
     }
   }
 
@@ -86,7 +98,6 @@ export class ChapterCacheService {
     this.preloadSuspended = false;
     this.priorityChapterId = '';
     this.drain();
-    this.drainFile();
   }
 
   static getInstance(): ChapterCacheService {
@@ -98,11 +109,15 @@ export class ChapterCacheService {
 
   setPreloadCount(forward: number, backward: number = 0): void {
     PRE_DOWNLOAD_FORWARD = Number.isFinite(forward) ? Math.max(0, Math.min(50, Math.round(forward))) : 1;
-    PRE_DOWNLOAD_BACKWARD = backward;
-    if (forward <= 0) {
-      // 不预加载时丢弃尚未开始的 URL 解析任务；正在执行的请求自然结束。
-      this.queue = [];
-      this.fileQueue = [];
+    PRE_DOWNLOAD_BACKWARD = Number.isFinite(backward) ? Math.max(0, Math.min(50, Math.round(backward))) : 0;
+    this.queue.clear();
+    if (!this.isPreloadEnabled()) {
+      // 清除队列并使在途解析失效，避免关闭后又追加下载。
+      this.clearGen++;
+      this.preloadGen++;
+      this.priorityChapterId = '';
+      for (const download of this.activeDownloads.values()) download.cancel();
+      this.activeDownloads.clear();
     }
   }
 
@@ -115,7 +130,7 @@ export class ChapterCacheService {
   }
 
   isChapterCached(chapterId: string): boolean {
-    return this.audioCache.has(chapterId) || this.fileCache.has(chapterId);
+    return this.getAudioUrl(chapterId) !== null || this.fileCache.has(chapterId);
   }
 
   isAudioChapterCached(book: Book, chapter: Chapter): boolean {
@@ -130,14 +145,13 @@ export class ChapterCacheService {
   }
 
   async clearAllCache(): Promise<ClearCacheResult> {
-    const myGen = ++this.clearGen;
+    this.clearGen++;
     for (const download of this.activeDownloads.values()) download.cancel();
     this.audioCache.clear();
     this.durationCache.clear();
     this.preloadFailureAt.clear();
-    this.queue = [];
-    this.fileQueue = [];
-    this.pendingTasks.clear();
+    this.activeDownloads.clear();
+    this.queue.clear();
     const result = new ClearCacheResult();
     const unlinkPromises: Promise<void>[] = [];
     for (const entry of this.fileCache.values()) {
@@ -201,13 +215,29 @@ export class ChapterCacheService {
   }
 
   getAudioUrl(chapterId: string): string | null {
-    const entry = this.audioCache.get(chapterId);
+    const entry = this.getFreshAudioEntry(chapterId);
     return entry ? entry.resolvedUrl : null;
   }
 
   getAudioHeaders(chapterId: string): Record<string, string> {
-    const entry = this.audioCache.get(chapterId);
+    const entry = this.getFreshAudioEntry(chapterId);
     return entry ? entry.headers : {};
+  }
+
+  rememberAudioRequest(chapterId: string, resolvedUrl: string, headers: Record<string, string>): void {
+    if (!this.isPreloadEnabled() || !resolvedUrl.startsWith('http')) return;
+    if (!this.audioCache.has(chapterId)) this.evictUrlCache();
+    const entry: CacheEntry = { resolvedUrl: resolvedUrl, headers: headers, timestamp: Date.now() };
+    this.audioCache.set(chapterId, entry);
+  }
+
+  private getFreshAudioEntry(chapterId: string): CacheEntry | undefined {
+    const entry = this.audioCache.get(chapterId);
+    if (entry && (!Number.isFinite(entry.timestamp) || Date.now() - entry.timestamp >= AUDIO_URL_TTL_MS)) {
+      this.audioCache.delete(chapterId);
+      return undefined;
+    }
+    return entry;
   }
 
   async waitForAudioFile(book: Book, chapter: Chapter): Promise<string | null> {
@@ -224,7 +254,14 @@ export class ChapterCacheService {
         clearTimeout(timer);
       }
     }
-    return this.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue || chapter.source.value);
+    const completed = this.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue || chapter.source.value);
+    if (completed === null) {
+      // 等待预算耗尽后交给播放器拉流，停止同一章节的独立下载。
+      this.activeDownloads.get(chapter.id)?.cancel();
+      this.activeDownloads.delete(chapter.id);
+      this.priorityChapterId = '';
+    }
+    return completed;
   }
 
   /** 章节是否已经有完整音频文件落盘，命中后 AudioService 直接 fdSrc 播放 */
@@ -253,26 +290,19 @@ export class ChapterCacheService {
   }
 
   preloadAudioChapters(book: Book, currentIndex: number): void {
-    if (!book.sourceUrl || PRE_DOWNLOAD_FORWARD <= 0) return;
-    const start = Math.max(0, currentIndex - (PreferenceService.chapterStep(book) < 0 ? PRE_DOWNLOAD_FORWARD : PRE_DOWNLOAD_BACKWARD));
-    const end = Math.min(book.chapters.length - 1, currentIndex + (PreferenceService.chapterStep(book) < 0 ? PRE_DOWNLOAD_BACKWARD : PRE_DOWNLOAD_FORWARD));
-    for (let i = start; i <= end; i++) {
-      if (i === currentIndex) continue;
+    if (!book.sourceUrl || !this.isPreloadEnabled() || this.preloadSuspended) return;
+    const step = PreferenceService.chapterStep(book) < 0 ? -1 : 1;
+    // 正序与倒序都先下一章；反向回看窗口排在后面。
+    for (let distance = 1; distance <= PRE_DOWNLOAD_FORWARD + PRE_DOWNLOAD_BACKWARD; distance++) {
+      const i = distance <= PRE_DOWNLOAD_FORWARD ? currentIndex + distance * step :
+        currentIndex - (distance - PRE_DOWNLOAD_FORWARD) * step;
+      if (i < 0 || i >= book.chapters.length) continue;
       const ch = book.chapters[i];
       if (ch.source.type !== 'url') continue;
       if (this.isPreloadCoolingDown(ch.id)) continue;
       const pageUrl = ch.originSourceValue || ch.source.value;
       if (this.getAudioFilePath(book.id, ch.id, pageUrl)) continue;
-      // 1) URL 解析
-      if (!this.audioCache.has(ch.id) && !this.pendingTasks.has(`audio_${ch.id}`)) {
-        this.enqueue(() => this.resolveAudioAndDownload(book, ch));
-      } else if (this.audioCache.has(ch.id) && !this.pendingTasks.has(`file_${ch.id}`)) {
-        // 2) URL 已有，仅下载文件
-        const cached = this.audioCache.get(ch.id);
-        if (cached) {
-          this.enqueueFile(() => this.downloadFile(book, ch, cached.resolvedUrl, cached.headers));
-        }
-      }
+      this.enqueue(ch.id, () => this.resolveAudioAndDownload(book, ch));
     }
   }
 
@@ -301,7 +331,10 @@ export class ChapterCacheService {
 
   /** 清除某个章节的所有缓存（临时签名 URL 失效时用） */
   clearChapter(chapterId: string, bookId: string = '', pageUrl: string = ''): void {
+    if (this.pendingTasks.has(`audio_${chapterId}`)) this.invalidatedResolves.add(chapterId);
+    this.queue.delete(chapterId);
     this.activeDownloads.get(chapterId)?.cancel();
+    this.activeDownloads.delete(chapterId);
     this.audioCache.delete(chapterId);
     this.durationCache.delete(chapterId);
     this.preloadFailureAt.delete(chapterId);
@@ -317,57 +350,45 @@ export class ChapterCacheService {
     }
   }
 
-  /** 主动给某个章节下载文件（AudioService 在 playChapter 时调用，让当前章节也能落盘） */
+  /** 播放稳定后优先保存当前章，完整文件供切章后的回听复用。 */
   ensureFileCached(book: Book, chapter: Chapter, resolvedUrl: string,
     headers: Record<string, string> = {}): void {
     if (!this.isPreloadEnabled()) return;
     if (!resolvedUrl || !resolvedUrl.startsWith('http')) return;
+    if (this.isPreloadCoolingDown(chapter.id)) return;
     const pageUrl = chapter.originSourceValue || chapter.source.value;
     if (this.getAudioFilePath(book.id, chapter.id, pageUrl)) return;
-    if (this.pendingTasks.has(`file_${chapter.id}`)) return;
-    this.enqueueFile(() => this.downloadFile(book, chapter, resolvedUrl, headers));
+    this.enqueue(chapter.id, () => this.downloadFile(book, chapter, resolvedUrl, headers));
   }
 
   /* ───────────── 内部：URL 解析队列 ───────────── */
 
-  private enqueue(task: () => Promise<void>): void {
-    this.queue.push(task);
+  private enqueue(chapterId: string, task: () => Promise<void>): void {
+    if (!this.isPreloadEnabled() || this.preloadSuspended ||
+      this.queue.has(chapterId) || this.runningTaskGenerations.get(chapterId) === this.preloadGen) return;
+    this.queue.set(chapterId, task);
     this.drain();
   }
 
   private drain(): void {
-    if (this.preloadSuspended) return;
-    while (this.runningCount < MAX_CONCURRENT && this.queue.length > 0) {
-      const task = this.queue.shift()!;
+    if (this.preloadSuspended || !this.isPreloadEnabled()) return;
+    while (this.runningCount < MAX_CONCURRENT && this.queue.size > 0) {
+      const first = this.queue.keys().next();
+      if (first.done) return;
+      const chapterId = first.value;
+      const task = this.queue.get(chapterId);
+      this.queue.delete(chapterId);
+      if (!task) continue;
+      this.pendingTasks.add(chapterId);
+      this.runningTaskGenerations.set(chapterId, this.preloadGen);
       this.runningCount++;
-      task().then(() => {
+      task().catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'preload task failed: %{public}s', error.message);
+      }).finally((): void => {
+        this.pendingTasks.delete(chapterId);
+        this.runningTaskGenerations.delete(chapterId);
         this.runningCount--;
         this.drain();
-      }).catch(() => {
-        this.runningCount--;
-        this.drain();
-      });
-    }
-  }
-
-  /* ───────────── 内部：音频文件下载队列 ───────────── */
-
-  private enqueueFile(task: () => Promise<void>): void {
-    this.fileQueue.push(task);
-    this.drainFile();
-  }
-
-  private drainFile(): void {
-    if (this.preloadSuspended) return;
-    while (this.fileRunningCount < MAX_FILE_CONCURRENT && this.fileQueue.length > 0) {
-      const task = this.fileQueue.shift()!;
-      this.fileRunningCount++;
-      task().then(() => {
-        this.fileRunningCount--;
-        this.drainFile();
-      }).catch(() => {
-        this.fileRunningCount--;
-        this.drainFile();
       });
     }
   }
@@ -376,20 +397,26 @@ export class ChapterCacheService {
 
   private async resolveAudioAndDownload(book: Book, chapter: Chapter): Promise<void> {
     const myClearGen = this.clearGen;
+    const myPreloadGen = this.preloadGen;
     const taskKey = `audio_${chapter.id}`;
     this.pendingTasks.add(taskKey);
     try {
+      const cached = this.getFreshAudioEntry(chapter.id);
+      if (cached) {
+        await this.downloadFileCheckGen(book, chapter, cached.resolvedUrl, cached.headers, myClearGen);
+        return;
+      }
       const source = await this.findSource(book.sourceUrl);
-      if (myClearGen !== this.clearGen) return;
+      if (!this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return;
       if (!source) throw new Error('预加载书源不可用');
       await BookSourceService.prepareAudioChapter(source, book, chapter);
-      if (myClearGen !== this.clearGen) return;
+      if (!this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return;
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const requestInfo: AudioRequestInfo =
         await BookSourceService.resolveAudioRequest(source, pageUrl, book.variables, chapter.variables);
       const audioUrl = requestInfo.url;
-      if (myClearGen !== this.clearGen) return;
-      if (audioUrl && audioUrl !== pageUrl) {
+      if (!this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return;
+      if (DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl)) {
         this.preloadFailureAt.delete(chapter.id);
         this.evictUrlCache();
         this.audioCache.set(chapter.id, {
@@ -397,30 +424,29 @@ export class ChapterCacheService {
           headers: requestInfo.headers,
           timestamp: Date.now()
         });
-        // URL 拿到后顺手把文件也下了
-        if (myClearGen === this.clearGen) {
-          if (this.preloadSuspended && this.priorityChapterId === chapter.id) {
-            await this.downloadFileCheckGen(book, chapter, audioUrl, requestInfo.headers, myClearGen);
-          } else {
-            this.enqueueFile(() => this.downloadFileCheckGen(book, chapter, audioUrl, requestInfo.headers, myClearGen));
-          }
-        }
+        await this.downloadFileCheckGen(book, chapter, audioUrl, requestInfo.headers, myClearGen);
       } else {
         throw new Error('预加载未获取到有效音频地址');
       }
     } catch (err) {
-      if (myClearGen === this.clearGen) this.markPreloadFailure(chapter.id);
-      const e = err as Error;
+      if (this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) this.markPreloadFailure(chapter.id);
+      const message = err instanceof Error ? err.message : String(err);
       hilog.warn(DOMAIN, TAG, 'resolve preload failed [%{public}s]: %{public}s', chapter.title,
-        e?.message ?? JSON.stringify(err));
+        message);
     } finally {
       this.pendingTasks.delete(taskKey);
+      this.invalidatedResolves.delete(chapter.id);
     }
+  }
+
+  private isResolveCurrent(chapterId: string, clearGen: number, preloadGen: number): boolean {
+    return this.isPreloadEnabled() && !this.invalidatedResolves.has(chapterId) && clearGen === this.clearGen &&
+      (preloadGen === this.preloadGen || chapterId === this.priorityChapterId);
   }
 
   private downloadFileCheckGen(book: Book, chapter: Chapter, audioUrl: string,
     headers: Record<string, string>, gen: number): Promise<void> {
-    if (gen !== this.clearGen) return Promise.resolve();
+    if (gen !== this.clearGen || !this.isPreloadEnabled()) return Promise.resolve();
     return this.downloadFile(book, chapter, audioUrl, headers);
   }
 
@@ -437,6 +463,7 @@ export class ChapterCacheService {
 
   private async downloadFileStrict(book: Book, chapter: Chapter, audioUrl: string,
     headers: Record<string, string> = {}): Promise<void> {
+    if (!this.isPreloadEnabled() || (this.preloadSuspended && this.priorityChapterId !== chapter.id)) return;
     // HLS 是播放清单，不能作为完整音频写入 mp3 缓存（包含点播与直播）。
     if (DownloadPolicy.isHls(audioUrl, '')) return;
     if (!this.appContext) return;
@@ -446,6 +473,7 @@ export class ChapterCacheService {
     const taskKey = `file_${chapter.id}`;
     this.pendingTasks.add(taskKey);
     let transport: AudioDownloadTransport | null = null;
+    let activePath = '';
     try {
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const filePath = this.audioFilePath(book.id, pageUrl);
@@ -459,9 +487,11 @@ export class ChapterCacheService {
       }
 
       transport = new AudioDownloadTransport();
+      activePath = filePath;
+      this.activeFilePaths.add(filePath);
       this.activeDownloads.set(chapter.id, transport);
       const bytes = await transport.download({ url: audioUrl, headers: headers, finalPath: filePath });
-      if (capturedGen !== this.clearGen) {
+      if (capturedGen !== this.clearGen || this.activeDownloads.get(chapter.id) !== transport) {
         this.deleteFileSafely(filePath);
         return;
       }
@@ -478,12 +508,15 @@ export class ChapterCacheService {
       await this.enforceDiskCacheLimit();
       this.extractDuration(chapter, filePath);
     } catch (err) {
-      if (capturedGen === this.clearGen && (!this.preloadSuspended || this.priorityChapterId === chapter.id)) {
+      if (capturedGen === this.clearGen && transport !== null &&
+        this.activeDownloads.get(chapter.id) === transport && this.isPreloadEnabled()) {
+        this.audioCache.delete(chapter.id);
         this.markPreloadFailure(chapter.id);
       }
-      const e = err as Error;
-      hilog.warn(DOMAIN, TAG, 'downloadFile failed: %{public}s', e?.message ?? JSON.stringify(err));
+      const message = err instanceof Error ? err.message : String(err);
+      hilog.warn(DOMAIN, TAG, 'downloadFile failed: %{public}s', message);
     } finally {
+      if (activePath) this.activeFilePaths.delete(activePath);
       if (transport !== null && this.activeDownloads.get(chapter.id) === transport) this.activeDownloads.delete(chapter.id);
       this.pendingTasks.delete(taskKey);
     }
@@ -522,7 +555,7 @@ export class ChapterCacheService {
       let oldestTimestamp: number = Number.MAX_SAFE_INTEGER;
       for (const id of this.fileCache.keys()) {
         const candidate = this.fileCache.get(id);
-        if (candidate && candidate.timestamp < oldestTimestamp) {
+        if (candidate && !this.isProtectedFile(candidate.filePath) && candidate.timestamp < oldestTimestamp) {
           oldestId = id;
           oldestTimestamp = candidate.timestamp;
         }
@@ -539,6 +572,29 @@ export class ChapterCacheService {
 
   /** 冷启动时按磁盘实际大小执行 1GB 上限，避免上个进程遗留文件脱离内存索引。 */
   private async enforceDiskCacheLimit(): Promise<void> {
+    this.diskCleanupRequested = true;
+    if (this.diskCleanupTask !== null) return this.diskCleanupTask;
+    const task = this.drainDiskCleanup();
+    this.diskCleanupTask = task;
+    try {
+      await task;
+    } finally {
+      this.diskCleanupTask = null;
+    }
+  }
+
+  private async drainDiskCleanup(): Promise<void> {
+    while (this.diskCleanupRequested) {
+      this.diskCleanupRequested = false;
+      await this.scanDiskCacheLimit();
+    }
+  }
+
+  private isProtectedFile(filePath: string): boolean {
+    return filePath === this.playingFilePath || this.activeFilePaths.has(filePath);
+  }
+
+  private async scanDiskCacheLimit(): Promise<void> {
     const ctx = this.appContext;
     if (!ctx) return;
     let names: string[] = [];
@@ -550,7 +606,7 @@ export class ChapterCacheService {
     const entries: DiskCacheEntry[] = [];
     let totalBytes: number = 0;
     for (const name of names) {
-      if (!name.startsWith('chap_')) continue;
+      if (!name.startsWith('chap_') || !name.endsWith('.mp3')) continue;
       const filePath = `${ctx.cacheDir}/${name}`;
       try {
         const stat = await fileIo.stat(filePath);
@@ -568,6 +624,7 @@ export class ChapterCacheService {
     entries.sort((left: DiskCacheEntry, right: DiskCacheEntry): number => left.timestamp - right.timestamp);
     for (const entry of entries) {
       if (totalBytes <= MAX_FILE_CACHE_BYTES) return;
+      if (this.isProtectedFile(entry.filePath)) continue;
       try {
         await fileIo.unlink(entry.filePath);
         totalBytes -= entry.bytes;
