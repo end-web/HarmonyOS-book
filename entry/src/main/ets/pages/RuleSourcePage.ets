@@ -5,6 +5,8 @@ import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { BookSourceService } from '../service/BookSourceService';
 import { HttpClient, HttpResponse } from '../service/http/HttpClient';
 import { LocalRuleSourceImportParser } from '../service/rulesource/LocalRuleSourceImportParser';
+import { LocalRuleSourceImportService } from '../service/rulesource/LocalRuleSourceImportService';
+import { LocalRuleSourceFileImporter } from '../service/rulesource/LocalRuleSourceFileImporter';
 import {
   LocalRuleSourceBulkTester,
   LocalRuleSourceBulkTestProgress,
@@ -109,6 +111,8 @@ export struct RuleSourcePage {
   @Local filteredSourceCount: number = 0;
   @Local isLoading: boolean = true;
   @Local isImporting: boolean = false;
+  @Local importFileCurrent: number = 0;
+  @Local importFileTotal: number = 0;
   @Local isBulkTesting: boolean = false;
   @Local isEditMode: boolean = false;
   @Local showImportPanel: boolean = false;
@@ -725,16 +729,26 @@ export struct RuleSourcePage {
     if (this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0) return;
     this.isImporting = true;
     try {
-      const uri = await this.pickLocalJsonUri();
-      if (uri.length === 0) return;
-      const content = await this.readLocalJson(uri);
-      if (content === undefined) return;
-      const imported = await this.persistImportContent(content);
-      if (imported) this.showImportPanel = false;
+      const uris = await this.pickLocalJsonUris();
+      if (uris.length === 0) return;
+      const result = await LocalRuleSourceFileImporter.importFiles(uris, (current: number, total: number) => {
+        this.importFileCurrent = current;
+        this.importFileTotal = total;
+      });
+      if (result.imported > 0) this.sortMode = 0;
+      SourceDataService.invalidateLocalSources();
+      await this.loadSources(false);
+      this.showToast($r('app.string.rule_source_import_files_result',
+        result.imported, result.skippedSources, result.skippedFiles));
+      if (result.imported > 0 && result.skippedFiles === 0 && result.skippedSources === 0) {
+        this.showImportPanel = false;
+      }
     } catch (_error) {
       this.showToast($r('app.string.rule_source_operation_failed'));
     } finally {
       this.isImporting = false;
+      this.importFileCurrent = 0;
+      this.importFileTotal = 0;
     }
   }
 
@@ -781,19 +795,19 @@ export struct RuleSourcePage {
     }
   }
 
-  private async pickLocalJsonUri(): Promise<string> {
+  private async pickLocalJsonUris(): Promise<string[]> {
     try {
       const context = this.getUIContext().getHostContext();
-      if (context === undefined) return '';
+      if (context === undefined) return [];
       const options = new picker.DocumentSelectOptions();
-      options.maxSelectNumber = 1;
+      options.maxSelectNumber = LocalRuleSourceFileImporter.MAX_FILES;
       options.fileSuffixFilters = ['.json'];
       const documentPicker = new picker.DocumentViewPicker(context);
       const uris: Array<string> = await documentPicker.select(options);
-      return uris.length > 0 ? uris[0] : '';
+      return uris;
     } catch (_error) {
       // 用户取消选择时不提示错误。
-      return '';
+      return [];
     }
   }
 
@@ -842,7 +856,7 @@ export struct RuleSourcePage {
       this.showToast(report.message.length > 0 ? report.message : $r('app.string.rule_source_import_invalid'));
       return false;
     }
-    const importedCount = await LocalRuleSourceRepository.upsertImportedBatch(report.sources);
+    const importedCount = await LocalRuleSourceImportService.importSources(report.sources);
     if (importedCount > 0) this.sortMode = 0;
     SourceDataService.invalidateLocalSources();
     await this.loadSources(false);
@@ -1948,6 +1962,16 @@ export struct RuleSourcePage {
       .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
       .opacity(this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0 ? 0.55 : 1)
       .onClick(() => this.importLocalFile())
+
+      Text($r('app.string.rule_source_import_files_hint'))
+        .fontSize(AppFont.Caption)
+        .fontColor($r('sys.color.font_tertiary'))
+        .width('100%')
+      if (this.importFileTotal > 0) {
+        Text($r('app.string.rule_source_import_files_progress', this.importFileCurrent, this.importFileTotal))
+          .fontSize(AppFont.Caption)
+          .fontColor(AppColor.Brand)
+      }
 
       Button() {
         Row({ space: AppSpace.Xs }) {

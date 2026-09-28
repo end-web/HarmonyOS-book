@@ -1,3 +1,4 @@
+import { ReaderTapPolicy } from '../../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { TextReadingPosition, TextReadingSettings } from '../../model/TextReading';
@@ -9,10 +10,22 @@ import { TextToSpeechService } from './TextToSpeechService';
 
 /** 只迁移常规阅读选项；自定义图片、字体、配色及本机文件路径不进入快照。 */
 export class ReadingSettingsBackup {
+  textAlignment: string = 'justify';
   fontSize: number = 18;
   lineHeight: number = 1.9;
   fontWeight: number = 400;
   themeId: string | undefined = undefined;
+  tapRegions: string = ReaderTapPolicy.DEFAULT;
+  tapLeftPercent: number = 33;
+  tapRightPercent: number = 33;
+  tapTopPercent: number = 33;
+  tapBottomPercent: number = 33;
+  showHeader: boolean = true;
+  showFooter: boolean = true;
+  showChapterTitle: boolean = true;
+  showPageNumber: boolean = true;
+  showChapterNumber: boolean = true;
+  showBookName: boolean = true;
   pageTurnMode: string = 'cover';
   showReadingStatus: boolean = true;
   alwaysShowStatusBar: boolean = true;
@@ -45,10 +58,22 @@ export class ReadingBackupService {
       .filter((position: TextReadingPosition): boolean => !position.bookId.startsWith('import_'));
     const settings = await TextReadingSettingsService.get(context);
     const saved = snapshot.settings;
+    saved.textAlignment = settings.textAlignment;
     saved.fontSize = settings.fontSize;
     saved.lineHeight = settings.lineHeight;
     saved.fontWeight = settings.fontWeight;
     if (findThemePreset(settings.themeId) !== null) saved.themeId = settings.themeId;
+    saved.tapLeftPercent = settings.tapLeftPercent;
+    saved.tapRightPercent = settings.tapRightPercent;
+    saved.tapTopPercent = settings.tapTopPercent;
+    saved.tapBottomPercent = settings.tapBottomPercent;
+    saved.showHeader = settings.showHeader;
+    saved.showFooter = settings.showFooter;
+    saved.showChapterTitle = settings.showChapterTitle;
+    saved.showPageNumber = settings.showPageNumber;
+    saved.showChapterNumber = settings.showChapterNumber;
+    saved.showBookName = settings.showBookName;
+    saved.tapRegions = settings.tapRegions;
     saved.pageTurnMode = settings.pageTurnMode;
     saved.showReadingStatus = settings.showReadingStatus;
     saved.alwaysShowStatusBar = settings.alwaysShowStatusBar;
@@ -86,6 +111,7 @@ export class ReadingBackupService {
     await TextReadingProgressService.restoreBackupPositions(context, snapshot.positions);
     const settings = await TextReadingSettingsService.get(context);
     const saved = snapshot.settings;
+    settings.textAlignment = TextReadingSettings.normalizeTextAlignment(saved.textAlignment);
     settings.fontSize = saved.fontSize;
     settings.lineHeight = saved.lineHeight;
     settings.fontWeight = saved.fontWeight;
@@ -95,6 +121,17 @@ export class ReadingBackupService {
       // 不删除本机自定义文件，也不将源设备的路径带入恢复。
       settings.backgroundImage = '';
     }
+    settings.tapLeftPercent = typeof saved.tapLeftPercent === 'number' ? ReaderTapPolicy.percent(saved.tapLeftPercent) : 33;
+    settings.tapRightPercent = typeof saved.tapRightPercent === 'number' ? ReaderTapPolicy.percent(saved.tapRightPercent, settings.tapLeftPercent) : 33;
+    settings.tapTopPercent = typeof saved.tapTopPercent === 'number' ? ReaderTapPolicy.percent(saved.tapTopPercent) : 33;
+    settings.tapBottomPercent = typeof saved.tapBottomPercent === 'number' ? ReaderTapPolicy.percent(saved.tapBottomPercent, settings.tapTopPercent) : 33;
+    settings.showHeader = saved.showHeader !== false;
+    settings.showFooter = saved.showFooter !== false;
+    settings.showChapterTitle = saved.showChapterTitle !== false;
+    settings.showPageNumber = saved.showPageNumber !== false;
+    settings.showChapterNumber = saved.showChapterNumber !== false;
+    settings.showBookName = saved.showBookName !== false;
+    settings.tapRegions = ReaderTapPolicy.normalize(typeof saved.tapRegions === 'string' ? saved.tapRegions : ReaderTapPolicy.DEFAULT);
     settings.pageTurnMode = saved.pageTurnMode;
     settings.showReadingStatus = saved.showReadingStatus;
     settings.alwaysShowStatusBar = saved.alwaysShowStatusBar;
@@ -141,6 +178,7 @@ export class ReadingBackupService {
       snapshot.speechLanguage.length > 128 || typeof snapshot.speechFollow !== 'boolean') return false;
     const settings = snapshot.settings;
     return !!settings && ReadingBackupService.inRange(settings.fontSize, 14, 50) &&
+      (settings.textAlignment === undefined || ['justify', 'start', 'center', 'end'].includes(settings.textAlignment)) &&
       ReadingBackupService.inRange(settings.lineHeight, 1, 2.4) &&
       ReadingBackupService.inRange(settings.fontWeight, 100, 900) &&
       (settings.themeId === undefined || findThemePreset(settings.themeId) !== null) &&

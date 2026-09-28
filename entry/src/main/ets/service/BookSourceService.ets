@@ -20,6 +20,7 @@ class AudioBookLoad {
   book: Book;
   listeners: Array<(book: Book) => void> = [];
   promise: Promise<Book>;
+  invalidated: boolean = false;
 
   constructor(book: Book) {
     this.book = book;
@@ -76,6 +77,100 @@ export class NativeRuleSourceHealthPolicy {
 
 export class BookSourceService {
   private static audioLoads: Map<string, AudioBookLoad> = new Map();
+  private static audioTocRefreshes: Map<string, Promise<TocItem[]>> = new Map();
+  private static audioTocRevision: Map<string, number> = new Map();
+
+  static invalidateAudioTocs(sourceUrls: Set<string>): void {
+    for (const url of sourceUrls) {
+      BookSourceService.audioTocRevision.set(url, (BookSourceService.audioTocRevision.get(url) ?? 0) + 1);
+    }
+    for (const task of BookSourceService.audioLoads.values()) {
+      if (!sourceUrls.has(task.book.sourceUrl)) continue;
+      task.invalidated = true;
+      BookSourceService.audioLoads.delete(task.book.id);
+    }
+  }
+
+  private static audioTocDefinition(source: LocalRuleSource): string {
+    return JSON.stringify([source.ruleBookInfo.init, source.ruleBookInfo.tocUrl,
+      source.ruleToc, source.jsLib]);
+  }
+
+  /** Reimported rules must use fresh chapter requests while retaining saved chapter identities. */
+  static async prepareAudioChapter(source: BookSource, book: Book, chapter: Chapter): Promise<void> {
+    if (!book.bookUrl || NativeRuleSourceDispatcher.isSource(source)) return;
+    const localSource = await BookSourceService.resolveLocalSource(source);
+    if (localSource === undefined) return;
+    const definition = BookSourceService.audioTocDefinition(localSource);
+    const revision = BookSourceService.audioTocRevision.get(book.sourceUrl) ?? 0;
+    if (book.variables?.['__audioTocDefinition'] === definition) return;
+    const key = `${book.id}:${revision}:${definition}`;
+    let pending = BookSourceService.audioTocRefreshes.get(key);
+    if (pending === undefined) {
+      pending = BookSourceService.fetchCurrentAudioToc(localSource, book).finally((): void => {
+        BookSourceService.audioTocRefreshes.delete(key);
+      });
+      BookSourceService.audioTocRefreshes.set(key, pending);
+    }
+    const items = await pending;
+    if (revision !== (BookSourceService.audioTocRevision.get(book.sourceUrl) ?? 0)) {
+      throw new Error('书源已更新，请重试');
+    }
+    const titleKey = (title: string): string =>
+      ChapterTitleFormatter.stripBookPrefix(title, book.title).replace(/\s+/g, '');
+    const names = new Map<string, TocItem[]>();
+    for (const item of items) {
+      const name = titleKey(item.name);
+      const matches = names.get(name) ?? [];
+      matches.push(item);
+      names.set(name, matches);
+    }
+    const find = (saved: Chapter): TocItem | undefined => {
+      const name = titleKey(saved.title);
+      const indexed = items[saved.index - 1];
+      if (indexed !== undefined && titleKey(indexed.name) === name) return indexed;
+      const matches = names.get(name);
+      return matches?.length === 1 ? matches[0] : undefined;
+    };
+    if (find(chapter) === undefined) throw new Error('当前书源目录中找不到该章节，请刷新书籍目录');
+    const update = (saved: Chapter): void => {
+      const item = find(saved);
+      if (item === undefined) return;
+      saved.originSourceValue = item.url;
+      saved.variables = BookSourceService.copyVariables(item.variables);
+      if (saved.source.type === 'url') saved.source = { type: 'url', value: item.url };
+    };
+    if (book.chapters.length === 0) {
+      for (let index = 0; index < items.length; index++) {
+        const item = items[index];
+        const restored: Chapter = {
+          id: `${book.id}-c${index}`, index: index + 1, title: item.name, duration: item.duration || 0,
+          source: { type: 'url', value: item.url }, originSourceValue: item.url, variables: item.variables
+        };
+        book.chapters.push(restored);
+      }
+      book.chapterCount = items.length;
+      book.tocComplete = true;
+    }
+    for (const saved of book.chapters) update(saved);
+    update(chapter);
+    book.variables = BookSourceService.copyVariables(book.variables);
+    book.variables['__audioTocDefinition'] = definition;
+    SearchCache.put(book);
+    await DataService.upsertCachedBook(book);
+    console.info(`[BookSourceService] refreshed chapter requests ${localSource.bookSourceName}: ${items.length}`);
+  }
+
+  private static async fetchCurrentAudioToc(source: LocalRuleSource, book: Book): Promise<TocItem[]> {
+    const variables = BookSourceService.copyVariables(book.variables);
+    variables['__audioTocDefinition'] = '';
+    const info = await BookSourceService.getBookInfo(source, book.bookUrl, variables);
+    if (info === null) throw new Error('无法刷新当前书源的书籍信息');
+    const scoped = BookSourceService.mergeVariables(variables, info.variables);
+    // A batch callback makes incomplete or failed catalogs propagate their error.
+    return BookSourceService.getBookToc(source, info.tocUrl || book.bookUrl, scoped, book.title,
+      (_items: TocItem[]): void => {});
+  }
 
   static pendingAudioBook(bookId: string): Promise<Book> | undefined {
     return BookSourceService.audioLoads.get(bookId)?.promise;
@@ -90,6 +185,8 @@ export class BookSourceService {
       return active.promise;
     }
     const value = BookSourceService.copyBook(book);
+    value.variables = BookSourceService.copyVariables(book.variables);
+    value.variables['__audioTocDefinition'] = '';
     value.chapters = [];
     value.tocComplete = false;
     const task = new AudioBookLoad(value);
@@ -104,6 +201,7 @@ export class BookSourceService {
   }
 
   private static notifyAudioBook(task: AudioBookLoad): void {
+    if (task.invalidated) return;
     for (const listener of task.listeners) listener(task.book);
   }
 
@@ -130,6 +228,7 @@ export class BookSourceService {
     }
     BookSourceService.notifyAudioBook(task);
     const append = (items: TocItem[]): void => {
+      if (task.invalidated) throw new Error('书源已更新，请重试');
       const first = book.chapters.length === 0;
       for (const item of items) {
         const index = book.chapters.length;
@@ -147,8 +246,11 @@ export class BookSourceService {
       BookSourceService.notifyAudioBook(task);
     };
     await BookSourceService.getBookToc(source, tocUrl, book.variables, book.title, append);
+    if (task.invalidated) throw new Error('书源已更新，请重试');
     if (book.chapters.length === 0) throw new Error('书源未返回有效章节');
     book.tocComplete = true;
+    book.variables = BookSourceService.copyVariables(book.variables);
+    book.variables['__audioTocDefinition'] = BookSourceService.audioTocDefinition(source);
     SearchCache.put(book);
     BookSourceService.notifyAudioBook(task);
     console.info(`[BookSourceService] toc complete ${source.bookSourceName}: ` +

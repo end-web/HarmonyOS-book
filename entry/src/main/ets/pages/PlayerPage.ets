@@ -1,4 +1,5 @@
 import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
+import { BookSourceSwitchSheet } from '../components/BookSourceSwitchSheet';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -25,6 +26,12 @@ import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
+
+class PlayerSourceSwitchRoute {
+  bookId: string = '';
+  chapterId: string = '';
+  progressMs: number = 0;
+}
 
 /**
  * 播放页向其 NavDestination 暴露的返回拦截器。
@@ -95,6 +102,9 @@ export struct PlayerPage {
   @Param resumeChapterId: string = '';
   @Param resumeProgressMs: number = 0;
   @Local book: Book | null = null;
+  @Local showSourceSwitch: boolean = false;
+  @Local reloadingChapter: boolean = false;
+  @Local sourceName: ResourceStr = '';
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
   @Local chapterGridVisible: boolean = false;
@@ -123,8 +133,19 @@ export struct PlayerPage {
   /** 根容器实时尺寸，用于跟随小窗缩放切换紧凑布局。 */
   @Local viewportWidth: number = 0;
   @Local viewportHeight: number = 0;
+  @Local topSafeVp: number = WindowUtils.getStatusBarHeightVp();
+  @Local bottomSafeVp: number = WindowUtils.getBottomSafeVp();
+  @Local leftSafeVp: number = WindowUtils.getLeftSafeVp();
+  @Local rightSafeVp: number = WindowUtils.getRightSafeVp();
 
   private context: common.UIAbilityContext | null = null;
+  private safeAreaChangeHandler = (topVp: number, bottomVp: number): void => {
+    if (this.isLeaving) return;
+    this.topSafeVp = topVp;
+    this.bottomSafeVp = bottomVp;
+    this.leftSafeVp = WindowUtils.getLeftSafeVp();
+    this.rightSafeVp = WindowUtils.getRightSafeVp();
+  };
   private chapterListScroller: Scroller = new Scroller();
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
@@ -173,6 +194,8 @@ export struct PlayerPage {
 
   aboutToAppear(): void {
     this.isLeaving = false;
+    WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
+    WindowUtils.refreshAvoidArea();
     this.entryFinished = false;
     this.highQualityCover = false;
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -181,9 +204,7 @@ export struct PlayerPage {
     PlayerEntryDecider.setEntered(() => this.finishEntering());
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
-    if (this.playerState.playMode === PlayMode.Sequence) {
-      AudioService.getInstance().setPlayMode(PlayMode.ListLoop);
-    }
+    AudioService.getInstance().setPlayMode(PlayMode.Sequence);
     this.deferredLoadTimerId = setTimeout(() => {
       this.finishEntering();
     }, AppMotion.Page + 80);
@@ -224,6 +245,7 @@ export struct PlayerPage {
 
   aboutToDisappear(): void {
     this.isLeaving = true;
+    WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     PlayerBackInterceptor.set(null);
     PlayerEntryDecider.setCancelPendingClear(null);
     PlayerEntryDecider.setMarkLeaving(null);
@@ -259,6 +281,20 @@ export struct PlayerPage {
     return AdaptiveLayout.isCompact(this.viewportWidth, this.viewportHeight);
   }
 
+  private isLandscapePlayer(): boolean {
+    return this.viewportHeight > 0 && this.viewportWidth > this.viewportHeight;
+  }
+
+  private landscapeBodyHeight(): number {
+    return Math.max(1, this.viewportHeight - this.playerTopPadding() - this.playerBottomPadding() - 48 - AppSpace.Sm);
+  }
+
+  private landscapeCoverSize(): number {
+    // 右栏至少保留 280vp，避免五个播控按钮被封面挤压。
+    const availableWidth = this.viewportWidth - this.playerLeftPadding() - this.playerRightPadding() - AppSpace.Xl;
+    return Math.max(1, Math.min(320, this.landscapeBodyHeight(), this.viewportWidth * 0.34, availableWidth - 280));
+  }
+
   private playerNeedsScroll(): boolean {
     return AdaptiveLayout.playerNeedsScroll(this.viewportHeight);
   }
@@ -267,14 +303,22 @@ export struct PlayerPage {
     return AdaptiveLayout.horizontalPadding(this.viewportWidth, this.viewportHeight);
   }
 
+  private playerLeftPadding(): number {
+    return this.leftSafeVp + this.playerHorizontalPadding();
+  }
+
+  private playerRightPadding(): number {
+    return this.rightSafeVp + this.playerHorizontalPadding();
+  }
+
   private playerTopPadding(): number {
     const spacing = AdaptiveLayout.playerTopSpacing(this.viewportWidth, this.viewportHeight);
-    return WindowUtils.getStatusBarHeightVp() + spacing;
+    return this.topSafeVp + spacing;
   }
 
   private playerBottomPadding(): number {
     const spacing = AdaptiveLayout.playerBottomSpacing(this.viewportWidth, this.viewportHeight);
-    return WindowUtils.getBottomSafeVp() + Math.max(0, spacing - AppSpace.Sm);
+    return this.bottomSafeVp + Math.max(0, spacing - AppSpace.Sm);
   }
 
   private compactCoverSize(): number {
@@ -286,6 +330,10 @@ export struct PlayerPage {
    * 实际同时只会有一个抽屉打开,逐个判断即可。
    */
   private handleBack(): boolean {
+    if (this.showSourceSwitch) {
+      this.showSourceSwitch = false;
+      return true;
+    }
     if (this.showChapterList) {
       this.showChapterList = false;
       return true;
@@ -354,6 +402,7 @@ export struct PlayerPage {
     await PreferenceService.applyTocOrder(b);
     if (this.isLeaving) return;
     this.book = b;
+    this.loadSourceName(b);
     this.chapterDataSource.setChapters(PreferenceService.orderedChapters(b));
     const pendingToc = BookSourceService.pendingAudioBook(b.id);
     if (pendingToc !== undefined) {
@@ -389,6 +438,17 @@ export struct PlayerPage {
   private isSameBook(left: Book, right: Book): boolean {
     if (left.id === right.id) return true;
     return left.bookUrl.length > 0 && left.bookUrl === right.bookUrl && left.sourceUrl === right.sourceUrl;
+  }
+
+  private async loadSourceName(book: Book): Promise<void> {
+    if (!book.sourceUrl) {
+      this.sourceName = $r('app.string.player_source_local');
+      return;
+    }
+    this.sourceName = $r('app.string.player_source_unknown');
+    const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
+    if (this.isLeaving || this.book?.sourceUrl !== book.sourceUrl) return;
+    this.sourceName = source?.bookSourceName || $r('app.string.player_source_unknown');
   }
 
   private needsChapterHydration(book: Book): boolean {
@@ -873,17 +933,6 @@ export struct PlayerPage {
     return value === 1 ? $r('app.string.player_sleep_finish_current') : $r('app.string.player_sleep_chapters', value);
   }
 
-  private cyclePlayMode(): void {
-    const next: PlayMode = this.playerState.playMode === PlayMode.ListLoop
-      ? PlayMode.SingleLoop : PlayMode.ListLoop;
-    AudioService.getInstance().setPlayMode(next);
-  }
-
-  private playModeIcon(): Resource {
-    if (this.playerState.playMode === PlayMode.SingleLoop) return $r('sys.symbol.repeat_1');
-    return $r('sys.symbol.repeat');
-  }
-
   private openBookDetail(): void {
     const id = this.book?.id || this.bookId;
     if (!id) {
@@ -900,7 +949,9 @@ export struct PlayerPage {
       // 内容层
       Column() {
         if (this.book) {
-          if (this.isCompactPlayer()) {
+          if (this.isLandscapePlayer()) {
+            this.buildLandscapePlayerContent()
+          } else if (this.isCompactPlayer()) {
             if (this.playerNeedsScroll()) {
               Scroll() {
                 Column() {
@@ -929,17 +980,51 @@ export struct PlayerPage {
       .padding({
         top: this.playerTopPadding(),
         bottom: this.playerBottomPadding(),
-        left: this.playerHorizontalPadding(),
-        right: this.playerHorizontalPadding()
+        left: this.playerLeftPadding(),
+        right: this.playerRightPadding()
       })
 
     }
     .width('100%')
     .height('100%')
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
     .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
       this.handleViewportSizeChange(newValue);
     })
+  }
+
+  @Builder
+  buildLandscapePlayerContent() {
+    this.buildTopBar()
+    Row({ space: AppSpace.Xl }) {
+      Column() {
+        this.buildCover()
+      }
+      .width(this.landscapeCoverSize())
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+
+      Scroll() {
+        Column() {
+          this.buildMeta()
+          Blank().height(AppSpace.Md)
+          this.buildProgress()
+          this.buildControls()
+          this.buildBottomBar()
+        }
+        .width('100%')
+        .constraintSize({ minHeight: this.landscapeBodyHeight() })
+        .justifyContent(FlexAlign.Center)
+      }
+      .layoutWeight(1)
+      .height('100%')
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .margin({ top: AppSpace.Sm })
   }
 
   @Builder
@@ -999,6 +1084,56 @@ export struct PlayerPage {
     .height('100%')
   }
 
+  private async reloadCurrentChapter(): Promise<void> {
+    const book = this.book;
+    if (!book || this.reloadingChapter || this.playerState.isLoading) return;
+    const current = this.playerState.currentBook?.id === book.id ? this.playerState.currentChapter : null;
+    const chapter = current ?? book.chapters[0];
+    if (!chapter) return;
+    this.reloadingChapter = true;
+    try {
+      await AudioService.getInstance().playChapterAndSeek(book, chapter,
+        current ? this.playerState.progressMs : 0, false, true);
+    } catch (_error) {
+      if (!this.isLeaving) this.showToast($r('app.string.content_reload_failed'));
+    } finally { this.reloadingChapter = false; }
+  }
+
+  private async switchSource(book: Book, index: number, matched: boolean): Promise<void> {
+    if (this.isLeaving || !this.showSourceSwitch) return;
+    const chapter = book.chapters[index];
+    if (!chapter) return;
+    const progress = matched && this.playerState.currentBook?.id === this.book?.id ? this.playerState.progressMs : 0;
+    const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
+    if (!source) throw new Error(this.context!.resourceManager.getStringSync($r('app.string.source_switch_unavailable').id));
+    const chapterUrl = chapter.originSourceValue ?? chapter.source.value;
+    const resolved = await BookSourceService.resolveAudioRequest(source, chapterUrl, book.variables, chapter.variables);
+    if (!DownloadPolicy.isResolvedAudioUrl(chapterUrl, resolved.url)) {
+      throw new Error(this.context!.resourceManager.getStringSync($r('app.string.source_switch_unavailable').id));
+    }
+    if (this.isLeaving || !this.showSourceSwitch) return;
+    await DataService.upsertCachedBook(book);
+    if (this.isLeaving || !this.showSourceSwitch) return;
+    SearchCache.put(book);
+    this.showSourceSwitch = false;
+    const params = new PlayerSourceSwitchRoute();
+    params.bookId = book.id;
+    params.chapterId = chapter.id;
+    params.progressMs = progress;
+    this.navStack.replacePath({ name: 'player', param: params }, false);
+  }
+
+  @Builder
+  private buildSourceSwitchSheet(): void {
+    BookSourceSwitchSheet({ book: this.book,
+      chapterTitle: this.playerState.currentBook?.id === this.book?.id ? this.playerState.currentChapter?.title ?? '' : '',
+      chapterIndex: this.playerState.currentBook?.id === this.book?.id ? this.currentChapterIndex() : 0,
+      onSelect: async (book: Book, index: number, matched: boolean): Promise<void> => {
+        await this.switchSource(book, index, matched);
+      }
+    })
+  }
+
   @Builder
   buildTopBar() {
     Row() {
@@ -1018,16 +1153,35 @@ export struct PlayerPage {
         });
       })
       Blank()
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.info_circle'))
-          .fontSize(24)
-          .fontColor(['#FFFFFF'])
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.arrow_clockwise')).fontSize(20).fontColor(['#FFFFFF'])
       }
-      .width(40)
-      .height(40)
-      .borderRadius(20)
-      .attributeModifier(AppMaterial.modifier(AppMaterial.FloatingControl, AppColor.GlassSheetFallback))
-      .onClick(() => this.openBookDetail())
+        .width(40).height(40).backgroundColor(Color.Transparent)
+        .accessibilityText($r('app.string.content_reload'))
+        .onClick((): void => { this.reloadCurrentChapter(); })
+        .margin({ right: 8 })
+        .enabled(!this.reloadingChapter && !this.playerState.isLoading && this.book !== null)
+      if (this.book?.sourceUrl) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.arrow_left_arrow_right')).fontSize(24).fontColor(['#FFFFFF'])
+        }
+          .width(40).height(40).backgroundColor(Color.Transparent)
+          .accessibilityText($r('app.string.source_switch_title'))
+          .onClick((): void => { this.showSourceSwitch = true; })
+          .margin({ right: 8 })
+          .enabled(!this.reloadingChapter && !this.playerState.isLoading)
+          .bindSheet($$this.showSourceSwitch, this.buildSourceSwitchSheet(), {
+            height: '82%', preferType: SheetType.BOTTOM, showClose: true,
+            backgroundColor: AppMaterial.SheetBackground,
+            blurStyle: AppMaterial.ReaderSheetBlur, systemMaterial: AppMaterial.ReaderSheetThick
+          })
+      }
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.info_circle')).fontSize(24).fontColor(['#FFFFFF'])
+      }
+        .width(40).height(40).backgroundColor(Color.Transparent)
+        .accessibilityText($r('app.string.reader_details'))
+        .onClick((): void => { this.openBookDetail(); })
     }
     .width('100%')
     .height(48)
@@ -1086,13 +1240,27 @@ export struct PlayerPage {
   @Builder
   buildCover() {
     Column() {
-      Stack() {
+      Stack({ alignContent: Alignment.TopStart }) {
         this.coverContent()
         if (this.highQualityCover) {
           this.highQualityCoverContent()
         }
+        if (this.sourceName !== '') {
+          Text(this.sourceName)
+            .fontSize(AppFont.Caption)
+            .fontColor('#FFFFFF')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: '70%' })
+            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+            .backgroundColor('#99000000')
+            .borderRadius(6)
+            .margin(12)
+            .hitTestBehavior(HitTestMode.None)
+        }
       }
-      .width(this.isCompactPlayer() ? this.compactCoverSize() : '100%')
+      .width(this.isLandscapePlayer() ? this.landscapeCoverSize()
+        : this.isCompactPlayer() ? this.compactCoverSize() : '100%')
       .aspectRatio(1)
       .borderRadius(16)
       .clip(true)
@@ -1100,7 +1268,7 @@ export struct PlayerPage {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
-    .margin({ top: this.isCompactPlayer() ? AppSpace.Xs : AppSpace.Lg })
+    .margin({ top: this.isLandscapePlayer() ? 0 : this.isCompactPlayer() ? AppSpace.Xs : AppSpace.Lg })
   }
 
   @Builder
@@ -1133,7 +1301,7 @@ export struct PlayerPage {
       .width('100%')
     }
     .width('100%')
-    .padding({ top: this.isCompactPlayer() ? AppSpace.Md : AppSpace.Xl })
+    .padding({ top: this.isLandscapePlayer() ? 0 : this.isCompactPlayer() ? AppSpace.Md : AppSpace.Xl })
   }
 
   @Builder
@@ -1188,13 +1356,17 @@ export struct PlayerPage {
   buildControls() {
     Row() {
       Stack({ alignContent: Alignment.Start }) {
-        SymbolGlyph(this.playModeIcon())
-          .fontSize(19)
+        SymbolGlyph($r('sys.symbol.gobackward_15'))
+          .fontSize(20)
           .fontColor(['#B3B3B3'])
       }
       .width(44)
       .height(44)
-      .onClick(() => this.cyclePlayMode())
+      .enabled(!this.isLiveBook() && !this.playerState.isLoading && this.playerState.durationMs > 0)
+      .opacity(this.isLiveBook() ? 0.4 : 1)
+      .accessibilityText($r('app.string.player_rewind_15'))
+      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
+      .onClick(() => { AudioService.getInstance().seekBy(-15000); })
 
       Blank()
 
@@ -1239,26 +1411,18 @@ export struct PlayerPage {
       Blank()
 
       Stack({ alignContent: Alignment.End }) {
-        SymbolGlyph($r('sys.symbol.music_note_list'))
-          .fontSize(19)
+        SymbolGlyph($r('sys.symbol.goforward_15'))
+          .fontSize(20)
           .fontColor(['#B3B3B3'])
       }
       .width(44)
       .height(44)
-        .onClick(() => this.openChapterList())
-        .bindSheet($$this.showChapterList, this.buildChapterSheet(), {
-          height: '80%',
-          preferType: SheetType.BOTTOM,
-          showClose: false,
-          dragBar: true,
-          backgroundColor: AppMaterial.SheetBackground,
-          blurStyle: AppMaterial.PlayerSheetBlur,
-          systemMaterial: AppMaterial.PlayerSheet,
-          onAppear: () => this.scrollToCurrentChapter(),
-          onDisappear: () => { this.showChapterList = false; }
-        })
+      .enabled(!this.isLiveBook() && !this.playerState.isLoading && this.playerState.durationMs > 0)
+      .opacity(this.isLiveBook() ? 0.4 : 1)
+      .accessibilityText($r('app.string.player_forward_15'))
+      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
+      .onClick(() => { AudioService.getInstance().seekBy(15000); })
     }
-    // 两侧可见内容边缘对齐进度条端点，44vp 点击区向内延伸。
     .width('calc(100% - 18vp)')
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
@@ -1270,12 +1434,12 @@ export struct PlayerPage {
     Row() {
       Column() {
         Text(this.fmtSpeed(this.isLiveBook() ? 1 : this.playerState.speed) + 'x')
-          .fontSize(AppFont.Body)
-          .height(22)
+          .fontSize(AppFont.Body + 1)
+          .height(26)
           .fontColor(this.playerState.speed !== 1.0 ? AppColor.Brand : '#B3B3B3')
           .fontWeight(FontWeight.Medium)
       }
-      .width(44)
+      .width(56)
       .alignItems(HorizontalAlign.Start)
       .height(44)
       .justifyContent(FlexAlign.Center)
@@ -1285,7 +1449,7 @@ export struct PlayerPage {
         this.showSpeedSheet = true;
       })
       .bindSheet($$this.showSpeedSheet, this.buildSpeedSheet(), {
-        height: SheetSize.FIT_CONTENT,
+        height: '55%',
         preferType: SheetType.BOTTOM,
         showClose: false,
         dragBar: true,
@@ -1301,23 +1465,24 @@ export struct PlayerPage {
 
       Blank()
 
-      Column() {
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph($r('sys.symbol.alarm'))
+          .fontSize(20)
+          .fontColor([this.sleepActive() ? AppColor.Brand : '#B3B3B3'])
         if (this.sleepActive()) {
-          Text(this.sleepLabel()).fontSize(12).fontColor(AppColor.Brand).maxLines(1)
-        } else {
-          Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph($r('sys.symbol.clock'))
-              .fontSize(18)
-              .fontColor(['#B3B3B3'])
-          }
-          .width(22)
-          .height(22)
+          Text(this.sleepLabel())
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(AppColor.Brand)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: 62 })
+            .position({ x: 30, y: 0 })
+            .hitTestBehavior(HitTestMode.None)
         }
       }
-      .width(this.isCompactPlayer() ? 56 : 64)
-      .alignItems(HorizontalAlign.Center)
+      .width(56)
       .height(44)
-      .justifyContent(FlexAlign.Center)
       .accessibilityText(this.sleepLabel())
       .onClick(() => this.openSleepSheet())
       .bindSheet($$this.showSleepSheet, this.buildSleepSheet(), {
@@ -1347,15 +1512,15 @@ export struct PlayerPage {
       Column() {
         Stack({ alignContent: Alignment.End }) {
           SymbolGlyph($r('sys.symbol.chevron_left_2'))
-            .fontSize(18)
+            .fontSize(20)
             .rotate({ angle: 180 })
             .fontColor([this.hasSkipConfig() ? AppColor.Brand : '#B3B3B3'])
         }
-        .width(22)
-        .height(22)
+        .width(26)
+        .height(26)
       }
-      .width(44)
-      .alignItems(HorizontalAlign.End)
+      .width(56)
+      .alignItems(HorizontalAlign.Center)
       .height(44)
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
@@ -1364,7 +1529,7 @@ export struct PlayerPage {
         this.showSkipSheet = true;
       })
       .bindSheet($$this.showSkipSheet, this.buildSkipSheet(), {
-        height: SheetSize.FIT_CONTENT,
+        height: '55%',
         preferType: SheetType.BOTTOM,
         showClose: false,
         dragBar: true,
@@ -1382,9 +1547,32 @@ export struct PlayerPage {
         }
       }))
 
+      Blank()
+
+      Stack({ alignContent: Alignment.End }) {
+        SymbolGlyph($r('sys.symbol.music_note_list'))
+          .fontSize(20)
+          .fontColor(['#B3B3B3'])
+      }
+      .width(44)
+      .height(44)
+      .accessibilityText($r('app.string.reader_chapters'))
+      .onClick(() => this.openChapterList())
+      .bindSheet($$this.showChapterList, this.buildChapterSheet(), {
+        height: '80%',
+        preferType: SheetType.BOTTOM,
+        showClose: false,
+        dragBar: true,
+        backgroundColor: AppMaterial.SheetBackground,
+        blurStyle: AppMaterial.PlayerSheetBlur,
+        systemMaterial: AppMaterial.PlayerSheet,
+        onAppear: () => this.scrollToCurrentChapter(),
+        onDisappear: () => { this.showChapterList = false; }
+      })
+
     }
     .width('calc(100% - 18vp)')
-    .padding({ top: AppSpace.Lg })
+    .padding({ top: this.isLandscapePlayer() ? AppSpace.Md : AppSpace.Lg })
   }
 
   @Builder
@@ -1696,156 +1884,239 @@ export struct PlayerPage {
   }
 
   @Builder
-  buildSkipSheet() {
-    Column({ space: AppSpace.Md }) {
-    Row() {
-      Text('跳过片头片尾')
-        .fontSize(AppFont.Title)
-        .fontColor($r('sys.color.font_primary'))
-        .fontWeight(FontWeight.Bold)
-      Blank()
-      SymbolGlyph($r('sys.symbol.xmark'))
+  buildAdjustmentButton(action: string) {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph(action.endsWith('Down') ? $r('sys.symbol.minus') : $r('sys.symbol.plus'))
         .fontSize(20)
-        .fontColor([$r('sys.color.font_secondary')])
-        .onClick(() => { this.showSkipSheet = false; })
+        .fontColor([AppColor.Brand])
     }
-    .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+    .width(44)
+    .height(44)
+    .backgroundColor(AppColor.BrandSoft)
+    .enabled(this.adjustmentEnabled(action))
+    .opacity(this.adjustmentEnabled(action) ? 1 : 0.4)
+    .accessibilityText(this.adjustmentLabel(action))
+    .onClick(() => this.adjustValue(action))
+  }
 
-    Column({ space: AppSpace.Xs }) {
-      Row() {
-        Text('片头')
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
-        Blank()
-        Text(`${this.skipIntroValue} 秒`)
-          .fontSize(AppFont.BodyL)
-          .fontColor(AppColor.Brand)
-          .fontWeight(FontWeight.Medium)
+  private adjustmentEnabled(action: string): boolean {
+    const current = action.startsWith('speed') ? this.speedValue
+      : action.startsWith('intro') ? this.skipIntroValue : this.skipOutroValue;
+    const min = action.startsWith('speed') ? 0.5 : 0;
+    const max = action.startsWith('speed') ? 3 : 120;
+    return action.endsWith('Down') ? current > min : current < max;
+  }
+
+  private adjustmentLabel(action: string): Resource {
+    if (action.startsWith('speed')) {
+      return action.endsWith('Down') ? $r('app.string.player_speed_decrease') : $r('app.string.player_speed_increase');
+    }
+    if (action.startsWith('intro')) {
+      return action.endsWith('Down') ? $r('app.string.player_intro_decrease') : $r('app.string.player_intro_increase');
+    }
+    return action.endsWith('Down') ? $r('app.string.player_outro_decrease') : $r('app.string.player_outro_increase');
+  }
+
+  private adjustValue(action: string): void {
+    const delta = action.endsWith('Down') ? -1 : 1;
+    if (action.startsWith('speed')) {
+      this.speedValue = Math.min(3, Math.max(0.5, Math.round(this.speedValue * 20 + delta) / 20));
+      AudioService.getInstance().setSpeed(this.speedValue);
+      return;
+    }
+    if (action.startsWith('intro')) {
+      this.skipIntroValue = Math.min(120, Math.max(0, this.skipIntroValue + delta));
+    } else {
+      this.skipOutroValue = Math.min(120, Math.max(0, this.skipOutroValue + delta));
+    }
+    this.persistSkip(this.skipIntroValue, this.skipOutroValue);
+  }
+
+  @Builder
+  buildSkipSheet() {
+    Scroll() {
+      Column({ space: AppSpace.Lg }) {
+        Row() {
+          Text($r('app.string.player_skip_title'))
+            .fontSize(AppFont.Title)
+            .fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Bold)
+          Blank()
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.xmark'))
+              .fontSize(20)
+              .fontColor([$r('sys.color.font_secondary')])
+          }
+          .width(44)
+          .height(44)
+          .backgroundColor(Color.Transparent)
+          .onClick(() => { this.showSkipSheet = false; })
+        }
+        .width('100%')
+        .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+        Column({ space: AppSpace.Xs }) {
+          Row() {
+            Text($r('app.string.player_skip_intro'))
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary'))
+            Blank()
+            Text($r('app.string.player_skip_seconds', this.skipIntroValue))
+              .fontSize(AppFont.BodyL)
+              .fontColor(AppColor.Brand)
+              .fontWeight(FontWeight.Medium)
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row({ space: AppSpace.Sm }) {
+            this.buildAdjustmentButton('introDown')
+            Slider({ value: this.skipIntroValue, min: 0, max: 120, step: 1 })
+              .blockColor(AppColor.Brand)
+              .trackColor($r('sys.color.comp_divider'))
+              .selectedColor(AppColor.Brand)
+              .onChange((value: number, mode: SliderChangeMode) => {
+                this.skipIntroValue = Math.round(value);
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  this.persistSkip(this.skipIntroValue, this.skipOutroValue);
+                }
+              })
+              .layoutWeight(1)
+            this.buildAdjustmentButton('introUp')
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+        }
+        .width('100%')
+        .padding({ top: AppSpace.Sm })
+
+        Column({ space: AppSpace.Xs }) {
+          Row() {
+            Text($r('app.string.player_skip_outro'))
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary'))
+            Blank()
+            Text($r('app.string.player_skip_seconds', this.skipOutroValue))
+              .fontSize(AppFont.BodyL)
+              .fontColor(AppColor.Brand)
+              .fontWeight(FontWeight.Medium)
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row({ space: AppSpace.Sm }) {
+            this.buildAdjustmentButton('outroDown')
+            Slider({ value: this.skipOutroValue, min: 0, max: 120, step: 1 })
+              .blockColor(AppColor.Brand)
+              .trackColor($r('sys.color.comp_divider'))
+              .selectedColor(AppColor.Brand)
+              .onChange((value: number, mode: SliderChangeMode) => {
+                this.skipOutroValue = Math.round(value);
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  this.persistSkip(this.skipIntroValue, this.skipOutroValue);
+                }
+              })
+              .layoutWeight(1)
+            this.buildAdjustmentButton('outroUp')
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+        }
+        .width('100%')
+        .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-      Slider({ value: this.skipIntroValue, min: 0, max: 120, step: 1 })
-        .blockColor(AppColor.Brand)
-        .trackColor($r('sys.color.comp_divider'))
-        .selectedColor(AppColor.Brand)
-        .onChange((value: number) => { this.skipIntroValue = Math.round(value); })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Up) {
-            this.setSkipValue('intro', this.skipIntroValue);
-          }
-        })
-        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+      .padding({ top: AppSpace.Xs, bottom: AppSpace.Xl })
     }
     .width('100%')
-    .padding({ top: AppSpace.Sm })
-
-    Column({ space: AppSpace.Xs }) {
-      Row() {
-        Text('片尾')
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
-        Blank()
-        Text(`${this.skipOutroValue} 秒`)
-          .fontSize(AppFont.BodyL)
-          .fontColor(AppColor.Brand)
-          .fontWeight(FontWeight.Medium)
-      }
-      .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-      Slider({ value: this.skipOutroValue, min: 0, max: 120, step: 1 })
-        .blockColor(AppColor.Brand)
-        .trackColor($r('sys.color.comp_divider'))
-        .selectedColor(AppColor.Brand)
-        .onChange((value: number) => { this.skipOutroValue = Math.round(value); })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Up) {
-            this.setSkipValue('outro', this.skipOutroValue);
-          }
-        })
-        .padding({ left: AppSpace.Md, right: AppSpace.Md })
-    }
-    .width('100%')
-    .padding({ top: AppSpace.Sm })
-    }
-    .width('100%')
-    .padding({ bottom: AppSpace.Lg })
+    .height('100%')
+    .align(Alignment.TopStart)
+    .scrollBar(BarState.Off)
   }
 
   @Builder
   buildSpeedSheet() {
-    Column({ space: AppSpace.Md }) {
-    Row() {
-      Text('播放速度')
-        .fontSize(AppFont.Title)
-        .fontColor($r('sys.color.font_primary'))
-        .fontWeight(FontWeight.Bold)
-      Blank()
-      SymbolGlyph($r('sys.symbol.xmark'))
-        .fontSize(20)
-        .fontColor([$r('sys.color.font_secondary')])
-        .onClick(() => { this.showSpeedSheet = false; })
-    }
-    .width('100%')
-    .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
-
-    Column({ space: AppSpace.Xs }) {
-      Row() {
-        Text('倍速')
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
-        Blank()
-        Text(this.fmtSpeed(this.speedValue) + 'x')
-          .fontSize(AppFont.TitleL)
-          .fontColor(AppColor.Brand)
-          .fontWeight(FontWeight.Bold)
-      }
-      .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
-
-      Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
-        .blockColor(AppColor.Brand)
-        .trackColor($r('sys.color.comp_divider'))
-        .selectedColor(AppColor.Brand)
-        .onChange((value: number) => { this.speedValue = Math.round(value * 20) / 20; })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Up) {
-            AudioService.getInstance().setSpeed(this.speedValue);
+    Scroll() {
+      Column({ space: AppSpace.Lg }) {
+        Row() {
+          Text($r('app.string.player_speed_title'))
+            .fontSize(AppFont.Title)
+            .fontColor($r('sys.color.font_primary'))
+            .fontWeight(FontWeight.Bold)
+          Blank()
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.xmark'))
+              .fontSize(20)
+              .fontColor([$r('sys.color.font_secondary')])
           }
-        })
-        .padding({ left: AppSpace.Md, right: AppSpace.Md })
+          .width(44)
+          .height(44)
+          .backgroundColor(Color.Transparent)
+          .onClick(() => { this.showSpeedSheet = false; })
+        }
+        .width('100%')
+        .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
 
-      Row() {
-        Text('0.5x')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-        Blank()
-        Text('3.0x')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
+        Column({ space: AppSpace.Xs }) {
+          Row() {
+            Text($r('app.string.player_speed'))
+              .fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary'))
+            Blank()
+            Text(this.fmtSpeed(this.speedValue) + 'x')
+              .fontSize(AppFont.TitleL)
+              .fontColor(AppColor.Brand)
+              .fontWeight(FontWeight.Bold)
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+
+          Row({ space: AppSpace.Sm }) {
+            this.buildAdjustmentButton('speedDown')
+            Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
+              .blockColor(AppColor.Brand)
+              .trackColor($r('sys.color.comp_divider'))
+              .selectedColor(AppColor.Brand)
+              .onChange((value: number, mode: SliderChangeMode) => {
+                this.speedValue = Math.round(value * 20) / 20;
+                if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                  AudioService.getInstance().setSpeed(this.speedValue);
+                }
+              })
+              .layoutWeight(1)
+            this.buildAdjustmentButton('speedUp')
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+          .margin({ top: AppSpace.Md })
+
+          Row() {
+            Text('0.5x')
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+            Blank()
+            Text('3.0x')
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+          }
+          .width('100%')
+          .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+        }
+        .width('100%')
+        .padding({ top: AppSpace.Sm })
       }
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg })
+      .padding({ top: AppSpace.Xs, bottom: AppSpace.Xl })
     }
     .width('100%')
-    .padding({ top: AppSpace.Sm })
-    }
-    .width('100%')
-    .padding({ bottom: AppSpace.Lg })
+    .height('100%')
+    .align(Alignment.TopStart)
+    .scrollBar(BarState.Off)
   }
 
   private hasSkipConfig(): boolean {
     if (!this.book) return false;
     return (this.book.skipIntro ?? 0) > 0 || (this.book.skipOutro ?? 0) > 0;
-  }
-
-  private async setSkipValue(type: string, seconds: number): Promise<void> {
-    if (!this.book) return;
-    const intro = type === 'intro' ? seconds : (this.book.skipIntro ?? 0);
-    const outro = type === 'outro' ? seconds : (this.book.skipOutro ?? 0);
-    await this.persistSkip(intro, outro);
   }
 
   /** 原子写片头+片尾:一次 saveSkipConfig,避免长按清空时两次异步各写各的留半状态 */

@@ -1,5 +1,5 @@
 import { fileIo } from '@kit.CoreFileKit';
-import { image } from '@kit.ImageKit';
+import { BookCoverImageService } from './BookCoverImageService';
 import { bookParser } from '@hms.core.readerservice.bookParser';
 
 /** 通过 ReaderKit 解包资源，再由 ImageKit 解码为独立封面，不保存解析器临时路径。 */
@@ -14,7 +14,7 @@ export class EpubCoverService {
         if (await fileIo.access(path)) {
           const stat = await fileIo.stat(path);
           if (stat.size > 0 && stat.size <= 16 * 1024 * 1024) {
-            return await EpubCoverService.decode(path, directory);
+            return await BookCoverImageService.decode(path, directory);
           }
         }
       }
@@ -32,7 +32,7 @@ export class EpubCoverService {
             try {
               const bytes = handler.getResourceContent(index, candidate);
               if (bytes === undefined || bytes.byteLength === 0 || bytes.byteLength > 16 * 1024 * 1024) continue;
-              return await EpubCoverService.decode(bytes, directory);
+              return await BookCoverImageService.decode(bytes, directory);
             } catch (_e) { /* 继续兼容包内路径和章节相对路径。 */ }
           }
         } catch (_e) { /* 无效 spine 不影响其他候选。 */ }
@@ -48,35 +48,4 @@ export class EpubCoverService {
     return '../'.repeat(from.length) + to.join('/');
   }
 
-  private static async decode(input: string | ArrayBuffer, directory: string): Promise<string> {
-    const source = typeof input === 'string' ? image.createImageSource(input) : image.createImageSource(input);
-    let pixels: image.PixelMap | null = null;
-    let packer: image.ImagePacker | null = null;
-    let file: fileIo.File | null = null;
-    const destination = `${directory}/cover.jpg`;
-    try {
-      const info = await source.getImageInfo();
-      if (info.size.width <= 0 || info.size.height <= 0 || info.size.width * info.size.height > 64000000) return '';
-      const scale = Math.min(1, 1200 / Math.max(info.size.width, info.size.height));
-      pixels = await source.createPixelMap({ desiredSize: {
-        width: Math.max(1, Math.round(info.size.width * scale)),
-        height: Math.max(1, Math.round(info.size.height * scale))
-      } });
-      packer = image.createImagePacker();
-      const encoded = await packer.packToData(pixels, { format: 'image/jpeg', quality: 90 });
-      file = await fileIo.open(destination, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      let offset = 0;
-      while (offset < encoded.byteLength) {
-        const written = await fileIo.write(file.fd, encoded.slice(offset));
-        if (written <= 0) throw new Error('Cover write interrupted');
-        offset += written;
-      }
-      return destination;
-    } finally {
-      if (file !== null) await fileIo.close(file);
-      if (packer !== null) await packer.release();
-      if (pixels !== null) await pixels.release();
-      await source.release();
-    }
-  }
 }

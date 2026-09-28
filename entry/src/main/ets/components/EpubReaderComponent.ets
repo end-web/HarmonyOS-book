@@ -1,3 +1,4 @@
+import { ReaderTapPolicy, ReaderTouchTracker } from '../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
@@ -5,6 +6,13 @@ import { ReadPageComponent, readerCore } from '@hms.core.readerservice.readerCom
 
 @ComponentV2
 export struct EpubReaderComponent {
+  @Param tapLeftPercent: number = 33;
+  @Param tapRightPercent: number = 33;
+  @Param tapTopPercent: number = 33;
+  @Param tapBottomPercent: number = 33;
+  @Param tapRegions: string = ReaderTapPolicy.DEFAULT;
+  private tapTracker: ReaderTouchTracker = new ReaderTouchTracker();
+  private contentHeight: number = 0;
   @Param controller: readerCore.ReaderComponentController = new readerCore.ReaderComponentController();
   @Param handler: bookParser.BookParserHandler | null = null;
   @Param startResourceIndex: number = 0;
@@ -78,13 +86,14 @@ export struct EpubReaderComponent {
   }
 
   private handleContentTap(event: GestureEvent): void {
-    if (this.contentWidth <= 0) return;
+    if (!this.tapTracker.canTap()) return;
     const finger = event.fingerList[0];
     if (finger === undefined) return;
-    const centerStart: number = this.contentWidth * 0.3;
-    const centerEnd: number = this.contentWidth * 0.7;
-    if (finger.localX >= centerStart && finger.localX <= centerEnd) {
-      this.onContentTap();
+    const action = ReaderTapPolicy.resolve(this.tapRegions, finger.localX, finger.localY,
+      this.contentWidth, this.contentHeight, this.tapLeftPercent, this.tapRightPercent, this.tapTopPercent, this.tapBottomPercent);
+    if (action === 1) this.onContentTap();
+    else if ((action === 0 || action === 2) && this.initialized) {
+      try { this.controller.flipPage(action === 2); } catch (_error) {}
     }
   }
 
@@ -102,12 +111,14 @@ export struct EpubReaderComponent {
     .width('100%')
     .height('100%')
     // 底色/纹理由父页面的 ReaderBackground 铺；ReaderKit 自身底色走 pageConfig.themeColor
+    .onTouch((event: TouchEvent): void => this.tapTracker.update(event))
     .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions): void => {
+      if (typeof newValue.height === 'number') this.contentHeight = newValue.height;
       if (typeof newValue.width === 'number') {
         this.contentWidth = newValue.width;
       }
     })
-    .parallelGesture(
+    .priorityGesture(
       TapGesture().onAction((event: GestureEvent): void => this.handleContentTap(event))
     )
   }

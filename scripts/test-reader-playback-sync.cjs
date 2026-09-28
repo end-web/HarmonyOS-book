@@ -48,11 +48,12 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(updates.at(-1).mediaImage, undefined, 'coverless book must not reuse the old image');
 
   let source = fs.readFileSync(path.join(root, 'components/ReaderPageTurnComponent.ets'), 'utf8');
-  source = source.slice(0, source.indexOf('  @Builder\n')) + '\n}';
+  source = source.slice(0, source.search(/  @Builder\r?\n/)) + '\n}';
   source = source.replace('@ComponentV2', '').replace('export struct', 'export class')
     .replace(/@(Param|Event|BuilderParam)\s+/g, '').replace(/@Monitor\([^\n]*\)\s*/g, '');
   const events = new EventEmitter();
   const { ReaderPageTurnComponent } = compile(source, {
+    '../utils/ReaderTapPolicy': compile(fs.readFileSync(path.join(root, 'utils/ReaderTapPolicy.ets'), 'utf8'), {}),
     '@kit.BasicServicesKit': { emitter: events },
     '../model/TextReading': { PageTurnMode: { Cover: 'cover', None: 'none', Vertical: 'vertical' } }
   }, { CanvasRenderingContext2D: class { clearRect() {} }, RenderingContextSettings: class {} });

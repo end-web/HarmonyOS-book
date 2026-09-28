@@ -133,6 +133,17 @@ function newProcess() {
   assert.equal(await host.readOrFetchOnlineTextContent({}, { title: '第一章' }, 'chapter-a', key), text);
   assert.equal(requests, 1);
   console.log('PASS reader reopens cached chapter offline without a second network request');
+  offline = false;
+  await host.readOrFetchOnlineTextContent({}, { title: '第一章' }, 'chapter-a', key, true);
+  assert.equal(requests, 2, 'reload must reach network even when disk contains the chapter');
+  const otherKey = cache.key('source-a', 'book-a', 'chapter-2');
+  const pendingWrite = cache.write(context, key, 'old in-flight write');
+  await cache.removeChapter(context, key);
+  await pendingWrite;
+  assert.equal(await cache.read(context, key), undefined);
+  assert.equal(await cache.read(context, otherKey), 'second');
+  console.log('PASS reload bypasses disk; chapter eviction waits for writes and preserves adjacent chapters');
+
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });

@@ -25,7 +25,6 @@ import { HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
-const LOCAL_RULE_SEARCH_CONCURRENCY: number = 6;
 const LOCAL_RULE_COVER_CONCURRENCY: number = 3;
 const LOCAL_RULE_COVER_LIMIT: number = 12;
 const SEARCH_COVER_ASPECT_RATIO: number = 0.75;
@@ -52,6 +51,8 @@ export struct SearchPage {
   @Local historyWidth: number = 0;
   private historyWrite: Promise<void> = Promise.resolve();
   @Local searching: boolean = false;
+  @Local searchedSourceCount: number = 0;
+  @Local searchSourceTotal: number = 0;
   @Local hasSearched: boolean = false;
   @Local searchTab: number = 0;
   @Local viewMode: number = 0;
@@ -187,6 +188,8 @@ export struct SearchPage {
     this.searchCollapseOffset = 0;
     this.searchGen++;
     this.searching = false;
+    this.searchedSourceCount = 0;
+    this.searchSourceTotal = 0;
     this.hasSearched = false;
     this.searchTab = 0;
     this.audioBooks = [];
@@ -389,6 +392,8 @@ export struct SearchPage {
     this.searchGen++;
     const gen = this.searchGen;
     this.searching = true;
+    this.searchedSourceCount = 0;
+    this.searchSourceTotal = 0;
     this.searchCollapseOffset = 0;
     this.hasSearched = true;
     this.searchTab = 0;
@@ -407,18 +412,11 @@ export struct SearchPage {
     try {
       const sources = await SourceDataService.getEnabledSources();
       if (gen !== this.searchGen) return;
+      this.searchSourceTotal = sources.length;
+      const concurrency = await PreferenceService.getSearchConcurrency();
+      if (gen !== this.searchGen) return;
       const seen = new Set<string>();
-      const tasks: Promise<void>[] = [];
-      const localSources: BookSource[] = [];
-      for (const source of sources) {
-        if (SourceDataService.isLocalRuleSource(source.bookSourceUrl)) {
-          localSources.push(source);
-        } else {
-          tasks.push(this.searchOneSource(source, keyword, gen, seen));
-        }
-      }
-      tasks.push(this.searchLocalSources(localSources, keyword, gen, seen));
-      await Promise.all(tasks);
+      await this.searchSources(sources, keyword, gen, seen, concurrency);
       if (gen !== this.searchGen) return;
       this.audioCount = this.audioBooks.length;
       this.textCount = this.textBooks.length;
@@ -430,16 +428,27 @@ export struct SearchPage {
     }
   }
 
-  private async searchLocalSources(sources: BookSource[], keyword: string, gen: number,
-    seen: Set<string>): Promise<void> {
-    for (let start = 0; start < sources.length; start += LOCAL_RULE_SEARCH_CONCURRENCY) {
-      if (gen !== this.searchGen) return;
-      const batch: Promise<void>[] = [];
-      const end = Math.min(sources.length, start + LOCAL_RULE_SEARCH_CONCURRENCY);
-      for (let index = start; index < end; index++) {
-        batch.push(this.searchOneSource(sources[index], keyword, gen, seen));
-      }
-      await Promise.all(batch);
+  private async searchSources(sources: BookSource[], keyword: string, gen: number,
+    seen: Set<string>, concurrency: number): Promise<void> {
+    let nextIndex: number = 0;
+    const nextSource = (): BookSource | undefined => {
+      if (gen !== this.searchGen || nextIndex >= sources.length) return undefined;
+      return sources[nextIndex++];
+    };
+    const tasks: Promise<void>[] = [];
+    for (let index = 0; index < Math.min(concurrency, sources.length); index++) {
+      tasks.push(this.searchSourceQueue(nextSource, keyword, gen, seen));
+    }
+    await Promise.all(tasks);
+  }
+
+  private async searchSourceQueue(nextSource: () => BookSource | undefined, keyword: string,
+    gen: number, seen: Set<string>): Promise<void> {
+    // 空闲位置立即接续下一个书源，不等待同批其他慢源。
+    let source = nextSource();
+    while (source !== undefined) {
+      await this.searchOneSource(source, keyword, gen, seen);
+      source = nextSource();
     }
   }
 
@@ -488,6 +497,8 @@ export struct SearchPage {
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'source search failed [%{public}s]: %{public}s',
         source.bookSourceName, String(e));
+    } finally {
+      if (gen === this.searchGen) this.searchedSourceCount++;
     }
   }
 
@@ -797,6 +808,11 @@ export struct SearchPage {
               .height(18)
               .color(AppColor.Brand)
               .margin({ left: AppSpace.Xs })
+            Text(`${this.searchedSourceCount}/${this.searchSourceTotal}`)
+              .fontSize(11)
+              .fontColor($r('sys.color.font_secondary'))
+              .maxLines(1)
+              .margin({ left: AppSpace.Xxs })
           }
 
           Blank()
@@ -840,10 +856,16 @@ export struct SearchPage {
   @Builder
   buildLoadingState() {
     Column({ space: AppSpace.Sm }) {
-      LoadingProgress()
-        .width(40)
-        .height(40)
-        .color(AppColor.Brand)
+      Row({ space: AppSpace.Xs }) {
+        LoadingProgress()
+          .width(40)
+          .height(40)
+          .color(AppColor.Brand)
+        Text(`${this.searchedSourceCount}/${this.searchSourceTotal}`)
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+          .maxLines(1)
+      }
       Text($r('app.string.search_loading'))
         .fontSize(AppFont.Body)
         .fontColor($r('sys.color.font_tertiary'))

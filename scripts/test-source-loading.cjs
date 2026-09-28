@@ -514,6 +514,37 @@ async function testAudioLoad() {
   assert.equal(retained.latestChapterTitle, '原最新章');
   assert.equal(retained.updateTime, '原更新时间', 'Copying and blank detail metadata preserve existing fields');
   assert.equal(saved.length, 2, 'Failed task can be retried');
+  const stale = makeBook('reimported');
+  stale.chapters = [
+    { id: 'reimported-c0', index: 1, title: '第一章', duration: 12,
+      source: { type: 'url', value: 'https://fixture.invalid/old/0' }, originSourceValue: 'https://fixture.invalid/old/0' },
+    { id: 'reimported-c1', index: 2, title: '第二章', duration: 34,
+      source: { type: 'file', value: '/downloads/kept.mp3' }, originSourceValue: 'https://fixture.invalid/old/1' }
+  ];
+  const target = stale.chapters[0];
+  const originalToc = service.getBookToc;
+  let refreshed = 0;
+  service.getBookToc = async () => {
+    refreshed++;
+    await delay(10);
+    return ['第一章', '第二章'].map((name, index) => ({ name,
+      url: `https://fixture.invalid/new/${index}`, variables: { chapterIndex: String(index), fresh: 'yes' } }));
+  };
+  await Promise.all([service.prepareAudioChapter(source, stale, target),
+    service.prepareAudioChapter(source, stale, stale.chapters[1])]);
+  assert.equal(refreshed, 1, 'Concurrent play/download joins one fresh catalog');
+  assert.equal(target.originSourceValue, 'https://fixture.invalid/new/0');
+  assert.equal(target.variables.fresh, 'yes');
+  assert.equal(target.id, 'reimported-c0');
+  assert.equal(target.duration, 12);
+  assert.equal(stale.chapters[1].source.value, '/downloads/kept.mp3');
+  await service.prepareAudioChapter(source, stale, target);
+  assert.equal(refreshed, 1, 'Current definition reuses refreshed requests');
+  source.ruleToc.chapterUrl = 'a@data-url';
+  await service.prepareAudioChapter(source, stale, target);
+  assert.equal(refreshed, 2, 'Changed chapter rules refresh saved requests');
+  service.getBookToc = originalToc;
+  console.log('PASS: reimported catalog refresh, concurrent coalescing, retained chapter IDs and downloaded files');
   stubs['service/BookSourceService'] = homeFacade;
   console.log('PASS: playable partial catalog, reentry coalescing, canonical array growth, complete-only persistence and retry');
 }

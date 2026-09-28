@@ -36,6 +36,7 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppRadius } from '../theme/Theme';
 import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { WindowUtils } from '../utils/WindowUtils';
+import { LocalImportRouteParams } from '../utils/FileOpenRouting';
 import {
   BookOneShotPayload,
   NavigationOneShotRunner,
@@ -47,6 +48,7 @@ import {
 interface WidgetRouteEvent {
   target: string;
   bookId: string;
+  fileType?: string;
   ts?: number;
 }
 
@@ -82,7 +84,8 @@ struct Index {
         const ts = ev.ts ?? 0;
         if (ts > 0 && ts === this.lastConsumedRouteTs) return;
         this.lastConsumedRouteTs = ts;
-        this.handleWidgetRoute(ev.target, ev.bookId);
+        AppStorage.setOrCreate<WidgetRoute | undefined>(KEY_WIDGET_ROUTE, undefined);
+        this.handleWidgetRoute(ev.target, ev.bookId, ev.fileType ?? '');
       });
       this.widgetSubscribed = true;
     }
@@ -117,10 +120,14 @@ struct Index {
     if (!r) return;
     AppStorage.setOrCreate<WidgetRoute | undefined>(KEY_WIDGET_ROUTE, undefined);
     this.lastConsumedRouteTs = r.ts ?? 0;
-    this.handleWidgetRoute(r.target, r.bookId ?? '');
+    this.handleWidgetRoute(r.target, r.bookId ?? '', r.fileType ?? '');
   }
 
-  private handleWidgetRoute(target: string, bookId: string): void {
+  private handleWidgetRoute(target: string, bookId: string, fileType: string = ''): void {
+    if (target === 'localBookImport') {
+      this.navStack.pushPathByName('import', new LocalImportRouteParams(bookId, fileType), false);
+      return;
+    }
     if (target === 'ruleSourceImport') {
       this.navStack.pushPathByName('ruleSources', bookId, false);
       return;
@@ -378,7 +385,11 @@ struct Index {
       }
     } else if (name === 'import') {
       ProfileMenuDestination() {
-        ImportPage({ navStack: this.navStack })
+        ImportPage({
+          navStack: this.navStack,
+          importFileUri: param ? this.resolveParam(param, 'uri') : '',
+          importFileType: param ? this.resolveParam(param, 'fileType') : ''
+        })
       }
     } else if (name === 'stats') {
       NavDestination() {

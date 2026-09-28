@@ -1,7 +1,7 @@
 import { media } from '@kit.MediaKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { abilityDelegatorRegistry } from '@kit.TestKit';
-import { describe, expect, it } from '@ohos/hypium';
+import { beforeAll, describe, expect, it } from '@ohos/hypium';
 import { LocalRuleSource } from '../../../main/ets/model/LocalRuleSource';
 import { LocalRuleDispatcher } from '../../../main/ets/service/rulesource/LocalRuleDispatcher';
 import { LocalRuleSourceImportParser } from '../../../main/ets/service/rulesource/LocalRuleSourceImportParser';
@@ -13,6 +13,11 @@ export default function sourcePlaybackSmokeTest() {
   const keyword = parameters['-s playbackKeyword'] ?? parameters['playbackKeyword'] ?? '';
   if (!chapterUrl && !keyword) return;
   describe('SourcePlaybackSmoke', () => {
+    beforeAll(async () => {
+      await abilityDelegatorRegistry.getAbilityDelegator().startAbility({
+        bundleName: 'com.huan.listenbook', abilityName: 'EntryAbility'
+      });
+    });
     it('loads the resolved audio and advances playback before and after pause', 0, async () => {
       const sourceUrl = parameters['-s playbackSourceUrl'] ?? parameters['playbackSourceUrl'] ?? '';
       const importUrl = parameters['-s playbackImportUrl'] ?? parameters['playbackImportUrl'] ?? '';

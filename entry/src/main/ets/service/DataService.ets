@@ -4,6 +4,7 @@ import { Book, Chapter } from '../model/Book';
 import { PreferenceService } from './PreferenceService';
 import { TextReadingProgressService } from './text/TextReadingProgressService';
 import { StorageMigrationService } from './StorageMigrationService';
+import { OnlineTextContentCache } from './text/OnlineTextContentCache';
 
 /** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
 const CACHED_BOOKS_FILE = 'cached_books_v1.json';
@@ -380,6 +381,7 @@ export class DataService {
       rating: b.rating,
       tags: b.tags,
       chapters: [],
+      tocComplete: b.tocComplete,
       bookUrl: b.bookUrl,
       sourceUrl: b.sourceUrl,
       variables: b.variables,
@@ -518,6 +520,37 @@ export class DataService {
       for (const item of await TextReadingProgressService.getAll(DataService.ctx)) ids.add(item.bookId);
       return ids;
     } catch (_e) { return null; }
+  }
+
+  /** Replacing a source discards requests and content while keeping favorite/history book identities. */
+  static async invalidateSourceCaches(sourceUrls: Set<string>,
+    beforeInvalidate?: (bookId: string, chapters: Chapter[]) => void): Promise<string[]> {
+    const list = await DataService.loadCachedBooks();
+    const ids: string[] = [];
+    for (const book of list) {
+      if (!sourceUrls.has(book.sourceUrl)) continue;
+      if (beforeInvalidate !== undefined) {
+        const chapters = book.chapters.length > 0 ? book.chapters : await DataService.getChaptersForBook(book.id);
+        beforeInvalidate(book.id, chapters);
+      }
+      book.chapters = [];
+      book.tocComplete = false;
+      book.variables = {};
+      book.totalDuration = 0;
+      ids.push(book.id);
+    }
+    await DataService.writeIndex(list);
+    const task = DataService.writeChain.then(async (): Promise<void> => {
+      for (const id of ids) {
+        await DataService.deleteToc(id);
+        const legacy = DataService.legacyTocPath(id);
+        if (legacy && await fileIo.access(legacy)) await fileIo.unlink(legacy);
+      }
+    });
+    DataService.writeChain = task.then(() => {}, () => {});
+    await task;
+    if (DataService.ctx !== null) await OnlineTextContentCache.invalidateSources(DataService.ctx, sourceUrls);
+    return ids;
   }
 
   /** 清空缓存书池(索引 + sidecar 目录 + 内存),用于"清空书架"。 */

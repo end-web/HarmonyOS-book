@@ -15,6 +15,8 @@ interface SafeAreaInsets {
 export class WindowUtils {
   private static topPx: number = 0;
   private static bottomPx: number = 0;
+  private static leftPx: number = 0;
+  private static rightPx: number = 0;
   private static systemBottomPx: number = 0;
   private static density: number = 3.25;
   private static mainWindow: window.Window | null = null;
@@ -29,6 +31,8 @@ export class WindowUtils {
   private static readerActive: boolean = false;
   private static readerStatusBarVisible: boolean = true;
   private static readerStatusBarLight: boolean = false;
+  private static cutoutTopPx: number = 0;
+  private static readerWindowShape: string = '';
   private static readerTopPx: number = 0;
   private static readerStatusBarUpdate: Promise<void> = Promise.resolve();
 
@@ -168,6 +172,8 @@ export class WindowUtils {
     });
   }
 
+  static getCutoutTopVp(): number { return WindowUtils.cutoutTopPx / WindowUtils.density; }
+
   static getStatusBarHeightVp(): number {
     return WindowUtils.topPx / WindowUtils.density;
   }
@@ -175,6 +181,14 @@ export class WindowUtils {
   static getBottomSafeVp(): number {
     const measuredVp = WindowUtils.bottomPx / WindowUtils.density;
     return Math.max(measuredVp, WindowUtils.FALLBACK_BOTTOM_SAFE_VP);
+  }
+
+  static getLeftSafeVp(): number {
+    return WindowUtils.leftPx / WindowUtils.density;
+  }
+
+  static getRightSafeVp(): number {
+    return WindowUtils.rightPx / WindowUtils.density;
   }
 
   /** TYPE_SYSTEM 底部分量：大于 0 说明是三键导航等实体底栏，需要完整避让。 */
@@ -309,13 +323,42 @@ export class WindowUtils {
       const navigationArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
       const floatNavigationArea = PlatformCompat.supports(26)
         ? WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_FLOAT_NAVIGATION) : null;
+      const cutoutArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_CUTOUT);
+      const rect = win.getWindowProperties().windowRect;
+      const shape = `${rect.width}:${rect.height}`;
+      if (shape !== WindowUtils.readerWindowShape) {
+        WindowUtils.readerTopPx = 0;
+        WindowUtils.readerWindowShape = shape;
+      }
+      if (cutoutArea !== null) WindowUtils.cutoutTopPx = cutoutArea.topRect.top + cutoutArea.topRect.height;
+      const windowWidthPx: number = rect.width;
+      const sideAreas: Array<window.AvoidArea | null> = [
+        systemArea, cutoutArea, navigationArea, floatNavigationArea
+      ];
+      let hasSideArea: boolean = false;
+      let nextLeftPx: number = 0;
+      let nextRightPx: number = 0;
+      for (const area of sideAreas) {
+        if (area === null) continue;
+        hasSideArea = true;
+        // 挖孔矩形可能不贴边，避让距离应包含矩形到窗口边缘的间隙。
+        if (area.leftRect.width > 0) {
+          nextLeftPx = Math.max(nextLeftPx, area.leftRect.left + area.leftRect.width);
+        }
+        if (area.rightRect.width > 0) {
+          nextRightPx = Math.max(nextRightPx, windowWidthPx - area.rightRect.left);
+        }
+      }
+      if (hasSideArea && windowWidthPx > 0) {
+        WindowUtils.leftPx = Math.min(windowWidthPx, Math.max(0, nextLeftPx));
+        WindowUtils.rightPx = Math.min(windowWidthPx, Math.max(0, nextRightPx));
+      }
       let hasBottomArea: boolean = false;
       let nextBottomPx: number = 0;
       if (systemArea !== null) {
         WindowUtils.topPx = systemArea.topRect.height;
         WindowUtils.systemBottomPx = systemArea.bottomRect.height;
         if (WindowUtils.readerActive && win.getWindowStatus() === window.WindowStatusType.FULL_SCREEN) {
-          const cutoutArea = WindowUtils.readAvoidArea(win, window.AvoidAreaType.TYPE_CUTOUT);
           // API 22 起直接取不受显隐影响的安全区；API 20–21 保留本次阅读已测得的高度。
           if (PlatformCompat.supports(22)) {
             try {

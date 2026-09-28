@@ -1,6 +1,6 @@
-import { AppColor, AppFont, AppMaterial } from '../theme/Theme';
+import { AppFont, AppMaterial } from '../theme/Theme';
 
-/** 原生沉浸下拉选项：选中行随主题色高亮，菜单材质兼容旧系统。 */
+/** 原生沉浸下拉选项：选项文字随系统深浅模式适配，菜单材质兼容旧系统。 */
 @ComponentV2
 export struct ImmersiveOptionTabs {
   @Param labels: ResourceStr[] = [];
@@ -15,14 +15,17 @@ export struct ImmersiveOptionTabs {
   build() {
     Select(this.options())
       .width(this.fillWidth ? '100%' : LayoutPolicy.wrapContent)
+      .height(40)
+      .borderRadius(20)
+      .backgroundColor(Color.Transparent)
       .selected(this.selected)
       .value(this.labels[this.selected] ?? '')
       .font({ size: AppFont.Body })
-      .fontColor(AppColor.Brand)
+      .fontColor($r('sys.color.font_primary'))
       .optionFont({ size: AppFont.Body })
       .optionFontColor($r('sys.color.font_primary'))
-      .selectedOptionFontColor(AppColor.Brand)
-      .selectedOptionBgColor(AppColor.BrandSoft)
+      .selectedOptionFontColor($r('sys.color.font_primary'))
+      .selectedOptionBgColor($r('sys.color.comp_background_tertiary'))
       .optionWidth(180)
       .attributeModifier(AppMaterial.selectModifier())
       .onSelect((index: number): void => this.onSelect(index))

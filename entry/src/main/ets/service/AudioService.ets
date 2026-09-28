@@ -187,17 +187,13 @@ export class AudioService {
    *  正在解析音频 URL（耗时长，比如 WebView 嗅探）的旧任务跑完后会用这个比对，
    *  如果不是最新代次就直接丢弃，不再装载到 AVPlayer，避免"切了新章节但旧的还在响"。 */
   private playGen: number = 0;
-  /** 已解析 URL 加载失败(临时签名链接过期等)时的自动重试限流:
-   *  同一章节在冷却时间内只自动重试一次,避免 AVPlayer error → 重试 → error 死循环 */
+  /** One automatic retry per user playback request; network timeouts must not restart indefinitely. */
   private autoRetryChapterId: string = '';
-  private autoRetryAt: number = 0;
   /** 最近一次在线地址解析失败原因，用于把书源业务错误反馈给播放页。 */
   private lastResolveFailure: string = '';
-  private static readonly AUTO_RETRY_COOLDOWN_MS: number = 3000;
 
   private canAutoRetryLoad(chapterId: string): boolean {
-    return this.autoRetryChapterId !== chapterId
-      || Date.now() - this.autoRetryAt >= AudioService.AUTO_RETRY_COOLDOWN_MS;
+    return this.autoRetryChapterId !== chapterId;
   }
   /** 持久化代次：clearOnlineFavoritesAndHistory 期间冻结写入，防止清理后被 tick/persistHistory 写回。 */
   private persistGen: number = 0;
@@ -540,7 +536,6 @@ export class AudioService {
       if (book && ch && usingResolvedUrl && !this.pauseRequested && !this.sleepPausePending
         && this.canAutoRetryLoad(ch.id)) {
         this.autoRetryChapterId = ch.id;
-        this.autoRetryAt = Date.now();
         hilog.warn(DOMAIN, TAG, 'AVPlayer error with resolved URL, auto re-resolve chapter: %{public}s', ch.title);
         const resumeMs = this.state.progressMs;
         this.tracePlayback('retry:resolved-url');
@@ -839,6 +834,7 @@ export class AudioService {
       throw new Error('AudioService not bound');
     }
     this.prepareSleepForPlayback(book, chapter, automatic);
+    if (!automatic) this.autoRetryChapterId = '';
     this.cancelExternalMediaWatch();
 
     // ★ 同书+同章节短路:不 reset,直接 seek(0) + play,避免重新嗅探 URL
@@ -982,7 +978,7 @@ export class AudioService {
     return false;
   }
 
-  private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number): Promise<void> {
+  private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number, forceReload: boolean = false): Promise<void> {
     if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
     const myGen = ++this.playGen;
     this.cancelLiveRecovery();
@@ -993,7 +989,7 @@ export class AudioService {
       this.liveReconnectChapter = chapter.id;
       this.liveReconnectAttempts = 0;
     }
-    ChapterCacheService.getInstance().suspendPreload();
+    ChapterCacheService.getInstance().suspendPreload(forceReload ? '' : chapter.id);
     this.currentAudioHeaders = {};
     this.tracePlayback('chapter-load');
     // ★ 缓存命中→快路径,UI 不显示 loading 圈;否则常规路径,显示加载状态
@@ -1047,7 +1043,7 @@ export class AudioService {
       let resolved: boolean = false;
       this.lastResolveFailure = '';
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        resolveResult = await this.resolveAudioUrl(book, chapter);
+        resolveResult = await this.resolveAudioUrl(book, chapter, forceReload);
         if (myGen !== this.playGen) {
           return;
         }
@@ -1131,7 +1127,7 @@ export class AudioService {
     }
   }
 
-  private async resolveAudioUrl(book: Book, chapter: Chapter): Promise<AudioResolveResult> {
+  private async resolveAudioUrl(book: Book, chapter: Chapter, forceReload: boolean = false): Promise<AudioResolveResult> {
     const cache = ChapterCacheService.getInstance();
     if (chapter.source.type !== 'url') {
       if (chapter.source.type === 'rawfile') {
@@ -1167,14 +1163,15 @@ export class AudioService {
       chapter.originSourceValue = chapter.source.value;
     }
     const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
-    if (downloadedPath && this.isFileUsable(downloadedPath)) {
+    if (!forceReload && downloadedPath && this.isFileUsable(downloadedPath)) {
       chapter.source = { type: 'file', value: downloadedPath };
       const r: AudioResolveResult = { headers: {}, success: true };
       return r;
     }
-    if (cache.isPreloadEnabled()) {
-      const filePath = cache.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue);
+    if (!forceReload && cache.isPreloadEnabled()) {
+      const filePath = await cache.waitForAudioFile(book, chapter);
       if (filePath && this.isFileUsable(filePath)) {
+        hilog.info(DOMAIN, TAG, 'preload file hit chapter=%{public}s', chapter.id);
         chapter.source = { type: 'file', value: filePath };
         const r: AudioResolveResult = { headers: {}, success: true };
         return r;
@@ -1194,6 +1191,7 @@ export class AudioService {
         const r: AudioResolveResult = { headers: {}, success: false };
         return r;
       }
+      await BookSourceService.prepareAudioChapter(source, book, chapter);
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const requestInfo = await this.resolveAudioRequestWithTimeout(
         source, pageUrl, book.variables, chapter.variables);
@@ -1739,8 +1737,14 @@ export class AudioService {
     if (mode === PlayMode.ListLoop && chapters.length > 0) {
       // 列表循环:回到第一集
       this.playChapter(this.state.currentBook, PreferenceService.orderedChapters(this.state.currentBook)[0], true);
+      return;
     }
-    // 顺序播放:停在最后一集
+    // 片尾跳过也算章末，末章仍在 playing 时必须主动暂停。
+    if (this.player?.state === 'playing') {
+      this.pause('chapter-end').catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'Final chapter stop failed: %{public}s', error.message);
+      });
+    }
   }
 
   /**
@@ -1748,7 +1752,8 @@ export class AudioService {
    * - 同书+同章节+player 已 prepared/playing/paused: 仅 seek(seekMs),不 reset
    * - 同书+不同章 / 不同书: await 落盘 → reset → 装载 → prepared 后 seek
    */
-  async playChapterAndSeek(book: Book, chapter: Chapter, seekMs: number, automatic: boolean = false): Promise<void> {
+  async playChapterAndSeek(book: Book, chapter: Chapter, seekMs: number, automatic: boolean = false,
+    forceReload: boolean = false): Promise<void> {
     if (automatic && PlaybackCoordinator.speechActive) return;
     if (!await PlaybackCoordinator.useAudio()) return;
     AVSessionService.getInstance().restoreAudioCallbacks();
@@ -1756,9 +1761,10 @@ export class AudioService {
       throw new Error('AudioService not bound');
     }
     this.prepareSleepForPlayback(book, chapter, automatic);
+    if (!automatic) this.autoRetryChapterId = '';
     this.cancelExternalMediaWatch();
-    // ★ 同书+同章节+合理状态: 直接 seek,不 reset
-    if (this.canReuseSameChapter(book, chapter)) {
+    // 重载必须重新解析；普通续播仍复用当前播放器。
+    if (!forceReload && this.canReuseSameChapter(book, chapter)) {
       AVSessionService.getInstance().updateMetadata(book, chapter);
       await this.seekAndPlaySameChapter(seekMs);
       return;
@@ -1766,7 +1772,11 @@ export class AudioService {
     this.beginChapterLoading();
     try {
       await this.flushBeforeSwitch(book, chapter);
-      return await this.doPlayChapter(book, chapter, seekMs);
+      if (forceReload && book.sourceUrl && chapter.originSourceValue) {
+        ChapterCacheService.getInstance().clearChapter(chapter.id, book.id, chapter.originSourceValue);
+        chapter.source = { type: 'url', value: chapter.originSourceValue };
+      }
+      return await this.doPlayChapter(book, chapter, seekMs, forceReload);
     } catch (err) {
       if (this.state) this.state.isLoading = false;
       throw err as Error;

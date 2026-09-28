@@ -22,14 +22,25 @@ function environment(api, failingNewApi = false) {
   const exports = {};
   let visible = true;
   let top = 90;
+  let width = 1200;
+  let cutoutTop = 60;
   let windowStatus = 'fullscreen';
   const visibility = [];
-  const area = (height, bottom = 0) => ({ topRect: { height }, bottomRect: { height: bottom } });
+  let cutoutLeft = 0;
+  let cutoutRight = 0;
+  let navigationRight = 0;
+  const area = (height, bottom = 0, left = 0, right = 0) => ({
+    topRect: { top: 0, left: 0, width: 0, height },
+    bottomRect: { top: 0, left: 0, width: 0, height: bottom },
+    leftRect: { top: 0, left: left > 0 ? 12 : 0, width: left, height: left > 0 ? 60 : 0 },
+    rightRect: { top: 0, left: right > 0 ? 1200 - right - 12 : 0, width: right, height: right > 0 ? 60 : 0 }
+  });
   const win = {
+    getWindowProperties: () => ({ windowRect: { width } }),
     getWindowDensityInfo: () => ({ customDensity: 0, systemDensity: 3 }),
     getWindowStatus: () => windowStatus,
     getWindowAvoidArea: type => windowStatus === 'minimized' ? area(0) : type === 'system' ? area(visible ? top : 0) :
-      type === 'cutout' ? area(60) : area(0, 30),
+      type === 'cutout' ? area(cutoutTop, 0, cutoutLeft, cutoutRight) : area(0, 30, 0, navigationRight),
     getWindowAvoidAreaIgnoringVisibility: () => {
       assert.ok(api >= 22, 'API 20 must not invoke the API 22 interface');
       if (failingNewApi) throw new Error('unavailable');
@@ -57,11 +68,34 @@ function environment(api, failingNewApi = false) {
   const index = Object.create(indexExports.Index.prototype);
   index.navStack = { getAllPathName: () => routes };
   return { utils, visibility, routes, syncRoute: () => index.syncReaderWindowMode(),
-    setWindowStatus: value => { windowStatus = value; } };
+    rotate: () => { width = 2400; top = 36; cutoutTop = 0; utils.refreshAvoidArea(); },
+    setWindowStatus: value => { windowStatus = value; },
+    setSideAreas: (left, right, navRight = 0) => {
+      cutoutLeft = left;
+      cutoutRight = right;
+      navigationRight = navRight;
+      utils.handleAvoidAreaChange();
+    } };
 }
 (async () => {
   for (const [api, fallback] of [[20, false], [22, false], [22, true], [26, false]]) {
-    const { utils, visibility, routes, syncRoute, setWindowStatus } = environment(api, fallback);
+    const { utils, visibility, routes, syncRoute, setWindowStatus, setSideAreas, rotate } = environment(api, fallback);
+    const observedSides = [];
+    const sideListener = () => observedSides.push([utils.getLeftSafeVp(), utils.getRightSafeVp()]);
+    utils.addSafeAreaListener(sideListener);
+    setSideAreas(84, 0);
+    assert.equal(utils.getLeftSafeVp(), 32, 'left cutout clearance includes the gap to the window edge');
+    assert.equal(utils.getRightSafeVp(), 0);
+    setSideAreas(0, 84);
+    assert.equal(utils.getLeftSafeVp(), 0, 'rotating must clear the old camera side');
+    assert.equal(utils.getRightSafeVp(), 32, 'right cutout clearance is measured from the window edge');
+    setSideAreas(84, 60, 108);
+    assert.equal(utils.getLeftSafeVp(), 32);
+    assert.equal(utils.getRightSafeVp(), 40, 'side system navigation uses the larger inset');
+    setSideAreas(0, 0);
+    assert.deepEqual(observedSides, [[0, 0], [32, 0], [0, 32], [32, 40], [0, 0]],
+      'side-only changes must notify page listeners and portrait must clear side insets');
+    utils.removeSafeAreaListener(sideListener);
     syncRoute();
     await utils.readerStatusBarUpdate;
     assert.equal(visibility.at(-1), true, 'status bar is visible by default');
@@ -116,6 +150,11 @@ function environment(api, failingNewApi = false) {
     await utils.readerStatusBarUpdate;
     assert.equal(visibility.at(-1), false, 'returning from details restores toolbar-following visibility');
     assert.equal(utils.getStatusBarHeightVp(), safeTop);
+    utils.setReaderStatusBarVisible(true);
+    await utils.readerStatusBarUpdate;
+    rotate();
+    assert.equal(utils.getStatusBarHeightVp(), 12, 'landscape clears stale portrait inset');
+    assert.equal(utils.getCutoutTopVp(), 0, 'landscape top has no camera gap');
   }
   console.log('PASS: API 20/22/26 and fallback, repeated Home/resume with either status mode, stable insets, theme changes, details route restore');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -60,17 +60,41 @@ export default function onlineTextPaginatorTest() {
       const normalized = OnlineTextPaginator.normalizeContent(
         '<p>&nbsp;&nbsp;第一段</p><p style="text-indent:2em">第二段</p><br/>第三段');
       const displayed = OnlineTextIndentedContent.fromNormalized(normalized);
-      expect(displayed.text).assertEqual('\u3000\u3000第一段\n\n\u3000\u3000第二段\n\n\u3000\u3000第三段');
+      expect(displayed.text).assertEqual('\u3000\u3000第一段\n\u3000\u3000第二段\n\u3000\u3000第三段');
     });
 
-    it('uses exactly two full-width spaces and leaves empty lines unindented', 0, () => {
+    it('uses exactly two full-width spaces and collapses empty lines', 0, () => {
       const displayed = OnlineTextIndentedContent.fromNormalized(
         '  第一段\n\n\t第二段\n\u3000\u3000\u3000第三段\n\u00A0第四段');
       expect(displayed.text).assertEqual(
-        '\u3000\u3000第一段\n\n\u3000\u3000第二段\n\u3000\u3000第三段\n\u3000\u3000第四段');
+        '\u3000\u3000第一段\n\u3000\u3000第二段\n\u3000\u3000第三段\n\u3000\u3000第四段');
       const repeated = OnlineTextIndentedContent.fromNormalized(displayed.text);
       expect(repeated.text).assertEqual(displayed.text);
       expect(OnlineTextIndentedContent.fromNormalized('').text).assertEqual('');
+    });
+
+    it('collapses whitespace paragraphs while preserving page and character positions', 0, () => {
+      const source = '\n \t\n甲乙\n\n\u3000\u00A0\n丙丁\n\u3000\n';
+      const displayed = OnlineTextIndentedContent.fromNormalized(source);
+      expect(displayed.text).assertEqual('\u3000\u3000甲乙\n\u3000\u3000丙丁');
+      expect(displayed.sourceOffsetForDisplay(2)).assertEqual(source.indexOf('甲'));
+      expect(displayed.sourceOffsetForDisplay(7)).assertEqual(source.indexOf('丙'));
+      const lines: OnlineTextMeasuredLine[] = [
+        OnlineTextMeasuredLine.of(0, 10), OnlineTextMeasuredLine.of(5, 10)
+      ];
+      const pages = displayed.restoreSourceOffsets(
+        OnlineTextPaginator.paginateMeasuredLines(displayed.text, lines, 10));
+      expect(pages.length).assertEqual(2);
+      expect(pages[0].startOffset).assertEqual(0);
+      expect(pages[0].endOffset).assertEqual(pages[1].startOffset);
+      expect(pages[1].startOffset).assertEqual(source.indexOf('丙'));
+      expect(pages[1].endOffset).assertEqual(source.length);
+      expect(OnlineTextPaginator.pageIndexForOffset(pages, source.indexOf('丁'))).assertEqual(1);
+      const larger = displayed.restoreSourceOffsets(
+        OnlineTextPaginator.paginateMeasuredLines(displayed.text, lines, 20));
+      expect(larger.length).assertEqual(1);
+      expect(larger[0].endOffset).assertEqual(source.length);
+      expect(OnlineTextIndentedContent.fromNormalized(' \t\n\u3000\u00A0').text).assertEqual('');
     });
 
     it('keeps first-page indentation through repeated normalization and layout', 0, () => {

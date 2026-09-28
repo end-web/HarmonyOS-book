@@ -90,7 +90,10 @@ Import capability messages and test status are diagnostic, not a blanket enablem
 
 Local rule scripts must run through `LocalRuleScriptRuntime` → `LocalRuleQuickJsRuntime` in a taskpool, with independent contexts, native interrupt timeout, heap/stack/pending-job/input/output budgets, and guaranteed release. Do not expose unrestricted QuickJS APIs, direct `fetch`/XHR/WebSocket, platform objects, files, or databases. The local-rule ArkWeb host parses already-downloaded HTML. Source website login uses the routed HTTPS-only incognito page with no platform bridge; cookies must be copied into the encrypted source+origin store before the Web session is cleared.
 
-Online novels use `OnlineTextPaginator` and local reading preferences. ReaderKit handles the existing EPUB-path branch; `ImportPage` imports audio, TXT, EPUB, HTML/HTM and ZIP bundles. Imported ebooks are converted into bounded local text chapters for the existing paginator and speech service; original EPUB images/layout are not preserved. Local chapter catalogs live in durable filesDir/imported_toc rather than Preferences.
+Online novels use `OnlineTextPaginator` and local reading preferences. ReaderKit handles the existing EPUB-path branch; `ImportPage` imports audio, TXT, EPUB, MOBI, HTML/HTM and ZIP bundles. MOBI supports unencrypted MOBI6 with uncompressed/PalmDOC records (including the legacy part of hybrid files), up to 128 MiB per file and 32 MiB of expanded text; encrypted, HUFF/CDIC and standalone KF8 files report explicit errors. Imported ebooks are converted into bounded local text chapters for the existing paginator and speech service; embedded MOBI/EPUB covers are saved separately, while original body images/layout are not preserved. Local chapter catalogs live in durable filesDir/imported_toc rather than Preferences.
+
+External file-open requests route JSON to source import and TXT/EPUB/MOBI/HTML/HTM/ZIP to the local import screen with the original granted URI preselected. Filename extensions take precedence; MIME/UTD supplies the format for extensionless provider URIs. Cold and warm launches use the same pending/event route and consume it once.
+
 
 The optional `server/` project is not registered or configurable as an App content source. Do not reintroduce an App API-base setting without an explicit product decision.
 

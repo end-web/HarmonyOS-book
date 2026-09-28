@@ -1,3 +1,4 @@
+import { ReaderTapPolicy, ReaderTouchTracker } from '../utils/ReaderTapPolicy';
 import { emitter } from '@kit.BasicServicesKit';
 import { AnimatorResult } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
@@ -7,6 +8,16 @@ import { PageTurnMode } from '../model/TextReading';
 /** 只预览目标页；动画完成才通知阅读页提交进度，回弹不改变阅读位置。 */
 @ComponentV2
 export struct ReaderPageTurnComponent {
+  @Param tapLeftPercent: number = 33;
+  @Param tapRightPercent: number = 33;
+  @Param tapTopPercent: number = 33;
+  @Param tapBottomPercent: number = 33;
+  @Param tapRegions: string = ReaderTapPolicy.DEFAULT;
+  @Param safeLeft: number = 0;
+  @Param safeRight: number = 0;
+  @Param safeTop: number = 0;
+  @Param safeBottom: number = 0;
+  private tapTracker: ReaderTouchTracker = new ReaderTouchTracker();
   @Param mode: string = PageTurnMode.Cover;
   @Param revision: string = '';
   @Param paperColor: string = '#F5F2EA';
@@ -117,10 +128,12 @@ export struct ReaderPageTurnComponent {
   }
 
   private handleTouch(event: TouchEvent): void {
+    this.tapTracker.update(event);
     if (event.type === TouchType.Down) {
       const touch = event.touches[0];
       // 整段手势沿用落点判定，避免从状态栏下拉到正文后触发翻页。
-      this.touchBlocked = touch === undefined || touch.y < this.pageHeight * 0.1;
+      this.touchBlocked = touch === undefined || touch.y < this.safeTop || touch.x < this.safeLeft ||
+        touch.x >= this.pageWidth - this.safeRight || touch.y >= this.pageHeight - this.safeBottom;
     } else if (event.type === TouchType.Cancel) {
       this.touchBlocked = true;
       this.handlePanCancel();
@@ -128,9 +141,10 @@ export struct ReaderPageTurnComponent {
   }
 
   private handlePanStart(event: GestureEvent): void {
+    this.tapTracker.cancel();
     const finger = event.fingerList[0];
     if (this.touchBlocked || finger === undefined ||
-      finger.localY - event.offsetY < this.pageHeight * 0.1) return;
+      finger.localY - event.offsetY < this.safeTop) return;
     this.beginTurn((this.mode === PageTurnMode.Vertical ? event.offsetY : event.offsetX) < 0, false, finger !== undefined ? finger.localY : this.pageHeight / 2);
     this.handlePanUpdate(event);
   }
@@ -163,16 +177,14 @@ export struct ReaderPageTurnComponent {
   }
 
   private handleTap(event: GestureEvent): void {
-    if (this.phase !== 'idle' || this.touchBlocked) return;
+    if (this.phase !== 'idle' || this.touchBlocked || !this.tapTracker.canTap()) return;
     const finger = event.fingerList[0];
-    if (finger === undefined || finger.localY < this.pageHeight * 0.1) return;
-    if (finger.localX < this.pageWidth * 0.3) {
-      this.beginTurn(false, true, finger.localY);
-    } else if (finger.localX > this.pageWidth * 0.7) {
-      this.beginTurn(true, true, finger.localY);
-    } else {
-      this.onCenterTap();
-    }
+    if (finger === undefined) return;
+    const action = ReaderTapPolicy.resolve(this.tapRegions, finger.localX - this.safeLeft,
+      finger.localY - this.safeTop, this.pageWidth - this.safeLeft - this.safeRight,
+      this.pageHeight - this.safeTop - this.safeBottom, this.tapLeftPercent, this.tapRightPercent, this.tapTopPercent, this.tapBottomPercent);
+    if (action === 0 || action === 2) this.beginTurn(action === 2, true, finger.localY);
+    else if (action === 1) this.onCenterTap();
   }
 
   private settle(commit: boolean): void {

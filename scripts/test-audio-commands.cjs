@@ -64,6 +64,7 @@ async function fixture(initialState = 'paused') {
   const mediaSources = [];
   const platformCompat = { supports: () => true };
   const cache = {
+    clearChapter(id) { cacheCalls.push(`clear:${id}`); },
     suspendPreload() { cacheCalls.push('suspend'); },
     resumePreload() { cacheCalls.push('resume'); },
     ensureFileCached() { cacheCalls.push('current'); },
@@ -155,6 +156,28 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('manual reload bypasses same-chapter reuse and retains interrupted position', async () => {
+    const f = await fixture('playing');
+    const book = f.state.currentBook;
+    const chapter = f.state.currentChapter;
+    book.sourceUrl = 'imported-source';
+    chapter.originSourceValue = 'https://source.test/chapter';
+    chapter.source = { type: 'file', value: '/cached-audio' };
+    let reloaded;
+    let reused = false;
+    f.service.canReuseSameChapter = () => true;
+    f.service.seekAndPlaySameChapter = async () => { reused = true; };
+    f.service.flushBeforeSwitch = async () => {};
+    f.service.doPlayChapter = async (...args) => { reloaded = args; };
+    await f.service.playChapterAndSeek(book, chapter, 42000, false, true);
+    assert.equal(reused, false);
+    assert.equal(reloaded[2], 42000);
+    assert.equal(reloaded[3], true);
+    assert.equal(chapter.source.value, chapter.originSourceValue);
+    assert.ok(f.cacheCalls.includes('clear:chapter-1'));
+    await f.service.playChapterAndSeek(book, chapter, 42000);
+    assert.equal(reused, true);
+  });
   await check('HLS and indexed containers bypass offline cache; ordinary audio keeps caching', async () => {
     const f = await fixture();
     const loaded = [];
@@ -278,6 +301,11 @@ async function check(name, test) {
     f.player.emit('error', { code: 5400103, message: 'simulated failure' });
     await flush();
     assert.deepEqual(retry, { position: 42000, automatic: true });
+    retry = null;
+    f.state.currentChapter.source = { type: 'url', value: 'https://example.invalid/audio-retry' };
+    f.player.emit('error', { code: 5411002, message: 'connection timed out again' });
+    await flush();
+    assert.equal(retry, null, 'A second connection timeout must not restart the same chapter indefinitely');
   });
   await check('explicit pause prevents automatic URL-error recovery', async () => {
     const f = await fixture('playing');
@@ -413,6 +441,38 @@ async function check(name, test) {
     f.service.applySkipConfigNow('book-1', 0, 10);
     assert.equal(completed, 1);
     assert.deepEqual(f.player.seeks, []);
+  });
+  await check('15-second seeking clamps at chapter boundaries and keeps paused playback paused', async () => {
+    const f = await fixture('paused');
+    f.state.progressMs = f.player.currentTime = 5000;
+    await f.service.seekBy(-15000);
+    assert.equal(f.state.progressMs, 0);
+    f.state.progressMs = f.player.currentTime = 175000;
+    await f.service.seekBy(15000);
+    assert.equal(f.state.progressMs, 180000);
+    assert.equal(f.player.plays, 0);
+  });
+  await check('sequential playback stops at the final chapter including skipped outro', async () => {
+    for (const descending of [false, true]) {
+      const f = await fixture('playing');
+      const book = f.state.currentBook;
+      book.chapters = ['a', 'b'].map(id => ({ id, title: id }));
+      book.chaptersDescending = descending;
+      book.skipOutro = 10;
+      f.state.currentChapter = book.chapters[descending ? 0 : 1];
+      f.state.playMode = 0;
+      const played = [];
+      f.service.playChapter = async (_book, chapter) => played.push(chapter.id);
+      f.service.checkSkipOutro(175000);
+      await flush();
+      assert.equal(f.player.state, 'paused');
+      assert.equal(f.state.isPlaying, false);
+      assert.equal(played.length, 0);
+      f.player.transition('completed');
+      await flush();
+      assert.equal(f.state.isPlaying, false);
+      assert.equal(played.length, 0);
+    }
   });
   await check('intro saved during loading updates the pending seek', async () => {
     const f = await fixture('initialized');

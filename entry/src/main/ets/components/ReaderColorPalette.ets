@@ -1,5 +1,5 @@
 import { hexToHsv, hsvToHex } from '../model/ReaderTheme';
-import { AppColor, AppSpace } from '../theme/Theme';
+import { AppSpace } from '../theme/Theme';
 
 /** 二维饱和度/明度调色盘，色相滑杆覆盖全部 RGB 颜色。 */
 @ComponentV2
@@ -55,7 +55,7 @@ export struct ReaderColorPalette {
             this.onChange(hsvToHex(value, this.saturation, this.valueLevel),
               mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
           })
-        Text(this.color).fontSize(12).fontColor(AppColor.Brand)
+        Text(this.color).fontSize(12).fontColor($r('sys.color.font_primary'))
         Row().width(24).height(24).borderRadius(12).backgroundColor(this.color)
       }.width('100%')
     }.width('100%')

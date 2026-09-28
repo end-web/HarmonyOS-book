@@ -1,5 +1,5 @@
 import { HdsCompat } from '../utils/HdsCompat';
-import { curves, FrameCallback, LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
+import { curves, FrameCallback, LengthMetrics } from '@kit.ArkUI';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
@@ -108,6 +108,7 @@ struct HomeLoadingSkeleton {
   @Param showCarousel: boolean = true;
   @Param showRecommendations: boolean = true;
   @Param contentWidth: number = 360;
+  @Param landscape: boolean = false;
   @Local pulsing: boolean = false;
 
   onDidBuild(): void {
@@ -261,6 +262,24 @@ struct HomeLoadingSkeleton {
     Column() {
       Column({ space: AppSpace.Xs }) {
         if (this.showCarousel) {
+          if (this.landscape) {
+            Row({ space: 16 }) {
+              Row().width(81).height(108).borderRadius(AppRadius.Sm)
+                .backgroundColor(AppColor.Divider)
+              Column({ space: 10 }) {
+                Row().width('65%').height(20).borderRadius(AppRadius.Xs)
+                  .backgroundColor(AppColor.Divider)
+                Row().width('35%').height(12).borderRadius(AppRadius.Xs)
+                  .backgroundColor(AppColor.Divider)
+                Row().width('90%').height(12).borderRadius(AppRadius.Xs)
+                  .backgroundColor(AppColor.Divider)
+                Row().width('75%').height(12).borderRadius(AppRadius.Xs)
+                  .backgroundColor(AppColor.Divider)
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            }
+            .width('100%').height(homeCoverCarouselHeight(this.coverContentWidth, true))
+            .padding({ left: AppSpace.Md + 12, right: AppSpace.Md + 12, bottom: 12 })
+          } else {
           Stack() {
             Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
               .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
@@ -275,6 +294,7 @@ struct HomeLoadingSkeleton {
           }
           .width('100%').height(homeCoverCarouselHeight(this.coverContentWidth))
           .padding({ left: AppSpace.Md, right: AppSpace.Md })
+          }
         }
         if (this.showRecommendations) {
           this.skeletonFeaturedSection()
@@ -306,6 +326,11 @@ export struct HomePage {
   @Local homeSources: LocalRuleSource[] = [];
   @Local homeSourceIndex: number = -1;
   @Local savingHomeSource: boolean = false;
+  @Local homeSourceMenuVisible: boolean = false;
+  @Local homeSourceKeyword: string = '';
+  @Local homeSourceMatchCount: number = 0;
+  private homeSourceMenuData: HomeRecommendationDataSource<LocalRuleSource> = new HomeRecommendationDataSource();
+  private homeSourceMenuScroller: Scroller = new Scroller();
   @Local favoriteIds: string[] = [];
   @Local savingFavorite: boolean = false;
   private favoritesChangedHandler: () => void = (): void => { this.loadFavorites(); };
@@ -357,8 +382,19 @@ export struct HomePage {
   private refreshInFlight: boolean = false;
   private readonly searchTitleBarBuilder: CustomBuilder = (): void => this.buildSearchTitleBar();
   private readonly homeNavigationBottomBuilder: CustomBuilder = (): void => this.buildHomeNavigationBottom();
+  @Local leftSafeVp: number = WindowUtils.getLeftSafeVp();
+  @Local rightSafeVp: number = WindowUtils.getRightSafeVp();
+  @Local topSafeVp: number = WindowUtils.getStatusBarHeightVp();
+  @Local bottomSafeVp: number = WindowUtils.getBottomSafeVp();
+  private readonly safeAreaChangeHandler = (topVp: number, bottomVp: number): void => {
+    this.leftSafeVp = WindowUtils.getLeftSafeVp();
+    this.rightSafeVp = WindowUtils.getRightSafeVp();
+    this.topSafeVp = topVp;
+    this.bottomSafeVp = bottomVp;
+  };
 
   aboutToAppear(): void {
+    WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
     this.onBackHandlerChange((): boolean => {
       if (this.selectedCategoryIndex === -1) return false;
       this.switchCategory(-1);
@@ -376,6 +412,7 @@ export struct HomePage {
   }
 
   aboutToDisappear(): void {
+    WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     this.onBackHandlerChange(undefined);
     this.cancelContentEntrance();
     this.cancelCarouselAnimation();
@@ -864,17 +901,27 @@ export struct HomePage {
   /** 外层移动整个头部，Tab 吸顶后才把滚动交给内容列表。 */
   @Local isAtContentTop: boolean = true;
   @Local isSearchCollapsed: boolean = false;
-  @Local contentWidth: number = 360;
+  @Local viewportWidth: number = 360;
   @Local contentHeight: number = 800;
   @Local headerScrollOffset: number = 0;
 
   @Computed
+  get contentWidth(): number {
+    return Math.max(1, this.viewportWidth - this.leftSafeVp - this.rightSafeVp);
+  }
+
+  @Computed
+  get landscapeCarousel(): boolean {
+    return this.viewportWidth > this.contentHeight;
+  }
+
+  @Computed
   get carouselFullHeight(): number {
     if (this.loadingHome && this.homeBlocks.length === 0) {
-      return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2);
+      return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2, this.landscapeCarousel);
     }
     if (this.carouselBooks.length === 0) return 0;
-    return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2);
+    return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2, this.landscapeCarousel);
   }
 
   @Computed
@@ -969,6 +1016,68 @@ export struct HomePage {
     this.headerScrollOffset = 0;
   }
 
+  private filterHomeSources(value: string): void {
+    this.homeSourceKeyword = value;
+    const keyword = value.trim().toLowerCase();
+    const matches = this.homeSources.filter((source: LocalRuleSource): boolean =>
+      source.bookSourceName.toLowerCase().includes(keyword) ||
+      source.bookSourceUrl.toLowerCase().includes(keyword) ||
+      source.bookSourceGroup.toLowerCase().includes(keyword));
+    this.homeSourceMenuData.setItems(matches);
+    this.homeSourceMatchCount = matches.length;
+    this.homeSourceMenuScroller.scrollTo({ xOffset: 0, yOffset: 0 });
+  }
+
+  private homeSourceMenuOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      builder: this.buildHomeSourceMenu,
+      placement: Placement.BottomRight,
+      popupColor: Color.Transparent,
+      enableArrow: false,
+      focusable: true,
+      onStateChange: (event): void => { this.homeSourceMenuVisible = event.isVisible; }
+    };
+    if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    else options.backgroundBlurStyle = AppMaterial.SheetBlur;
+    return options;
+  }
+
+  @LocalBuilder
+  buildHomeSourceMenu() {
+    Column({ space: AppSpace.Xs }) {
+      Search({ value: this.homeSourceKeyword, placeholder: $r('app.string.rule_source_search_placeholder') })
+        .width('100%').height(40)
+        .fontColor($r('sys.color.font_primary'))
+        .placeholderColor($r('sys.color.font_tertiary'))
+        .onChange((value: string): void => this.filterHomeSources(value))
+      if (this.homeSourceMatchCount === 0) {
+        Text($r('app.string.rule_source_no_match'))
+          .fontSize(14).fontColor($r('sys.color.font_secondary'))
+          .width('100%').height(64).textAlign(TextAlign.Center)
+      } else {
+        List({ scroller: this.homeSourceMenuScroller }) {
+          LazyForEach(this.homeSourceMenuData, (source: LocalRuleSource) => {
+            ListItem() {
+              Text(source.bookSourceName)
+                .fontSize(16).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .fontColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
+                  AppColor.Brand : $r('sys.color.font_primary'))
+                .width('100%').height(48).padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+                .borderRadius(AppRadius.Sm)
+                .backgroundColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
+                  AppColor.BrandSoft : Color.Transparent)
+                .onClick((): void => {
+                  this.homeSourceMenuVisible = false;
+                  this.selectHomeSource(this.homeSources.findIndex((item: LocalRuleSource): boolean =>
+                    item.bookSourceUrl === source.bookSourceUrl));
+                })
+            }
+          }, (source: LocalRuleSource): string => source.bookSourceUrl)
+        }.width('100%').height(Math.min(288, this.homeSourceMatchCount * 48)).scrollBar(BarState.Auto)
+      }
+    }.width(280).padding(AppSpace.Xs)
+  }
+
   /** 标题栏主区域：放入 Navigation 生效范围，启用原生沉浸光感。 */
   @LocalBuilder
   buildSearchTitleBar() {
@@ -992,28 +1101,24 @@ export struct HomePage {
       .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
       .onClick(() => this.onSearchTap())
 
-      Select(this.homeSources.map((source: LocalRuleSource): SelectOption => {
-        return { value: source.bookSourceName };
-      }))
-        .selected($$this.homeSourceIndex)
-        .value(this.homeSourceName || $r('app.string.home_source_setting'))
-        .font({ size: 13, weight: FontWeight.Medium })
-        .arrowModifier(new SymbolGlyphModifier().visibility(Visibility.None))
+      Text(this.homeSourceName || $r('app.string.home_source_setting'))
+        .fontSize(13).fontWeight(FontWeight.Medium)
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .fontColor(AppColor.Brand)
-        .selectedOptionFontColor(AppColor.Brand)
-        .selectedOptionBgColor(AppColor.BrandSoft)
-        .space(0)
-        .menuAlign(MenuAlignType.END)
         .width(LayoutPolicy.wrapContent)
         .constraintSize({ maxWidth: '45%' })
         .height(SEARCH_FIELD_HEIGHT)
         .padding({ left: AppSpace.Sm, right: AppSpace.Sm })
         .borderRadius(AppRadius.Pill)
         .backgroundColor(Color.Transparent)
-        .attributeModifier(AppMaterial.selectModifier())
+        .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
         .enabled(this.homeSources.length > 0 && !this.savingHomeSource)
         .accessibilityDescription($r('app.string.home_source_setting'))
-        .onSelect((index: number) => this.selectHomeSource(index))
+        .onClick((): void => {
+          this.filterHomeSources('');
+          this.homeSourceMenuVisible = !this.homeSourceMenuVisible;
+        })
+        .bindPopup(this.homeSourceMenuVisible, this.homeSourceMenuOptions())
     }
     .width('100%')
     .height(SEARCH_FIELD_ROW_HEIGHT)
@@ -1066,7 +1171,8 @@ export struct HomePage {
         .width('100%')
         .height('100%')
         .backgroundColor(HomeTheme.BgNeutral)
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+        .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+          [SafeAreaEdge.TOP, SafeAreaEdge.START, SafeAreaEdge.END])
 
       // 固定视口的原生渐变模糊，搜索和轮播整体从其后方经过。
       HdsNavigation() {
@@ -1133,11 +1239,13 @@ export struct HomePage {
         { statusBarContentColor: WindowUtils.getSystemBarContentColor() }
       )
       .backgroundColor(Color.Transparent)
+      // 内容统一避让两侧挖孔；背景独立铺满，子组件只保留原有页面边距。
+      .padding({ left: this.leftSafeVp, right: this.rightSafeVp })
     }
     .onSizeChange((_oldSize: SizeOptions, newSize: SizeOptions) => {
       const width: number = Number(newSize.width);
-      if (Number.isFinite(width) && width > 0 && Math.abs(width - this.contentWidth) > 1) {
-        this.contentWidth = width;
+      if (Number.isFinite(width) && width > 0 && Math.abs(width - this.viewportWidth) > 1) {
+        this.viewportWidth = width;
       }
       const height: number = Number(newSize.height);
       if (Number.isFinite(height) && height > 0 && Math.abs(height - this.contentHeight) > 1) {
@@ -1155,7 +1263,7 @@ export struct HomePage {
       Column() {
         Column()
           .width('100%')
-          .height(WindowUtils.getStatusBarHeightVp() + SEARCH_FIELD_ROW_HEIGHT +
+          .height(this.topSafeVp + SEARCH_FIELD_ROW_HEIGHT +
             this.carouselFullHeight + CATEGORY_NAV_ROW_HEIGHT)
 
         Stack({ alignContent: Alignment.Top }) {
@@ -1167,7 +1275,7 @@ export struct HomePage {
           this.buildHomeContent(false)
         }
         .width('100%')
-        .height(Math.max(1, this.contentHeight - WindowUtils.getStatusBarHeightVp() - CATEGORY_NAV_ROW_HEIGHT))
+        .height(Math.max(1, this.contentHeight - this.topSafeVp - CATEGORY_NAV_ROW_HEIGHT))
         .clip(false)
         .backgroundColor(Color.Transparent)
       }
@@ -1366,12 +1474,12 @@ export struct HomePage {
 
         // 底部留白避开浮动 Tab + MiniPlayer。
         ListItem() {
-          Column().height(WindowUtils.getFloatingTabBottomVp() + AppSpace.Lg)
+          Column().height(WindowUtils.getFloatingTabBottomVp(this.bottomSafeVp) + AppSpace.Lg)
         }
       }
     }
     .width('100%')
-    .height(Math.max(1, this.contentHeight - WindowUtils.getStatusBarHeightVp() - CATEGORY_NAV_ROW_HEIGHT))
+    .height(Math.max(1, this.contentHeight - this.topSafeVp - CATEGORY_NAV_ROW_HEIGHT))
     .listDirection(Axis.Vertical)
     .enableScrollInteraction(!this.carouselTransitioning)
     .nestedScroll({
@@ -1660,10 +1768,15 @@ export struct HomePage {
         Column() {
           Column() {
             if (this.loadingHome && this.homeBlocks.length === 0) {
-              HomeLoadingSkeleton({ showRecommendations: false, contentWidth: this.contentWidth })
+              HomeLoadingSkeleton({
+                showRecommendations: false,
+                contentWidth: this.contentWidth,
+                landscape: this.landscapeCarousel
+              })
             } else {
               HomeCoverCarousel({
                 books: this.carouselBooks,
+                landscape: this.landscapeCarousel,
                 active: this.selectedCategoryIndex === -1 && !this.carouselTransitioning && !this.isSearchCollapsed,
                 onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
               })

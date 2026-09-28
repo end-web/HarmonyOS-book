@@ -1,7 +1,22 @@
 import { text as graphicsText } from '@kit.ArkGraphics2D';
 
+export class OnlineTextPaintState {
+  color: string = '';
+  lines: graphicsText.TextLine[] = [];
+}
+
 export class OnlineTextPage {
+  firstLine: number = 0;
+  lineMetrics: graphicsText.LineMetrics[] = [];
+  paintState: OnlineTextPaintState = new OnlineTextPaintState();
   text: string = '';
+  // Keep the measured paragraph: slicing text and laying it out again loses justification.
+  paragraph: graphicsText.Paragraph | null = null;
+  displayStart: number = 0;
+  layoutTop: number = 0;
+  layoutHeight: number = 0;
+  layoutWidth: number = 0;
+  layoutKey: number = 0;
   // Offsets refer to normalized source text, excluding display-only indentation.
   startOffset: number = 0;
   endOffset: number = 0;
@@ -27,7 +42,7 @@ class OnlineTextIndent {
   }
 }
 
-/** Display indentation is mapped back to existing character-based reading positions. */
+/** Display indentation and collapsed blank paragraphs map back to existing reading positions. */
 export class OnlineTextIndentedContent {
   text: string = '';
   private sourceLength: number = 0;
@@ -44,15 +59,16 @@ export class OnlineTextIndentedContent {
     for (let index = 0; index < paragraphs.length; index++) {
       const paragraph = paragraphs[index];
       const body = paragraph.replace(new RegExp('^[ \\t\\u00A0\\u3000]+'), '');
-      let displayText = paragraph;
-      if (body.length > 0) {
+      // Source separators remain in the offset space, but must not reserve extra line boxes.
+      if (body.trim().length > 0) {
+        if (displayed.length > 0) displayStart += 1;
         result.indents.push(new OnlineTextIndent(
           sourceStart, sourceStart + paragraph.length - body.length, displayStart));
-        displayText = OnlineTextIndentedContent.INDENT + body;
+        const displayText = OnlineTextIndentedContent.INDENT + body;
+        displayed.push(displayText);
+        displayStart += displayText.length;
       }
-      displayed.push(displayText);
       sourceStart += paragraph.length + 1;
-      displayStart += displayText.length + 1;
     }
     result.text = displayed.join('\n');
     return result;
@@ -60,6 +76,8 @@ export class OnlineTextIndentedContent {
 
   sourceOffsetForDisplay(displayOffset: number): number {
     const offset = Math.max(0, Math.min(displayOffset, this.text.length));
+    if (offset === 0) return 0;
+    if (offset === this.text.length) return this.sourceLength;
     let low = 0;
     let high = this.indents.length;
     while (low < high) {
@@ -138,7 +156,24 @@ export class OnlineTextPageNavigator {
   }
 }
 
+class OnlineTextLayout {
+  source: string = '';
+  key: string = '';
+  serial: number = 0;
+  width: number = 0;
+  displayed: OnlineTextIndentedContent = new OnlineTextIndentedContent();
+  paragraph: graphicsText.Paragraph | null = null;
+  metrics: graphicsText.LineMetrics[] = [];
+  lines: OnlineTextMeasuredLine[] = [];
+  paintState: OnlineTextPaintState = new OnlineTextPaintState();
+}
+
 export class OnlineTextPaginator {
+  private static layouts: OnlineTextLayout[] = [];
+
+  static invalidateLayouts(): void { OnlineTextPaginator.layouts = []; }
+
+  private static layoutSerial: number = 0;
   static normalizeContent(content: string): string {
     let value = content
       .replace(new RegExp('\\r\\n?', 'g'), '\n')
@@ -165,18 +200,59 @@ export class OnlineTextPaginator {
   }
 
   static paginate(content: string, widthPx: number, heightPx: number,
-    fontSizePx: number, lineHeight: number, fontFamily: string = 'HarmonyOS Sans', fontWeight: number = 400): OnlineTextPage[] {
-    const normalized = OnlineTextPaginator.normalizeContent(content);
-    if (normalized.length === 0) return [OnlineTextPage.of('', 0, 0)];
-    const displayed = OnlineTextIndentedContent.fromNormalized(normalized);
+    fontSizePx: number, lineHeight: number, fontFamily: string = '', fontWeight: number = 400,
+    alignment: string = 'justify'): OnlineTextPage[] {
+    const layout = OnlineTextPaginator.measure(content, widthPx, fontSizePx, lineHeight, fontFamily, fontWeight, alignment);
+    const displayed = layout.displayed;
+    const metrics = layout.metrics;
+    const pages = OnlineTextPaginator.paginateMeasuredLines(displayed.text, layout.lines, heightPx);
+    let lineIndex = 0;
+    for (const page of pages) {
+      page.paragraph = layout.paragraph;
+      page.paintState = layout.paintState;
+      page.layoutKey = layout.serial;
+      page.displayStart = page.startOffset;
+      page.layoutWidth = layout.width;
+      page.firstLine = lineIndex;
+      const first = metrics[lineIndex];
+      if (first !== undefined) {
+        page.layoutTop = first.baseline - first.ascent;
+        let last = first;
+        while (lineIndex < metrics.length && metrics[lineIndex].startIndex < page.endOffset) {
+          last = metrics[lineIndex++];
+        }
+        page.layoutHeight = last.baseline + last.descent - page.layoutTop;
+        page.lineMetrics = metrics.slice(page.firstLine, lineIndex);
+      }
+    }
+    return displayed.restoreSourceOffsets(pages);
+  }
 
+  private static measure(content: string, widthPx: number, fontSizePx: number, lineHeight: number,
+    fontFamily: string, fontWeight: number, alignment: string): OnlineTextLayout {
+    const key = `${widthPx}:${fontSizePx}:${lineHeight}:${fontWeight}:${alignment}:${fontFamily}`;
+    const cachedIndex = OnlineTextPaginator.layouts.findIndex((item: OnlineTextLayout): boolean =>
+      item.key === key && item.source === content);
+    if (cachedIndex >= 0) {
+      const cached = OnlineTextPaginator.layouts.splice(cachedIndex, 1)[0];
+      OnlineTextPaginator.layouts.push(cached);
+      return cached;
+    }
+    const layout = new OnlineTextLayout();
+    layout.source = content;
+    layout.key = key;
+    layout.serial = ++OnlineTextPaginator.layoutSerial;
+    const normalized = OnlineTextPaginator.normalizeContent(content);
+    layout.displayed = OnlineTextIndentedContent.fromNormalized(normalized);
+    if (layout.displayed.text.length === 0) return layout;
     const safeWidth = Math.max(1, widthPx);
     const safeFontSize = Math.max(1, fontSizePx);
     const safeLineHeight = Math.max(1, lineHeight);
     const textStyle: graphicsText.TextStyle = {
       fontSize: safeFontSize,
       fontWeight: Math.max(0, Math.min(8, Math.round(fontWeight / 100) - 1)),
-      fontFamilies: [fontFamily],
+      // 空列表由全局字体集合匹配用户当前的系统字体。
+      fontFamilies: fontFamily.length > 0 ? [fontFamily] : [],
       fontVariations: [{ axis: 'wght', value: fontWeight }],
       heightScale: safeLineHeight,
       heightOnly: true,
@@ -184,14 +260,14 @@ export class OnlineTextPaginator {
     };
     const paragraphStyle: graphicsText.ParagraphStyle = {
       textStyle: textStyle,
-      align: graphicsText.TextAlign.START,
+      align: OnlineTextPaginator.textAlign(alignment),
       wordBreak: graphicsText.WordBreak.BREAK_WORD,
       breakStrategy: graphicsText.BreakStrategy.GREEDY
     };
     const builder = new graphicsText.ParagraphBuilder(
       paragraphStyle, graphicsText.FontCollection.getGlobalInstance());
     builder.pushStyle(textStyle);
-    builder.addText(displayed.text);
+    builder.addText(layout.displayed.text);
     builder.popStyle();
     const paragraph = builder.build();
     paragraph.layoutSync(safeWidth);
@@ -200,8 +276,27 @@ export class OnlineTextPaginator {
     for (let i = 0; i < metrics.length; i++) {
       lines.push(OnlineTextMeasuredLine.of(metrics[i].startIndex, metrics[i].height));
     }
-    return displayed.restoreSourceOffsets(
-      OnlineTextPaginator.paginateMeasuredLines(displayed.text, lines, heightPx));
+    layout.width = safeWidth;
+    layout.paragraph = paragraph;
+    layout.metrics = metrics;
+    layout.lines = lines;
+    // Bound retained native layouts by both count and source size; oversized chapters remain uncached.
+    if (content.length <= 160000) {
+      OnlineTextPaginator.layouts.push(layout);
+      let total = OnlineTextPaginator.layouts.reduce((sum: number, item: OnlineTextLayout): number => sum + item.source.length, 0);
+      while (OnlineTextPaginator.layouts.length > 4 || total > 160000) {
+        const removed = OnlineTextPaginator.layouts.shift();
+        if (removed !== undefined) total -= removed.source.length;
+      }
+    }
+    return layout;
+  }
+
+  private static textAlign(value: string): graphicsText.TextAlign {
+    if (value === 'start') return graphicsText.TextAlign.LEFT;
+    if (value === 'center') return graphicsText.TextAlign.CENTER;
+    if (value === 'end') return graphicsText.TextAlign.RIGHT;
+    return graphicsText.TextAlign.JUSTIFY;
   }
 
   static paginateMeasuredLines(content: string, lines: OnlineTextMeasuredLine[],

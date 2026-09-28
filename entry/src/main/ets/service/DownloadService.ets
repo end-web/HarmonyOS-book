@@ -464,7 +464,6 @@ export class DownloadService {
   }
 
   private async resolveAndQueueFile(item: DownloadQueueItem): Promise<void> {
-    const pageUrl = this.chapterPageUrl(item.chapter);
     if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
     try {
       await DownloadStore.upsertChapter(item.book, item.chapter, 'resolving', '', '', 0, '',
@@ -477,6 +476,9 @@ export class DownloadService {
         await this.markFailed(item, '内容来源不可用');
         return;
       }
+      await BookSourceService.prepareAudioChapter(source, item.book, item.chapter);
+      if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
+      const pageUrl = this.chapterPageUrl(item.chapter);
       const requestInfo = await BookSourceService.resolveAudioRequest(
         source, pageUrl, item.book.variables, item.chapter.variables);
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);

@@ -133,4 +133,34 @@ export class OnlineTextContentCache {
     OnlineTextContentCache.writeChain = task;
     return task;
   }
+
+  static async removeChapter(context: common.Context, key: string): Promise<void> {
+    const task = OnlineTextContentCache.writeChain.then(async (): Promise<void> => {
+      try { await fileIo.unlink(OnlineTextContentCache.path(context, key)); } catch (_error) { /* cache miss */ }
+    });
+    OnlineTextContentCache.writeChain = task;
+    await task;
+  }
+
+  static async invalidateSources(context: common.Context, sourceUrls: Set<string>): Promise<void> {
+    const task = OnlineTextContentCache.writeChain.then(async (): Promise<void> => {
+      const directory = `${context.cacheDir}/online_text_content`;
+      let names: string[];
+      try { names = await fileIo.listFile(directory); } catch (_e) { return; }
+      for (const name of names) {
+        if (!/^search_text_[a-z0-9]+\.json$/.test(name)) continue;
+        const path = `${directory}/${name}`;
+        const stat = await fileIo.stat(path);
+        if (stat.size <= 0 || stat.size > OnlineTextContentCache.MAX_FILE_BYTES) continue;
+        let parts: string[];
+        try {
+          const record: CachedTextChapter = JSON.parse(await fileIo.readText(path));
+          parts = JSON.parse(record.key);
+        } catch (_e) { continue; }
+        if (Array.isArray(parts) && sourceUrls.has(parts[0])) await fileIo.unlink(path);
+      }
+    });
+    OnlineTextContentCache.writeChain = task.catch((): void => {});
+    await task;
+  }
 }

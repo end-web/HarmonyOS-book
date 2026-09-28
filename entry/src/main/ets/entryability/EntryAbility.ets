@@ -19,6 +19,8 @@ import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig
 import { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
+import { EVT_READER_TYPOGRAPHY_CHANGED } from '../model/TextReading';
+import { FileOpenRouting } from '../utils/FileOpenRouting';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -30,6 +32,7 @@ export const EVT_WIDGET_ROUTE = 'app.widget.route';
 export interface WidgetRoute {
   target: string;
   bookId?: string;
+  fileType?: string;
   ts: number;
 }
 
@@ -336,14 +339,17 @@ export default class EntryAbility extends UIAbility {
   private consumeRouteWant(want: Want): void {
     const action = want.action ?? '';
     const uri = want.uri ?? '';
-    const type = (want.type ?? '').toLowerCase();
-    if ((action === 'ohos.want.action.viewData' || action === 'ohos.want.action.sendData') &&
-      (uri.startsWith('file://') || uri.startsWith('content://')) &&
-      (type === 'application/json' || type === 'text/json' || type === 'general.json' ||
-        /\.json(?:[?#]|$)/i.test(uri))) {
-      const route: WidgetRoute = { target: 'ruleSourceImport', bookId: uri, ts: Date.now() };
+    const fileTarget = FileOpenRouting.target(want);
+    if (fileTarget.length > 0) {
+      // Opening a file must not also resume unrelated audio during cold startup.
+      this.startupPlaybackPending = false;
+      const route: WidgetRoute = {
+        target: fileTarget, bookId: uri, fileType: want.type ?? '', ts: Date.now()
+      };
       AppStorage.setOrCreate<WidgetRoute>(KEY_WIDGET_ROUTE, route);
-      emitter.emit(EVT_WIDGET_ROUTE, { data: { target: route.target, bookId: uri, ts: route.ts } });
+      emitter.emit(EVT_WIDGET_ROUTE, {
+        data: { target: route.target, bookId: uri, fileType: route.fileType ?? '', ts: route.ts }
+      });
       return;
     }
     if (action === 'readerKitVerify') {
@@ -484,6 +490,10 @@ export default class EntryAbility extends UIAbility {
     if (newConfig.colorMode !== undefined) {
       WindowUtils.updateColorMode(newConfig.colorMode);
     }
+    if (newConfig.fontId !== undefined || newConfig.fontSizeScale !== undefined ||
+      newConfig.fontWeightScale !== undefined) {
+      emitter.emit(EVT_READER_TYPOGRAPHY_CHANGED);
+    }
   }
 
   onWindowStageDestroy(): void {
@@ -534,6 +544,7 @@ export default class EntryAbility extends UIAbility {
   async onForeground(): Promise<void> {
     // 系统颜色可能在后台改变，阅读器独立跟随系统时也需要重新取值。
     if (this.context.config.colorMode !== undefined) WindowUtils.updateColorMode(this.context.config.colorMode);
+    emitter.emit(EVT_READER_TYPOGRAPHY_CHANGED);
     AudioService.getInstance().setForeground(true);
     TextToSpeechService.getInstance().setForeground(true);
     this.isInForeground = true;

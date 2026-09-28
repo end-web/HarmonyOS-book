@@ -56,6 +56,23 @@ export enum PageTurnMode {
 }
 
 export class TextReadingSettings {
+  textAlignment: string = 'justify';
+
+  static normalizeTextAlignment(value?: string): string {
+    return value === 'start' || value === 'center' || value === 'end' ? value : 'justify';
+  }
+
+  tapRegions: string = '012012012';
+  tapLeftPercent: number = 33;
+  tapRightPercent: number = 33;
+  tapTopPercent: number = 33;
+  tapBottomPercent: number = 33;
+  showHeader: boolean = true;
+  showFooter: boolean = true;
+  showChapterTitle: boolean = true;
+  showPageNumber: boolean = true;
+  showChapterNumber: boolean = true;
+  showBookName: boolean = true;
   static readonly FONT_SIZE_MIN: number = 14;
   static readonly FONT_SIZE_MAX: number = 50;
   static readonly FONT_SIZE_DEFAULT: number = 18;
@@ -208,6 +225,7 @@ export class TextReaderRouteParams {
 
 /** 详情页复用栈内阅读页时请求跳章的事件 */
 export const EVT_READER_JUMP_CHAPTER: string = 'app.reader.jumpChapter';
+export const EVT_READER_TYPOGRAPHY_CHANGED: string = 'app.reader.typography.changed';
 
 /** EVT_READER_JUMP_CHAPTER 的事件负载 */
 export class ReaderJumpChapterEvent {

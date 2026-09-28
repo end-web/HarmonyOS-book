@@ -6,6 +6,8 @@ import { bookParser } from '@hms.core.readerservice.bookParser';
 import { Book, Chapter } from '../model/Book';
 import { KkBiqugeHtmlParser } from './text/KkBiqugeHtmlParser';
 import { EpubCoverService } from './text/EpubCoverService';
+import { MobiBookParser, MobiBookInfo } from './text/MobiBookParser';
+import { FileOpenRouting } from '../utils/FileOpenRouting';
 
 export class LocalImportFile {
   uri: string = '';
@@ -24,13 +26,31 @@ export class LocalBookImportService {
   static readonly MAX_CHAPTERS: number = 50000;
   static readonly MAX_ARCHIVE_BYTES: number = 32 * 1024 * 1024 * 1024;
   static readonly MAX_EXPANDED_BYTES: number = 64 * 1024 * 1024 * 1024;
-  static readonly TEXT_EXTS: string[] = ['.txt', '.epub', '.html', '.htm'];
+  static readonly TEXT_EXTS: string[] = FileOpenRouting.TEXT_EXTS;
   static readonly AUDIO_EXTS: string[] = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac'];
 
   /** 选文件后预解析，不写入书架；临时封面在正式导入时复制到书籍目录。 */
   static async preview(context: common.Context, file: LocalImportFile): Promise<LocalBookPreview> {
     const result = new LocalBookPreview();
     result.title = file.name;
+    if (file.ext === '.mobi') {
+      result.directory = `${context.cacheDir}/book_preview_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+      await fileIo.mkdir(result.directory, true);
+      try {
+        const info = await LocalBookImportService.readMobi(context, file.uri, undefined, result.directory);
+        result.title = info.title || file.name;
+        result.author = info.author;
+        result.cover = info.cover;
+        if (!result.cover) {
+          await fileIo.rmdir(result.directory);
+          result.directory = '';
+        }
+        return result;
+      } catch (error) {
+        await fileIo.rmdir(result.directory).catch((): void => {});
+        throw new Error(error instanceof Error ? error.message : String(error));
+      }
+    }
     if (file.ext === '.txt' || file.ext === '.html' || file.ext === '.htm') {
       const source = await fileIo.open(file.uri, fileIo.OpenMode.READ_ONLY);
       try {
@@ -227,6 +247,53 @@ export class LocalBookImportService {
     } finally { await fileIo.close(file); }
   }
 
+  private static async readMobi(context: common.Context, uri: string,
+    consume?: (text: string, info: MobiBookInfo, percent: number) => Promise<void>,
+    coverDirectory: string = ''): Promise<MobiBookInfo> {
+    try { return await MobiBookParser.read(uri, consume, coverDirectory); }
+    catch (error) {
+      if (error instanceof Error && error.message.startsWith('import_mobi_')) {
+        throw new Error(context.resourceManager.getStringByNameSync(error.message));
+      }
+      throw new Error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private static async importMobi(context: common.Context, book: Book, directory: string,
+    file: LocalImportFile, title: string, author: string, progress: (text: string) => void): Promise<void> {
+    const chunks: string[] = [];
+    const info = await LocalBookImportService.readMobi(context, file.uri,
+      async (text: string, metadata: MobiBookInfo, percent: number): Promise<void> => {
+        if (!title && metadata.title) book.title = metadata.title;
+        chunks.push(text);
+        progress(`${book.title} ${percent}%`);
+      }, book.cover.length === 0 ? directory : '');
+    if (!book.cover) book.cover = info.cover;
+    if (!author && info.author) book.author = info.author;
+    let html = chunks.join('');
+    chunks.length = 0;
+    const body = /<body\b[^>]*>([\s\S]*?)<\/body\s*>/i.exec(html);
+    html = (body === null ? html : body[1]).replace(/<(script|style|head)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+    const boundary = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>|<mbp:pagebreak\b[^>]*\/?\s*>/gi;
+    let match: RegExpExecArray | null = boundary.exec(html);
+    let start = 0;
+    let label = book.title;
+    while (match !== null) {
+      await LocalBookImportService.appendText(book, directory, label,
+        LocalBookImportService.htmlText(html.substring(start, match.index)));
+      if (match[2] !== undefined) {
+        label = LocalBookImportService.htmlText(match[2]).trim().substring(0, 200) || book.title;
+        start = match.index; // Keep the visible heading in the chapter body.
+      } else {
+        label = `${book.title} ${book.chapters.length + 1}`;
+        start = boundary.lastIndex;
+      }
+      match = boundary.exec(html);
+    }
+    await LocalBookImportService.appendText(book, directory, label,
+      LocalBookImportService.htmlText(html.substring(start)));
+  }
+
   static async importBook(context: common.Context, file: LocalImportFile, id: string,
     title: string, author: string, cover: string, progress: (text: string) => void): Promise<Book> {
     const directory = `${context.filesDir}/ebooks/${id}`;
@@ -245,7 +312,9 @@ export class LocalBookImportService {
       }
       const size = await LocalBookImportService.fileSize(file.uri);
       await LocalBookImportService.requireSpace(context, size * 3);
-      if (file.ext === '.epub') {
+      if (file.ext === '.mobi') {
+        await LocalBookImportService.importMobi(context, book, directory, file, title, author, progress);
+      } else if (file.ext === '.epub') {
         if (size > 512 * 1024 * 1024) throw new Error('EPUB 超过 512 MiB');
         const archive = `${directory}/source.zip`;
         const epub = `${directory}/source.epub`;

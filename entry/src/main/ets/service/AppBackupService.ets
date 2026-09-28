@@ -17,6 +17,7 @@ import {
 import { BookUsageStats, StatsService } from './StatsService';
 import { DataService } from './DataService';
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
+import { LocalRuleSourceImportService } from './rulesource/LocalRuleSourceImportService';
 import { GuangYuSourceIdentity } from './rulesource/guangyu/GuangYuSourceIdentity';
 import { ShuShanSourceIdentity } from './rulesource/shushan/ShuShanSourceIdentity';
 import { SourceDataService } from './SourceDataService';
@@ -209,7 +210,7 @@ export class AppBackupService {
       if (localSources.length > 0) {
         try {
           await LocalRuleSourceRepository.init(context);
-          const restoredCount = await LocalRuleSourceRepository.upsertImportedBatch(localSources);
+          const restoredCount = await LocalRuleSourceImportService.importSources(localSources);
           if (restoredCount < localSources.length) {
             console.info(`[AppBackupService] skipped ${localSources.length - restoredCount} locked sources`);
           }
@@ -252,6 +253,8 @@ export class AppBackupService {
       !AppBackupService.optionalText(prefs.accentColor) ||
       !AppBackupService.optionalNumber(prefs.materialStyle) ||
       !AppBackupService.optionalNumber(prefs.preloadChapters) ||
+      (prefs.searchConcurrency !== undefined && (typeof prefs.searchConcurrency !== 'number' ||
+        !Number.isInteger(prefs.searchConcurrency) || prefs.searchConcurrency < 1 || prefs.searchConcurrency > 12)) ||
       (prefs.autoPlayOnLaunch !== undefined && typeof prefs.autoPlayOnLaunch !== 'boolean')) return AppBackupService.invalidSnapshot('preferences.settings');
     if (prefs.lastPlayed && !AppBackupService.validLastPlayed(prefs.lastPlayed)) {
       return AppBackupService.invalidSnapshot('preferences.lastPlayed');

@@ -54,7 +54,36 @@ function load() {
   } }, { filename: file });
   return exports.ReaderFontService;
 }
+
+function verifyPaginatorFonts() {
+  let measuredStyle;
+  const graphicsText = {
+    TextAlign: { START: 0 }, WordBreak: { BREAK_WORD: 0 }, BreakStrategy: { GREEDY: 0 },
+    FontCollection: { getGlobalInstance: () => ({}) },
+    ParagraphBuilder: class {
+      constructor(style) { measuredStyle = style.textStyle; }
+      pushStyle() {}
+      addText() {}
+      popStyle() {}
+      build() { return { layoutSync() {}, getLineMetrics: () => [{ startIndex: 0, height: 24 }] }; }
+    }
+  };
+  const file = path.resolve(__dirname, '../entry/src/main/ets/service/text/OnlineTextPaginator.ets');
+  const exports = {};
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
+  }).outputText, { exports, require: () => ({ text: graphicsText }) }, { filename: file });
+  const { OnlineTextPaginator: paginator } = exports;
+  paginator.paginate('System font text', 300, 500, 18, 1.9);
+  assert.deepEqual(Array.from(measuredStyle.fontFamilies), [], 'default pagination lets the system choose its current font');
+  paginator.paginate('System font text', 300, 500, 18, 1.9, '');
+  assert.deepEqual(Array.from(measuredStyle.fontFamilies), [], 'system selection does not pin a named font');
+  paginator.paginate('Imported font text', 300, 500, 18, 1.9, 'ReaderFont_Custom');
+  assert.deepEqual(Array.from(measuredStyle.fontFamilies), ['ReaderFont_Custom'], 'imported font remains explicitly selected');
+}
+
 (async () => {
+  verifyPaginatorFonts();
   const context = { filesDir: temp };
   let service = load();
   assert.equal((await service.list(context)).length, 0);
@@ -89,6 +118,6 @@ function load() {
   await assert.rejects(service.remove(context, `${temp}/Test-0.ttf`));
   assert.ok(fs.existsSync(`${temp}/Test-0.ttf`), 'cannot delete outside the font library');
   assert.equal(handles.size, 0);
-  console.log('PASS: five-font selection, unique files, retained library, restart, partial failure, cancellation');
+  console.log('PASS: system/custom pagination fonts, five-font selection, unique files, retained library, restart, partial failure, cancellation');
 })().catch(error => { console.error(error); process.exitCode = 1; })
   .finally(() => fs.rmSync(temp, { recursive: true, force: true }));

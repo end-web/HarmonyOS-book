@@ -27,15 +27,19 @@ function compile(relative, source) {
   }).outputText, { exports, require: name => mocks[name] || {}, setTimeout, clearTimeout, ScrollAlign: { START: 0 } }, { filename });
   return exports;
 }
+mocks['../utils/ReaderTapPolicy'] = compile('utils/ReaderTapPolicy');
 mocks['./ReaderTheme'] = compile('model/ReaderTheme');
 const model = compile('model/TextReading');
 mocks['../model/TextReading'] = model;
 mocks['../../model/TextReading'] = model;
 mocks['../service/text/OnlineTextPaginator'] = compile('service/text/OnlineTextPaginator');
+mocks['./OnlineTextPaginator'] = mocks['../service/text/OnlineTextPaginator'];
 const { TextReadingProgressService: progress } = compile('service/text/TextReadingProgressService');
 mocks['../service/text/TextReadingProgressService'] = { TextReadingProgressService: progress };
+mocks['../service/text/ReaderFontService'] = { ReaderFontService: { register: () => 'ReaderFont_Custom' } };
 let source = fs.readFileSync(path.join(root, 'pages/ReaderPage.ets'), 'utf8');
 source = source.slice(0, source.search(/\s*@Builder\s+readerTabStyle\(/)) + '\n}';
+source = source.replace(/^  @Builder[\s\S]*?^  }\r?$/gm, '');
 source = source.replace('@ComponentV2', '').replace('export struct', 'export class')
   .replace(/@(Param|Local)\s+/g, '');
 const { ReaderPage } = compile('pages/ReaderPage', source);
@@ -64,6 +68,48 @@ function reader() {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
+  const fontPage = reader();
+  fontPage.fontPath = '/files/reader_fonts/custom.ttf';
+  fontPage.fontName = 'Custom';
+  fontPage.fontFamily = 'ReaderFont_Custom';
+  fontPage.saveReadingSettings = () => {};
+  fontPage.selectReaderFont({ path: '', name: '' });
+  assert.equal(fontPage.fontFamily, '', 'system selection removes the imported font override');
+  assert.equal(fontPage.fontPath, '');
+  assert.equal(fontPage.currentPosition.charOffset, 100, 'system font reflow preserves the reading position');
+  fontPage.selectReaderFont({ path: '/files/reader_fonts/custom.ttf', name: 'Custom' });
+  assert.equal(fontPage.fontFamily, 'ReaderFont_Custom');
+  assert.equal(fontPage.currentPosition.charOffset, 100);
+
+  const typographyStart = source.indexOf('  private systemTypographyKey:');
+  const typographyEnd = source.indexOf('  aboutToAppear()', typographyStart);
+  assert.ok(typographyStart >= 0 && typographyEnd > typographyStart);
+  const { Typography } = compile('pages/ReaderPage', `import { OnlineTextPaginator } from '../service/text/OnlineTextPaginator';
+  export class Typography {
+    ${source.slice(typographyStart, typographyEnd)}
+  }`);
+  const typography = new Typography();
+  let typographyReflows = 0;
+  Object.assign(typography, {
+    context: { config: { fontId: 'system-A', fontSizeScale: 1, fontWeightScale: 1 } },
+    leaving: false, systemTypographyRevision: 0,
+    scheduleReaderSettingsRefresh() { typographyReflows++; }
+  });
+  typography.systemTypographyKey = typography.currentSystemTypographyKey();
+  typography.typographyChangeHandler();
+  assert.equal(typographyReflows, 0, 'foreground without a font change keeps the existing layout');
+  typography.context.config.fontId = 'system-B';
+  typography.typographyChangeHandler();
+  assert.equal(typographyReflows, 1, 'system font changes schedule a reflow');
+  assert.equal(typography.systemTypographyRevision, 1, 'font change invalidates captured page turns');
+  typography.context.config.fontSizeScale = 1.2;
+  typography.typographyChangeHandler();
+  assert.equal(typographyReflows, 2, 'system text scaling also refreshes layout');
+  typography.leaving = true;
+  typography.context.config.fontId = 'system-C';
+  typography.typographyChangeHandler();
+  assert.equal(typographyReflows, 2, 'disposed reader ignores subsequent font changes');
+
   const stable = reader();
   let layoutRefreshes = 0;
   Object.assign(stable, {
@@ -79,6 +125,25 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(layoutRefreshes, 1, 'a real window resize must still refresh pagination');
 
   const page = reader();
+  const dragging = reader();
+  let reflows = 0;
+  let saves = 0;
+  Object.assign(dragging, { fontSize: 18, lineHeight: 1.9,
+    cancelReaderSettingsRefresh() {}, applyReadingSettings() { reflows++; }, saveReadingSettings() { saves++; } });
+  for (let size = 19; size <= 35; size++) dragging.handleFontSizeChange(size, false);
+  assert.equal(reflows, 0, 'slider movement must not synchronously repaginate the chapter');
+  assert.equal(dragging.fontSize, 18, 'mounted text keeps its previous geometry while dragging');
+  assert.equal(dragging.previewFontSize, 35);
+  dragging.handleFontSizeChange(35, true);
+  assert.equal(reflows, 1);
+  assert.equal(saves, 1);
+  assert.equal(dragging.fontSize, 35);
+  assert.equal(dragging.previewFontSize, 0);
+  dragging.handleLineHeightChange(2.2, false);
+  assert.equal(reflows, 1);
+  dragging.handleLineHeightChange(2.2, true);
+  assert.equal(reflows, 2);
+  assert.equal(dragging.currentPosition.charOffset, 100);
   for (let repeat = 0; repeat < 3; repeat++) {
     page.paginateOnlineTextContent = () => expanded;
     page.repaginateOnlineText();
@@ -132,7 +197,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   let positioned = -1;
   let reported = -1;
   Object.assign(continuous, {
-    contentWidth: 360, disposed: false, serial: 0, restoreTimer: -1,
+    contentWidth: 360, disposed: false, serial: 0, restoreTimer: -1, positionTimer: -1,
     chapters: [makeChapter(9), makeChapter(10), makeChapter(11)],
     chapterIndex: 10, charOffset: 150, content, source: new scrollModel.OnlineTextScrollDataSource(),
     makeChapter, scroller: { scrollToIndex: index => { positioned = index; } },
@@ -150,5 +215,37 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
   continuous.visibleChanged(positioned, positioned + 2);
   continuous.reportPosition(true);
   assert.equal(reported, 10, 'font change stays in the current chapter');
-  console.log('PASS: repeated Home/layout restoration, saved-position reload, confirmed cross-chapter turn, cancelled drag, deliberate page turn');
+  let positionReports = 0;
+  let persisted = false;
+  continuous.onPosition = (_chapter, _offset, _content, persist) => { positionReports++; persisted = persist; };
+  for (let i = 0; i < 20; i++) continuous.visibleChanged(positioned, positioned + 2);
+  assert.equal(positionReports, 0, 'scroll callbacks must not synchronously update the parent');
+  await new Promise(resolve => setTimeout(resolve, 180));
+  assert.equal(positionReports, 1, 'rapid scroll callbacks share one progress update');
+  continuous.visibleChanged(positioned, positioned + 2);
+  continuous.backgroundHandler = () => continuous.reportPosition(true);
+  continuous.aboutToAppear();
+  events.emit('app.reader.background');
+  assert.equal(persisted, true, 'backgrounding immediately persists the latest visible position');
+  assert.equal(continuous.positionTimer, -1, 'background flush cancels pending progress update');
+  continuous.aboutToDisappear();
+  const short = Object.create(ReaderContinuousComponent.prototype);
+  Object.assign(short, {
+    contentWidth: 360, contentHeight: 800, rowHeight: 34, disposed: false, serial: 0,
+    restoreTimer: -1, positionTimer: -1, chapters: [], chapterIndex: 0, charOffset: 0,
+    chapterCount: 30, chapterStep: 1, content: '短章', source: new scrollModel.OnlineTextScrollDataSource(),
+    makeChapter: index => scrollModel.OnlineTextScrollChapter.create(index, `short-${index}`, '扉页', '短章',
+      [mocks['./OnlineTextPaginator'].OnlineTextPage.of('短章', 0, 2)]),
+    scroller: { scrollToIndex() {} }, getContent: async () => '短章', onPosition() {}, backgroundHandler() {}
+  });
+  short.reset();
+  short.visibleChanged(0, 1);
+  assert.equal(short.restoring, true, 'ignore callbacks before restore scroll is issued');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(short.chapters.length > 5, 'short chapters fill the viewport even while restoring');
+  assert.ok(short.chapters.length <= short.chapterLimit(), 'loading stays bounded');
+  short.visibleChanged(0, short.source.totalCount() - 1);
+  assert.equal(short.restoring, false, 'bottom-clamped target visible on screen releases restore lock');
+  short.aboutToDisappear();
+  console.log('PASS: system/custom font selection, typography changes, repeated Home/layout restoration, saved-position reload, confirmed cross-chapter turn, cancelled drag, deliberate page turn');
 })().catch(error => { console.error(error); process.exitCode = 1; });

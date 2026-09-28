@@ -2,6 +2,7 @@ import { OnlineTextPage } from './OnlineTextPaginator';
 
 /** 连续阅读的可见行；字符偏移沿用原始正文，键不依赖列表位置。 */
 export class OnlineTextScrollRow {
+  page: OnlineTextPage = new OnlineTextPage();
   key: string = '';
   chapterIndex: number = 0;
   startOffset: number = 0;
@@ -29,7 +30,8 @@ export class OnlineTextScrollChapter {
     chapter.rows.push(heading);
     for (const line of lines) {
       const row = new OnlineTextScrollRow();
-      row.key = `${key}:${line.startOffset}:${line.endOffset}`;
+      row.page = line;
+      row.key = `${key}:${line.startOffset}:${line.endOffset}:${line.layoutKey}`;
       row.chapterIndex = index;
       row.startOffset = line.startOffset;
       row.endOffset = line.endOffset;

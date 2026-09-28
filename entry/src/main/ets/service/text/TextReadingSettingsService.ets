@@ -1,3 +1,4 @@
+import { ReaderTapPolicy } from '../../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { TextReadingSettings } from '../../model/TextReading';
@@ -58,6 +59,24 @@ export class TextReadingSettingsService {
       TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
     const result = TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
       pageTurnMode, showReadingStatus);
+    const alignment = store.getSync('text_alignment', 'justify');
+    result.textAlignment = TextReadingSettings.normalizeTextAlignment(typeof alignment === 'string' ? alignment : 'justify');
+    const tapLeftPercent = store.getSync('tapLeftPercent', 33);
+    result.tapLeftPercent = ReaderTapPolicy.percent(typeof tapLeftPercent === 'number' ? tapLeftPercent : 33);
+    const tapRightPercent = store.getSync('tapRightPercent', 33);
+    result.tapRightPercent = ReaderTapPolicy.percent(typeof tapRightPercent === 'number' ? tapRightPercent : 33, result.tapLeftPercent);
+    const tapTopPercent = store.getSync('tapTopPercent', 33);
+    result.tapTopPercent = ReaderTapPolicy.percent(typeof tapTopPercent === 'number' ? tapTopPercent : 33);
+    const tapBottomPercent = store.getSync('tapBottomPercent', 33);
+    result.tapBottomPercent = ReaderTapPolicy.percent(typeof tapBottomPercent === 'number' ? tapBottomPercent : 33, result.tapTopPercent);
+    result.showHeader = store.getSync('showHeader', true) !== false;
+    result.showFooter = store.getSync('showFooter', true) !== false;
+    result.showChapterTitle = store.getSync('showChapterTitle', true) !== false;
+    result.showPageNumber = store.getSync('showPageNumber', true) !== false;
+    result.showChapterNumber = store.getSync('showChapterNumber', true) !== false;
+    result.showBookName = store.getSync('showBookName', true) !== false;
+    const tapRegions = store.getSync('tap_regions', ReaderTapPolicy.DEFAULT);
+    result.tapRegions = ReaderTapPolicy.normalize(typeof tapRegions === 'string' ? tapRegions : ReaderTapPolicy.DEFAULT);
     const statusBar = store.getSync(KEY_ALWAYS_SHOW_STATUS_BAR, TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT);
     result.alwaysShowStatusBar = typeof statusBar === 'boolean' ? statusBar :
       TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
@@ -88,6 +107,18 @@ export class TextReadingSettingsService {
     await TextReadingSettingsService.init(context);
     const store = TextReadingSettingsService.store;
     if (store === null) return;
+    store.putSync('tapLeftPercent', settings.tapLeftPercent);
+    store.putSync('tapRightPercent', settings.tapRightPercent);
+    store.putSync('tapTopPercent', settings.tapTopPercent);
+    store.putSync('tapBottomPercent', settings.tapBottomPercent);
+    store.putSync('showHeader', settings.showHeader);
+    store.putSync('showFooter', settings.showFooter);
+    store.putSync('showChapterTitle', settings.showChapterTitle);
+    store.putSync('showPageNumber', settings.showPageNumber);
+    store.putSync('showChapterNumber', settings.showChapterNumber);
+    store.putSync('showBookName', settings.showBookName);
+    store.putSync('tap_regions', ReaderTapPolicy.normalize(settings.tapRegions));
+    store.putSync('text_alignment', TextReadingSettings.normalizeTextAlignment(settings.textAlignment));
     store.putSync(KEY_FONT_SIZE, TextReadingSettings.normalizeFontSize(settings.fontSize));
     store.putSync(KEY_LINE_HEIGHT, TextReadingSettings.normalizeLineHeight(settings.lineHeight));
     store.putSync(KEY_THEME_ID, TextReadingSettings.normalizeThemeId(settings.themeId));

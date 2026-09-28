@@ -1,6 +1,6 @@
 import { ReaderImportedFont } from '../service/text/ReaderFontService';
 import { PlatformCompat } from '../utils/PlatformCompat';
-import { AppColor, AppMaterial } from '../theme/Theme';
+import { AppMaterial } from '../theme/Theme';
 
 class ReaderFontDataSource implements IDataSource {
   private fonts: ReaderImportedFont[] = [];
@@ -61,7 +61,7 @@ export struct ReaderFontTabs {
             Text(font.path.length > 0 ? font.name : $r('app.string.reader_system_font'))
               .fontSize(16).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
               .layoutWeight(1).height(48)
-              .fontColor(font.path === this.selectedPath ? AppColor.Brand : $r('sys.color.font_primary'))
+              .fontColor($r('sys.color.font_primary'))
               .onClick((): void => { this.expanded = false; this.onSelect(font); })
             if (font.path.length > 0) {
               Button({ type: ButtonType.Circle }) {
@@ -71,7 +71,7 @@ export struct ReaderFontTabs {
               .onClick((): void => { this.pendingDelete = font; this.expanded = false; })
             }
           }.padding({ left: 12, right: 4 }).width('100%')
-            .backgroundColor(font.path === this.selectedPath ? AppColor.BrandSoft : Color.Transparent)
+            .backgroundColor(font.path === this.selectedPath ? $r('sys.color.comp_background_tertiary') : Color.Transparent)
         }
       }, (font: ReaderImportedFont): string => font.path || 'system')
     }.width(260).height(Math.min(288, (this.fonts.length + 1) * 48))
@@ -80,9 +80,9 @@ export struct ReaderFontTabs {
 
   build() {
     Row({ space: 8 }) {
-      Text(this.selectedName()).fontSize(16).fontColor(AppColor.Brand)
+      Text(this.selectedName()).fontSize(16).fontColor($r('sys.color.font_primary'))
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-      SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([AppColor.Brand])
+      SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([$r('sys.color.font_primary')])
     }.width('100%').height(40).padding({ left: 12, right: 12 }).borderRadius(20)
       .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
       .onClick((): void => { this.expanded = !this.expanded; })

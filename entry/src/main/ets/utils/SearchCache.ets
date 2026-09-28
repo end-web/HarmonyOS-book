@@ -1,4 +1,4 @@
-import { Book } from '../model/Book';
+import { Book, Chapter } from '../model/Book';
 
 /** 最大缓存条目数，防止内存无限增长 */
 const MAX_CACHE_SIZE = 80;
@@ -48,6 +48,21 @@ export class SearchCache {
 
   static clear(): void {
     searchCache.clear();
+  }
+
+  static invalidateSources(sourceUrls: Set<string>,
+    beforeInvalidate?: (bookId: string, chapters: Chapter[]) => void): string[] {
+    const ids: string[] = [];
+    for (const book of searchCache.values()) {
+      if (!sourceUrls.has(book.sourceUrl)) continue;
+      if (beforeInvalidate !== undefined) beforeInvalidate(book.id, book.chapters);
+      book.chapters = [];
+      book.tocComplete = false;
+      book.variables = {};
+      book.totalDuration = 0;
+      ids.push(book.id);
+    }
+    return ids;
   }
 
   static size(): number {

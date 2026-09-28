@@ -10,6 +10,7 @@ import { Book, Chapter, AudioSource } from '../model/Book';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { WindowUtils } from '../utils/WindowUtils';
+import { FileOpenRouting } from '../utils/FileOpenRouting';
 
 export const EVT_SWITCH_TAB = 'app.nav.switchTab';
 const TAB_INDEX_FAVORITE = 1;
@@ -36,6 +37,9 @@ class ImportFileDataSource implements IDataSource {
 @ComponentV2
 export struct ImportPage {
   @Param navStack: NavPathStack = new NavPathStack();
+  @Param importFileUri: string = '';
+  @Param importFileType: string = '';
+  private externalImportConsumed: boolean = false;
   @Local bookTitle: string = '';
   @Local bookAuthor: string = '';
   @Local pickedFiles: PickedFile[] = [];
@@ -56,6 +60,15 @@ export struct ImportPage {
 
   aboutToAppear(): void {
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.disposed = false;
+    if (this.importFileUri.length > 0 && !this.externalImportConsumed) {
+      this.externalImportConsumed = true;
+      this.addPickedUris([this.importFileUri], this.importFileType).catch((): void => {
+        if (!this.disposed && this.context !== null) {
+          this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_external_failed').id);
+        }
+      });
+    }
   }
 
   aboutToDisappear(): void {
@@ -106,25 +119,34 @@ export struct ImportPage {
     try {
       const opt = new picker.DocumentSelectOptions();
       opt.maxSelectNumber = 500;
-      opt.fileSuffixFilters = ['音频、电子书、ZIP|.mp3,.m4a,.flac,.wav,.ogg,.aac,.txt,.epub,.html,.htm,.zip'];
+      opt.fileSuffixFilters = [this.context!.resourceManager.getStringSync($r('app.string.import_file_filter').id)];
       const dp = new picker.DocumentViewPicker(this.context!);
       const uris = await dp.select(opt);
       if (!uris || uris.length === 0) return;
-      const files: PickedFile[] = this.pickedFiles.slice();
-      for (const uri of uris) {
-        const name = this.extractFileName(uri);
-        const ext = this.extractExt(uri);
-        if (!files.some((file: PickedFile): boolean => file.uri === uri)) {
-          const file = new PickedFile();
-          file.uri = uri; file.name = name; file.ext = ext;
-          files.push(file);
-        }
-      }
-      this.pickedFiles = files;
-      this.fileDataSource.setFiles(files);
-      await this.previewFiles(files);
+      await this.addPickedUris(uris);
     } catch (e) {
       // user cancelled or error
+    }
+  }
+
+  private async addPickedUris(uris: string[], fileType: string = ''): Promise<void> {
+    const files: PickedFile[] = this.pickedFiles.slice();
+    for (const uri of uris) {
+      const ext = FileOpenRouting.extension(uri, fileType);
+      if (ext !== '.zip' && !LocalBookImportService.TEXT_EXTS.includes(ext) && !this.isAudioExt(ext)) continue;
+      if (files.some((file: PickedFile): boolean => file.uri === uri)) continue;
+      const fullName = FileOpenRouting.fileName(uri);
+      const file = new PickedFile();
+      file.uri = uri;
+      file.ext = ext;
+      file.name = fullName.toLowerCase().endsWith(ext) ? fullName.substring(0, fullName.length - ext.length) : fullName;
+      files.push(file);
+    }
+    this.pickedFiles = files;
+    this.fileDataSource.setFiles(files);
+    await this.previewFiles(files);
+    if (files.length === 0 && this.context !== null && !this.disposed) {
+      this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_external_failed').id);
     }
   }
 
@@ -150,16 +172,6 @@ export struct ImportPage {
       this.coverPath = dest;
     } catch (e) {
       // cancelled
-    }
-  }
-
-  private extractFileName(uri: string): string {
-    try {
-      const fullName = new fileUri.FileUri(uri).name;
-      const dotIdx = fullName.lastIndexOf('.');
-      return dotIdx > 0 ? fullName.substring(0, dotIdx) : fullName;
-    } catch (_e) {
-      return '';
     }
   }
 

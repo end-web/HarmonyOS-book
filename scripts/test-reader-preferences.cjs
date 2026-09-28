@@ -12,6 +12,8 @@ let flushes = 0;
 const preferences = { getPreferences: async () => ({
   getSync: (key, fallback) => values.has(key) ? values.get(key) : fallback,
   putSync: (key, value) => values.set(key, value),
+  getAll: async () => Object.fromEntries(values),
+  deleteSync: key => values.delete(key),
   flush: async () => { flushes++; }
 }) };
 const cache = new Map();
@@ -23,8 +25,10 @@ function load(relative) {
   const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
   }).outputText;
-  vm.runInNewContext(code, { exports, require: name => {
+  vm.runInNewContext(code, { exports, ObservedV2: value => value, Trace: () => {}, require: name => {
     if (name === '@kit.ArkData') return { preferences };
+    if (name === '@kit.BasicServicesKit') return { emitter: { emit() {} } };
+    if (name === './TextToSpeechService') return { TextToSpeechService: { reloadSettings: async () => {} } };
     if (name.startsWith('@')) return {};
     return load(path.resolve(path.dirname(filename), name));
   }, console }, { filename });
@@ -32,10 +36,13 @@ function load(relative) {
 }
 (async () => {
   const { TextReadingSettings, PageTurnMode } = load('model/TextReading');
+  assert.equal(new TextReadingSettings().textAlignment, 'justify');
+  assert.equal(TextReadingSettings.normalizeTextAlignment('invalid'), 'justify');
   const { TextReadingSettingsService: service } = load('service/text/TextReadingSettingsService');
   values.set('font_size', 22); // Existing installations have no new preference keys.
   const migrated = await service.get({});
   assert.equal(migrated.fontSize, 22);
+  assert.equal(migrated.textAlignment, 'justify', 'legacy preferences default to justified text');
   assert.equal(migrated.marginLeft, migrated.marginRight);
   assert.equal(migrated.followSystemTheme, false);
   assert.equal(migrated.alwaysShowStatusBar, true, 'existing installations show the status bar by default');
@@ -90,6 +97,13 @@ function load(relative) {
   typography.screenOnMinutes = 5;
   await service.save({}, typography);
   const fontRestored = await service.get({});
+  for (const alignment of ['justify', 'start', 'center', 'end']) {
+    typography.textAlignment = alignment;
+    await service.save({}, typography);
+    assert.equal((await service.get({})).textAlignment, alignment);
+  }
+  values.set('text_alignment', 'invalid');
+  assert.equal((await service.get({})).textAlignment, 'justify');
   for (const field of ['fontSize', 'lineHeight', 'fontWeight', 'fontColor', 'fontName', 'fontPath',
     'themeId', 'customBackground', 'screenOnMinutes']) assert.equal(fontRestored[field], typography[field], field);
   assert.equal(TextReadingSettings.normalizeFontSize(100), 50);
@@ -102,5 +116,16 @@ function load(relative) {
     await service.save({}, typography);
     assert.equal((await service.get({})).screenOnMinutes, minutes);
   }
-  console.log('PASS: legacy preferences, vertical mode, four margins, system theme, invalid values, reset, custom typography/colors/fonts, screen timeout');
+  const { ReadingBackupService: backup } = load('service/text/ReadingBackupService');
+  typography.textAlignment = 'end';
+  await service.save({}, typography);
+  const snapshot = await backup.createSnapshot({});
+  assert.equal(snapshot.settings.textAlignment, 'end');
+  await service.save({}, new TextReadingSettings());
+  await backup.restoreSnapshot({}, snapshot);
+  assert.equal((await service.get({})).textAlignment, 'end');
+  delete snapshot.settings.textAlignment;
+  await backup.restoreSnapshot({}, snapshot);
+  assert.equal((await service.get({})).textAlignment, 'justify', 'old backups adopt justified text');
+  console.log('PASS: settings migration/reset, four alignments, persistence, backup round trip, legacy backup, typography and margins');
 })().catch(error => { console.error(error); process.exitCode = 1; });

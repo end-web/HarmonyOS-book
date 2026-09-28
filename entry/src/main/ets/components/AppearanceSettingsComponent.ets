@@ -1,3 +1,4 @@
+import { ImmersiveActionButton } from './ImmersiveActionButton';
 import { ImmersiveOptionTabs } from './ImmersiveOptionTabs';
 import { AppAppearance } from '../model/AppAppearance';
 import { PreferenceService } from '../service/PreferenceService';
@@ -125,11 +126,10 @@ export struct AppearanceSettingsComponent {
             this.colorInvalid = false;
           })
           .onSubmit(() => this.applyCustomAccent())
-        Button($r('app.string.appearance_apply'))
-          .backgroundColor(AppColor.Brand)
-          .fontColor(AppColor.OnBrand)
-          .enabled(!this.saving)
-          .onClick(() => this.applyCustomAccent())
+        ImmersiveActionButton({
+          textSize: AppFont.Body,
+          onPress: (): void => this.applyCustomAccent()
+        }).width(72).enabled(!this.saving)
       }
       .width('100%')
       if (this.colorInvalid) {

@@ -30,6 +30,7 @@ const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
 /** 搜索历史记录 */
 const KEY_SEARCH_HISTORY = 'search_history_v1';
+const KEY_SEARCH_CONCURRENCY = 'search_concurrency';
 const MAX_SEARCH_HISTORY = 20;
 /** 卡片侧持久化的播放快照(由主进程写,FormExtensionAbility 读) */
 const KEY_WIDGET_PLAYER_SNAPSHOT = 'widget_player_snapshot_v1';
@@ -97,6 +98,7 @@ export class PreferenceBackupSnapshot {
   audioAutoResume: boolean = true;
   homeGridColumns: number = 3;
   preloadChapters: number = 1;
+  searchConcurrency: number = 6;
 }
 
 /**
@@ -857,6 +859,28 @@ export class PreferenceService {
     await s.flush();
   }
 
+  static async getSearchConcurrency(): Promise<number> {
+    const s = await PreferenceService.ensureStore();
+    const count = await s.get(KEY_SEARCH_CONCURRENCY, 6);
+    return typeof count === 'number' && Number.isInteger(count) && count >= 1 && count <= 12 ? count : 6;
+  }
+
+  static async setSearchConcurrency(count: number): Promise<void> {
+    if (!Number.isInteger(count) || count < 1 || count > 12) {
+      throw new Error('Search concurrency must be an integer from 1 to 12');
+    }
+    const s = await PreferenceService.ensureStore();
+    const previous = await PreferenceService.getSearchConcurrency();
+    await s.put(KEY_SEARCH_CONCURRENCY, count);
+    try {
+      await s.flush();
+    } catch (error) {
+      await s.put(KEY_SEARCH_CONCURRENCY, previous);
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
+  }
+
   /** 获取搜索历史 */
   static async setSearchHistory(history: string[]): Promise<void> {
     const s = await PreferenceService.ensureStore();
@@ -946,6 +970,7 @@ export class PreferenceService {
     snapshot.audioAutoResume = await PreferenceService.getAudioAutoResume();
     snapshot.homeGridColumns = await PreferenceService.getHomeGridColumns();
     snapshot.preloadChapters = await PreferenceService.getPreloadChapters();
+    snapshot.searchConcurrency = await PreferenceService.getSearchConcurrency();
     const s = await PreferenceService.ensureStore();
     const all = await s.getAll() as Record<string, Object>;
     for (const key of Object.keys(all)) {
@@ -1045,6 +1070,9 @@ export class PreferenceService {
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
     await s.put(KEY_PRELOAD_CHAPTERS, Number.isFinite(snapshot.preloadChapters) ?
       Math.max(0, Math.min(50, Math.round(snapshot.preloadChapters))) : 1);
+    await s.put(KEY_SEARCH_CONCURRENCY, typeof snapshot.searchConcurrency === 'number' &&
+      Number.isInteger(snapshot.searchConcurrency) && snapshot.searchConcurrency >= 1 &&
+      snapshot.searchConcurrency <= 12 ? snapshot.searchConcurrency : 6);
     await s.flush();
     AppAppearance.current.material = material;
     AppAppearance.current.accent = accent;

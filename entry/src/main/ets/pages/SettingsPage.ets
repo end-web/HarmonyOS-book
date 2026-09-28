@@ -1,3 +1,4 @@
+import { ImmersiveActionButton } from '../components/ImmersiveActionButton';
 import { ImmersiveOptionTabs } from '../components/ImmersiveOptionTabs';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
@@ -63,6 +64,7 @@ const PRELOAD_OPTIONS: PreloadOption[] = [
 ];
 
 const ROW_INDENT: number = AppSpace.Md;
+const SEARCH_CONCURRENCY_OPTIONS: number[] = [3, 6, 9, 12];
 
 @ComponentV2
 export struct SettingsPage {
@@ -77,6 +79,10 @@ export struct SettingsPage {
   @Local preloadCount: number = 1;
   @Local preloadDraft: string = '1';
   @Local preloadCustom: boolean = false;
+  @Local searchConcurrency: number = 6;
+  @Local searchConcurrencyDraft: string = '6';
+  @Local searchConcurrencyCustom: boolean = false;
+  @Local isSavingSearchConcurrency: boolean = false;
   @Local isLoaded: boolean = false;
   @Local isClearingCache: boolean = false;
   @Local isClearingBookshelf: boolean = false;
@@ -134,6 +140,9 @@ export struct SettingsPage {
     this.preloadCount = await PreferenceService.getPreloadChapters();
     this.preloadDraft = this.preloadCount.toString();
     this.preloadCustom = !PRELOAD_OPTIONS.some((opt: PreloadOption): boolean => opt.count === this.preloadCount);
+    this.searchConcurrency = await PreferenceService.getSearchConcurrency();
+    this.searchConcurrencyDraft = this.searchConcurrency.toString();
+    this.searchConcurrencyCustom = !SEARCH_CONCURRENCY_OPTIONS.includes(this.searchConcurrency);
     this.isLoaded = true;
   }
 
@@ -183,6 +192,36 @@ export struct SettingsPage {
     this.preloadDraft = count.toString();
     await PreferenceService.setPreloadChapters(count);
     ChapterCacheService.getInstance().setPreloadCount(count);
+  }
+
+  private submitSearchConcurrency(): void {
+    const count = Number(this.searchConcurrencyDraft);
+    if (!new RegExp('^[0-9]+$').test(this.searchConcurrencyDraft) ||
+      !Number.isInteger(count) || count < 1 || count > 12) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_search_concurrency_range') });
+      return;
+    }
+    this.setSearchConcurrency(count, true);
+  }
+
+  private async setSearchConcurrency(count: number, custom: boolean): Promise<void> {
+    if (this.isSavingSearchConcurrency) return;
+    const previous = this.searchConcurrency;
+    const previousCustom = this.searchConcurrencyCustom;
+    this.isSavingSearchConcurrency = true;
+    try {
+      await PreferenceService.setSearchConcurrency(count);
+      this.searchConcurrency = count;
+      this.searchConcurrencyDraft = count.toString();
+      this.searchConcurrencyCustom = custom;
+    } catch (error) {
+      this.searchConcurrencyDraft = previous.toString();
+      this.searchConcurrencyCustom = previousCustom;
+      hilog.warn(0xFF00, 'SettingsPage', 'Save search concurrency failed: %{public}s', String(error));
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_save_failed') });
+    } finally {
+      this.isSavingSearchConcurrency = false;
+    }
   }
 
   private async clearCache(): Promise<void> {
@@ -333,6 +372,7 @@ export struct SettingsPage {
             this.buildAppearanceGroup()
             this.buildLaunchGroup()
             this.buildPlaybackGroup()
+            this.buildSearchGroup()
           }
           .width('100%')
           .padding({
@@ -509,9 +549,7 @@ export struct SettingsPage {
               .type(InputType.Number).maxLength(2).layoutWeight(1).height(40)
               .onChange((value: string): void => { this.preloadDraft = value; })
               .onSubmit((): void => this.submitPreload())
-            Button($r('app.string.appearance_apply')).fontColor(AppColor.OnBrand).backgroundColor(AppColor.Brand)
-              .fontSize(AppFont.Caption).layoutWeight(0.8).height(40).padding({ left: 4, right: 4 })
-              .onClick((): void => this.submitPreload())
+            ImmersiveActionButton({ onPress: (): void => this.submitPreload() }).layoutWeight(0.8)
           }.width('100%').alignItems(VerticalAlign.Center)
         }.width('100%').padding(ROW_INDENT)
 
@@ -547,6 +585,48 @@ export struct SettingsPage {
         this.buildActionItem('清空在线收藏与播放记录', '清除在线收藏 / 缓存书 / 播放记录，保留导入和下载', () => this.confirmClearBookshelf(), this.isClearingBookshelf)
       }
       .width('100%')
+      .backgroundColor($r('sys.color.comp_background_primary'))
+      .borderRadius(AppRadius.Lg)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  buildSearchGroup() {
+    Column() {
+      this.buildGroupTitle($r('app.string.settings_search_group'))
+
+      Column({ space: AppSpace.Sm }) {
+        Text($r('app.string.settings_search_concurrency'))
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+          .width('100%')
+        Row({ space: AppSpace.Sm }) {
+          ImmersiveOptionTabs({
+            labels: ['3', '6', '9', '12', $r('app.string.settings_search_custom')],
+            fillWidth: true,
+            selected: this.searchConcurrencyCustom ? 4 : SEARCH_CONCURRENCY_OPTIONS.indexOf(this.searchConcurrency),
+            onSelect: (index: number): void => {
+              if (index === 4) {
+                this.searchConcurrencyCustom = true;
+              } else {
+                this.setSearchConcurrency(SEARCH_CONCURRENCY_OPTIONS[index], false);
+              }
+            }
+          }).layoutWeight(1.5)
+          TextInput({ text: this.searchConcurrencyDraft, placeholder: $r('app.string.settings_search_concurrency_hint') })
+            .type(InputType.Number).maxLength(2).layoutWeight(1).height(40)
+            .onChange((value: string): void => { this.searchConcurrencyDraft = value; })
+            .onSubmit((): void => this.submitSearchConcurrency())
+          ImmersiveActionButton({ onPress: (): void => this.submitSearchConcurrency() }).layoutWeight(0.8)
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .enabled(!this.isSavingSearchConcurrency)
+      }
+      .width('100%')
+      .padding(ROW_INDENT)
       .backgroundColor($r('sys.color.comp_background_primary'))
       .borderRadius(AppRadius.Lg)
     }
