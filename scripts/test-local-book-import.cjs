@@ -27,7 +27,10 @@ const fileIo = {
     return (await handles.get(fd).read(Buffer.from(buffer), 0, options.length, options.offset)).bytesRead;
   },
   async write(fd, text) { return (await handles.get(fd).write(typeof text === 'string' ? text : Buffer.from(text))).bytesWritten; },
-  async copyFile(source, target) { await handles.get(target).writeFile(await handles.get(source).readFile()); },
+  async copyFile(source, target) {
+    if (typeof source === 'string') return fsp.copyFile(source, target);
+    await handles.get(target).writeFile(await handles.get(source).readFile());
+  },
   async mkdir(directory) {
     // HarmonyOS recursive mkdir still reports EEXIST for an existing leaf directory.
     if (fs.existsSync(directory)) throw new Error('File exists');
@@ -118,7 +121,23 @@ function load(relative) {
 (async () => {
   const { LocalBookImportService: service } = load('service/LocalBookImportService');
   const { DataService: data } = load('service/DataService');
-  data.ctx = context; data.migrationPromise = Promise.resolve();
+  await fsp.mkdir(path.join(context.cacheDir, 'cached_toc'), { recursive: true });
+  await fsp.mkdir(path.join(context.filesDir, 'cached_toc'), { recursive: true });
+  const legacyBook = { id: 'migration_book', title: 'current cache', sourceUrl: 'source', bookUrl: 'book', chapters: [] };
+  const legacyChapter = { id: 'migration_chapter', title: 'cached chapter', source: { type: 'url', value: 'chapter' } };
+  await fsp.writeFile(path.join(context.cacheDir, 'cached_books_v1.json'), JSON.stringify([legacyBook]));
+  await fsp.writeFile(path.join(context.cacheDir, 'cached_toc/migration_book.json'), JSON.stringify([legacyChapter]));
+  await fsp.writeFile(path.join(context.filesDir, 'cached_books_v1.json'), JSON.stringify([{ ...legacyBook, title: 'stale' }]));
+  await fsp.writeFile(path.join(context.filesDir, 'cached_toc/migration_book.json'), '[]');
+  data.setContext(context);
+  await data.migrationPromise;
+  await fsp.rm(context.cacheDir, { recursive: true }); await fsp.mkdir(context.cacheDir);
+  assert.equal((await data.getBookById(context, legacyBook.id)).title, 'current cache');
+  assert.equal((await data.getChaptersForBook(legacyBook.id))[0].title, 'cached chapter');
+  await data.clearCachedBooks(); data.cachedBooksMem = null;
+  data.migrationPromise = null;
+  assert.equal(await data.getBookById(context, legacyBook.id), undefined, 'explicit clear cannot resurrect old metadata');
+  console.log('PASS metadata/TOC upgrade prefers current cache, survives system cleanup and respects explicit clear');
   const file = { uri: path.join(temp, 'novel.txt'), name: '小说', ext: '.txt' };
   const source = '第一章 初见\n你好世界\n第二章 重逢\n' + '文字😀'.repeat(20000);
   await fsp.writeFile(file.uri, source);
@@ -271,6 +290,8 @@ function load(relative) {
   await data.upsertCachedBook({ ...online, id: 'audio_history' });
   historyIds.add('audio_history');
   for (let i = 0; i < 205; i++) await data.upsertCachedBook({ ...online, id: 'temporary_' + i });
+  await fsp.rm(context.cacheDir, { recursive: true, force: true });
+  await fsp.mkdir(context.cacheDir);
   data.cachedBooksMem = null;
   const readAgain = await data.getBookById(context, online.id);
   assert.equal(readAgain.title, online.title);
@@ -285,7 +306,7 @@ function load(relative) {
   const other = { ...online, id: 'other_source', sourceUrl: 'other' };
   await data.upsertCachedBook(other);
   const { OnlineTextContentCache: textCache } = load('service/text/OnlineTextContentCache');
-  const textDirectory = path.join(context.cacheDir, 'online_text_content');
+  const textDirectory = path.join(context.filesDir, 'online_text_content');
   await fsp.mkdir(textDirectory, { recursive: true });
   const keys = ['source', 'other'].map(sourceUrl => textCache.key(sourceUrl, 'book', 'chapter'));
   for (const key of keys) await fsp.writeFile(textCache.path(context, key),
@@ -298,7 +319,7 @@ function load(relative) {
   assert.ok(removed.includes(online.id));
   assert.equal(invalidatedChapters.get(online.id).length, online.chapters.length,
     'Disk-only chapters are provided for targeted audio cleanup before the TOC is removed');
-  assert.equal(fs.existsSync(path.join(context.cacheDir, 'cached_toc', online.id + '.json')), false);
+  assert.equal(fs.existsSync(path.join(context.filesDir, 'library_toc', online.id + '.json')), false);
   assert.equal(await textCache.read(context, keys[0]), undefined);
   assert.equal(await textCache.read(context, keys[1]), 'cached text');
   data.cachedBooksMem = null;

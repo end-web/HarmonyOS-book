@@ -9,6 +9,7 @@ import { BookSource } from '../model/BookSource';
 import { AudioRequestInfo, BookSourceService } from './BookSourceService';
 import { SourceDataService } from './SourceDataService';
 import { DownloadPolicy } from './DownloadPolicy';
+import { StorageMigrationService } from './StorageMigrationService';
 import { AudioDownloadTransport } from './AudioDownloadTransport';
 
 const DOMAIN = 0x0001;
@@ -65,6 +66,8 @@ export class ChapterCacheService {
   private runningCount: number = 0;
   private queue: Map<string, () => Promise<void>> = new Map();
   private appContext: common.Context | null = null;
+  private storageMigration: Promise<void> = Promise.resolve();
+  private storageReady: boolean = true;
   private clearGen: number = 0;
   private preloadSuspended: boolean = false;
   private activeDownloads: Map<string, AudioDownloadTransport> = new Map();
@@ -152,6 +155,7 @@ export class ChapterCacheService {
     this.preloadFailureAt.clear();
     this.activeDownloads.clear();
     this.queue.clear();
+    await this.storageMigration;
     const result = new ClearCacheResult();
     const unlinkPromises: Promise<void>[] = [];
     for (const entry of this.fileCache.values()) {
@@ -161,10 +165,10 @@ export class ChapterCacheService {
     const ctx = this.appContext;
     if (ctx) {
       try {
-        const names = await fileIo.listFile(ctx.cacheDir);
+        const names = await fileIo.listFile(ctx.filesDir);
         for (const name of names) {
           if (!name.startsWith('chap_')) continue;
-          const p = `${ctx.cacheDir}/${name}`;
+          const p = `${ctx.filesDir}/${name}`;
           unlinkPromises.push(fileIo.unlink(p).then((): void => { result.deleted++; }).catch((): void => { result.failed++; }));
         }
       } catch (_e) { /* ignore */ }
@@ -211,7 +215,15 @@ export class ChapterCacheService {
 
   setContext(ctx: common.Context): void {
     this.appContext = ctx;
-    this.enforceDiskCacheLimit().catch((): void => { /* 系统缓存目录不可用时交由系统回收 */ });
+    this.storageReady = false;
+    this.storageMigration = StorageMigrationService.migrateFilesWithPrefix(ctx.cacheDir, ctx.filesDir, 'chap_', true)
+      .then((): void => {
+        this.fileCache.clear();
+        this.storageReady = true;
+      });
+    this.storageMigration.then((): Promise<void> => this.enforceDiskCacheLimit()).catch((): void => {
+      hilog.warn(DOMAIN, TAG, 'audio storage migration failed; legacy files retained');
+    });
   }
 
   getAudioUrl(chapterId: string): string | null {
@@ -241,6 +253,7 @@ export class ChapterCacheService {
   }
 
   async waitForAudioFile(book: Book, chapter: Chapter): Promise<string | null> {
+    await this.storageMigration;
     const cached = this.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue || chapter.source.value);
     if (cached !== null) return cached;
     const task = this.fileTasks.get(chapter.id);
@@ -331,6 +344,10 @@ export class ChapterCacheService {
 
   /** 清除某个章节的所有缓存（临时签名 URL 失效时用） */
   clearChapter(chapterId: string, bookId: string = '', pageUrl: string = ''): void {
+    if (!this.storageReady) {
+      this.storageMigration.then((): void => this.clearChapter(chapterId, bookId, pageUrl))
+        .catch((): void => { /* 迁移失败保留旧文件 */ });
+    }
     if (this.pendingTasks.has(`audio_${chapterId}`)) this.invalidatedResolves.add(chapterId);
     this.queue.delete(chapterId);
     this.activeDownloads.get(chapterId)?.cancel();
@@ -475,6 +492,9 @@ export class ChapterCacheService {
     let transport: AudioDownloadTransport | null = null;
     let activePath = '';
     try {
+      if (!this.storageReady) await this.storageMigration;
+      if (capturedGen !== this.clearGen || !this.isPreloadEnabled() ||
+        (this.preloadSuspended && this.priorityChapterId !== chapter.id)) return;
       const pageUrl = chapter.originSourceValue || chapter.source.value;
       const filePath = this.audioFilePath(book.id, pageUrl);
       if (!filePath) return;
@@ -599,7 +619,7 @@ export class ChapterCacheService {
     if (!ctx) return;
     let names: string[] = [];
     try {
-      names = await fileIo.listFile(ctx.cacheDir);
+      names = await fileIo.listFile(ctx.filesDir);
     } catch (_e) {
       return;
     }
@@ -607,7 +627,7 @@ export class ChapterCacheService {
     let totalBytes: number = 0;
     for (const name of names) {
       if (!name.startsWith('chap_') || !name.endsWith('.mp3')) continue;
-      const filePath = `${ctx.cacheDir}/${name}`;
+      const filePath = `${ctx.filesDir}/${name}`;
       try {
         const stat = await fileIo.stat(filePath);
         if (stat.isDirectory()) continue;
@@ -651,12 +671,12 @@ export class ChapterCacheService {
 
   private audioFilePath(bookId: string, pageUrl: string): string | null {
     if (!this.appContext || !bookId || !pageUrl) return null;
-    return `${this.appContext.cacheDir}/chap_${this.hash(bookId + '|' + pageUrl)}.mp3`;
+    return `${this.appContext.filesDir}/chap_${this.hash(bookId + '|' + pageUrl)}.mp3`;
   }
 
   private legacyAudioFilePath(bookId: string, chapterId: string): string | null {
     if (!this.appContext || !bookId || !chapterId) return null;
-    return `${this.appContext.cacheDir}/chap_${this.hash(bookId + '|' + chapterId)}.mp3`;
+    return `${this.appContext.filesDir}/chap_${this.hash(bookId + '|' + chapterId)}.mp3`;
   }
 
   private restoreFileCacheEntry(chapterId: string, pageUrl: string, filePath: string | null): string | null {

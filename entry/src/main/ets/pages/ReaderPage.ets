@@ -61,6 +61,7 @@ const READER_LOG_DOMAIN: number = 0x0000;
 const READER_LOG_TAG: string = 'ReaderPage';
 const READER_FLOATING_BOTTOM: number = 4;
 const READER_MIN_SAFE_BOTTOM: number = 8;
+const READER_LANDSCAPE_TOP_GAP: number = 16;
 /** 手势/悬浮小白条的最大正文避让：只需让过悬浮条本体，不占完整手势区。 */
 const READER_GESTURE_SAFE_MAX: number = 16;
 // 与首页 HdsTabs barFloatingStyle 官方沉浸栏同款视觉参数。
@@ -219,8 +220,8 @@ export struct ReaderPage {
   private onlineTextContent: string = '';
   private onlineTextContentRequests: Map<number, Promise<string>> = new Map();
   private onlineTextLoadSerial: number = 0;
-  private readerViewportWidthVp: number = 0;
-  private readerViewportHeightVp: number = 0;
+  @Local readerViewportWidthVp: number = 0;
+  @Local readerViewportHeightVp: number = 0;
   private readerTextWidthVp: number = 0;
   private readerTextHeightVp: number = 0;
   private readerSettingsRefreshTimerId: number = -1;
@@ -990,8 +991,8 @@ export struct ReaderPage {
     const currentDisplay = display.getDefaultDisplaySync();
     const scaledDensity = currentDisplay.scaledDensity > 0 ? currentDisplay.scaledDensity : 1;
     const density = currentDisplay.densityPixels > 0 ? currentDisplay.densityPixels : 1;
-    const verticalSafePx = (this.readerTopInsetVp() + this.readerBottomInsetVp() +
-      this.readerFooterHeight() + Math.max(0, this.marginTop - 12) + this.marginBottom) * density;
+    const verticalSafePx = (this.readerTopInsetVp() + this.readerTextBottomPaddingVp() +
+      this.readerFooterHeight() + Math.max(0, this.marginTop - 12)) * density;
     const pageConfig: readerCore.ReaderSetting = {
       fontName: this.fontName || this.fontFamily,
       fontSize: TextReadingSettings.normalizeFontSize(this.fontSize),
@@ -1504,9 +1505,12 @@ export struct ReaderPage {
     }.width('100%').height(48)
   }
 
-  /** 正文底部避让：三键导航等实体底栏完整避让；手势/悬浮小白条只留最小间隙。 */
+  /** 横屏隐藏状态栏时仍保护页眉两端，挖孔避让不包含另一侧的屏幕圆角。 */
   private readerTopInsetVp(): number {
-    return this.alwaysShowStatusBar ? this.topSafeVp : this.cutoutTopSafeVp;
+    if (this.alwaysShowStatusBar) return this.topSafeVp;
+    const landscape = this.readerViewportWidthVp > this.readerViewportHeightVp &&
+      this.readerViewportHeightVp > 0;
+    return Math.max(this.cutoutTopSafeVp, landscape ? READER_LANDSCAPE_TOP_GAP : 0);
   }
 
   private readerHeaderHeight(): number {
@@ -1519,9 +1523,9 @@ export struct ReaderPage {
 
   private readerTextBottomPaddingVp(): number {
     const inset = this.readerBottomInsetVp();
-    // 滚动阅读的下边距同时容纳手势留白，避免在页脚下重复叠加。
+    // 所有阅读模式的下边距同时容纳手势留白，避免在页脚下重复叠加。
     // 实体导航栏仍完整避让，并在栏上方保留用户设置的边距。
-    if (this.pageTurnMode === PageTurnMode.Vertical && WindowUtils.getSystemBottomVp() <= 0) {
+    if (WindowUtils.getSystemBottomVp() <= 0) {
       return Math.max(inset, this.marginBottom);
     }
     return inset + this.marginBottom;
@@ -1816,12 +1820,12 @@ export struct ReaderPage {
                   .padding({
                     left: this.marginLeft + this.leftSafeVp, right: this.marginRight + this.rightSafeVp,
                     top: this.readerTopInsetVp() + Math.max(0, this.marginTop - 12),
-                    bottom: this.readerBottomInsetVp() + this.readerFooterHeight() + this.marginBottom
+                    bottom: this.readerTextBottomPaddingVp() + this.readerFooterHeight()
                   })
                 if (this.showFooter && this.showReadingStatus) {
                   ReaderStatusIndicator({ color: this.palette.secondary })
                     .height(this.readerFooterHeight())
-                    .margin({ bottom: this.readerBottomInsetVp() + this.marginBottom })
+                    .margin({ bottom: this.readerTextBottomPaddingVp() })
                 }
               }
 
@@ -2034,7 +2038,7 @@ export struct ReaderPage {
 
           safeLeft: this.leftSafeVp, safeRight: this.rightSafeVp,
           safeTop: this.readerTopInsetVp() + Math.max(0, this.marginTop - 12) + this.readerHeaderHeight(),
-          safeBottom: this.readerBottomInsetVp() + this.marginBottom,
+          safeBottom: this.readerTextBottomPaddingVp(),
           keyTurnRequest: this.keyTurnRequest,
           mode: this.pageTurnMode,
           revision: this.onlineTextTurnRevision(),

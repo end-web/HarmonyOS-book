@@ -8,7 +8,8 @@ const vm = require('node:vm');
 const ide = process.env.DEVECO_HOME || process.env.DEVECO_PATH;
 const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hsda-text-cache-'));
-const context = { cacheDir: root };
+const context = { cacheDir: path.join(root, 'cache'), filesDir: path.join(root, 'files') };
+fs.mkdirSync(context.cacheDir); fs.mkdirSync(context.filesDir);
 let failWrite = false;
 let failMove = false;
 const handles = new Map();
@@ -16,6 +17,9 @@ const fileIo = {
   OpenMode: { CREATE: 1, READ_WRITE: 2, TRUNC: 4 },
   listFile: p => fs.promises.readdir(p),
   stat: p => fs.promises.stat(p),
+  access: async p => fs.existsSync(p),
+  copyFile: (a, b) => fs.promises.copyFile(a, b),
+  rmdir: p => fs.promises.rm(p, { recursive: true }),
   readText: p => fs.promises.readFile(p, 'utf8'),
   mkdir: p => fs.promises.mkdir(p),
   open: async p => {
@@ -47,11 +51,13 @@ function load(relative, modules) {
   return module.exports;
 }
 const identity = load('utils/BookIdentity.ets', {});
+const migration = load('service/StorageMigrationService.ets', { '@kit.CoreFileKit': { fileIo } });
 function newProcess() {
   return load('service/text/OnlineTextContentCache.ets', {
     '@kit.CoreFileKit': { fileIo },
     '@kit.ArkTS': { buffer: { from: text => ({ buffer: Uint8Array.from(Buffer.from(text)).buffer }) } },
     '@kit.PerformanceAnalysisKit': { hilog: { warn() {} } },
+    '../StorageMigrationService': migration,
     '../../utils/BookIdentity': identity
   }).OnlineTextContentCache;
 }
@@ -59,7 +65,20 @@ function newProcess() {
   let cache = newProcess();
   const key = cache.key('source-a', 'book-a', 'chapter-a');
   const text = '第一章\n　　重启后继续阅读，中文与 emoji 📚 不丢失。';
-  assert.equal(await cache.read(context, key), undefined);
+  const legacyDir = path.join(context.cacheDir, 'online_text_content');
+  fs.mkdirSync(legacyDir);
+  const legacyFile = path.join(legacyDir, identity.BookIdentity.onlineTextBookId(key, '') + '.json');
+  fs.writeFileSync(legacyFile, JSON.stringify({ version: 1, key, content: text }));
+  failMove = true;
+  await assert.rejects(() => cache.read(context, key), /migration failed/);
+  assert.ok(fs.existsSync(legacyFile), 'failed migration keeps the source');
+  failMove = false;
+  assert.equal(await cache.read(context, key), text, 'retry migrates the old chapter');
+  assert.equal(fs.existsSync(legacyFile), false);
+  fs.rmSync(context.cacheDir, { recursive: true }); fs.mkdirSync(context.cacheDir);
+  cache = newProcess();
+  assert.equal(await cache.read(context, key), text, 'system cache cleanup cannot remove saved text');
+  console.log('PASS legacy migration, failed-copy publication recovery and system cache cleanup');
   await cache.write(context, key, text);
   cache = newProcess();
   assert.equal(await cache.read(context, key), text);
@@ -70,8 +89,8 @@ function newProcess() {
   assert.equal(recovered[0].bookUrl, 'book-a');
   await cache.write(context, cache.key('source-a', 'book-a', 'chapter-2'), 'second');
   assert.equal((await cache.recoverBookIdentities(context, [bookId])).length, 1);
-  fs.writeFileSync(path.join(root, 'online_text_content/search_text_broken.json'), '{broken');
-  fs.writeFileSync(path.join(root, 'online_text_content/search_text_wrong.json'), JSON.stringify({ version: 1, key }));
+  fs.writeFileSync(path.join(context.filesDir, 'online_text_content/search_text_broken.json'), '{broken');
+  fs.writeFileSync(path.join(context.filesDir, 'online_text_content/search_text_wrong.json'), JSON.stringify({ version: 1, key }));
   assert.equal((await cache.recoverBookIdentities(context, ['search_text_missing'])).length, 0);
   assert.equal((await cache.recoverBookIdentities(context, [bookId])).length, 1);
   console.log('PASS legacy book identity recovery, deduplication and corrupt cache isolation');
@@ -80,7 +99,13 @@ function newProcess() {
   assert.equal(await cache.read(context, cache.key('source-a', 'book-b', 'chapter-a')), undefined);
   assert.equal(await cache.read(context, cache.key('source-a', 'book-a', 'chapter-b')), undefined);
   console.log('PASS source/book/chapter isolation independent of chapter index');
-  const file = path.join(root, 'online_text_content', identity.BookIdentity.onlineTextBookId(key, '') + '.json');
+  const separateBook = cache.key('source-a', 'book-other', 'chapter-a');
+  await cache.write(context, separateBook, 'keep other book');
+  await cache.removeBook(context, 'source-a', 'book-other');
+  assert.equal(await cache.read(context, separateBook), undefined);
+  assert.equal(await cache.read(context, key), text, 'per-book cleanup keeps other books from the same source');
+
+  const file = path.join(context.filesDir, 'online_text_content', identity.BookIdentity.onlineTextBookId(key, '') + '.json');
   fs.writeFileSync(file, '{broken');
   assert.equal(await cache.read(context, key), undefined);
   fs.writeFileSync(file, JSON.stringify({ version: 1, key: 'wrong identity', content: 'wrong book' }));

@@ -1,6 +1,6 @@
 {
   "string": [
-    {"name": "app_icon_title", "value": "主题图标(限免)"},
+    {"name": "app_icon_title", "value": "图标主题(限免)"},
     {"name": "app_icon_hint", "value": "点击喜欢的图标，更换桌面上的简听图标"},
     {"name": "app_icon_unsupported", "value": "当前系统暂不支持直接切换桌面图标，可预览下方样式，升级系统后使用"},
     {"name": "app_icon_default", "value": "默认"},
@@ -260,7 +260,7 @@
     {"name": "technical_support_title", "value": "技术支持"},
     {"name": "technical_support_names", "value": "QG\n浅度\n相思界\nXIAOBAO"},
     {"name": "sponsor_thanks_title", "value": "感谢赞助"},
-    {"name": "sponsor_thanks_names", "value": "WT\n子阳\ndefault\n干脆面不用泡\n苏小锋\n张"},
+    {"name": "sponsor_thanks_names", "value": "WT\n子阳\ndefault\n干脆面不用泡\n苏小锋\n张\n李富贵"},
     {"name": "sponsor_thanks_hendo", "value": "HenDo"},
     {"name": "about_compliance_title", "value": "合规说明"},
     {"name": "about_compliance_body", "value": "本项目不内置、不托管、不分发任何小说正文、章节内容、封面图片或付费资源；不提供书源订阅服务，也不推荐、维护或背书任何第三方内容站点。"},

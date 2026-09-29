@@ -29,6 +29,8 @@ const locked = { bookSourceUrl: 'https://locked.invalid', isLocked: true };
 const stubs = {
   '@kit.CoreFileKit': { fileIo: {
     statSync: filename => { if (!sizes.has(filename)) throw new Error('missing'); return { size: sizes.get(filename) }; },
+    stat: async filename => { if (filename === '/files' || filename === '/cache') return { isDirectory: () => true }; throw new Error('missing'); },
+    access: async filename => sizes.has(filename),
     utimes() {}, listFile: async () => [], unlink: async filename => sizes.delete(filename),
     unlinkSync: filename => sizes.delete(filename)
   } },
@@ -69,12 +71,13 @@ function load(name) {
 (async () => {
   const { ChapterCacheService } = load('service/ChapterCacheService');
   const cache = ChapterCacheService.getInstance();
-  cache.setContext({ cacheDir: '/cache' });
+  cache.setContext({ cacheDir: '/cache', filesDir: '/files' });
   const chapters = [0, 1].map(index => ({ id: `book-c${index}`, index: index + 1, title: `episode ${index}`,
     duration: 0, source: { type: 'url', value: `https://source.invalid/chapter/${index}` } }));
   const book = { id: 'book', sourceUrl: source.bookSourceUrl, chapters };
   cache.audioCache.set(chapters[0].id, { resolvedUrl: 'https://cdn.invalid/audio.mp3', headers: {} });
   assert.equal(cache.isAudioChapterCached(book, chapters[0]), false, 'A resolved URL is not a complete cache');
+  await cache.storageMigration;
   const first = cache.downloadFile(book, chapters[0], 'https://cdn.invalid/first.mp3');
   const duplicate = cache.downloadFile(book, chapters[0], 'https://cdn.invalid/first.mp3');
   assert.equal(first, duplicate, 'One transfer per chapter');
@@ -123,9 +126,10 @@ function load(name) {
   const makeBook = id => ({ id, sourceUrl: source.bookSourceUrl,
     chapters: Array.from({ length: 6 }, (_, i) => ({ id: `${id}-c${i}`, title: `chapter ${i}`,
       source: { type: 'url', value: `https://source.invalid/${id}/${i}` } })) });
-  const freshCache = () => {
+  const freshCache = async () => {
     const instance = new ChapterCacheService();
-    instance.setContext({ cacheDir: '/cache' });
+    instance.setContext({ cacheDir: '/cache', filesDir: '/files' });
+    await instance.storageMigration;
     instance.setPreloadCount(3);
     return instance;
   };
@@ -137,7 +141,7 @@ function load(name) {
     resolved.push(url);
     return { url: `${url}.mp3`, headers: {} };
   };
-  const replay = freshCache();
+  const replay = await freshCache();
   replay.setPreloadCount(1);
   const replayBook = makeBook('replay');
   const firstChapter = replayBook.chapters[0];
@@ -163,7 +167,7 @@ function load(name) {
 
   for (const direction of [1, -1]) {
     stubs['service/PreferenceService'].PreferenceService.chapterStep = () => direction;
-    const ordered = freshCache();
+    const ordered = await freshCache();
     const orderedBook = makeBook(`ordered-${direction}`);
     const current = direction === 1 ? 0 : 5;
     const before = transfers.length;
@@ -184,7 +188,7 @@ function load(name) {
   console.log('PASS nearest-first forward/reverse ordering, queue deduplication and serial transfers');
 
   stubs['service/PreferenceService'].PreferenceService.chapterStep = () => 1;
-  const stopping = freshCache();
+  const stopping = await freshCache();
   const stoppingBook = makeBook('stopping');
   stopping.preloadAudioChapters(stoppingBook, 0);
   await settle();
@@ -194,7 +198,7 @@ function load(name) {
   assert.equal(cancelled.cancelled, true);
   assert.equal(stopping.queue.size, 0);
   assert.equal(stopping.preloadFailureAt.size, 0, 'User cancellation is not a source failure');
-  const deferred = freshCache();
+  const deferred = await freshCache();
   let finishResolve;
   sourceService.resolveAudioRequest = () => new Promise(resolve => { finishResolve = resolve; });
   deferred.preloadAudioChapters(makeBook('deferred'), 0);
@@ -208,7 +212,7 @@ function load(name) {
   assert.equal(deferred.audioCache.size, 0);
   console.log('PASS disable cancels transfers and invalidates late resolution across reenable');
 
-  const resumed = freshCache();
+  const resumed = await freshCache();
   const resumedBook = makeBook('resumed');
   sourceService.resolveAudioRequest = async (_source, url) => ({ url: `${url}.mp3`, headers: {} });
   resumed.preloadAudioChapters(resumedBook, 0);
@@ -224,10 +228,11 @@ function load(name) {
   await settle();
   console.log('PASS buffer cancellation followed by immediate resume preserves nearest-chapter priority');
 
-  const timed = freshCache();
+  const timed = await freshCache();
   const timedBook = makeBook('timed');
   const target = timedBook.chapters[1];
   const timedTask = timed.downloadFile(timedBook, target, 'https://cdn.invalid/slow.mp3');
+  await settle();
   const slowTransfer = transfers.at(-1);
   timed.suspendPreload(target.id);
   assert.equal(await timed.waitForAudioFile(timedBook, target), null);
@@ -236,7 +241,7 @@ function load(name) {
   assert.equal(timed.preloadFailureAt.size, 0);
   console.log('PASS selected transfer timeout cancels duplicate traffic without failure cooldown');
 
-  const expiring = freshCache();
+  const expiring = await freshCache();
   expiring.audioCache.set('expired', { resolvedUrl: 'https://cdn.invalid/old',
     headers: { Authorization: 'old' }, timestamp: Date.now() - 6 * 60 * 1000 });
   assert.equal(expiring.getAudioUrl('expired'), null);
@@ -246,14 +251,37 @@ function load(name) {
   console.log('PASS URL expiration removes both stale URL and headers');
 
   sizes.clear();
+  const migrationIo = stubs['@kit.CoreFileKit'].fileIo;
+  migrationIo.listFile = async dir => [...sizes.keys()].filter(p => path.posix.dirname(p) === dir).map(p => path.posix.basename(p));
+  migrationIo.stat = async filename => {
+    if (filename === '/files' || filename === '/cache') return { isDirectory: () => true };
+    if (!sizes.has(filename)) throw new Error('missing');
+    return { size: sizes.get(filename), mtime: 1, isDirectory: () => false };
+  };
+  migrationIo.copyFile = async (from, to) => { sizes.set(to, sizes.get(from)); };
+  migrationIo.moveFile = async (from, to) => { sizes.set(to, sizes.get(from)); sizes.delete(from); };
+  const migrated = await freshCache();
+  const durablePath = migrated.audioFilePath(book.id, chapters[0].source.value);
+  const legacyPath = durablePath.replace('/files/', '/cache/');
+  sizes.set(legacyPath, 4096);
+  migrated.setContext({ cacheDir: '/cache', filesDir: '/files' });
+  await migrated.storageMigration;
+  assert.equal(sizes.has(legacyPath), false);
+  for (const name of sizes.keys()) if (name.startsWith('/cache/')) sizes.delete(name);
+  const cold = await freshCache();
+  assert.equal(cold.getAudioFilePath(book.id, chapters[0].id, chapters[0].source.value), durablePath);
+  await cold.clearAllCache();
+  assert.equal(sizes.has(durablePath), false, 'in-app audio cleanup deletes migrated files');
+  console.log('PASS audio migration, cold offline reuse after system cleanup and in-app cleanup');
+  sizes.clear();
   const io = stubs['@kit.CoreFileKit'].fileIo;
   io.listFile = async () => [...sizes.keys()].map(filename => path.posix.basename(filename));
   io.stat = async filename => ({ size: sizes.get(filename), mtime: filename.includes('old') ? 1 : 2,
     isDirectory: () => false });
-  const pinned = '/cache/chap_playing.mp3';
-  const old = '/cache/chap_old.mp3';
-  const part = '/cache/chap_active.mp3.part';
-  const publishing = '/cache/chap_publishing.mp3';
+  const pinned = '/files/chap_playing.mp3';
+  const old = '/files/chap_old.mp3';
+  const part = '/files/chap_active.mp3.part';
+  const publishing = '/files/chap_publishing.mp3';
   sizes.set(pinned, 600 * 1024 * 1024);
   sizes.set(old, 600 * 1024 * 1024);
   sizes.set(part, 600 * 1024 * 1024);

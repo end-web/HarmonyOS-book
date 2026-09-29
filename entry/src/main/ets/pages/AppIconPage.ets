@@ -87,21 +87,32 @@ export struct AppIconPage {
               GridCol() {
                 Button({ type: ButtonType.Normal }) {
                   Column({ space: 8 }) {
-                    Image(option.preview)
-                      .width('100%')
-                      .aspectRatio(1)
-                      .objectFit(ImageFit.Contain)
-                      .borderRadius(20)
-                      .clip(true)
+                    Stack({ alignContent: Alignment.BottomEnd }) {
+                      Image(option.preview)
+                        .width('100%')
+                        .aspectRatio(1)
+                        .objectFit(ImageFit.Contain)
+                        .borderRadius(20)
+                        .clip(true)
+                      if (this.service.supported && !this.loading && !this.loadFailed && this.current === option.name) {
+                        SymbolGlyph($r('sys.symbol.checkmark'))
+                          .fontSize(14)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor([AppColor.OnBrand])
+                          .width(24)
+                          .height(24)
+                          .backgroundColor(AppColor.Brand)
+                          .borderRadius(12)
+                          .margin({ right: 4, bottom: 4 })
+                          .accessibilityText($r('app.string.app_icon_current'))
+                      }
+                    }
+                    .width('100%')
                     Text(option.label)
                       .fontSize(AppFont.Body)
                       .fontColor($r('sys.color.font_primary'))
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(this.service.supported && !this.loading && !this.loadFailed && this.current === option.name ?
-                      $r('app.string.app_icon_current') : $r('app.string.app_icon_blank'))
-                      .fontSize(AppFont.Caption)
-                      .fontColor(AppColor.Brand)
                   }
                   .width('100%')
                   .padding({ left: 6, right: 6, top: 6, bottom: 10 })
@@ -110,8 +121,6 @@ export struct AppIconPage {
                 .padding(0)
                 .borderRadius(AppRadius.Lg)
                 .backgroundColor($r('sys.color.comp_background_primary'))
-                .border({ width: 2, color: this.service.supported && !this.loading && !this.loadFailed &&
-                  this.current === option.name ? AppColor.Brand : Color.Transparent })
                 .enabled(this.service.supported && !this.loading && !this.switching && !this.loadFailed)
                 .accessibilityText(option.label)
                 .onClick(() => this.selectIcon(option))

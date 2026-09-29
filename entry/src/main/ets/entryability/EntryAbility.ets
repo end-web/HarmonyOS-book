@@ -68,7 +68,7 @@ export default class EntryAbility extends UIAbility {
     // 章节音频文件缓存的沙箱根目录
     ChapterCacheService.getInstance().setContext(this.context);
     DownloadService.getInstance().setContext(this.context);
-    // 缓存书改用文件持久化,注入 context 供 cacheDir 读写
+    // 书架资源使用持久目录，启动旧缓存迁移
     DataService.setContext(this.context);
     this.captureContinuation(want, launchParam);
 

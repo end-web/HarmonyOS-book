@@ -72,7 +72,7 @@ mocks['../service/text/ReaderFontService'] = { ReaderFontService: { register: ()
 let systemBottomVp = 0;
 mocks['../utils/WindowUtils'] = { WindowUtils: { getSystemBottomVp: () => systemBottomVp } };
 let source = fs.readFileSync(path.join(root, 'pages/ReaderPage.ets'), 'utf8');
-const readerBottomMethods = source.slice(source.indexOf('  private readerTextBottomPaddingVp()'),
+const readerBottomMethods = source.slice(source.indexOf('  private readerTopInsetVp()'),
   source.indexOf('  private readerFloatingStyle()'));
 source = source.slice(0, source.search(/\s*@Builder\s+readerTabStyle\(/)) + '\n' + readerBottomMethods + '\n}';
 source = source.replace(/^  @Builder[\s\S]*?^  }\r?$/gm, '');
@@ -96,7 +96,20 @@ assert.equal(bottomReader.readerTextBottomPaddingVp(), 60, 'solid navigation bar
 systemBottomVp = 0;
 bottomReader.bottomSafeVp = 32;
 bottomReader.pageTurnMode = PageTurnMode.Cover;
-assert.equal(bottomReader.readerTextBottomPaddingVp(), 28, 'paged mode retains its original spacing');
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 16, 'paged footer shares gesture and reading spacing');
+Object.assign(bottomReader, { alwaysShowStatusBar: false, topSafeVp: 30, cutoutTopSafeVp: 0,
+  readerViewportWidthVp: 800, readerViewportHeightVp: 400 });
+assert.equal(bottomReader.readerTopInsetVp(), 16, 'hidden-status landscape header clears the camera-free corner');
+bottomReader.topSafeVp = 0;
+assert.equal(bottomReader.readerTopInsetVp(), 16, 'temporary status bar visibility cannot shift the header');
+bottomReader.cutoutTopSafeVp = 24;
+assert.equal(bottomReader.readerTopInsetVp(), 24, 'actual camera clearance remains protected');
+bottomReader.readerViewportWidthVp = 300;
+bottomReader.cutoutTopSafeVp = 0;
+assert.equal(bottomReader.readerTopInsetVp(), 0, 'portrait does not inherit the landscape gap');
+bottomReader.alwaysShowStatusBar = true;
+bottomReader.topSafeVp = 30;
+assert.equal(bottomReader.readerTopInsetVp(), 30, 'always-visible status bar uses its measured height');
 const keyReader = Object.create(ReaderPage.prototype);
 Object.assign(keyReader, { volumeKeyPageTurn: false, readerVisible: true, leaving: false, loading: false,
   readerError: '', keyTurnRequest: 0, screenOn: { touch() {} }, isOnlineTextBook: () => true });

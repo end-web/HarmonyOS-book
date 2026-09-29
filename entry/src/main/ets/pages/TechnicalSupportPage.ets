@@ -15,12 +15,12 @@ export struct TechnicalSupportPage {
         .fontColor($r('sys.color.font_primary'))
         .width('100%')
       Text() {
-        Span(names)
         if (blackGoldName !== '') {
-          Span('\n')
           Span(blackGoldName)
             .fontColor($r('app.color.sponsor_black_gold'))
+          Span('\n')
         }
+        Span(names)
       }
         .fontSize(AppFont.BodyL)
         .fontColor(namesColor)

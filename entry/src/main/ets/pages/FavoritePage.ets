@@ -16,6 +16,8 @@ import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
+import { ChapterCacheService } from '../service/ChapterCacheService';
+import { OnlineTextContentCache } from '../service/text/OnlineTextContentCache';
 import { PreferenceService, PlayHistoryItem, EVT_FAVORITES_CHANGED } from '../service/PreferenceService';
 import { SourceDataService } from '../service/SourceDataService';
 import { AudioService, EVT_HISTORY_UPDATED } from '../service/AudioService';
@@ -857,6 +859,11 @@ export struct FavoritePage {
       await DownloadService.getInstance().deleteBookDownload(bookId);
       if (bookId.startsWith('import_')) await DataService.removeImportedBook(bookId);
       for (const id of ids) {
+        const storedBook = await DataService.getBookById(this.context, id);
+        if (storedBook !== undefined && !id.startsWith('import_')) {
+          ChapterCacheService.getInstance().clearBook(id, storedBook.chapters);
+          await OnlineTextContentCache.removeBook(this.context, storedBook.sourceUrl ?? '', storedBook.bookUrl || id);
+        }
         await PreferenceService.removeHistory(id);
         await PreferenceService.removeProgress(id);
         await TextReadingProgressService.remove(this.context, id);

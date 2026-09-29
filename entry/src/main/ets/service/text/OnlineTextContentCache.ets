@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { buffer } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { StorageMigrationService } from '../StorageMigrationService';
 import { BookIdentity } from '../../utils/BookIdentity';
 
 class CachedTextChapter {
@@ -21,15 +22,31 @@ export class OnlineTextContentCache {
   private static writeChain: Promise<void> = Promise.resolve();
   private static readonly MAX_FILE_BYTES: number = 8 * 1024 * 1024;
 
+  private static migrations: Map<string, Promise<void>> = new Map();
+
+  static migrateStorage(context: common.Context): Promise<void> {
+    const existing = OnlineTextContentCache.migrations.get(context.filesDir);
+    if (existing !== undefined) return existing;
+    const task = StorageMigrationService.migrateDirectory(
+      `${context.cacheDir}/online_text_content`, `${context.filesDir}/online_text_content`, true)
+      .catch((error: Error): void => {
+        OnlineTextContentCache.migrations.delete(context.filesDir);
+        throw error;
+      });
+    OnlineTextContentCache.migrations.set(context.filesDir, task);
+    return task;
+  }
+
   static key(sourceUrl: string, bookUrl: string, chapterUrl: string): string {
     return JSON.stringify([sourceUrl, bookUrl, chapterUrl]);
   }
 
   private static path(context: common.Context, key: string): string {
-    return `${context.cacheDir}/online_text_content/${BookIdentity.onlineTextBookId(key, '')}.json`;
+    return `${context.filesDir}/online_text_content/${BookIdentity.onlineTextBookId(key, '')}.json`;
   }
 
   static async contains(context: common.Context, key: string): Promise<boolean> {
+    await OnlineTextContentCache.migrateStorage(context);
     try {
       const stat = await fileIo.stat(OnlineTextContentCache.path(context, key));
       return stat.size > 0 && stat.size <= OnlineTextContentCache.MAX_FILE_BYTES;
@@ -37,6 +54,7 @@ export class OnlineTextContentCache {
   }
 
   static async read(context: common.Context, key: string): Promise<string | undefined> {
+    await OnlineTextContentCache.migrateStorage(context);
     try {
       const path = OnlineTextContentCache.path(context, key);
       const stat = await fileIo.stat(path);
@@ -54,11 +72,12 @@ export class OnlineTextContentCache {
   /** 旧进度只有 bookId，从正文的完整身份恢复地址；只扫描一次且限制总读取量。 */
   static async recoverBookIdentities(context: common.Context,
     bookIds: string[]): Promise<CachedTextBookIdentity[]> {
+    await OnlineTextContentCache.migrateStorage(context);
     const wanted = new Set<string>(bookIds);
     const found = new Map<string, CachedTextBookIdentity>();
     const ambiguous = new Set<string>();
     if (wanted.size === 0) return [];
-    const directory = `${context.cacheDir}/online_text_content`;
+    const directory = `${context.filesDir}/online_text_content`;
     let names: string[];
     try { names = await fileIo.listFile(directory); } catch (_e) { return []; }
     let bytesRead = 0;
@@ -103,7 +122,8 @@ export class OnlineTextContentCache {
     const bytes = buffer.from(JSON.stringify(record), 'utf-8').buffer;
     if (bytes.byteLength > OnlineTextContentCache.MAX_FILE_BYTES) return Promise.resolve();
     const task = OnlineTextContentCache.writeChain.then(async (): Promise<void> => {
-      const dir = `${context.cacheDir}/online_text_content`;
+      await OnlineTextContentCache.migrateStorage(context);
+      const dir = `${context.filesDir}/online_text_content`;
       try { await fileIo.mkdir(dir); } catch (_e) { /* 已存在 */ }
       const path = OnlineTextContentCache.path(context, key);
       const temp = path + '.tmp';
@@ -136,15 +156,27 @@ export class OnlineTextContentCache {
 
   static async removeChapter(context: common.Context, key: string): Promise<void> {
     const task = OnlineTextContentCache.writeChain.then(async (): Promise<void> => {
+      await OnlineTextContentCache.migrateStorage(context);
       try { await fileIo.unlink(OnlineTextContentCache.path(context, key)); } catch (_error) { /* cache miss */ }
     });
-    OnlineTextContentCache.writeChain = task;
+    OnlineTextContentCache.writeChain = task.catch((): void => {});
     await task;
   }
 
   static async invalidateSources(context: common.Context, sourceUrls: Set<string>): Promise<void> {
+    await OnlineTextContentCache.removeMatching(context, sourceUrls);
+  }
+
+  static async removeBook(context: common.Context, sourceUrl: string, bookUrl: string): Promise<void> {
+    if (!sourceUrl || !bookUrl) return;
+    await OnlineTextContentCache.removeMatching(context, new Set<string>([sourceUrl]), bookUrl);
+  }
+
+  private static async removeMatching(context: common.Context, sourceUrls: Set<string>,
+    bookUrl?: string): Promise<void> {
     const task = OnlineTextContentCache.writeChain.then(async (): Promise<void> => {
-      const directory = `${context.cacheDir}/online_text_content`;
+      await OnlineTextContentCache.migrateStorage(context);
+      const directory = `${context.filesDir}/online_text_content`;
       let names: string[];
       try { names = await fileIo.listFile(directory); } catch (_e) { return; }
       for (const name of names) {
@@ -157,7 +189,8 @@ export class OnlineTextContentCache {
           const record: CachedTextChapter = JSON.parse(await fileIo.readText(path));
           parts = JSON.parse(record.key);
         } catch (_e) { continue; }
-        if (Array.isArray(parts) && sourceUrls.has(parts[0])) await fileIo.unlink(path);
+        if (Array.isArray(parts) && sourceUrls.has(parts[0]) &&
+          (bookUrl === undefined || parts[1] === bookUrl)) await fileIo.unlink(path);
       }
     });
     OnlineTextContentCache.writeChain = task.catch((): void => {});

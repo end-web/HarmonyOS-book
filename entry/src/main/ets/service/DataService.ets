@@ -8,7 +8,7 @@ import { OnlineTextContentCache } from './text/OnlineTextContentCache';
 
 /** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
 const CACHED_BOOKS_FILE = 'cached_books_v1.json';
-/** 每本书的章节目录(sidecar):cached_toc/<id>.json,按需懒加载,命中即瞬时无网络 */
+/** 旧版章节目录(sidecar):cached_toc/<id>.json,按需懒加载,命中即瞬时无网络 */
 const CACHED_TOC_DIR = 'cached_toc';
 /** 旧 preferences 缓存超过此字节数即判定含整章 TOC 巨值,合并进文件后压成元数据壳 */
 const LEGACY_SLIM_THRESHOLD = 100 * 1024;
@@ -28,8 +28,8 @@ interface CacheRead {
  * 缓存书让搜索得到的书也能被收藏 / 出现在书架 / 历史里。
  *
  * 存储分层(都在主进程内写,卡片 FormExtension 进程只读 preferences、不碰这些文件):
- *  - 索引 cached_books_v1.json:全部缓存书的"元数据壳"(无 chapters),冷启动一次性读入内存,小而快。
- *  - sidecar cached_toc/<id>.json:每本书的整章目录,单独一个小文件,打开某本书时才懒加载(瞬时,无网络)。
+ *  - 索引 files/library_books_v1.json:全部缓存书的"元数据壳"(无 chapters),冷启动一次性读入内存,小而快。
+ *  - sidecar files/library_toc/<id>.json:每本书的整章目录,单独一个小文件,打开某本书时才懒加载(瞬时,无网络)。
  *  这样"全部书的章节都本地缓存"与"冷启动不卡"二者兼得 —— 不再像单一大文件那样把几 MB 的整章
  *  TOC 在启动时全部读+解析(卡顿),也不像"瘦身丢章节"那样让旧书每次点开都要联网重拉。
  *
@@ -55,15 +55,17 @@ export class DataService {
     DataService.ctx = c;
     if (DataService.migrationPromise === null) {
       DataService.migrationPromise = DataService.migrateLegacyStorage();
+      DataService.migrationPromise.catch((): void => { /* 读取入口会报告失败，不写入空书架。 */ });
     }
+    OnlineTextContentCache.migrateStorage(c).catch((): void => { /* 正文读取时重试迁移。 */ });
   }
 
   private static cachedFilePath(): string | null {
-    return DataService.ctx ? `${DataService.ctx.cacheDir}/${CACHED_BOOKS_FILE}` : null;
+    return DataService.ctx ? `${DataService.ctx.filesDir}/library_books_v1.json` : null;
   }
 
   private static tocDirPath(): string | null {
-    return DataService.ctx ? `${DataService.ctx.cacheDir}/${CACHED_TOC_DIR}` : null;
+    return DataService.ctx ? `${DataService.ctx.filesDir}/library_toc` : null;
   }
 
   private static legacyCachedFilePath(): string | null {
@@ -89,15 +91,23 @@ export class DataService {
   }
 
   private static async migrateLegacyStorage(): Promise<void> {
+    // 新目录避免旧 filesDir 残留覆盖当前 cacheDir 中较新的书架数据。
+    const ctx = DataService.ctx;
+    if (ctx !== null) {
+      await StorageMigrationService.migrateFileChecked(`${ctx.cacheDir}/${CACHED_BOOKS_FILE}`,
+        `${ctx.filesDir}/library_books_v1.json`);
+      await StorageMigrationService.migrateDirectory(`${ctx.cacheDir}/${CACHED_TOC_DIR}`,
+        `${ctx.filesDir}/library_toc`, true);
+    }
     const legacyFile = DataService.legacyCachedFilePath();
     const cacheFile = DataService.cachedFilePath();
     if (legacyFile && cacheFile) {
-      await StorageMigrationService.migrateFile(legacyFile, cacheFile);
+      await StorageMigrationService.migrateFileChecked(legacyFile, cacheFile);
     }
     const legacyToc = DataService.legacyTocDirPath();
     const cacheToc = DataService.tocDirPath();
     if (legacyToc && cacheToc) {
-      await StorageMigrationService.migrateDirectory(legacyToc, cacheToc);
+      await StorageMigrationService.migrateDirectory(legacyToc, cacheToc, true);
     }
   }
 

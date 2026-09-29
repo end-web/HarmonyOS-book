@@ -983,7 +983,7 @@ export struct PlayerPage {
               .scrollBar(BarState.Off)
               .edgeEffect(EdgeEffect.Spring)
             } else {
-              this.buildPlayerContent(true)
+              this.buildPlayerContent(false)
             }
           } else {
             this.buildPlayerContent(false)
@@ -1047,11 +1047,12 @@ export struct PlayerPage {
   }
 
   @Builder
-  buildPlayerContent(compact: boolean) {
+  buildPlayerContent(scrollable: boolean) {
     this.buildTopBar()
     this.buildCover()
     this.buildMeta()
-    if (compact) {
+    // 仅滚动容器使用固定间距；可同屏显示时由 Blank 吸收余高，让播控贴合底部安全区。
+    if (scrollable) {
       Blank().height(AppSpace.Md)
     } else {
       Blank()
