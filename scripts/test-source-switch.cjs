@@ -10,7 +10,7 @@ function load(file, dependencies = {}) {
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,
     '../entry/src/main/ets/', file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
-  }).outputText, { module, exports: module.exports, setTimeout, clearTimeout, require: key => {
+  }).outputText, { module, exports: module.exports, ObservedV2: value => value, Trace: () => {}, setTimeout, clearTimeout, require: key => {
     assert.ok(dependencies[key], key); return dependencies[key];
   } });
   return module.exports;
@@ -25,6 +25,7 @@ let stalled = '';
 let receivedQuery = '';
 let resultTitle = '《测试书》';
 const { SourceSwitchSearch } = load('service/BookSourceSwitchService.ets', {
+  '../model/LocalRuleSource': load('model/LocalRuleSource.ets'),
   '../utils/BookIdentity': load('utils/BookIdentity.ets'),
   '../utils/ChapterTitleFormatter': load('utils/ChapterTitleFormatter.ets'),
   './SourceDataService': { SourceDataService: { getEnabledSources: async () => sources } },
@@ -43,7 +44,7 @@ const { SourceSwitchSearch } = load('service/BookSourceSwitchService.ets', {
 (async () => {
   const oldBook = { title: '测试书', sourceUrl: 'current', contentType: 'audio' };
   sources = ['current', 'bad', ...Array.from({ length: 12 }, (_, i) => `source-${i}`)]
-    .map(bookSourceUrl => ({ bookSourceUrl, bookSourceName: bookSourceUrl }));
+    .map(bookSourceUrl => ({ bookSourceUrl, bookSourceName: bookSourceUrl, bookSourceType: 1 }));
   task = new SourceSwitchSearch();
   let results = [];
   await task.run(oldBook, books => { results = books; });
@@ -55,10 +56,37 @@ const { SourceSwitchSearch } = load('service/BookSourceSwitchService.ets', {
   assert.ok(!calls.includes('current'));
   console.log('PASS six concurrent sources, failure isolation, deduplication and audio filtering');
   task = new SourceSwitchSearch();
+  sources = sources.map(source => ({ ...source, bookSourceType: 0 }));
+  calls = [];
   await task.run({ ...oldBook, contentType: 'text' }, books => { results = books; });
   assert.equal(results.length, 12);
   assert.ok(results.every(book => book.contentType === 'text'));
+  assert.equal(task.total, 13);
   console.log('PASS text switching excludes audio editions');
+  const originalSources = sources.map(source => ({ ...source, bookSourceType: 1 }));
+  sources = [0, 1, 2, 3, 9, undefined].map(bookSourceType => ({
+    bookSourceUrl: `kind-${bookSourceType}`, bookSourceName: `kind-${bookSourceType}`, bookSourceType
+  }));
+  calls = []; task = new SourceSwitchSearch();
+  await task.run({ ...oldBook, contentType: 'text' }, books => { results = books; });
+  assert.deepEqual(calls.sort(), ['kind-0', 'kind-3']);
+  assert.equal(task.total, 2);
+  assert.equal(task.completed, 2);
+  assert.equal(results.length, 2);
+  assert.ok(results.every(book => book.contentType === 'text'));
+  calls = []; task = new SourceSwitchSearch();
+  await task.run(oldBook, books => { results = books; });
+  assert.deepEqual(calls, ['kind-1']);
+  assert.equal(task.total, 1);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].contentType, 'audio');
+  calls = []; task = new SourceSwitchSearch();
+  await task.run({ ...oldBook, sourceUrl: 'kind-1' }, books => { results = books; });
+  assert.equal(calls.length, 0);
+  assert.equal(task.total, 0);
+  assert.equal(results.length, 0);
+  console.log('PASS only matching source types are requested/counted; comics, unknown and current sources are skipped');
+  sources = originalSources;
   task = new SourceSwitchSearch(); calls = []; cancel = true;
   let updates = 0;
   await task.run(oldBook, () => updates++);
@@ -75,20 +103,23 @@ const { SourceSwitchSearch } = load('service/BookSourceSwitchService.ets', {
   assert.equal(SourceSwitchSearch.searchKeyword('测试书（多人演播）'), '测试书');
   console.log('PASS edition suffixes do not hide matching books or pollute search query');
   sources = ['stalled', ...Array.from({ length: 7 }, (_, i) => `fast-${i}`)]
-    .map(bookSourceUrl => ({ bookSourceUrl, bookSourceName: bookSourceUrl }));
+    .map(bookSourceUrl => ({ bookSourceUrl, bookSourceName: bookSourceUrl, bookSourceType: 1 }));
   stalled = 'stalled'; calls = [];
   task = new SourceSwitchSearch(80);
   let advancedBeforeTimeout = false;
+  let displayedBeforeSlowSource = false;
   await task.run(oldBook, books => {
     results = books;
     if (calls.includes('fast-6') && task.failed === 0) advancedBeforeTimeout = true;
+    if (books.length > 0 && task.completed < task.total && task.failed === 0) displayedBeforeSlowSource = true;
   });
+  assert.ok(displayedBeforeSlowSource, 'successful results are published while other sources are still running');
   assert.ok(advancedBeforeTimeout, 'fast workers must advance without waiting for a slow source');
   assert.equal(task.failed, 1);
   assert.equal(task.completed, 8);
   assert.equal(results.length, 7);
   console.log('PASS slow source times out; fast workers continue and keep results');
-  sources = [{ bookSourceUrl: 'stalled', bookSourceName: 'stalled' }];
+  sources = [{ bookSourceUrl: 'stalled', bookSourceName: 'stalled', bookSourceType: 1 }];
   task = new SourceSwitchSearch(30000);
   let cancelledRunFinished = false;
   let cancelUpdates = 0;

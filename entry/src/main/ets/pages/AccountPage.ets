@@ -274,6 +274,9 @@ export struct AccountPage {
         Scroll() {
           Column({ space: AppSpace.Lg }) {
             this.profileCard()
+            if (this.auth.isLoggedIn) {
+              this.medalCard()
+            }
             this.localBackupCard()
             this.backupCard()
             if (this.auth.isLoggedIn) {
@@ -324,6 +327,37 @@ export struct AccountPage {
 
       this.profileActionButton()
     }
+    .width('100%')
+    .padding(AppSpace.Md)
+    .backgroundColor($r('sys.color.comp_background_primary'))
+    .borderRadius(AppRadius.Lg)
+  }
+
+  @Builder
+  medalCard() {
+    Column({ space: AppSpace.Md }) {
+      Text($r('app.string.account_medal_list'))
+        .fontSize(AppFont.BodyL)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('sys.color.font_primary'))
+      Row() {
+        Column({ space: AppSpace.Sm }) {
+          Image($r('app.media.national_day_medal'))
+            .width(64)
+            .height(64)
+            .objectFit(ImageFit.Contain)
+            .interpolation(ImageInterpolation.Medium)
+            .accessibilityText($r('app.string.account_national_day_badge'))
+          Text($r('app.string.account_national_day_medal_date'))
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_secondary'))
+        }
+        .width(96)
+        .alignItems(HorizontalAlign.Center)
+      }
+      .width('100%')
+    }
+    .alignItems(HorizontalAlign.Start)
     .width('100%')
     .padding(AppSpace.Md)
     .backgroundColor($r('sys.color.comp_background_primary'))

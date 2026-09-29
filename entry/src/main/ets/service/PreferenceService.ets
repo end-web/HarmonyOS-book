@@ -666,6 +666,50 @@ export class PreferenceService {
   }
 
   /** 打开应用时续播上次内容；新安装和旧版本升级默认关闭。 */
+  static async getAutoSleepEnabled(): Promise<boolean> {
+    const store = await PreferenceService.ensureStore();
+    return (await store.get('auto_sleep_enabled', false)) === true;
+  }
+
+  static async setAutoSleepEnabled(enabled: boolean): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    await store.put('auto_sleep_enabled', enabled);
+    await store.flush();
+  }
+
+  static async getLastSleepMode(): Promise<number> {
+    const store = await PreferenceService.ensureStore();
+    return (await store.get('last_sleep_mode', 1)) === 2 ? 2 : 1;
+  }
+
+  static async getLastSleepChapters(): Promise<number> {
+    const store = await PreferenceService.ensureStore();
+    const value = await store.get('last_sleep_chapters', 1);
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 999 ? value : 1;
+  }
+
+  static async setLastSleepChapters(count: number): Promise<void> {
+    if (!Number.isInteger(count) || count < 1 || count > 999) return;
+    const store = await PreferenceService.ensureStore();
+    await store.put('last_sleep_chapters', count);
+    await store.put('last_sleep_mode', 2);
+    await store.flush();
+  }
+
+  static async getLastSleepMinutes(): Promise<number> {
+    const store = await PreferenceService.ensureStore();
+    const value = await store.get('last_sleep_minutes', 30);
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 1440 ? value : 30;
+  }
+
+  static async setLastSleepMinutes(minutes: number): Promise<void> {
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return;
+    const store = await PreferenceService.ensureStore();
+    await store.put('last_sleep_minutes', minutes);
+    await store.put('last_sleep_mode', 1);
+    await store.flush();
+  }
+
   static async getAutoPlayOnLaunch(): Promise<boolean> {
     const store = await PreferenceService.ensureStore();
     return (await store.get(KEY_AUTO_PLAY_ON_LAUNCH, false)) === true;

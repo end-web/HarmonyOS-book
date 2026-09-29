@@ -844,6 +844,23 @@ export struct PlayerPage {
       : this.getUIContext().getHostContext()!.resourceManager.getStringSync($r('app.string.player_sleep').id);
   }
 
+  private sleepAlarmClipPath(): string {
+    const context = this.getUIContext();
+    const size = context.vp2px(20);
+    const notchX = context.vp2px(10);
+    const notchY = context.vp2px(6);
+    return this.sleepActive() ? `M0 0 H${notchX} V${notchY} H${size} V${size} H0 Z` :
+      `M0 0 H${size} V${size} H0 Z`;
+  }
+
+  private sleepBadgeLabel(): ResourceStr {
+    if (this.playerState.sleepMode === SleepMode.Chapters) {
+      return $r('app.string.player_sleep_chapters_badge', this.playerState.sleepChaptersRemaining);
+    }
+    if (this.playerState.sleepWaitingForChapter) return $r('app.string.player_sleep_current_badge');
+    return this.formatSleepRemaining();
+  }
+
   private sleepSheetDismissUntil: number = 0;
 
   private openSleepSheet(): void {
@@ -851,6 +868,8 @@ export struct PlayerPage {
     if (this.sleepActive()) {
       this.sleepSheetMode = this.playerState.sleepMode;
       this.sleepSmartStopDraft = this.playerState.sleepSmartStop;
+    } else {
+      this.sleepSheetMode = this.playerState.lastSleepMode;
     }
     this.sleepCustomVisible = false;
     this.sleepInputError = '';
@@ -1465,19 +1484,26 @@ export struct PlayerPage {
 
       Blank()
 
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.alarm'))
-          .fontSize(20)
-          .fontColor([this.sleepActive() ? AppColor.Brand : '#B3B3B3'])
+      Stack({ alignContent: Alignment.TopStart }) {
+        Stack() {
+          SymbolGlyph($r('sys.symbol.alarm'))
+            .fontSize(20)
+            .fontColor([this.sleepActive() ? AppColor.Brand : '#B3B3B3'])
+        }
+        .width(20).height(20)
+        // Path 的路径坐标使用 px；须与 20vp 图标按同一屏幕密度换算。
+        .clip(new Path().commands(this.sleepAlarmClipPath()))
+        .position({ x: 18, y: 12 })
+        .hitTestBehavior(HitTestMode.None)
         if (this.sleepActive()) {
-          Text(this.sleepLabel())
+          Text(this.sleepBadgeLabel())
             .fontSize(10)
-            .fontWeight(FontWeight.Medium)
+            .fontWeight(FontWeight.Bold)
             .fontColor(AppColor.Brand)
             .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .constraintSize({ maxWidth: 62 })
-            .position({ x: 30, y: 0 })
+            .constraintSize({ maxWidth: 48 })
+            .height(14)
+            .position({ x: 29, y: 4 })
             .hitTestBehavior(HitTestMode.None)
         }
       }
@@ -1754,6 +1780,24 @@ export struct PlayerPage {
         .onClick(() => { this.showSleepSheet = false; })
       }
       .width('100%')
+
+      Row({ space: AppSpace.Md }) {
+        Column({ space: 4 }) {
+          Text($r('app.string.player_auto_sleep'))
+            .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+          Text(this.playerState.lastSleepMode === SleepMode.Chapters ?
+            $r('app.string.player_auto_sleep_chapters_hint', this.playerState.lastSleepChapters) :
+            $r('app.string.player_auto_sleep_hint', this.playerState.lastSleepMinutes))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+        Toggle({ type: ToggleType.Switch, isOn: this.playerState.autoSleepEnabled })
+          .selectedColor(AppColor.Brand)
+          .onChange((enabled: boolean): void => {
+            AudioService.getInstance().setAutoSleepEnabled(enabled).catch((): void => {
+              this.showToast($r('app.string.player_auto_sleep_save_failed'));
+            });
+          })
+      }.width('100%')
 
       Row({ space: AppSpace.Xs }) {
         this.buildSleepModeTab(SleepMode.Duration)

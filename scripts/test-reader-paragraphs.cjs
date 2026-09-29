@@ -99,11 +99,12 @@ page.paragraph.getRectsForRange = range => {
 };
 graphicsText.RectWidthStyle = { TIGHT: 0 };
 graphicsText.RectHeightStyle = { TIGHT: 0 };
+let frameInvalidations = 0;
 const nodeModule = load('main/ets/service/text/ReaderParagraphNode.ets', {
   '@kit.ArkGraphics2D': { text: graphicsText, drawing: {
     ClipOp: { INTERSECT: 0 }, Brush: class { setColor() {} }
   } },
-  '@ohos.arkui.node': { FrameNode: class { getRenderNode() { return { invalidate() {} }; } }, NodeController: class {} },
+  '@ohos.arkui.node': { FrameNode: class { invalidate() { frameInvalidations++; } getRenderNode() { return { invalidate() {} }; } }, NodeController: class {} },
   './OnlineTextPaginator': native,
   './SpeechTextHighlighter': highlighter,
   '../../model/ReaderTheme': paletteModule
@@ -128,6 +129,17 @@ assert.equal(clips[0].bottom, 20, 'only the current row is visible');
 assert.equal(ranges[0].start, page.displayStart, 'highlight uses full paragraph display coordinates');
 assert.equal(paints[1].color.red, 255);
 assert.equal(paintedColor.red, 17, 'shared paragraph color is restored before another row paints');
+const nextPage = native.OnlineTextPaginator.paginate('甲乙丙丁戊己庚辛壬癸', 100, 20, 18, 1.9)[2];
+const invalidationsBeforeTurn = frameInvalidations;
+controller.update(nextPage, new highlighter.SpeechHighlightRange(), palette);
+assert.equal(frameInvalidations, invalidationsBeforeTurn + 1, 'page turn schedules FrameNode.onDraw on the mounted node');
+paints.length = 0;
+node.onDraw({ canvas: { save() {}, restore() {}, clipRect() {} } });
+assert.equal(paints[0].index, 2, 'the same mounted node now paints the next page');
+controller.update(page, new highlighter.SpeechHighlightRange(), palette);
+paints.length = 0;
+node.onDraw({ canvas: { save() {}, restore() {}, clipRect() {} } });
+assert.equal(paints[0].index, 1, 'previous page / canceled preview redraws the original page');
 console.log('PASS native paragraph clipping and speech highlight preserve measured geometry');
 
 const cacheText = '缓存复用验证甲乙丙丁戊己庚辛壬癸';

@@ -1,3 +1,4 @@
+import { ReaderVolumeKeyService } from '../service/text/ReaderVolumeKeyService';
 import { ReaderTapPolicy } from '../utils/ReaderTapPolicy';
 import { ImmersiveCircleButton } from '../components/ImmersiveCircleButton';
 import { ChapterCacheIndicator } from '../components/ChapterCacheIndicator';
@@ -33,7 +34,7 @@ import {
   ReaderJumpChapterEvent
 } from '../model/TextReading';
 import { emitter } from '@kit.BasicServicesKit';
-import { ReaderPalette, ReaderPattern, ReaderThemeId, resolvePalette } from '../model/ReaderTheme';
+import { ReaderPalette, ReaderPattern, ReaderThemeId, ReaderCustomTheme, resolvePalette, resolveEffectiveThemeId } from '../model/ReaderTheme';
 import { ReaderBackground } from '../components/ReaderBackground';
 import { ReaderContinuousComponent } from '../components/ReaderContinuousComponent';
 import { ReaderPageTurnComponent } from '../components/ReaderPageTurnComponent';
@@ -94,7 +95,7 @@ export struct ReaderPage {
   @Local currentChapterTitle: string = '';
   @Local fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   @Local lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
-  private pickingBackgroundImage: boolean = false;
+  @Local pickingBackgroundImage: boolean = false;
   @Local followSystemTheme: boolean = false;
   @Local systemNightOverride: boolean = false;
   @Local marginLeft: number = 16;
@@ -112,6 +113,11 @@ export struct ReaderPage {
   };
   @Local themeId: string = TextReadingSettings.THEME_DEFAULT;
   @Local customBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+  @Local customThemes: ReaderCustomTheme[] = ReaderCustomTheme.defaults();
+  @Local customThemeIndex: number = 0;
+  @Local imageBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+  @Local imageFontColor: string = '';
+  @Local effectiveThemeId: string = TextReadingSettings.THEME_DEFAULT;
   @Local backgroundPattern: string = ReaderPattern.None;
   @Local bgImagePath: string = '';
   @Local overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
@@ -126,6 +132,10 @@ export struct ReaderPage {
   @Local showPageNumber: boolean = true;
   @Local showChapterNumber: boolean = true;
   @Local showBookName: boolean = true;
+  private volumeKeys: ReaderVolumeKeyService = new ReaderVolumeKeyService();
+  @Local readerVisible: boolean = false;
+  @Local volumeKeyPageTurn: boolean = false;
+  @Local keyTurnRequest: number = 0;
   @Local pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
   @Local showReadingStatus: boolean = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
   @Local alwaysShowStatusBar: boolean = TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
@@ -152,7 +162,7 @@ export struct ReaderPage {
   @Local fontName: string = '';
   @Local importedFonts: ReaderImportedFont[] = [];
   @Local screenOnMinutes: number = 0;
-  private pickingFont: boolean = false;
+  @Local pickingFont: boolean = false;
   private screenOn: ReaderScreenOnService = new ReaderScreenOnService();
   @Local showSpeechSheet: boolean = false;
   @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
@@ -256,6 +266,7 @@ export struct ReaderPage {
     emitter.on('app.reader.background', this.backgroundHandler);
     emitter.on(EVT_READER_TYPOGRAPHY_CHANGED, this.typographyChangeHandler);
     this.leaving = false;
+    this.readerVisible = true;
     this.readerBarVisible = false;
     this.syncReaderStatusBar();
     WindowUtils.setReaderActive(true);
@@ -275,6 +286,8 @@ export struct ReaderPage {
   }
 
   aboutToDisappear(): void {
+    this.readerVisible = false;
+    this.volumeKeys.dispose();
     this.screenOn.dispose();
     emitter.off('app.reader.background', this.backgroundHandler);
     emitter.off(EVT_READER_TYPOGRAPHY_CHANGED, this.typographyChangeHandler);
@@ -652,8 +665,8 @@ export struct ReaderPage {
       this.readerViewportHeightVp : currentDisplay.height / density;
     const contentWidthVp = this.readerTextWidthVp > 0 ? this.readerTextWidthVp :
       Math.max(80, viewportWidthVp - this.marginLeft - this.marginRight - this.leftSafeVp - this.rightSafeVp);
-    const reservedHeightVp = this.readerTopInsetVp() + this.readerBottomInsetVp() +
-      Math.max(0, this.marginTop - 12) + this.marginBottom + this.readerHeaderHeight() +
+    const reservedHeightVp = this.readerTopInsetVp() + this.readerTextBottomPaddingVp() +
+      Math.max(0, this.marginTop - 12) + this.readerHeaderHeight() +
       this.readerFooterHeight() + READER_TEXT_LAYOUT_GUARD;
     const contentHeightVp = this.readerTextHeightVp > 0 ?
       Math.max(1, this.readerTextHeightVp - READER_TEXT_LAYOUT_GUARD) :
@@ -838,6 +851,10 @@ export struct ReaderPage {
       this.lineHeight = settings.lineHeight;
       this.themeId = settings.themeId;
       this.customBackground = settings.customBackground;
+      this.customThemes = settings.customThemes;
+      this.customThemeIndex = settings.customThemeIndex;
+      this.imageBackground = settings.imageBackground;
+      this.imageFontColor = settings.imageFontColor;
       this.backgroundPattern = settings.pattern;
       this.bgImagePath = settings.backgroundImage;
       if (this.bgImagePath.length > 0 && !await fileIo.access(this.bgImagePath)) {
@@ -857,6 +874,7 @@ export struct ReaderPage {
       this.showChapterNumber = settings.showChapterNumber;
       this.showBookName = settings.showBookName;
       this.tapRegions = settings.tapRegions;
+      this.volumeKeyPageTurn = settings.volumeKeyPageTurn;
       this.pageTurnMode = settings.pageTurnMode;
       this.showReadingStatus = settings.showReadingStatus;
       this.alwaysShowStatusBar = settings.alwaysShowStatusBar;
@@ -890,6 +908,10 @@ export struct ReaderPage {
     this.lineHeight = TextReadingSettings.LINE_HEIGHT_DEFAULT;
     this.themeId = TextReadingSettings.THEME_DEFAULT;
     this.customBackground = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+    this.customThemes = ReaderCustomTheme.defaults();
+    this.customThemeIndex = 0;
+    this.imageBackground = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+    this.imageFontColor = '';
     this.backgroundPattern = ReaderPattern.None;
     this.bgImagePath = '';
     this.overlayAlpha = TextReadingSettings.OVERLAY_DEFAULT;
@@ -904,6 +926,7 @@ export struct ReaderPage {
     this.showChapterNumber = true;
     this.showBookName = true;
     this.tapRegions = ReaderTapPolicy.DEFAULT;
+    this.volumeKeyPageTurn = false;
     this.pageTurnMode = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
     this.showReadingStatus = TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
     this.alwaysShowStatusBar = TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
@@ -917,13 +940,9 @@ export struct ReaderPage {
     const systemDark = WindowUtils.isDarkMode();
     this.systemNightOverride = this.followSystemTheme && systemDark;
     // 系统夜间只覆盖显示，不改写用户保存的图片、蒙层和白天主题。
-    const daytimeTheme = this.themeId === ReaderThemeId.Night || this.themeId === ReaderThemeId.Black ?
-      ReaderThemeId.Parchment : this.themeId;
-    const effectiveTheme = this.followSystemTheme ?
-      (this.systemNightOverride ? ReaderThemeId.Night : daytimeTheme) : this.themeId;
-    const palette = resolvePalette(effectiveTheme, this.customBackground);
-    if (this.fontColor.length > 0 && !this.systemNightOverride) palette.primary = this.fontColor;
-    this.palette = palette;
+    this.effectiveThemeId = resolveEffectiveThemeId(this.themeId, this.followSystemTheme, systemDark);
+    this.palette = resolvePalette(this.effectiveThemeId, this.customBackground, this.fontColor,
+      this.imageBackground, this.imageFontColor);
     // 深色底配白字状态栏，浅色底配黑字
     WindowUtils.setReaderStatusBarLight(this.palette.isDark).catch((_e: Error): void => {});
   }
@@ -936,11 +955,16 @@ export struct ReaderPage {
     settings.textAlignment = this.textAlignment;
     settings.fontWeight = this.fontWeight;
     settings.fontColor = this.fontColor;
+    settings.customThemes = this.customThemes;
+    settings.customThemeIndex = this.customThemeIndex;
+    settings.imageBackground = this.imageBackground;
+    settings.imageFontColor = this.imageFontColor;
     settings.fontPath = this.fontPath;
     settings.fontName = this.fontName;
     settings.screenOnMinutes = this.screenOnMinutes;
     settings.followSystemTheme = this.followSystemTheme;
     settings.alwaysShowStatusBar = this.alwaysShowStatusBar;
+    settings.volumeKeyPageTurn = this.volumeKeyPageTurn;
     settings.tapRegions = this.tapRegions;
     settings.tapLeftPercent = this.tapLeftPercent;
     settings.tapRightPercent = this.tapRightPercent;
@@ -1024,12 +1048,39 @@ export struct ReaderPage {
     this.saveReadingSettings();
   }
 
+  private disableSystemTheme(): void {
+    if (!this.followSystemTheme) return;
+    this.followSystemTheme = false;
+    this.showToast($r('app.string.reader_follow_system_disabled'));
+  }
+
+  private handleCustomThemeSelect(slot: number): void {
+    this.customThemeIndex = ReaderCustomTheme.normalizeSlot(slot);
+    const theme = this.customThemes[this.customThemeIndex];
+    this.customBackground = theme.background;
+    this.fontColor = theme.fontColor;
+    this.handleThemeChange(ReaderThemeId.Custom);
+  }
+
+  private handleCustomThemeSave(slot: number, background: string, fontColor: string): void {
+    const selectedSlot = ReaderCustomTheme.normalizeSlot(slot);
+    this.customThemes = this.customThemes.map((theme: ReaderCustomTheme): ReaderCustomTheme =>
+      theme.slot === selectedSlot ? ReaderCustomTheme.of(selectedSlot, background, fontColor) : theme);
+    this.handleCustomThemeSelect(selectedSlot);
+  }
+
+  private handleImageTextChange(light: boolean): void {
+    this.imageFontColor = light ? '#F5F2EA' : '#2D2925';
+    this.imageBackground = light ? '#1C1F22' : TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+    this.handleThemeChange(ReaderThemeId.Image);
+  }
+
   private handleThemeChange(themeId: string): void {
     if (themeId === ReaderThemeId.Image && this.bgImagePath.length === 0) {
       this.pickBackgroundImage();
       return;
     }
-    this.followSystemTheme = false;
+    this.disableSystemTheme();
     this.themeId = TextReadingSettings.normalizeThemeId(themeId);
     this.backgroundPattern = this.themeId === ReaderThemeId.Image ? ReaderPattern.Image : ReaderPattern.None;
     this.refreshPalette();
@@ -1124,9 +1175,8 @@ export struct ReaderPage {
       }
       if (this.leaving) return;
       const previous = this.bgImagePath;
-      if (this.themeId !== ReaderThemeId.Image) this.customBackground = this.palette.background;
       this.bgImagePath = destination;
-      this.followSystemTheme = false;
+      this.disableSystemTheme();
       this.themeId = ReaderThemeId.Image;
       this.backgroundPattern = ReaderPattern.Image;
       this.refreshPalette();
@@ -1136,11 +1186,16 @@ export struct ReaderPage {
       settings.textAlignment = this.textAlignment;
       settings.fontWeight = this.fontWeight;
       settings.fontColor = this.fontColor;
+    settings.customThemes = this.customThemes;
+    settings.customThemeIndex = this.customThemeIndex;
+    settings.imageBackground = this.imageBackground;
+    settings.imageFontColor = this.imageFontColor;
       settings.fontPath = this.fontPath;
       settings.fontName = this.fontName;
       settings.screenOnMinutes = this.screenOnMinutes;
       settings.followSystemTheme = this.followSystemTheme;
       settings.alwaysShowStatusBar = this.alwaysShowStatusBar;
+      settings.volumeKeyPageTurn = this.volumeKeyPageTurn;
       settings.tapRegions = this.tapRegions;
     settings.tapLeftPercent = this.tapLeftPercent;
     settings.tapRightPercent = this.tapRightPercent;
@@ -1408,7 +1463,7 @@ export struct ReaderPage {
   private onlineTextTurnRevision(): string {
     return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:` +
       `${this.textAlignment}:${this.fontFamily}:${this.systemTypographyRevision}:${this.fontWeight}:${this.fontColor}:${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.overlayAlpha}:` +
-      `${this.readerHeaderHeight()}:${this.readerFooterHeight()}:${this.readerTopInsetVp()}:${this.leftSafeVp}:${this.rightSafeVp}:${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}`;
+      `${this.readerHeaderHeight()}:${this.readerFooterHeight()}:${this.readerTopInsetVp()}:${this.leftSafeVp}:${this.rightSafeVp}:${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}:${this.palette.primary}`;
   }
 
   private showToast(message: ResourceStr): void {
@@ -1416,6 +1471,28 @@ export struct ReaderPage {
       this.getUIContext().getPromptAction().showToast({ message: message });
     } catch (_e) {
       // 页面退出过程中提示能力可能已经释放。
+    }
+  }
+
+  private canUseVolumeKeys(): boolean {
+    return this.volumeKeyPageTurn && this.readerVisible && !this.leaving && !this.loading &&
+      this.readerError.length === 0 && !this.showChapterSheet && !this.showSettingsSheet &&
+      !this.showSpeechSheet && !this.showSourceSwitch && !this.pickingFont && !this.pickingBackgroundImage;
+  }
+
+  @Monitor('volumeKeyPageTurn', 'readerVisible', 'loading', 'readerError', 'showChapterSheet',
+    'showSettingsSheet', 'showSpeechSheet', 'showSourceSwitch', 'pickingFont', 'pickingBackgroundImage')
+  syncVolumeKeys(): void {
+    this.volumeKeys.setEnabled(this.canUseVolumeKeys(), (forward: boolean): void => this.handleVolumePageTurn(forward));
+  }
+
+  private handleVolumePageTurn(forward: boolean): void {
+    if (!this.canUseVolumeKeys()) return;
+    this.screenOn.touch();
+    if (this.isOnlineTextBook()) {
+      this.keyTurnRequest = (Math.abs(this.keyTurnRequest) + 1) * (forward ? 1 : -1);
+    } else if (this.readerKitReady) {
+      try { this.readerKitController.flipPage(forward); } catch (_error) {}
     }
   }
 
@@ -1438,6 +1515,16 @@ export struct ReaderPage {
 
   private readerFooterHeight(): number {
     return this.showFooter && (this.showChapterNumber || this.showBookName || this.showReadingStatus) ? READER_TEXT_FOOTER_HEIGHT : 0;
+  }
+
+  private readerTextBottomPaddingVp(): number {
+    const inset = this.readerBottomInsetVp();
+    // 滚动阅读的下边距同时容纳手势留白，避免在页脚下重复叠加。
+    // 实体导航栏仍完整避让，并在栏上方保留用户设置的边距。
+    if (this.pageTurnMode === PageTurnMode.Vertical && WindowUtils.getSystemBottomVp() <= 0) {
+      return Math.max(inset, this.marginBottom);
+    }
+    return inset + this.marginBottom;
   }
 
   private readerBottomInsetVp(): number {
@@ -1799,7 +1886,10 @@ export struct ReaderPage {
       }
     })
     .onTouch((event: TouchEvent): void => { if (event.type === TouchType.Down) this.screenOn.touch(); })
-    .onVisibleAreaChange([0, 1], (visible: boolean): void => this.screenOn.setVisible(visible))
+    .onVisibleAreaChange([0, 1], (visible: boolean): void => {
+      this.readerVisible = visible;
+      this.screenOn.setVisible(visible);
+    })
     // 背景由 ReaderBackground 铺，根节点保持透明
     .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
     .onSizeChange((oldValue: SizeOptions, newValue: SizeOptions): void => {
@@ -1848,6 +1938,7 @@ export struct ReaderPage {
           tapTopPercent: this.tapTopPercent,
           tapBottomPercent: this.tapBottomPercent,
 
+              keyTurnRequest: this.keyTurnRequest,
               revision: this.continuousRevision, chapterIndex: this.currentResourceIndex,
               content: this.onlineTextContent, charOffset: this.currentOnlineTextCharOffset(),
               chapterCount: this.book?.chapters.length ?? 0,
@@ -1920,7 +2011,7 @@ export struct ReaderPage {
         right: this.marginRight + this.rightSafeVp,
         // 只让正文避开系统栏；背景和翻页纸面始终使用完整视口，保持图片连续。
         top: this.readerTopInsetVp() + Math.max(0, this.marginTop - 12),
-        bottom: this.readerBottomInsetVp() + this.marginBottom
+        bottom: this.readerTextBottomPaddingVp()
       })
 
     }
@@ -1944,6 +2035,7 @@ export struct ReaderPage {
           safeLeft: this.leftSafeVp, safeRight: this.rightSafeVp,
           safeTop: this.readerTopInsetVp() + Math.max(0, this.marginTop - 12) + this.readerHeaderHeight(),
           safeBottom: this.readerBottomInsetVp() + this.marginBottom,
+          keyTurnRequest: this.keyTurnRequest,
           mode: this.pageTurnMode,
           revision: this.onlineTextTurnRevision(),
           paperColor: this.palette.background,
@@ -2125,17 +2217,15 @@ export struct ReaderPage {
           this.applyReadingSettings(); this.saveReadingSettings();
         }
       },
-      onColorChange: (color: string, background: boolean, commit: boolean): void => {
-        this.followSystemTheme = false;
-        if (background) {
-          this.customBackground = color;
-          this.themeId = ReaderThemeId.Custom;
-          this.backgroundPattern = ReaderPattern.None;
-        } else { this.fontColor = color; }
-        this.refreshPalette();
-        this.applyReadingSettings(false);
-        if (commit) this.saveReadingSettings();
+      customThemes: this.customThemes,
+      customThemeIndex: this.customThemeIndex,
+      imageFontColor: this.imageFontColor,
+      effectiveThemeId: this.effectiveThemeId,
+      onCustomThemeSave: (slot: number, background: string, fontColor: string): void => {
+        this.handleCustomThemeSave(slot, background, fontColor);
       },
+      onCustomThemeSelect: (slot: number): void => this.handleCustomThemeSelect(slot),
+      onImageTextChange: (light: boolean): void => this.handleImageTextChange(light),
       onPickFont: (): void => { this.pickReaderFont(); },
       onSystemFont: (): void => {
         this.fontFamily = ''; this.fontPath = ''; this.fontName = '';
@@ -2185,6 +2275,11 @@ export struct ReaderPage {
       },
       onTapRegionsChange: (value: string): void => {
         this.tapRegions = ReaderTapPolicy.normalize(value);
+        this.saveReadingSettings();
+      },
+      volumeKeyPageTurn: this.volumeKeyPageTurn,
+      onVolumeKeyPageTurnChange: (enabled: boolean): void => {
+        this.volumeKeyPageTurn = enabled;
         this.saveReadingSettings();
       },
       pageTurnMode: this.pageTurnMode,

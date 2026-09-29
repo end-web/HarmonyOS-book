@@ -40,6 +40,10 @@ export class PlayerState {
    */
   @Trace savedDurationMs: number = 0;
   @Trace speed: number = 1.0;
+  @Trace autoSleepEnabled: boolean = false;
+  @Trace lastSleepMode: SleepMode = SleepMode.Duration;
+  @Trace lastSleepChapters: number = 1;
+  @Trace lastSleepMinutes: number = 30;
   @Trace sleepMode: SleepMode = SleepMode.Off;
   @Trace sleepMinutes: number = 0;
   @Trace sleepRemainingMs: number = 0;

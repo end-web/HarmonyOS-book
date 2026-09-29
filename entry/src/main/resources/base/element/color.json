@@ -1,5 +1,6 @@
 {
   "color": [
+    { "name": "sponsor_black_gold", "value": "#8C6A24" },
     { "name": "start_window_background", "value": "#FFFFFF" },
     { "name": "page_background", "value": "#F5F5F5" },
     { "name": "card_background", "value": "#FFFFFF" },

@@ -1,3 +1,4 @@
+import { LocalRuleSourceType } from '../model/LocalRuleSource';
 import { Book, Chapter } from '../model/Book';
 import { BookSource, SearchResult } from '../model/BookSource';
 import { BookSourceService } from './BookSourceService';
@@ -33,8 +34,12 @@ export class SourceSwitchSearch {
     const query = keyword.trim() || SourceSwitchSearch.searchKeyword(book.title);
     const available = await Promise.race([SourceDataService.getEnabledSources(),
       this.cancellation.then((): BookSource[] => [])]);
-    const sources = available
-      .filter((source: BookSource): boolean => source.bookSourceUrl !== book.sourceUrl);
+    const contentType = book.contentType ?? 'audio';
+    // 在调度搜索前按导入定义筛选，避免向异类书源发送请求。
+    const sources = available.filter((source: BookSource): boolean =>
+      source.bookSourceUrl !== book.sourceUrl && (contentType === 'text' ?
+        source.bookSourceType === LocalRuleSourceType.TEXT || source.bookSourceType === LocalRuleSourceType.WEB_FILE :
+        source.bookSourceType === LocalRuleSourceType.AUDIO));
     this.total = sources.length;
     const found: Book[] = [];
     const seen = new Set<string>();
@@ -52,8 +57,9 @@ export class SourceSwitchSearch {
           const results = await Promise.race([BookSourceService.searchBooks(source, query), timeout, this.cancellation]);
           if (this.cancelled) return;
           for (const result of results) {
-            const kind = result.contentType ?? ((source.bookSourceType === 0 || source.bookSourceType === 3) ? 'text' : 'audio');
-            if (kind !== (book.contentType ?? 'audio') || !result.bookUrl ||
+            const kind = result.contentType ?? ((source.bookSourceType === LocalRuleSourceType.TEXT ||
+              source.bookSourceType === LocalRuleSourceType.WEB_FILE) ? 'text' : 'audio');
+            if (kind !== contentType || !result.bookUrl ||
               !SourceSwitchSearch.titleKey(result.name).includes(SourceSwitchSearch.titleKey(query))) continue;
             const candidate = SourceSwitchSearch.toBook(result, source, kind);
             if (seen.has(candidate.id)) continue;

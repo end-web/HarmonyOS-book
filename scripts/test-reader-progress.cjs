@@ -11,6 +11,7 @@ const root = path.resolve(__dirname, '../entry/src/main/ets');
 const values = new Map();
 const events = new EventEmitter();
 const mocks = {
+  '@kit.InputKit': { KeyCode: { KEYCODE_VOLUME_UP: 16, KEYCODE_VOLUME_DOWN: 17 } },
   '@kit.BasicServicesKit': { emitter: events },
   '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },
   '@kit.ArkData': { preferences: { getPreferences: async () => ({
@@ -24,9 +25,40 @@ function compile(relative, source) {
   const exports = {};
   vm.runInNewContext(ts.transpileModule(source ?? fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
-  }).outputText, { exports, require: name => mocks[name] || {}, setTimeout, clearTimeout, ScrollAlign: { START: 0 } }, { filename });
+  }).outputText, { exports, require: name => mocks[name] || {}, setTimeout, clearTimeout, KeyType: { Down: 0, Up: 1 }, ScrollAlign: { START: 0 } }, { filename });
   return exports;
 }
+const subscriptions = new Map();
+let subscribeCount = 0;
+let rejectDown = false;
+mocks['@kit.InputKit'].inputConsumer = {
+  on(type, options, handler) {
+    assert.equal(type, 'keyPressed');
+    assert.equal(options.action, 1);
+    assert.equal(options.isRepeat, false);
+    if (rejectDown && options.key === 17) throw new Error('subscription rejected');
+    subscriptions.set(handler, options.key); subscribeCount++;
+  },
+  off(type, handler) { assert.equal(type, 'keyPressed'); subscriptions.delete(handler); }
+};
+const { ReaderVolumeKeyService } = compile('service/text/ReaderVolumeKeyService');
+const volumeKeys = new ReaderVolumeKeyService();
+const directions = [];
+volumeKeys.setEnabled(true, forward => directions.push(forward));
+assert.equal(subscriptions.size, 2, 'volume keys use distinct system consumer callbacks');
+for (const handler of subscriptions.keys()) handler();
+assert.deepEqual(directions, [false, true]);
+volumeKeys.setEnabled(true, forward => directions.push(forward));
+assert.equal(subscribeCount, 2, 'toolbar changes must not duplicate subscriptions');
+volumeKeys.setEnabled(false, () => {});
+assert.equal(subscriptions.size, 0, 'modal/disabled state restores system volume behavior');
+volumeKeys.setEnabled(true, () => {});
+volumeKeys.dispose();
+assert.equal(subscriptions.size, 0, 'leaving reader releases both volume keys');
+rejectDown = true;
+volumeKeys.setEnabled(true, () => {});
+assert.equal(subscriptions.size, 0, 'partial subscription failure rolls back the first key');
+rejectDown = false;
 mocks['../utils/ReaderTapPolicy'] = compile('utils/ReaderTapPolicy');
 mocks['./ReaderTheme'] = compile('model/ReaderTheme');
 const model = compile('model/TextReading');
@@ -37,13 +69,58 @@ mocks['./OnlineTextPaginator'] = mocks['../service/text/OnlineTextPaginator'];
 const { TextReadingProgressService: progress } = compile('service/text/TextReadingProgressService');
 mocks['../service/text/TextReadingProgressService'] = { TextReadingProgressService: progress };
 mocks['../service/text/ReaderFontService'] = { ReaderFontService: { register: () => 'ReaderFont_Custom' } };
+let systemBottomVp = 0;
+mocks['../utils/WindowUtils'] = { WindowUtils: { getSystemBottomVp: () => systemBottomVp } };
 let source = fs.readFileSync(path.join(root, 'pages/ReaderPage.ets'), 'utf8');
-source = source.slice(0, source.search(/\s*@Builder\s+readerTabStyle\(/)) + '\n}';
+const readerBottomMethods = source.slice(source.indexOf('  private readerTextBottomPaddingVp()'),
+  source.indexOf('  private readerFloatingStyle()'));
+source = source.slice(0, source.search(/\s*@Builder\s+readerTabStyle\(/)) + '\n' + readerBottomMethods + '\n}';
 source = source.replace(/^  @Builder[\s\S]*?^  }\r?$/gm, '');
 source = source.replace('@ComponentV2', '').replace('export struct', 'export class')
-  .replace(/@(Param|Local)\s+/g, '');
+  .replace(/@(Param|Local)\s+/g, '').replace(/  @Monitor\([\s\S]*?\)\s*/g, '');
 const { ReaderPage } = compile('pages/ReaderPage', source);
 const { TextReadingPosition, PageTurnMode } = model;
+const bottomReader = Object.create(ReaderPage.prototype);
+Object.assign(bottomReader, { pageTurnMode: PageTurnMode.Vertical, bottomSafeVp: 32, marginBottom: 12 });
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 16, 'scroll footer shares gesture and reading spacing');
+bottomReader.marginBottom = 40;
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 40, 'explicit large reading margin is preserved');
+bottomReader.marginBottom = 0;
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 16, 'zero margin retains gesture clearance');
+bottomReader.bottomSafeVp = 0;
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 8, 'landscape retains minimum clearance');
+systemBottomVp = 48;
+bottomReader.bottomSafeVp = 48;
+bottomReader.marginBottom = 12;
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 60, 'solid navigation bar is fully avoided');
+systemBottomVp = 0;
+bottomReader.bottomSafeVp = 32;
+bottomReader.pageTurnMode = PageTurnMode.Cover;
+assert.equal(bottomReader.readerTextBottomPaddingVp(), 28, 'paged mode retains its original spacing');
+const keyReader = Object.create(ReaderPage.prototype);
+Object.assign(keyReader, { volumeKeyPageTurn: false, readerVisible: true, leaving: false, loading: false,
+  readerError: '', keyTurnRequest: 0, screenOn: { touch() {} }, isOnlineTextBook: () => true });
+assert.equal(keyReader.canUseVolumeKeys(), false);
+keyReader.volumeKeyPageTurn = true;
+for (const visible of [true, false]) {
+  keyReader.readerBarVisible = visible;
+  assert.equal(keyReader.canUseVolumeKeys(), true, 'toolbar visibility must not govern key consumption');
+  keyReader.handleVolumePageTurn(true);
+  assert.ok(keyReader.keyTurnRequest > 0);
+  keyReader.handleVolumePageTurn(false);
+  assert.ok(keyReader.keyTurnRequest < 0);
+}
+for (const field of ['showSettingsSheet', 'showChapterSheet', 'showSpeechSheet', 'showSourceSwitch',
+  'pickingFont', 'pickingBackgroundImage', 'loading', 'leaving']) {
+  const request = keyReader.keyTurnRequest;
+  keyReader[field] = true;
+  assert.equal(keyReader.canUseVolumeKeys(), false, field);
+  keyReader.handleVolumePageTurn(true);
+  assert.equal(keyReader.keyTurnRequest, request);
+  keyReader[field] = false;
+}
+keyReader.readerVisible = false;
+assert.equal(keyReader.canUseVolumeKeys(), false);
 const content = '文'.repeat(300);
 const pages = starts => starts.map((startOffset, index) => ({
   startOffset, endOffset: starts[index + 1] ?? content.length,

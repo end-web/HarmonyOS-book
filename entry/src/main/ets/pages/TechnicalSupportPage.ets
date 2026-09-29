@@ -6,16 +6,24 @@ export struct TechnicalSupportPage {
   @Param navStack: NavPathStack = new NavPathStack();
 
   @Builder
-  buildSection(title: ResourceStr, names: ResourceStr) {
+  buildSection(title: ResourceStr, names: ResourceStr,
+    namesColor: ResourceColor = $r('sys.color.font_secondary'), blackGoldName: ResourceStr = '') {
     Column({ space: AppSpace.Md }) {
       Text(title)
         .fontSize(AppFont.BodyL)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('sys.color.font_primary'))
         .width('100%')
-      Text(names)
+      Text() {
+        Span(names)
+        if (blackGoldName !== '') {
+          Span('\n')
+          Span(blackGoldName)
+            .fontColor($r('app.color.sponsor_black_gold'))
+        }
+      }
         .fontSize(AppFont.BodyL)
-        .fontColor($r('sys.color.font_secondary'))
+        .fontColor(namesColor)
         .lineHeight(36)
         .width('100%')
     }
@@ -49,7 +57,8 @@ export struct TechnicalSupportPage {
       Scroll() {
         Column({ space: AppSpace.Lg }) {
           this.buildSection($r('app.string.technical_support_title'), $r('app.string.technical_support_names'))
-          this.buildSection($r('app.string.sponsor_thanks_title'), $r('app.string.sponsor_thanks_names'))
+          this.buildSection($r('app.string.sponsor_thanks_title'), $r('app.string.sponsor_thanks_names'),
+            '#D4A017', $r('app.string.sponsor_thanks_hendo'))
         }
         .width('100%')
         .padding({

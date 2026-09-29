@@ -1,10 +1,8 @@
 /**
  * ReaderTheme - 阅读页主题与背景模型
  *
- * 支持预设主题和自定义相册图片，图片使用保存的底色蒙层。
- * Custom 与 Paper/Cloth 图案值仅供旧偏好迁移，不再提供设置入口。
- *
- * 正文色不让用户单独选：由底色亮度推导，保证任何底色下都有可读对比度。
+ * 预设、自定义配色与图片主题互斥生效，各自保存颜色。
+ * Paper/Cloth 图案值仅供旧偏好迁移。
  */
 
 /** 背景图案类型 */
@@ -15,7 +13,7 @@ export enum ReaderPattern {
   Image = 'image'
 }
 
-/** 预设与图片主题 id；Custom 仅供旧偏好迁移。 */
+/** 预设、自定义配色与图片主题 id。 */
 export enum ReaderThemeId {
   Parchment = 'parchment',
   EyeCare = 'eyecare',
@@ -83,6 +81,38 @@ export class ReaderThemePreset {
     value.isDark = isDark;
     return value;
   }
+}
+
+/** 固定五个可编辑槽位，id 在重排与编辑时保持稳定。 */
+export class ReaderCustomTheme {
+  id: string = '';
+  slot: number = 0;
+  background: string = '#F5F2EA';
+  fontColor: string = '#2D2925';
+
+  static of(slot: number, background: string, fontColor: string): ReaderCustomTheme {
+    const theme = new ReaderCustomTheme();
+    theme.slot = slot;
+    theme.id = `custom-${slot + 1}`;
+    theme.background = normalizeHex(background);
+    theme.fontColor = fontColor.length > 0 ? normalizeHex(fontColor) : paletteFromCustomColor(background).primary;
+    return theme;
+  }
+
+  static defaults(): ReaderCustomTheme[] {
+    return [ReaderCustomTheme.of(0, '#F5F2EA', '#2D2925'), ReaderCustomTheme.of(1, '#E3EDDF', '#28322A'),
+      ReaderCustomTheme.of(2, '#EFE4D0', '#453321'), ReaderCustomTheme.of(3, '#E4EBF2', '#283645'),
+      ReaderCustomTheme.of(4, '#242424', '#D6D3CD')];
+  }
+
+  static normalizeSlot(slot: number): number {
+    return Number.isInteger(slot) && slot >= 0 && slot < 5 ? slot : 0;
+  }
+}
+
+/** 手动输入只接受 RGB 六位或三位色值，不把非法输入悄悄转换为默认色。 */
+export function isReaderHexColor(input: string): boolean {
+  return /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(input.trim());
 }
 
 /** 预设主题表；顺序即设置页展示顺序 */
@@ -154,16 +184,50 @@ export function paletteFromCustomColor(background: string): ReaderPalette {
 
 /**
  * 解析出当前应生效的配色。
- * 图片主题与旧 Custom 使用保存的蒙层底色；其余未知 id 视为脏数据，
- * 回落到默认预设，而不是悄悄套用一个用户没选的自定义底色。
+ * 自定义字色仅作用于自定义主题，图片只使用自己的蒙层与字色。
+ * 两参数调用保留旧模型迁移所需的背景解析语义。
  */
-export function resolvePalette(themeId: string, customBackground: string): ReaderPalette {
+export function resolvePalette(themeId: string, customBackground: string, customFontColor: string = '',
+  imageBackground: string = customBackground, imageFontColor: string = ''): ReaderPalette {
   if (themeId === ReaderThemeId.Custom || themeId === ReaderThemeId.Image) {
-    return paletteFromCustomColor(customBackground);
+    const palette = paletteFromCustomColor(themeId === ReaderThemeId.Image ? imageBackground : customBackground);
+    const color = themeId === ReaderThemeId.Image ? imageFontColor : customFontColor;
+    if (color.length > 0) palette.primary = normalizeHex(color);
+    return palette;
   }
   const preset = findThemePreset(themeId);
   const resolved = preset !== null ? preset : READER_THEME_PRESETS[0];
   return ReaderPalette.of(resolved.background, resolved.primary, resolved.secondary, resolved.isDark);
+}
+
+/** 系统主题只影响显示，不覆写已保存的主题。 */
+export function resolveEffectiveThemeId(themeId: string, followSystem: boolean, systemDark: boolean): string {
+  if (!followSystem) return themeId;
+  if (systemDark) return ReaderThemeId.Night;
+  return themeId === ReaderThemeId.Night || themeId === ReaderThemeId.Black ? ReaderThemeId.Parchment : themeId;
+}
+
+function linearColorChannel(value: number): number {
+  return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+}
+
+function relativeColorLuminance(hex: string): number {
+  const rgb = normalizeHex(hex).substring(1);
+  return 0.2126 * linearColorChannel(parseInt(rgb.substring(0, 2), 16) / 255) +
+    0.7152 * linearColorChannel(parseInt(rgb.substring(2, 4), 16) / 255) +
+    0.0722 * linearColorChannel(parseInt(rgb.substring(4, 6), 16) / 255);
+}
+
+/** WCAG 对比度仅用于提示，不自动更改用户颜色。 */
+export function readerColorContrast(background: string, foreground: string): number {
+  const first = relativeColorLuminance(background);
+  const second = relativeColorLuminance(foreground);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+export function recommendedReaderFontColor(background: string): string {
+  return readerColorContrast(background, '#2D2925') >= readerColorContrast(background, '#F5F2EA') ?
+    '#2D2925' : '#F5F2EA';
 }
 
 /**

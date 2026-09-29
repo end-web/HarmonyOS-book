@@ -17,7 +17,8 @@ class ReaderParagraphFrameNode extends FrameNode {
     this.page = page;
     this.range = range;
     this.palette = palette;
-    this.getRenderNode()?.invalidate();
+    // onDraw 属于 FrameNode，必须使自绘节点失效才能更新已挂载的正文。
+    this.invalidate();
   }
 
   onMeasure(constraint: LayoutConstraint): void {

@@ -49,6 +49,7 @@ async function fixture(initialState = 'paused') {
   };
   const state = {
     isPlaying: initialState === 'playing', isLoading: initialState === 'initialized',
+    sleepMode: 0, autoSleepEnabled: false, lastSleepMinutes: 30,
     progressMs: 42000, durationMs: 180000, speed: 1,
     currentBook: { id: 'book-1', chapters: [] },
     currentChapter: { id: 'chapter-1', duration: 180, source: { type: 'file', value: 'fixture' } }
@@ -111,7 +112,7 @@ async function fixture(initialState = 'paused') {
     '@kit.AVSessionKit': { avSession: {} },
     '@kit.CoreFileKit': { fileIo: {} },
     '../utils/PlatformCompat': { PlatformCompat: platformCompat },
-    '../model/PlayerState': { SleepMode: { Off: 0, Chapters: 2 }, PlayMode: { Sequence: 0, SingleLoop: 1, ListLoop: 2 } },
+    '../model/PlayerState': { SleepMode: { Off: 0, Duration: 1, Chapters: 2 }, PlayMode: { Sequence: 0, SingleLoop: 1, ListLoop: 2 } },
     './ExternalMediaWatcher': { ExternalMediaWatcher: Watcher },
     './AVSessionService': { AVSessionService: { getInstance: () => session } },
     './PlaybackStore': { PlaybackStore: { getInstance: () => playbackStore } },
@@ -159,6 +160,87 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('automatic sleep persists last duration, starts on explicit playback and never resets active countdown', async () => {
+    const f = await fixture('paused');
+    try {
+      assert.equal(f.state.autoSleepEnabled, false);
+      assert.equal(f.state.lastSleepMinutes, 30);
+      assert.equal(f.service.setSleepTimer(45), true);
+      await flush();
+      f.service.cancelSleepTimer();
+      assert.equal(await f.preference.getLastSleepMinutes(), 45);
+      await f.service.setAutoSleepEnabled(true);
+      assert.equal(await f.preference.getAutoSleepEnabled(), true);
+      assert.equal(f.state.sleepMode, 0, 'enabling while paused does not start countdown');
+      await f.service.play();
+      assert.equal(f.state.sleepMode, 1);
+      assert.equal(f.state.sleepMinutes, 45);
+      const deadline = f.service.sleepEndTime;
+      f.service.prepareSleepForPlayback(f.state.currentBook, f.state.currentChapter, true);
+      f.player.transition('playing');
+      assert.equal(f.service.sleepEndTime, deadline, 'natural next chapter keeps original deadline');
+      await f.service.pause();
+      await f.service.play();
+      assert.equal(f.service.sleepEndTime, deadline, 'pause/resume does not extend active timer');
+      f.service.cancelSleepTimer();
+      f.service.prepareSleepForPlayback(f.state.currentBook, f.state.currentChapter, true);
+      f.player.transition('playing');
+      assert.equal(f.state.sleepMode, 0, 'cancel remains effective through automatic chapters');
+      await f.service.pause();
+      await f.service.play();
+      assert.equal(f.state.sleepMinutes, 45, 'next explicit playback rearms remembered timer');
+      await f.service.setAutoSleepEnabled(false);
+      f.service.cancelSleepTimer();
+      await f.service.pause();
+      await f.service.play();
+      assert.equal(f.state.sleepMode, 0, 'disabled preference leaves playback untimed');
+      await f.preference.setLastSleepMinutes(0);
+      assert.equal(await f.preference.getLastSleepMinutes(), 45, 'cancel/invalid values never erase last duration');
+      f.service.sleepPreferencesReady = null;
+      await f.preference.setAutoSleepEnabled(true);
+      await f.service.loadSleepPreferences();
+      assert.equal(f.state.autoSleepEnabled, true);
+      assert.equal(f.state.lastSleepMinutes, 45, 'preferences reload restores toggle and duration');
+    } finally { f.service.cancelSleepTimer(); }
+  });
+  await check('automatic sleep restores chapter mode and original count across short books and preference reloads', async () => {
+    const f = await fixture('paused');
+    try {
+      f.state.currentBook.chapters = Array.from({ length: 7 }, (_, i) => ({ id: `ch-${i}`, title: `第${i + 1}章`, duration: 180, source: { type: 'file', value: 'fixture' } }));
+      f.state.currentChapter = f.state.currentBook.chapters[0];
+      assert.equal(f.service.setSleepChapters(5), true);
+      await flush();
+      assert.equal(await f.preference.getLastSleepMode(), 2);
+      assert.equal(await f.preference.getLastSleepChapters(), 5);
+      f.service.cancelSleepTimer();
+      f.service.sleepPreferencesReady = null;
+      await f.service.loadSleepPreferences();
+      await f.service.setAutoSleepEnabled(true);
+      await f.service.play();
+      assert.equal(f.state.sleepMode, 2);
+      assert.equal(f.state.sleepChaptersRemaining, 5);
+      assert.equal(f.state.sleepTargetTitle, '第5章');
+      f.state.sleepChaptersRemaining = 4;
+      f.service.prepareSleepForPlayback(f.state.currentBook, f.state.currentChapter, true);
+      f.player.transition('playing');
+      assert.equal(f.state.sleepChaptersRemaining, 4, 'automatic continuation does not reset chapter countdown');
+      f.service.cancelSleepTimer();
+      await f.service.pause();
+      f.state.currentChapter = f.state.currentBook.chapters[5];
+      await f.service.play();
+      assert.equal(f.state.sleepChaptersRemaining, 2, 'short book stops at last available chapter');
+      assert.equal(f.state.lastSleepChapters, 5);
+      assert.equal(await f.preference.getLastSleepChapters(), 5, 'clamping never overwrites remembered five chapters');
+      assert.equal(f.service.setSleepTimer(15), true);
+      await flush();
+      assert.equal(await f.preference.getLastSleepMode(), 1);
+      f.service.cancelSleepTimer();
+      await f.service.pause();
+      await f.service.play();
+      assert.equal(f.state.sleepMode, 1);
+      assert.equal(f.state.sleepMinutes, 15, 'switching back to minutes replaces the remembered mode');
+    } finally { f.service.cancelSleepTimer(); }
+  });
   await check('manual reload bypasses same-chapter reuse and retains interrupted position', async () => {
     const f = await fixture('playing');
     const book = f.state.currentBook;

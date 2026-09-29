@@ -188,24 +188,40 @@ export struct ProfilePage {
 
   @Builder
   buildAccountCard() {
-    Row({ space: AppSpace.Sm }) {
-      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 48 })
-      Column({ space: 2 }) {
-        Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
-          $r('app.string.hw_auth_login_title'))
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.auth.isLoggedIn ? $r('app.string.account_title') :
-          $r('app.string.hw_auth_login_desc'))
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+    Row({ space: 14 }) {
+      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 56 })
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
+            $r('app.string.hw_auth_login_title'))
+            .fontSize(20)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('sys.color.font_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .flexShrink(1)
+          if (this.auth.isLoggedIn) {
+            Image($r('app.media.national_day_badge'))
+              .width(20)
+              .height(20)
+              .objectFit(ImageFit.Contain)
+              .flexShrink(0)
+              .accessibilityText($r('app.string.account_national_day_badge'))
+          }
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .justifyContent(FlexAlign.Start)
+        if (!this.auth.isLoggedIn) {
+          Text($r('app.string.hw_auth_login_desc'))
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
       }
-      .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
 
       if (this.auth.logging || this.auth.restoring) {
         LoadingProgress()
@@ -222,9 +238,8 @@ export struct ProfilePage {
       }
     }
     .width('100%')
-    // 大头像与下方 28vp 图标的中心线对齐。
-    .padding({ left: ROW_INDENT - (48 - 28) / 2, right: ROW_INDENT, top: AppSpace.Sm, bottom: AppSpace.Sm })
-    .constraintSize({ minHeight: 64 })
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: AppSpace.Sm, right: ROW_INDENT, top: 20, bottom: 20 })
     .backgroundColor($r('sys.color.comp_background_primary'))
     .borderRadius(AppRadius.Lg)
     .enabled(!this.auth.logging && !this.auth.restoring)

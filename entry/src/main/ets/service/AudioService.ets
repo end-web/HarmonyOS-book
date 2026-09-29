@@ -131,6 +131,8 @@ export class AudioService {
   private context: common.UIAbilityContext | null = null;
   private timer: number = -1;
   private pendingSeek: number = 0;
+  private sleepPreferencesReady: Promise<void> | null = null;
+  private autoSleepRequested: boolean = false;
   private sleepTimer: number = -1;
   private sleepEndTime: number = 0;
   private chapterEndHandled: boolean = false;
@@ -260,6 +262,7 @@ export class AudioService {
     this.state = state;
     this.context = context;
     this.loadFocusPrefs();
+    this.loadSleepPreferences();
     this.initAVSession();
   }
 
@@ -367,6 +370,7 @@ export class AudioService {
   }
 
   private async ensurePlayer(): Promise<media.AVPlayer> {
+    await this.loadSleepPreferences();
     if (this.player) {
       return this.player;
     }
@@ -437,6 +441,7 @@ export class AudioService {
         }
         this.chapterEndHandled = false;
         this.state.isPlaying = true;
+        this.startAutoSleepIfNeeded();
         // 真正开始出声,清掉 loading 标记
         this.state.isLoading = false;
         this.startTick();
@@ -1464,6 +1469,53 @@ export class AudioService {
     try { await this.persistHistory(); } catch (_e) { /* ignore */ }
   }
 
+  private loadSleepPreferences(): Promise<void> {
+    if (this.sleepPreferencesReady !== null) return this.sleepPreferencesReady;
+    this.sleepPreferencesReady = this.restoreSleepPreferences();
+    return this.sleepPreferencesReady;
+  }
+
+  private async restoreSleepPreferences(): Promise<void> {
+    try {
+      const enabled = await PreferenceService.getAutoSleepEnabled();
+      const minutes = await PreferenceService.getLastSleepMinutes();
+      const mode = await PreferenceService.getLastSleepMode();
+      const chapters = await PreferenceService.getLastSleepChapters();
+      if (this.state) {
+        this.state.autoSleepEnabled = enabled;
+        this.state.lastSleepMinutes = minutes;
+        this.state.lastSleepMode = mode === SleepMode.Chapters ? SleepMode.Chapters : SleepMode.Duration;
+        this.state.lastSleepChapters = chapters;
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'restore sleep settings failed: %{public}s', String(error));
+    }
+  }
+
+  async setAutoSleepEnabled(enabled: boolean): Promise<void> {
+    await this.loadSleepPreferences();
+    await PreferenceService.setAutoSleepEnabled(enabled);
+    if (!this.state) return;
+    this.state.autoSleepEnabled = enabled;
+    if (enabled && this.state.isPlaying) {
+      this.autoSleepRequested = true;
+      this.startAutoSleepIfNeeded();
+    }
+  }
+
+  private startAutoSleepIfNeeded(): void {
+    if (!this.autoSleepRequested) return;
+    this.autoSleepRequested = false;
+    if (!this.state?.autoSleepEnabled || this.state.sleepMode !== SleepMode.Off) return;
+    if (this.state.lastSleepMode === SleepMode.Chapters) {
+      const count = Math.min(this.state.lastSleepChapters, this.getAvailableSleepChapters());
+      // 当前书剩余不足时只播放剩余章节，不覆盖用户记住的原始章数。
+      if (count > 0) this.setSleepChapters(count, false);
+    } else {
+      this.setSleepTimer(this.state.lastSleepMinutes);
+    }
+  }
+
   setSleepTimer(minutes: number, smartStop: boolean = false, fadeOut: boolean = false): boolean {
     if (!this.state) return false;
     if (minutes === 0) {
@@ -1474,6 +1526,11 @@ export class AudioService {
     this.cancelSleepTimer();
     this.state.sleepMode = SleepMode.Duration;
     this.state.sleepMinutes = minutes;
+    this.state.lastSleepMode = SleepMode.Duration;
+    this.state.lastSleepMinutes = minutes;
+    PreferenceService.setLastSleepMinutes(minutes).catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'save sleep duration failed: %{public}s', error.message);
+    });
     this.state.sleepSmartStop = smartStop;
     this.state.sleepFadeOut = fadeOut;
     this.sleepEndTime = Date.now() + minutes * 60 * 1000;
@@ -1489,7 +1546,7 @@ export class AudioService {
     return index < 0 ? 0 : Math.min(999, PreferenceService.chapterStep(book) < 0 ? index + 1 : book.chapters.length - index);
   }
 
-  setSleepChapters(count: number): boolean {
+  setSleepChapters(count: number, remember: boolean = true): boolean {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return false;
     const available = this.getAvailableSleepChapters();
     if (!Number.isInteger(count) || count < 1 || count > available) return false;
@@ -1497,6 +1554,13 @@ export class AudioService {
     const index = this.findChapterIndex(book, this.state.currentChapter);
     this.cancelSleepTimer();
     this.state.sleepMode = SleepMode.Chapters;
+    if (remember) {
+      this.state.lastSleepMode = SleepMode.Chapters;
+      this.state.lastSleepChapters = count;
+      PreferenceService.setLastSleepChapters(count).catch((error: Error): void => {
+        hilog.warn(DOMAIN, TAG, 'save sleep chapters failed: %{public}s', error.message);
+      });
+    }
     this.state.sleepChapterCount = count;
     this.state.sleepChaptersRemaining = count;
     this.state.sleepTargetTitle = book.chapters[index + (count - 1) * PreferenceService.chapterStep(book)].title;
@@ -1529,6 +1593,7 @@ export class AudioService {
   }
 
   cancelSleepTimer(): void {
+    this.autoSleepRequested = false;
     if (this.sleepTimer >= 0) {
       clearInterval(this.sleepTimer);
       this.sleepTimer = -1;
@@ -1560,6 +1625,7 @@ export class AudioService {
     }
     this.sleepPausePending = false;
     this.resumeAfterSleepChapter = false;
+    if (!automatic) this.autoSleepRequested = true;
   }
 
   /** 自然结束与跳过片尾共用入口，一章只能结算一次，先停止再决定是否续播。 */
@@ -1918,10 +1984,13 @@ export class AudioService {
   /** 系统播控、耳机和卡片共用的播放入口；重复 play 不切换为暂停或重载音源。 */
   async play(): Promise<void> {
     this.tracePlayback('play-request');
+    if (this.player?.state !== 'playing') this.autoSleepRequested = true;
     this.pauseSource = 'none';
     this.pauseRequested = false;
     this.pausedByFocus = false;
     this.cancelExternalMediaWatch();
+    await this.loadSleepPreferences();
+    if (this.pauseRequested) return;
     if (!await PlaybackCoordinator.useAudio()) return;
     if (this.pauseRequested) return;
     AVSessionService.getInstance().restoreAudioCallbacks();

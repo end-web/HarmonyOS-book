@@ -18,6 +18,7 @@ export struct ReaderPageTurnComponent {
   @Param safeTop: number = 0;
   @Param safeBottom: number = 0;
   private tapTracker: ReaderTouchTracker = new ReaderTouchTracker();
+  @Param keyTurnRequest: number = 0;
   @Param mode: string = PageTurnMode.Cover;
   @Param revision: string = '';
   @Param paperColor: string = '#F5F2EA';
@@ -50,6 +51,11 @@ export struct ReaderPageTurnComponent {
 
   aboutToAppear(): void {
     emitter.on('app.reader.background', this.backgroundHandler);
+  }
+
+  @Monitor('keyTurnRequest')
+  onKeyTurnRequested(): void {
+    this.beginTurn(this.keyTurnRequest > 0, true, this.pageHeight / 2);
   }
 
   @Monitor('mode', 'revision')

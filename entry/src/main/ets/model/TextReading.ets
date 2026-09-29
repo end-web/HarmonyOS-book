@@ -1,4 +1,4 @@
-import { ReaderPattern, ReaderThemeId, findThemePreset, normalizeHex, resolvePalette } from './ReaderTheme';
+import { ReaderPattern, ReaderThemeId, ReaderCustomTheme, findThemePreset, normalizeHex, resolvePalette } from './ReaderTheme';
 
 export class TextChapterContent {
   title: string = '';
@@ -104,7 +104,13 @@ export class TextReadingSettings {
   }
 
   fontWeight: number = 400;
+  /** 自定义主题字色；空值使用按背景推荐的默认色。 */
   fontColor: string = '';
+  /** 图片主题配置与自定义主题配色分开保存。 */
+  imageBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+  imageFontColor: string = '';
+  customThemeIndex: number = 0;
+  customThemes: ReaderCustomTheme[] = ReaderCustomTheme.defaults();
   fontPath: string = '';
   fontName: string = '';
   screenOnMinutes: number = 0;
@@ -121,7 +127,7 @@ export class TextReadingSettings {
   lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
   /** 预设主题 id，或 ReaderThemeId.Image 表示自定义图片 */
   themeId: string = TextReadingSettings.THEME_DEFAULT;
-  /** 自定义图片的蒙层底色，兼容旧自定义色 */
+  /** 自定义主题底色 */
   customBackground: string = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
   /** 兼容旧偏好字段，只保留 none / image */
   pattern: string = ReaderPattern.None;
@@ -129,6 +135,8 @@ export class TextReadingSettings {
   backgroundImage: string = '';
   /** 背景图上的底色蒙层浓度 */
   overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
+  /** 音量加上一页、音量减下一页；默认保留系统音量行为。 */
+  volumeKeyPageTurn: boolean = false;
   /** 翻页模式 */
   pageTurnMode: string = TextReadingSettings.PAGE_TURN_MODE_DEFAULT;
   /** 底部居中显示电量和时间，不影响正文视口。 */

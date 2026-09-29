@@ -2,7 +2,7 @@ import { ReaderTapPolicy } from '../../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { TextReadingSettings } from '../../model/TextReading';
-import { ReaderPattern, normalizeHex } from '../../model/ReaderTheme';
+import { ReaderPattern, ReaderThemeId, ReaderCustomTheme, normalizeHex, resolvePalette } from '../../model/ReaderTheme';
 
 const STORE_NAME: string = 'text_reading_settings';
 const KEY_FONT_SIZE: string = 'font_size';
@@ -80,6 +80,7 @@ export class TextReadingSettingsService {
     const statusBar = store.getSync(KEY_ALWAYS_SHOW_STATUS_BAR, TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT);
     result.alwaysShowStatusBar = typeof statusBar === 'boolean' ? statusBar :
       TextReadingSettings.ALWAYS_SHOW_STATUS_BAR_DEFAULT;
+    result.volumeKeyPageTurn = store.getSync('volume_key_page_turn', false) === true;
     result.followSystemTheme = store.getSync('follow_system_theme', false) === true;
     const marginLeft = store.getSync('marginLeft', 16);
     result.marginLeft = TextReadingSettings.normalizeMargin(typeof marginLeft === 'number' ? marginLeft : 16, 16);
@@ -94,6 +95,37 @@ export class TextReadingSettingsService {
     result.fontWeight = TextReadingSettings.normalizeFontWeight(typeof weight === 'number' ? weight : 400);
     const color = store.getSync('font_color', '');
     result.fontColor = typeof color === 'string' && color.length > 0 ? normalizeHex(color) : '';
+    const imageBackground = store.getSync('image_background', result.customBackground);
+    result.imageBackground = typeof imageBackground === 'string' ? normalizeHex(imageBackground) :
+      TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
+    const imageFontColor = store.getSync('image_font_color', result.fontColor);
+    result.imageFontColor = typeof imageFontColor === 'string' && imageFontColor.length > 0 ?
+      normalizeHex(imageFontColor) : '';
+    // 旧全局字色转换为一套自定义主题，保留升级前的可见效果；预设今后保持原配色。
+    if (store.getSync('theme_config_version', 0) !== 1 && result.themeId !== ReaderThemeId.Image &&
+      result.themeId !== ReaderThemeId.Custom && result.fontColor.length > 0) {
+      result.customBackground = resolvePalette(result.themeId, result.customBackground).background;
+      result.themeId = ReaderThemeId.Custom;
+      result.pattern = ReaderPattern.None;
+    }
+    const selectedCustomTheme = store.getSync('custom_theme_index', 0);
+    result.customThemeIndex = ReaderCustomTheme.normalizeSlot(typeof selectedCustomTheme === 'number' ? selectedCustomTheme : 0);
+    const customThemes = ReaderCustomTheme.defaults();
+    for (let slot = 0; slot < customThemes.length; slot++) {
+      const fallback = slot === result.customThemeIndex ?
+        ReaderCustomTheme.of(slot, result.customBackground, result.fontColor) : customThemes[slot];
+      const savedBackground = store.getSync(`custom_theme_${slot}_background`, fallback.background);
+      const savedFontColor = store.getSync(`custom_theme_${slot}_font_color`, fallback.fontColor);
+      customThemes[slot] = ReaderCustomTheme.of(slot,
+        typeof savedBackground === 'string' ? savedBackground : fallback.background,
+        typeof savedFontColor === 'string' ? savedFontColor : fallback.fontColor);
+    }
+    result.customThemes = customThemes;
+    // 旧版单套配色进入第一个槽位。兼容字段始终镜像当前槽位。
+    if (store.getSync('custom_themes_version', 0) === 1) {
+      result.customBackground = customThemes[result.customThemeIndex].background;
+      result.fontColor = customThemes[result.customThemeIndex].fontColor;
+    }
     const fontPath = store.getSync('font_path', '');
     result.fontPath = typeof fontPath === 'string' ? fontPath : '';
     const fontName = store.getSync('font_name', '');
@@ -129,6 +161,7 @@ export class TextReadingSettingsService {
     store.putSync(KEY_PAGE_TURN_MODE, TextReadingSettings.normalizePageTurnMode(settings.pageTurnMode));
     store.putSync(KEY_SHOW_READING_STATUS, settings.showReadingStatus);
     store.putSync(KEY_ALWAYS_SHOW_STATUS_BAR, settings.alwaysShowStatusBar);
+    store.putSync('volume_key_page_turn', settings.volumeKeyPageTurn);
     store.putSync('follow_system_theme', settings.followSystemTheme);
     store.putSync('marginLeft', TextReadingSettings.normalizeMargin(settings.marginLeft, 16));
     store.putSync('marginRight', TextReadingSettings.normalizeMargin(settings.marginRight, 16));
@@ -137,6 +170,19 @@ export class TextReadingSettingsService {
     store.putSync('marginBottom', TextReadingSettings.normalizeMargin(settings.marginBottom, 12));
     store.putSync('font_weight', TextReadingSettings.normalizeFontWeight(settings.fontWeight));
     store.putSync('font_color', settings.fontColor.length > 0 ? normalizeHex(settings.fontColor) : '');
+    store.putSync('image_background', normalizeHex(settings.imageBackground));
+    store.putSync('image_font_color', settings.imageFontColor.length > 0 ? normalizeHex(settings.imageFontColor) : '');
+    store.putSync('theme_config_version', 1);
+    const selectedCustomTheme = ReaderCustomTheme.normalizeSlot(settings.customThemeIndex);
+    const fallbackThemes = ReaderCustomTheme.defaults();
+    for (let slot = 0; slot < 5; slot++) {
+      const theme = slot === selectedCustomTheme ? ReaderCustomTheme.of(slot, settings.customBackground, settings.fontColor) :
+        (settings.customThemes[slot] ?? fallbackThemes[slot]);
+      store.putSync(`custom_theme_${slot}_background`, normalizeHex(theme.background));
+      store.putSync(`custom_theme_${slot}_font_color`, normalizeHex(theme.fontColor));
+    }
+    store.putSync('custom_theme_index', selectedCustomTheme);
+    store.putSync('custom_themes_version', 1);
     store.putSync('font_path', settings.fontPath);
     store.putSync('font_name', settings.fontName);
     store.putSync('screen_on_minutes', TextReadingSettings.normalizeScreenOnMinutes(settings.screenOnMinutes));

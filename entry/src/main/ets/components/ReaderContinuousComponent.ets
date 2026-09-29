@@ -18,6 +18,7 @@ export struct ReaderContinuousComponent {
   @Param tapRegions: string = ReaderTapPolicy.DEFAULT;
   private tapTracker: ReaderTouchTracker = new ReaderTouchTracker();
   private contentHeight: number = 0;
+  @Param keyTurnRequest: number = 0;
   @Param revision: number = 0;
   @Param chapterIndex: number = 0;
   @Param content: string = '';
@@ -74,6 +75,13 @@ export struct ReaderContinuousComponent {
       this.reflowTimer = -1;
       this.reset();
     }, 48);
+  }
+
+  @Monitor('keyTurnRequest')
+  onKeyTurnRequested(): void {
+    if (this.disposed || this.restoring || this.contentHeight <= 0) return;
+    this.onScrollStart();
+    this.scroller.scrollBy(0, (this.keyTurnRequest > 0 ? 1 : -1) * this.contentHeight * 0.85);
   }
 
   @Monitor('followOffset')
@@ -294,7 +302,7 @@ export struct ReaderContinuousComponent {
         }, (row: OnlineTextScrollRow): string => row.key)
       }
       .width('100%').height('100%')
-      .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(36) })
+      .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(12) })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.None)
       .cachedCount(12)
