@@ -23,7 +23,6 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
 import { WebEngineGate } from '../service/WebEngineGate';
-import { UpdateService } from '../service/UpdateService';
 import { AppColor, HomeTheme } from '../theme/Theme';
 import { LocalRuleWebRuntimeHost } from '../service/rulesource/LocalRuleWebRuntime';
 import { LocalRuleBrowserRuntimeHost } from '../service/rulesource/LocalRuleBrowserRuntime';
@@ -94,10 +93,6 @@ export struct MainPage {
     this.restoreDefaultTab();
     emitter.on(EVT_SWITCH_TAB, this.switchTabHandler);
     emitter.on(EVT_NAVIGATE_TO_BOOK, this.navigateBookHandler);
-    // 启动静默检查更新(24h 节流,失败静默),不阻塞首帧
-    if (this.context) {
-      UpdateService.silentCheck(this.context);
-    }
   }
 
   aboutToDisappear(): void {

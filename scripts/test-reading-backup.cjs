@@ -10,7 +10,11 @@ const { assert, fs, path, fixtures, snapshot, harness } = require('./backup-test
   values.set('last_played', JSON.stringify({ bookId: 123 }));
   await realPreferences.saveTocOrder('online-novel', true);
   await realPreferences.saveTocOrder('import_local', true);
+  values.set('favorite_book_ids', JSON.stringify(['online-novel', 'import_local']));
+  await realPreferences.setFavoritesPinned(['online-novel', 'import_local'], true);
   const portable = await realPreferences.exportBackupSnapshot();
+  assert.deepEqual(Array.from(portable.pinnedFavorites), ['online-novel']);
+  await realPreferences.setFavoritesPinned(['online-novel'], false);
   assert.equal(portable.history.length, 0, 'bad identity fields are skipped before filtering imported books');
   assert.equal(portable.lastPlayed, null);
   assert.deepEqual(Array.from(portable.descendingBookIds), ['online-novel']);
@@ -19,10 +23,14 @@ const { assert, fs, path, fixtures, snapshot, harness } = require('./backup-test
   await realPreferences.restoreBackupSnapshot(portable);
   assert.equal(await realPreferences.getTocOrder('online-novel'), true);
   assert.equal(await realPreferences.getTocOrder('stale-online'), false);
+  assert.deepEqual(Array.from(await realPreferences.getPinnedFavorites()), ['import_local', 'online-novel']);
   assert.equal(await realPreferences.getTocOrder('import_local'), true);
   delete portable.descendingBookIds;
+  delete portable.pinnedFavorites;
   await realPreferences.restoreBackupSnapshot(portable);
   assert.equal(await realPreferences.getTocOrder('online-novel'), true, 'old backups leave directory order intact');
+  assert.deepEqual(Array.from(await realPreferences.getPinnedFavorites()), ['import_local', 'online-novel'],
+    'legacy backups preserve pins for remaining favorites');
   preferencesHarness.settled();
   for (const mode of ['local', 'cloud']) {
     const h = harness();

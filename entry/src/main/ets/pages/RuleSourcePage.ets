@@ -118,6 +118,7 @@ export struct RuleSourcePage {
   @Local isBulkTesting: boolean = false;
   @Local isEditMode: boolean = false;
   @Local showImportPanel: boolean = false;
+  @Local expandedSourceUrls: Set<string> = new Set();
   @Local showTalebook: boolean = false;
   @Local talebookSourceUrl: string = '';
   @Local selectedSourceCount: number = 0;
@@ -238,7 +239,6 @@ export struct RuleSourcePage {
       this.allSources = sources;
       this.sourceGroups = groups;
       this.sourceCount = sources.length;
-      if (sources.length === 0) this.showImportPanel = true;
       this.applyFilters();
       if (this.managementView === 'order') this.refreshOrderSources();
       this.loadFailed = false;
@@ -2213,6 +2213,13 @@ export struct RuleSourcePage {
     .justifyContent(FlexAlign.Center)
   }
 
+  private toggleSourceExpanded(sourceUrl: string): void {
+    const expanded = new Set(this.expandedSourceUrls);
+    if (expanded.has(sourceUrl)) expanded.delete(sourceUrl);
+    else expanded.add(sourceUrl);
+    this.expandedSourceUrls = expanded;
+  }
+
   @Builder
   buildSourceItem(item: RuleSourceListItem) {
     Column({ space: AppSpace.Xs }) {
@@ -2241,6 +2248,15 @@ export struct RuleSourcePage {
 
         Column({ space: 6 }) {
           Row({ space: AppSpace.Xs }) {
+            Button() {
+              SymbolGlyph(this.expandedSourceUrls.has(item.sourceUrl) ?
+                $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+                .fontSize(18).fontColor([$r('sys.color.font_tertiary')])
+            }
+            .width(32).height(40).padding(0).backgroundColor(Color.Transparent)
+            .accessibilityText(this.expandedSourceUrls.has(item.sourceUrl) ?
+              $r('app.string.source_collapse') : $r('app.string.source_expand'))
+            .onClick(() => this.toggleSourceExpanded(item.sourceUrl))
             if (item.source.isPinned) {
               SymbolGlyph($r('sys.symbol.pin')).fontSize(16).fontColor([AppColor.Brand])
                 .accessibilityText($r('app.string.source_manage_pin'))
@@ -2256,6 +2272,8 @@ export struct RuleSourcePage {
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .layoutWeight(1)
+              .constraintSize({ minHeight: 40 })
+              .onClick(() => this.toggleSourceExpanded(item.sourceUrl))
             if (!this.isEditMode) {
               Button() { SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(18).fontColor([AppColor.Brand]) }
                 .width(32).height(32).padding(0).backgroundColor(Color.Transparent)
@@ -2266,33 +2284,35 @@ export struct RuleSourcePage {
           }
           .width('100%')
 
-          Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Center, wrap: FlexWrap.Wrap }) {
-            Text(this.sourceTypeLabel(item.source))
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_secondary'))
+          if (this.expandedSourceUrls.has(item.sourceUrl)) {
+            Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Center, wrap: FlexWrap.Wrap }) {
+              Text(this.sourceTypeLabel(item.source))
+                .fontSize(AppFont.Caption)
+                .fontColor($r('sys.color.font_secondary'))
 
-            if (this.sourceGroupLabels(item.source).length > 0) {
-              ForEach(this.sourceGroupLabels(item.source), (groupName: string) => {
-                Text(groupName)
-                  .fontSize(AppFont.Caption)
-                  .fontColor($r('sys.color.font_tertiary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .padding({ left: 6, right: 6, top: 1, bottom: 1 })
-                  .margin({ left: AppSpace.Xs })
-                  .backgroundColor($r('sys.color.background_secondary'))
-                  .borderRadius(AppRadius.Xs)
-              }, (groupName: string) => groupName)
+              if (this.sourceGroupLabels(item.source).length > 0) {
+                ForEach(this.sourceGroupLabels(item.source), (groupName: string) => {
+                  Text(groupName)
+                    .fontSize(AppFont.Caption)
+                    .fontColor($r('sys.color.font_tertiary'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+                    .margin({ left: AppSpace.Xs })
+                    .backgroundColor($r('sys.color.background_secondary'))
+                    .borderRadius(AppRadius.Xs)
+                }, (groupName: string) => groupName)
+              }
             }
-          }
-          .width('100%')
-
-          Text(item.source.bookSourceUrl)
-            .fontSize(AppFont.Caption)
-            .fontColor(AppColor.Brand)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
+
+            Text(item.source.bookSourceUrl)
+              .fontSize(AppFont.Caption)
+              .fontColor(AppColor.Brand)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+          }
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
@@ -2308,118 +2328,59 @@ export struct RuleSourcePage {
       .width('100%')
       .alignItems(VerticalAlign.Top)
 
-      Row({ space: AppSpace.Xs }) {
-        Column()
-          .width(8)
-          .height(8)
-          .backgroundColor(this.statusColor(item.source.validationStatus))
-          .borderRadius(AppRadius.Pill)
-        Text(this.statusLabel(item.source.validationStatus))
-          .fontSize(AppFont.Caption)
-          .fontColor(this.statusColor(item.source.validationStatus))
-          .fontWeight(FontWeight.Medium)
-        Text(this.statusMessage(item.source))
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .layoutWeight(1)
-          .maxLines(2)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      if (!this.isEditMode) {
-        if (item.source.exploreUrl.length > 0 || item.source.loginUi.length > 0 ||
-          RuleSourceAccountService.supports(item.source.bookSourceUrl) || this.canOpenSourceLogin(item.source)) {
-          Row({ space: AppSpace.Xs }) {
-            if (item.source.exploreUrl.length > 0) {
-              Button($r('app.string.rule_source_explore'), { type: ButtonType.Normal })
-                .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
-                .backgroundColor(AppColor.BrandSoft).fontColor(AppColor.Brand)
-                .enabled(item.source.enabledExplore && !this.isBulkTesting && !this.isImporting)
-                .onClick(() => this.navStack.pushPathByName('ruleSourceExplore', item.source.bookSourceUrl))
-            }
-            if (item.source.loginUi.length > 0 || RuleSourceAccountService.supports(item.source.bookSourceUrl) ||
-              this.canOpenSourceLogin(item.source)) {
-              Button(this.sourceLoginLabel(item.source), { type: ButtonType.Normal })
-                .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
-                .backgroundColor($r('sys.color.comp_background_secondary')).fontColor(AppColor.Brand)
-                .enabled(!this.isBulkTesting && !this.isImporting && this.busySourceUrl.length === 0)
-                .onClick(() => this.openLoginEntry(item.source))
-            }
-          }.width('100%')
-        }
-        Divider()
-          .strokeWidth(0.5)
-          .color($r('sys.color.comp_divider'))
-
+      if (this.expandedSourceUrls.has(item.sourceUrl)) {
         Row({ space: AppSpace.Xs }) {
-          Button() {
-            Row({ space: AppSpace.Xxs }) {
-              SymbolGlyph($r('sys.symbol.square_and_pencil'))
-                .fontSize(16)
-                .fontColor([AppColor.Brand])
-              Text($r('app.string.source_manage_edit'))
-                .fontSize(AppFont.Caption)
-                .fontColor(AppColor.Brand)
-            }
-            .justifyContent(FlexAlign.Center)
-          }
-          .layoutWeight(1)
-          .height(36)
-          .constraintSize({ minWidth: 0 })
-          .backgroundColor(AppColor.BrandSoft)
-          .borderRadius(AppRadius.Sm)
-          .enabled(!item.source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-          .onClick(() => this.editSource(item.source))
+          Column()
+            .width(8)
+            .height(8)
+            .backgroundColor(this.statusColor(item.source.validationStatus))
+            .borderRadius(AppRadius.Pill)
+          Text(this.statusLabel(item.source.validationStatus))
+            .fontSize(AppFont.Caption)
+            .fontColor(this.statusColor(item.source.validationStatus))
+            .fontWeight(FontWeight.Medium)
+          Text(this.statusMessage(item.source))
+            .fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+            .layoutWeight(1)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
 
-          Button() {
-            Row({ space: AppSpace.Xxs }) {
-              SymbolGlyph($r('sys.symbol.scope'))
-                .fontSize(16)
-                .fontColor([AppColor.Brand])
-              Text($r('app.string.source_manage_debug'))
-                .fontSize(AppFont.Caption)
-                .fontColor(AppColor.Brand)
-            }
-            .justifyContent(FlexAlign.Center)
+        if (!this.isEditMode) {
+          if (item.source.exploreUrl.length > 0 || item.source.loginUi.length > 0 ||
+            RuleSourceAccountService.supports(item.source.bookSourceUrl) || this.canOpenSourceLogin(item.source)) {
+            Row({ space: AppSpace.Xs }) {
+              if (item.source.exploreUrl.length > 0) {
+                Button($r('app.string.rule_source_explore'), { type: ButtonType.Normal })
+                  .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
+                  .backgroundColor(AppColor.BrandSoft).fontColor(AppColor.Brand)
+                  .enabled(item.source.enabledExplore && !this.isBulkTesting && !this.isImporting)
+                  .onClick(() => this.navStack.pushPathByName('ruleSourceExplore', item.source.bookSourceUrl))
+              }
+              if (item.source.loginUi.length > 0 || RuleSourceAccountService.supports(item.source.bookSourceUrl) ||
+                this.canOpenSourceLogin(item.source)) {
+                Button(this.sourceLoginLabel(item.source), { type: ButtonType.Normal })
+                  .layoutWeight(1).height(40).borderRadius(AppRadius.Sm)
+                  .backgroundColor($r('sys.color.comp_background_secondary')).fontColor(AppColor.Brand)
+                  .enabled(!this.isBulkTesting && !this.isImporting && this.busySourceUrl.length === 0)
+                  .onClick(() => this.openLoginEntry(item.source))
+              }
+            }.width('100%')
           }
-          .layoutWeight(1)
-          .height(36)
-          .constraintSize({ minWidth: 0 })
-          .backgroundColor($r('sys.color.comp_background_secondary'))
-          .borderRadius(AppRadius.Sm)
-          .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-          .onClick(() => this.debugSource(item.source))
+          Divider()
+            .strokeWidth(0.5)
+            .color($r('sys.color.comp_divider'))
 
-          Button() {
-            Row({ space: AppSpace.Xxs }) {
-              SymbolGlyph($r('sys.symbol.bolt'))
-                .fontSize(16)
-                .fontColor([item.source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary')])
-              Text($r('app.string.rule_source_test_action'))
-                .fontSize(AppFont.Caption)
-                .fontColor(item.source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary'))
-            }
-            .justifyContent(FlexAlign.Center)
-          }
-          .layoutWeight(1)
-          .height(36)
-          .constraintSize({ minWidth: 0 })
-          .backgroundColor(item.source.canExecute() ? AppColor.BrandSoft : Color.Transparent)
-          .borderRadius(AppRadius.Sm)
-          .enabled(item.source.canExecute() && !this.isImporting && !this.isBulkTesting &&
-            this.busySourceUrl.length === 0)
-          .accessibilityText($r('app.string.rule_source_test_action'))
-          .onClick(() => this.testSource(item.source))
-
-          if (RuleSourceChildService.supports(item.source.bookSourceUrl)) {
+          Row({ space: AppSpace.Xs }) {
             Button() {
               Row({ space: AppSpace.Xxs }) {
-                SymbolGlyph($r('sys.symbol.list_bullet'))
+                SymbolGlyph($r('sys.symbol.square_and_pencil'))
                   .fontSize(16)
                   .fontColor([AppColor.Brand])
-                Text($r('app.string.rule_source_child_action'))
+                Text($r('app.string.source_manage_edit'))
                   .fontSize(AppFont.Caption)
                   .fontColor(AppColor.Brand)
               }
@@ -2428,36 +2389,97 @@ export struct RuleSourcePage {
             .layoutWeight(1)
             .height(36)
             .constraintSize({ minWidth: 0 })
-            .backgroundColor($r('sys.color.background_secondary'))
+            .backgroundColor(AppColor.BrandSoft)
+            .borderRadius(AppRadius.Sm)
+            .enabled(!item.source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+            .onClick(() => this.editSource(item.source))
+
+            Button() {
+              Row({ space: AppSpace.Xxs }) {
+                SymbolGlyph($r('sys.symbol.scope'))
+                  .fontSize(16)
+                  .fontColor([AppColor.Brand])
+                Text($r('app.string.source_manage_debug'))
+                  .fontSize(AppFont.Caption)
+                  .fontColor(AppColor.Brand)
+              }
+              .justifyContent(FlexAlign.Center)
+            }
+            .layoutWeight(1)
+            .height(36)
+            .constraintSize({ minWidth: 0 })
+            .backgroundColor($r('sys.color.comp_background_secondary'))
             .borderRadius(AppRadius.Sm)
             .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-            .accessibilityText($r('app.string.rule_source_child_action'))
-            .onClick(() => this.openSourceChildren(item.source))
-          }
+            .onClick(() => this.debugSource(item.source))
 
-          Button() {
-            Row({ space: AppSpace.Xxs }) {
-              SymbolGlyph($r('sys.symbol.trash'))
-                .fontSize(16)
-                .fontColor([RULE_SOURCE_DANGER])
-              Text($r('app.string.rule_source_delete_action'))
-                .fontSize(AppFont.Caption)
-                .fontColor(RULE_SOURCE_DANGER)
+            Button() {
+              Row({ space: AppSpace.Xxs }) {
+                SymbolGlyph($r('sys.symbol.bolt'))
+                  .fontSize(16)
+                  .fontColor([item.source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary')])
+                Text($r('app.string.rule_source_test_action'))
+                  .fontSize(AppFont.Caption)
+                  .fontColor(item.source.canExecute() ? AppColor.Brand : $r('sys.color.font_tertiary'))
+              }
+              .justifyContent(FlexAlign.Center)
             }
-            .justifyContent(FlexAlign.Center)
+            .layoutWeight(1)
+            .height(36)
+            .constraintSize({ minWidth: 0 })
+            .backgroundColor(item.source.canExecute() ? AppColor.BrandSoft : Color.Transparent)
+            .borderRadius(AppRadius.Sm)
+            .enabled(item.source.canExecute() && !this.isImporting && !this.isBulkTesting &&
+              this.busySourceUrl.length === 0)
+            .accessibilityText($r('app.string.rule_source_test_action'))
+            .onClick(() => this.testSource(item.source))
+
+            if (RuleSourceChildService.supports(item.source.bookSourceUrl)) {
+              Button() {
+                Row({ space: AppSpace.Xxs }) {
+                  SymbolGlyph($r('sys.symbol.list_bullet'))
+                    .fontSize(16)
+                    .fontColor([AppColor.Brand])
+                  Text($r('app.string.rule_source_child_action'))
+                    .fontSize(AppFont.Caption)
+                    .fontColor(AppColor.Brand)
+                }
+                .justifyContent(FlexAlign.Center)
+              }
+              .layoutWeight(1)
+              .height(36)
+              .constraintSize({ minWidth: 0 })
+              .backgroundColor($r('sys.color.background_secondary'))
+              .borderRadius(AppRadius.Sm)
+              .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+              .accessibilityText($r('app.string.rule_source_child_action'))
+              .onClick(() => this.openSourceChildren(item.source))
+            }
+
+            Button() {
+              Row({ space: AppSpace.Xxs }) {
+                SymbolGlyph($r('sys.symbol.trash'))
+                  .fontSize(16)
+                  .fontColor([RULE_SOURCE_DANGER])
+                Text($r('app.string.rule_source_delete_action'))
+                  .fontSize(AppFont.Caption)
+                  .fontColor(RULE_SOURCE_DANGER)
+              }
+              .justifyContent(FlexAlign.Center)
+            }
+            .layoutWeight(1)
+            .height(36)
+            .constraintSize({ minWidth: 0 })
+            .backgroundColor(RULE_SOURCE_DANGER_SOFT)
+            .borderRadius(AppRadius.Sm)
+            .enabled(!item.source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+            .accessibilityText($r('app.string.rule_source_delete_action'))
+            .onClick(() => this.confirmDelete(item.source))
           }
-          .layoutWeight(1)
+          .width('100%')
           .height(36)
-          .constraintSize({ minWidth: 0 })
-          .backgroundColor(RULE_SOURCE_DANGER_SOFT)
-          .borderRadius(AppRadius.Sm)
-          .enabled(!item.source.isLocked && !this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
-          .accessibilityText($r('app.string.rule_source_delete_action'))
-          .onClick(() => this.confirmDelete(item.source))
+          .alignItems(VerticalAlign.Center)
         }
-        .width('100%')
-        .height(36)
-        .alignItems(VerticalAlign.Center)
       }
     }
     .width('100%')

@@ -35,6 +35,7 @@ const SYSTEM_ITEMS: ProfileItem[] = [
 ];
 
 const SUPPORT_ITEMS: ProfileItem[] = [
+  new ProfileItem($r('sys.symbol.square_grid_2x2'), $r('app.string.app_icon_title'), 'appIcon', AppColor.Brand),
   new ProfileItem($r('sys.symbol.qrcode'), $r('app.string.profile_wechat_title'), 'wechat',
     '#07C160', $r('app.string.profile_wechat_desc')),
   new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community',
@@ -66,6 +67,8 @@ export struct ProfilePage {
       this.navStack.pushPathByName('account', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');
+    } else if (id === 'appIcon') {
+      this.navStack.pushPathByName('appIcon', '');
     } else if (id === 'ruleSources') {
       this.navStack.pushPathByName('ruleSources', '');
     } else if (id === 'about') {

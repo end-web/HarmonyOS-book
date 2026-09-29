@@ -247,6 +247,10 @@ export class AppBackupService {
       !Array.isArray(prefs.history) || prefs.history.length > 10000 ||
       !Array.isArray(prefs.progresses) || prefs.progresses.length > 10000 ||
       !Array.isArray(prefs.skipConfigs) || prefs.skipConfigs.length > 10000) return AppBackupService.invalidSnapshot('preferences.collections');
+    if (prefs.pinnedFavorites !== undefined && (!Array.isArray(prefs.pinnedFavorites) ||
+      prefs.pinnedFavorites.length > 10000 ||
+      !prefs.pinnedFavorites.every((id: string): boolean => AppBackupService.validId(id) &&
+        prefs.favorites.includes(id)))) return AppBackupService.invalidSnapshot('preferences.pinnedFavorites');
     if (![prefs.colorMode, prefs.defaultTab, prefs.audioInterruptMode, prefs.homeGridColumns]
       .every((value: number): boolean => typeof value === 'number' && Number.isFinite(value)) ||
       typeof prefs.audioAutoResume !== 'boolean' ||

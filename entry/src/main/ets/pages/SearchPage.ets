@@ -42,12 +42,47 @@ const SEARCH_RECOMMENDATION_KEYWORDS: string[] = [
 ];
 
 @ComponentV2
+struct SearchOptionItem {
+  @Param label: Resource = $r('app.string.search_exact');
+  @Param selected: boolean = false;
+  @Event onToggle: () => void = (): void => {};
+
+  build() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: AppSpace.Sm }) {
+        Text(this.label)
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary'))
+          .layoutWeight(1)
+          .textAlign(TextAlign.Start)
+        SymbolGlyph($r('sys.symbol.checkmark'))
+          .fontSize(18)
+          .fontColor([AppColor.Brand])
+          .visibility(this.selected ? Visibility.Visible : Visibility.Hidden)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 48 })
+    .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm, bottom: AppSpace.Sm })
+    .borderRadius(AppRadius.Sm)
+    .backgroundColor(Color.Transparent)
+    .accessibilityText(this.label)
+    .accessibilityChecked(this.selected)
+    .onClick(() => this.onToggle())
+  }
+}
+
+@ComponentV2
 export struct SearchPage {
   @Param navStack: NavPathStack = new NavPathStack();
 
   @Local keyword: string = '';
   @Local exactSearch: boolean = false;
   @Local searchByAuthor: boolean = false;
+  @Local searchTextOnly: boolean = false;
+  @Local searchAudioOnly: boolean = false;
+  @Local searchOptionsVisible: boolean = false;
   @Local historyWidth: number = 0;
   private historyWrite: Promise<void> = Promise.resolve();
   @Local searching: boolean = false;
@@ -146,6 +181,7 @@ export struct SearchPage {
   }
 
   private handlePageHidden(): void {
+    this.searchOptionsVisible = false;
     this.pageShown = false;
     this.cancelRecommendations();
     this.searchController.stopEditing();
@@ -159,6 +195,8 @@ export struct SearchPage {
         this.trimHistory();
         this.exactSearch = await PreferenceService.getSearchExact();
         this.searchByAuthor = await PreferenceService.getSearchByAuthor();
+        this.searchTextOnly = await PreferenceService.getSearchTextOnly();
+        this.searchAudioOnly = await PreferenceService.getSearchAudioOnly();
       }
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'load search history failed: %{public}s', String(e));
@@ -239,7 +277,8 @@ export struct SearchPage {
   }
 
   private updateSearchOptions(): void {
-    PreferenceService.setSearchOptions(this.exactSearch, this.searchByAuthor).catch((error: Error): void => {
+    PreferenceService.setSearchOptions(this.exactSearch, this.searchByAuthor,
+      this.searchTextOnly, this.searchAudioOnly).catch((error: Error): void => {
       hilog.warn(DOMAIN, TAG, 'save search options: %{public}s', error.message);
     });
     if (this.hasSearched) this.doSearch();
@@ -412,11 +451,13 @@ export struct SearchPage {
     try {
       const sources = await SourceDataService.getEnabledSources();
       if (gen !== this.searchGen) return;
-      this.searchSourceTotal = sources.length;
+      const selectedSources = sources.filter((source: BookSource): boolean =>
+        SearchOptions.matchesSourceType(source.bookSourceType, this.searchTextOnly, this.searchAudioOnly));
+      this.searchSourceTotal = selectedSources.length;
       const concurrency = await PreferenceService.getSearchConcurrency();
       if (gen !== this.searchGen) return;
       const seen = new Set<string>();
-      await this.searchSources(sources, keyword, gen, seen, concurrency);
+      await this.searchSources(selectedSources, keyword, gen, seen, concurrency);
       if (gen !== this.searchGen) return;
       this.audioCount = this.audioBooks.length;
       this.textCount = this.textBooks.length;
@@ -464,10 +505,11 @@ export struct SearchPage {
         ? 'text' : 'audio';
       for (const item of results) {
         if (!SearchOptions.matches(item.name, item.author || '', keyword, this.exactSearch, this.searchByAuthor)) continue;
+        const contentType: 'audio' | 'text' = item.contentType ?? fallbackContentType;
+        if (!SearchOptions.matchesContentType(contentType, this.searchTextOnly, this.searchAudioOnly)) continue;
         const dedupeKey = `${item.sourceUrl}\u001f${item.bookUrl}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
-        const contentType: 'audio' | 'text' = item.contentType ?? fallbackContentType;
         const book = this.searchResultToBook(item, contentType);
         books.push(book);
         if (contentType === 'text') {
@@ -1055,7 +1097,8 @@ export struct SearchPage {
       Button({ type: ButtonType.Circle }) {
         SymbolGlyph($r('sys.symbol.funnel'))
           .fontSize(22)
-          .fontColor([this.exactSearch || this.searchByAuthor ? AppColor.Brand : $r('sys.color.icon_primary')])
+          .fontColor([this.exactSearch || this.searchByAuthor || this.searchTextOnly || this.searchAudioOnly
+            ? AppColor.Brand : $r('sys.color.icon_primary')])
       }
         .width(SEARCH_TITLE_CONTROL_HEIGHT)
         .height(SEARCH_TITLE_CONTROL_HEIGHT)
@@ -1065,8 +1108,11 @@ export struct SearchPage {
         .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
         .accessibilityText($r('app.string.search_options'))
         .id('search-options-button')
-        .onClick(() => this.searchController.stopEditing())
-        .bindMenu(this.buildSearchOptionsMenu(), this.searchOptionsMenuOptions())
+        .onClick(() => {
+          this.searchController.stopEditing();
+          this.searchOptionsVisible = !this.searchOptionsVisible;
+        })
+        .bindPopup(this.searchOptionsVisible, this.searchOptionsPopupOptions())
     }
     .width('100%')
     .height(SEARCH_HEADER_HEIGHT)
@@ -1078,35 +1124,54 @@ export struct SearchPage {
     .visibility(this.searchCollapseOffset >= SEARCH_HEADER_HEIGHT - 0.5 ? Visibility.Hidden : Visibility.Visible)
   }
 
-  private searchOptionsMenuOptions(): MenuOptions {
-    const options: MenuOptions = {
-      backgroundColor: AppMaterial.SheetBackground,
-      backgroundBlurStyle: AppMaterial.SheetBlur
+  private searchOptionsPopupOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      builder: this.buildSearchOptionsMenu,
+      placement: Placement.BottomRight,
+      popupColor: AppMaterial.SheetBackground,
+      enableArrow: false,
+      focusable: true,
+      onStateChange: (event): void => { this.searchOptionsVisible = event.isVisible; }
     };
     if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    else options.backgroundBlurStyle = AppMaterial.SheetBlur;
     return options;
   }
 
-  @Builder
+  @LocalBuilder
   buildSearchOptionsMenu() {
-    Menu() {
-      MenuItem({ content: $r('app.string.search_exact') })
-        .contentFontColor(this.exactSearch ? AppColor.Brand : $r('sys.color.font_primary'))
-        .selected(this.exactSearch)
-        .selectIcon(true)
-        .onChange((selected: boolean): void => {
-          this.exactSearch = selected;
+    Column() {
+      SearchOptionItem({
+        label: $r('app.string.search_exact'), selected: this.exactSearch,
+        onToggle: (): void => {
+          this.exactSearch = !this.exactSearch;
           this.updateSearchOptions();
-        })
-      MenuItem({ content: $r('app.string.search_by_author') })
-        .contentFontColor(this.searchByAuthor ? AppColor.Brand : $r('sys.color.font_primary'))
-        .selected(this.searchByAuthor)
-        .selectIcon(true)
-        .onChange((selected: boolean): void => {
-          this.searchByAuthor = selected;
+        }
+      })
+      SearchOptionItem({
+        label: $r('app.string.search_by_author'), selected: this.searchByAuthor,
+        onToggle: (): void => {
+          this.searchByAuthor = !this.searchByAuthor;
           this.updateSearchOptions();
-        })
+        }
+      })
+      SearchOptionItem({
+        label: $r('app.string.search_text_only'), selected: this.searchTextOnly,
+        onToggle: (): void => {
+          this.searchTextOnly = !this.searchTextOnly;
+          this.updateSearchOptions();
+        }
+      })
+      SearchOptionItem({
+        label: $r('app.string.search_audio_only'), selected: this.searchAudioOnly,
+        onToggle: (): void => {
+          this.searchAudioOnly = !this.searchAudioOnly;
+          this.updateSearchOptions();
+        }
+      })
     }
+    .width(208)
+    .padding(4)
   }
 
   @Builder

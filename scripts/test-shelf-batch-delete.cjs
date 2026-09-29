@@ -155,6 +155,34 @@ async function run() {
   shelf.toggleSelectAllBooks();
   assert.deepEqual([...shelf.selectedBookIds], ['other'], 'busy selection cannot change');
   assert.equal(shelf.handleManageBack(), true);
+  // Pinning survives a new service instance and never rewrites the original shelf order.
+  favorites(['new', 'audio', 'import_text', 'other']);
+  await PreferenceService.setFavoritesPinned(['audio'], true);
+  await PreferenceService.setFavoritesPinned(['other'], true);
+  assert.deepEqual(await PreferenceService.getShelfFavorites(), ['other', 'audio', 'new', 'import_text']);
+  assert.deepEqual(await PreferenceService.getFavorites(), ['new', 'audio', 'import_text', 'other']);
+  const restarted = compile(read('service/PreferenceService.ets'), {
+    require: name => name === '@kit.BasicServicesKit' ? { emitter: { emit() {} } } : {}
+  }).PreferenceService;
+  restarted.store = store;
+  assert.deepEqual(await restarted.getPinnedFavorites(), ['other', 'audio']);
+  await PreferenceService.setFavoritesPinned(['other'], false);
+  assert.deepEqual(await PreferenceService.getShelfFavorites(), ['audio', 'new', 'import_text', 'other']);
+  await PreferenceService.toggleFavorite('newer');
+  assert.deepEqual(await PreferenceService.getShelfFavorites(), ['audio', 'newer', 'new', 'import_text', 'other']);
+  await PreferenceService.removeFavorites(['audio']);
+  await PreferenceService.toggleFavorite('audio');
+  assert.deepEqual(await PreferenceService.getPinnedFavorites(), [], 're-adding a removed book clears its pin');
+  await PreferenceService.setFavoritesPinned(['import_text'], true);
+  await PreferenceService.removeFavorite('import_text');
+  assert.deepEqual(await PreferenceService.getPinnedFavorites(), []);
+  await PreferenceService.setFavoritesPinned(['missing'], true);
+  assert.deepEqual(await PreferenceService.getPinnedFavorites(), [], 'missing favorites cannot be pinned');
+  failWrite = true;
+  await assert.rejects(PreferenceService.setFavoritesPinned(['other'], true));
+  failWrite = false;
+  assert.deepEqual(await PreferenceService.getPinnedFavorites(), [], 'failed writes leave pin state unchanged');
+  console.log('PASS: persistent pin order, unpin, newly added books, removal/re-add and write failures');
   console.log('PASS: filter-scoped selection, cancel/back, default file retention, bulk persistence, alias IDs, partial failure/retry and busy guards');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

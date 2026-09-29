@@ -23,6 +23,8 @@ export struct AccountPage {
   @Local cloudSystemCode: number = 0;
   @Local localMessage: ResourceStr = '';
   @Local hasLocalMessage: boolean = false;
+  @Local localBackupExpanded: boolean = false;
+  @Local cloudBackupExpanded: boolean = false;
   private finishConfirmation: ((confirmed: boolean) => void) | null = null;
 
   aboutToAppear(): void {
@@ -296,6 +298,7 @@ export struct AccountPage {
             bottom: WindowUtils.getBottomSafeVp() + AppSpace.Xl })
         }
         .layoutWeight(1)
+        .align(Alignment.TopStart)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
       }
@@ -389,41 +392,52 @@ export struct AccountPage {
   @Builder
   localBackupCard() {
     Column({ space: AppSpace.Sm }) {
-      Text($r('app.string.local_backup_title'))
-        .fontSize(AppFont.BodyL)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('sys.color.font_primary'))
-      Text($r('app.string.local_backup_description'))
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_secondary'))
-        .lineHeight(21)
-      Column() {
-        this.backupAction(true, true)
-        Divider().color($r('sys.color.comp_divider')).strokeWidth(0.5).margin({ left: 36 })
-        this.backupAction(false, true)
+      Row({ space: AppSpace.Sm }) {
+        Text($r('app.string.local_backup_title'))
+          .fontSize(AppFont.BodyL)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+          .layoutWeight(1)
+        SymbolGlyph(this.localBackupExpanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+          .fontSize(20)
+          .fontColor([$r('sys.color.font_tertiary')])
       }
       .width('100%')
-      .enabled(!this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
-      .opacity(this.auth.dataOperation ? 0.5 : 1)
-      if (this.local.busy) {
-        Row({ space: AppSpace.Sm }) {
-          LoadingProgress().width(20).height(20).color(AppColor.Brand)
-          Text(this.localPhaseText()).fontSize(AppFont.Body).fontColor(AppColor.Brand).layoutWeight(1)
+      .constraintSize({ minHeight: 40 })
+      .onClick(() => { this.localBackupExpanded = !this.localBackupExpanded; })
+      if (this.localBackupExpanded) {
+        Text($r('app.string.local_backup_description'))
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_secondary'))
+          .lineHeight(21)
+        Column() {
+          this.backupAction(true, true)
+          Divider().color($r('sys.color.comp_divider')).strokeWidth(0.5).margin({ left: 36 })
+          this.backupAction(false, true)
         }
         .width('100%')
-        .constraintSize({ minHeight: 40 })
-      }
-      if (this.hasLocalMessage) {
-        Text(this.localMessage)
-          .fontSize(AppFont.Body)
-          .lineHeight(21)
-          .fontColor($r('sys.color.font_secondary'))
+        .enabled(!this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
+        .opacity(this.auth.dataOperation ? 0.5 : 1)
+        if (this.local.busy) {
+          Row({ space: AppSpace.Sm }) {
+            LoadingProgress().width(20).height(20).color(AppColor.Brand)
+            Text(this.localPhaseText()).fontSize(AppFont.Body).fontColor(AppColor.Brand).layoutWeight(1)
+          }
           .width('100%')
+          .constraintSize({ minHeight: 40 })
+        }
+        if (this.hasLocalMessage) {
+          Text(this.localMessage)
+            .fontSize(AppFont.Body)
+            .lineHeight(21)
+            .fontColor($r('sys.color.font_secondary'))
+            .width('100%')
+        }
+        Text($r('app.string.local_backup_exclusions'))
+          .fontSize(AppFont.Caption)
+          .lineHeight(19)
+          .fontColor($r('sys.color.font_tertiary'))
       }
-      Text($r('app.string.local_backup_exclusions'))
-        .fontSize(AppFont.Caption)
-        .lineHeight(19)
-        .fontColor($r('sys.color.font_tertiary'))
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')
@@ -435,61 +449,72 @@ export struct AccountPage {
   @Builder
   backupCard() {
     Column({ space: AppSpace.Sm }) {
-      Text($r('app.string.cloud_title'))
-        .fontSize(AppFont.BodyL)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('sys.color.font_primary'))
-      Text($r('app.string.cloud_description'))
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_secondary'))
-        .lineHeight(21)
-      Text(this.auth.isLoggedIn && this.cloud.lastBackupAt > 0
-        ? $r('app.string.cloud_last_backup', this.formatDate(this.cloud.lastBackupAt))
-        : $r('app.string.cloud_last_backup_unknown'))
-        .fontSize(AppFont.Caption)
-        .fontColor($r('sys.color.font_tertiary'))
-
-      Column() {
-        this.backupAction(true, false)
-        Divider().color($r('sys.color.comp_divider')).strokeWidth(0.5).margin({ left: 36 })
-        this.backupAction(false, false)
+      Row({ space: AppSpace.Sm }) {
+        Text($r('app.string.cloud_title'))
+          .fontSize(AppFont.BodyL)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary'))
+          .layoutWeight(1)
+        SymbolGlyph(this.cloudBackupExpanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+          .fontSize(20)
+          .fontColor([$r('sys.color.font_tertiary')])
       }
       .width('100%')
-      .enabled(this.auth.isLoggedIn && !this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
-      .opacity(this.auth.isLoggedIn && !this.auth.dataOperation ? 1 : 0.5)
+      .constraintSize({ minHeight: 40 })
+      .onClick(() => { this.cloudBackupExpanded = !this.cloudBackupExpanded; })
+      if (this.cloudBackupExpanded) {
+        Text($r('app.string.cloud_description'))
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_secondary'))
+          .lineHeight(21)
+        Text(this.auth.isLoggedIn && this.cloud.lastBackupAt > 0
+          ? $r('app.string.cloud_last_backup', this.formatDate(this.cloud.lastBackupAt))
+          : $r('app.string.cloud_last_backup_unknown'))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
 
-      if (this.cloud.busy) {
-        Row({ space: AppSpace.Sm }) {
-          LoadingProgress().width(20).height(20).color(AppColor.Brand)
-          Text(this.phaseText()).fontSize(AppFont.Body).fontColor(AppColor.Brand).layoutWeight(1)
-          if (this.cloud.phase !== CloudBackupPhase.RESTORING && this.cloud.phase !== CloudBackupPhase.CONFIRMING) {
-            Button($r('app.string.hw_auth_cancel'))
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_secondary'))
-              .backgroundColor($r('sys.color.comp_background_tertiary'))
-              .onClick(() => this.cloud.cancel())
-          }
+        Column() {
+          this.backupAction(true, false)
+          Divider().color($r('sys.color.comp_divider')).strokeWidth(0.5).margin({ left: 36 })
+          this.backupAction(false, false)
         }
         .width('100%')
-        .constraintSize({ minHeight: 40 })
-      }
-      if (this.hasMessage) {
-        Text(this.message)
-          .fontSize(AppFont.Body)
-          .lineHeight(21)
-          .fontColor($r('sys.color.font_secondary'))
+        .enabled(this.auth.isLoggedIn && !this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
+        .opacity(this.auth.isLoggedIn && !this.auth.dataOperation ? 1 : 0.5)
+
+        if (this.cloud.busy) {
+          Row({ space: AppSpace.Sm }) {
+            LoadingProgress().width(20).height(20).color(AppColor.Brand)
+            Text(this.phaseText()).fontSize(AppFont.Body).fontColor(AppColor.Brand).layoutWeight(1)
+            if (this.cloud.phase !== CloudBackupPhase.RESTORING && this.cloud.phase !== CloudBackupPhase.CONFIRMING) {
+              Button($r('app.string.hw_auth_cancel'))
+                .fontSize(AppFont.Caption)
+                .fontColor($r('sys.color.font_secondary'))
+                .backgroundColor($r('sys.color.comp_background_tertiary'))
+                .onClick(() => this.cloud.cancel())
+            }
+          }
           .width('100%')
-        if (this.cloudSystemCode !== 0) {
-          Text($r('app.string.cloud_error_code', this.cloudSystemCode))
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-            .width('100%')
+          .constraintSize({ minHeight: 40 })
         }
+        if (this.hasMessage) {
+          Text(this.message)
+            .fontSize(AppFont.Body)
+            .lineHeight(21)
+            .fontColor($r('sys.color.font_secondary'))
+            .width('100%')
+          if (this.cloudSystemCode !== 0) {
+            Text($r('app.string.cloud_error_code', this.cloudSystemCode))
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+              .width('100%')
+          }
+        }
+        Text($r('app.string.cloud_backup_exclusions'))
+          .fontSize(AppFont.Caption)
+          .lineHeight(19)
+          .fontColor($r('sys.color.font_tertiary'))
       }
-      Text($r('app.string.cloud_backup_exclusions'))
-        .fontSize(AppFont.Caption)
-        .lineHeight(19)
-        .fontColor($r('sys.color.font_tertiary'))
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')

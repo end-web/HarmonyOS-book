@@ -5,6 +5,7 @@ import { MainPage } from './MainPage';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
+import { AppIconPage } from './AppIconPage';
 import { AboutPage } from './AboutPage';
 import { TechnicalSupportPage } from './TechnicalSupportPage';
 import { AccountPage } from './AccountPage';
@@ -335,6 +336,10 @@ struct Index {
     } else if (name === 'settings') {
       ProfileMenuDestination() {
         SettingsPage({ navStack: this.navStack })
+      }
+    } else if (name === 'appIcon') {
+      ProfileMenuDestination() {
+        AppIconPage({ navStack: this.navStack })
       }
     } else if (name === 'ruleSources') {
       // RuleSourcePage 自带 ProfileMenuDestination：页内多级视图需拦截侧滑返回

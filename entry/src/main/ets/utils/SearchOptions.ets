@@ -1,4 +1,14 @@
 export class SearchOptions {
+  static matchesSourceType(type: number | undefined, textOnly: boolean, audioOnly: boolean): boolean {
+    if (textOnly === audioOnly) return true;
+    return textOnly ? type === 0 || type === 3 : type === 1;
+  }
+
+  static matchesContentType(type: 'audio' | 'text', textOnly: boolean, audioOnly: boolean): boolean {
+    if (textOnly === audioOnly) return true;
+    return textOnly ? type === 'text' : type === 'audio';
+  }
+
   static matches(name: string, author: string, keyword: string, exact: boolean, byAuthor: boolean): boolean {
     if (!exact && !byAuthor) return true;
     const value = (byAuthor ? author : name).trim().toLocaleLowerCase();

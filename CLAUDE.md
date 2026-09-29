@@ -13,7 +13,7 @@
 - 编译使用经确认的 Release SDK；当前配套为 DevEco Studio 26.0.0.821，编译版本与目标/最低版本分开管理。上传前检查 APP 内所有 HAP 的 `apiReleaseType = Release`，QuickJS HAR 也需用正式工具链重建。
 - Stage 模式，单模块 `entry/`，设备类型仅 `phone`。
 - ArkTS + ArkUI V2；页面使用 `@Local` 和 Service 单例。
-- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.33`、`versionCode = 1000033`，以 `AppScope/app.json5` 为准。
+- `bundleName = com.huan.listenbook`；当前 `versionName = 0.1.34`、`versionCode = 1000034`，以 `AppScope/app.json5` 为准。
 - 后台模式为 `audioPlayback`、`dataTransfer`，权限包括网络、振动和长时后台运行。
 - `entry/libs/quickjs.har` 为 arm64-v8a / x86_64 双 ABI 本地依赖；源码和构建脚本在 `third_party/quickjs/`、`scripts/build-quickjs.ps1`。
 - 签名在本机 DevEco Studio 配置，`build-profile.json5` 含私有签名信息，禁止提交其中的本机改动。
@@ -22,6 +22,7 @@
 
 | 页面 / 流程 | 服务入口 | 数据 |
 |---|---|---|
+| 我的 / 支持与联系 / 主题图标 | `AppIconPage` → `AppIconService` → `bundleManager` | 默认及八款 1024px 分层图标，选择由系统保存；API 26 起切换，API 20–25 仅预览 |
 | 首页推荐、分类、更多 | `HomePage` → `HomeSourceService` / `BlockMorePage` → `BookSourceService` | 已选择、启用且支持发现的小说或有声书源，选择保存在本地偏好中 |
 | 搜索和搜索推荐 | `SearchPage` → `SourceDataService` → `BookSourceService` | 已启用且具备搜索规则的导入源、`SearchCache`、本地搜索历史 |
 | 详情、目录 | `BookDetailPage` → `BookSourceService` → 对应分发器 | `Book`、`Chapter`、书籍索引和按书拆分的目录缓存 |
@@ -37,6 +38,10 @@
 章节顺序以 PreferenceService 的每书偏好为准，展示目录、播放/朗读上下章及自动续章、阅读跨章和后续章节下载统一跟随；保留原始章节索引和已保存进度。
 
 主导航是 `Index` + `NavPathStack`，`MainPage` 承载“首页 / 书架 / 记录 / 我的”。搜索、详情、阅读、播放器、导入、下载和书源管理使用独立路由。
+
+## 应用更新
+
+关于页“获取更新”通过 `UpdateService.openAppGallery()` 打开华为应用市场简听详情页（App ID `6917615941058168740`，跳转参数使用包名 `com.huan.listenbook`），失败时尝试官方 HTTPS 页面，全部失败提示手动搜索。版本判断、下载与安装由市场提供；不再启动 GitHub 检查或读取旧版本缓存。
 
 ## 内容分发
 

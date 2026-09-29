@@ -1,6 +1,6 @@
 import { hvigor, HvigorPlugin } from '@ohos/hvigor';
 import { hapTasks, OhosHapContext, OhosPluginId } from '@ohos/hvigor-ohos-plugin';
-import { copyFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const preserveLayeredIcon: HvigorPlugin = {
@@ -20,8 +20,9 @@ const preserveLayeredIcon: HvigorPlugin = {
             // 依据：openharmony/developtools_global_resource_tool/src/compression_parser.cpp
             const sourceDir = join(context.getModulePath(), 'src/main/resources/base/media');
             const outputDir = join(target.getModulePathDetails().getIntermediatesRes(), 'resources/base/media');
-            for (const layer of ['foreground', 'background']) {
-              const name = `app_icon_${layer}.png`;
+            const iconLayers = readdirSync(sourceDir).filter(name =>
+              /^app_icon(?:_[a-z]+)?_(foreground|background)\.png$/.test(name));
+            for (const name of iconLayers) {
               const source = join(sourceDir, name);
               const png = readFileSync(source);
               if (png.readUInt32BE(16) !== 1024 || png.readUInt32BE(20) !== 1024) {

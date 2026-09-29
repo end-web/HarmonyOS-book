@@ -231,6 +231,9 @@ function harness() {
           restoreBackupBookShells: async (_books, strict) => { assert.equal(strict, true); control.localRestores++; }
         } };
         if (name === './SourceDataService') return { SourceDataService: { invalidateLocalSources() {} } };
+        if (name === './rulesource/LocalRuleSourceImportService') return { LocalRuleSourceImportService: {
+          importSources: async sources => { control.restoredSources = sources; return sources.length; }
+        } };
         if (name === './rulesource/LocalRuleSourceRepository') return { LocalRuleSourceRepository: {
           init: async () => { if (control.sourceError) throw new Error('source database unavailable'); },
           getAll: async () => control.sources,

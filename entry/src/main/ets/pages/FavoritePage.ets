@@ -121,6 +121,9 @@ export struct FavoritePage {
   @Local textProgressMap: Map<string, TextReadingPosition> = new Map();
   @Param visible: boolean = false;
   @Local showBookActions: boolean = false;
+  @Local pinnedBookIds: Set<string> = new Set();
+  @Local pinningBook: boolean = false;
+  private pendingPinBookId: string = '';
   @Local removingBook: boolean = false;
   @Local isManaging: boolean = false;
   @Local selectedBookIds: Set<string> = new Set();
@@ -256,7 +259,8 @@ export struct FavoritePage {
     const serial = ++this.favoritesLoadSerial;
     // 刷新已导入规则源索引，来源库不可用时在线收藏不会被误判为可用。
     await SourceDataService.getSources();
-    const ids = await PreferenceService.getFavorites();
+    const ids = await PreferenceService.getShelfFavorites();
+    const pinnedIds = new Set(await PreferenceService.getPinnedFavorites());
     const allBooks = await DataService.getBooks(this.context);
     const byId = new Map<string, Book>();
     for (const book of allBooks) {
@@ -334,6 +338,9 @@ export struct FavoritePage {
     // 预算每本书的最新章节序号，避免 build / click 反复解析，也兼容章节 ID 已变化的旧进度。
     const idxMap = await this.buildChapterIndexMap(books, map);
     if (serial !== this.favoritesLoadSerial) return;
+    this.pinnedBookIds = new Set(books.filter((book: Book): boolean =>
+      (aliases.get(book.id) ?? [book.id]).some((id: string): boolean => pinnedIds.has(id)))
+      .map((book: Book): string => book.id));
     this.favoriteIdsByBookId = aliases;
     this.favoriteBooks = books;
     await this.refreshTextProgress();
@@ -963,6 +970,19 @@ export struct FavoritePage {
     }
   }
 
+  private async toggleBookPinned(bookId: string): Promise<void> {
+    if (this.pinningBook || this.removingBook || this.isRefreshing) return;
+    this.pinningBook = true;
+    try {
+      await PreferenceService.setFavoritesPinned(this.favoriteIdsByBookId.get(bookId) ?? [bookId],
+        !this.pinnedBookIds.has(bookId));
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.shelf_pin_failed') });
+    } finally {
+      this.pinningBook = false;
+    }
+  }
+
   private bookMenuOptions(): ContextMenuOptions {
     const options: ContextMenuOptions = {
       preview: MenuPreviewMode.NONE,
@@ -971,6 +991,9 @@ export struct FavoritePage {
       onAppear: (): void => { this.showBookActions = true; },
       onDisappear: (): void => {
         this.showBookActions = false;
+        const pinBookId = this.pendingPinBookId;
+        this.pendingPinBookId = '';
+        if (pinBookId.length > 0) this.toggleBookPinned(pinBookId);
         const selectedId = this.pendingSelection;
         this.pendingSelection = '';
         if (selectedId.length > 0) this.enterManagement(selectedId);
@@ -997,6 +1020,10 @@ export struct FavoritePage {
           else this.enterManagement(book.id);
         })
       if (!this.isManaging) {
+      MenuItem({ content: this.pinnedBookIds.has(book.id) ?
+        $r('app.string.shelf_unpin') : $r('app.string.shelf_pin') })
+        .enabled(!this.pinningBook && !this.removingBook && !this.isRefreshing)
+        .onClick((): void => { this.pendingPinBookId = book.id; })
       MenuItem({ content: $r('app.string.shelf_delete_only') })
         .contentFontColor(AppColor.Brand)
         .onClick((): void => { this.removeActionBook(book, false); })
@@ -1394,6 +1421,7 @@ export struct FavoritePage {
             .objectFit(ImageFit.Cover)
         }
         this.buildTypeBadge(false, book.contentType === 'text')
+        this.buildPinnedBadge(book)
         if (this.isManaging) {
           Row() {
             Blank()
@@ -1429,6 +1457,25 @@ export struct FavoritePage {
     .onClick((): void => {
       if (!this.showBookActions && !this.resolvingTocId) this.handleBookTap(book);
     })
+  }
+
+  @Builder
+  buildPinnedBadge(book: Book) {
+    if (this.pinnedBookIds.has(book.id) && !this.isManaging) {
+      Row() {
+        Blank()
+        SymbolGlyph($r('sys.symbol.pin'))
+          .fontSize(16)
+          .fontColor([AppColor.OnBrand])
+          .padding(5)
+          .backgroundColor(AppColor.Brand)
+          .borderRadius(AppRadius.Pill)
+          .accessibilityText($r('app.string.shelf_pin'))
+      }
+      .width('100%')
+      .padding(4)
+      .hitTestBehavior(HitTestMode.None)
+    }
   }
 
   @Builder
@@ -1517,6 +1564,10 @@ export struct FavoritePage {
       .justifyContent(FlexAlign.Center)
       if (this.isManaging) {
         this.buildSelectionMark(book)
+      } else if (this.pinnedBookIds.has(book.id)) {
+        SymbolGlyph($r('sys.symbol.pin')).fontSize(18).fontColor([AppColor.Brand])
+          .accessibilityText($r('app.string.shelf_pin'))
+          .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%')

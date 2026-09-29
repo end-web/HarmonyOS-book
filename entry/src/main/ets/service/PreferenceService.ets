@@ -13,6 +13,7 @@ export const EVT_HOME_SOURCE_CHANGED = 'app.home.source.changed';
  */
 const STORE_NAME = 'listenbook_prefs';
 const KEY_FAVORITES = 'favorite_book_ids';
+const KEY_PINNED_FAVORITES = 'pinned_favorite_book_ids';
 const KEY_HISTORY = 'play_history';
 const KEY_LAST_PLAYED = 'last_played';
 const KEY_COLOR_MODE = 'color_mode';
@@ -84,6 +85,7 @@ export class BookSkipBackup {
 
 export class PreferenceBackupSnapshot {
   favorites: string[] = [];
+  pinnedFavorites: string[] | undefined = undefined;
   history: PlayHistoryItem[] = [];
   lastPlayed: LastPlayedItem | null = null;
   progresses: PlayProgress[] = [];
@@ -243,6 +245,54 @@ export class PreferenceService {
     return JSON.parse(raw) as string[];
   }
 
+  static async getPinnedFavorites(): Promise<string[]> {
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_PINNED_FAVORITES, '[]');
+    if (typeof raw !== 'string') return [];
+    const pinned: string[] = JSON.parse(raw);
+    const favorites = new Set(await PreferenceService.getFavorites());
+    return pinned.filter((id: string): boolean => favorites.has(id));
+  }
+
+  /** 置顶排序不改写收藏原顺序，取消置顶后可恢复原位置。 */
+  static async getShelfFavorites(): Promise<string[]> {
+    const favorites = await PreferenceService.getFavorites();
+    const pinned = await PreferenceService.getPinnedFavorites();
+    const pinnedSet = new Set(pinned);
+    return pinned.concat(favorites.filter((id: string): boolean => !pinnedSet.has(id)));
+  }
+
+  static async setFavoritesPinned(bookIds: string[], pinned: boolean): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    const favorites = new Set(await PreferenceService.getFavorites());
+    const selected = new Set(bookIds.filter((id: string): boolean => favorites.has(id)));
+    if (selected.size === 0) return;
+    const previous = await s.get(KEY_PINNED_FAVORITES, '[]');
+    const remaining = (await PreferenceService.getPinnedFavorites())
+      .filter((id: string): boolean => !selected.has(id));
+    const next = pinned ? Array.from(selected).concat(remaining) : remaining;
+    try {
+      await s.put(KEY_PINNED_FAVORITES, JSON.stringify(next));
+      await s.flush();
+    } catch (error) {
+      await s.put(KEY_PINNED_FAVORITES, previous);
+      const failure: Error = error;
+      throw failure;
+    }
+    PreferenceService.notifyFavoriteChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });
+  }
+
+  private static async prunePinnedFavorites(favorites: string[]): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    const raw = await s.get(KEY_PINNED_FAVORITES, '[]');
+    if (typeof raw !== 'string') return;
+    const pinned: string[] = JSON.parse(raw);
+    const keep = new Set(favorites);
+    const remaining = pinned.filter((id: string): boolean => keep.has(id));
+    if (remaining.length !== pinned.length) await s.put(KEY_PINNED_FAVORITES, JSON.stringify(remaining));
+  }
+
   static async toggleFavorite(bookId: string): Promise<boolean> {
     const s = await PreferenceService.ensureStore();
     const list = await PreferenceService.getFavorites();
@@ -256,6 +306,7 @@ export class PreferenceService {
       added = true;
     }
     await s.put(KEY_FAVORITES, JSON.stringify(list));
+    await PreferenceService.prunePinnedFavorites(list);
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
     emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId } });
@@ -269,6 +320,7 @@ export class PreferenceService {
     if (idx >= 0) {
       list.splice(idx, 1);
       await s.put(KEY_FAVORITES, JSON.stringify(list));
+      await PreferenceService.prunePinnedFavorites(list);
       await s.flush();
       PreferenceService.notifyFavoriteChanged();
       emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId } });
@@ -289,6 +341,7 @@ export class PreferenceService {
     const remaining = list.filter((id: string): boolean => !selected.has(id));
     if (remaining.length === list.length) return;
     await s.put(KEY_FAVORITES, JSON.stringify(remaining));
+    await PreferenceService.prunePinnedFavorites(remaining);
     await s.flush();
     PreferenceService.notifyFavoriteChanged();
     emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: '' } });
@@ -782,6 +835,7 @@ export class PreferenceService {
   static async clearBookshelfAndHistory(): Promise<void> {
     const s = await PreferenceService.ensureStore();
     await s.delete(KEY_FAVORITES);
+    await s.delete(KEY_PINNED_FAVORITES);
     await s.delete(KEY_HISTORY);
     await s.delete(KEY_LAST_PLAYED);
     await s.delete(KEY_WIDGET_PLAYER_SNAPSHOT);
@@ -812,6 +866,7 @@ export class PreferenceService {
     const ids = await PreferenceService.getFavorites();
     const importIds = ids.filter((id: string) => id.startsWith('import_'));
     await s.put(KEY_FAVORITES, JSON.stringify(importIds));
+    await PreferenceService.prunePinnedFavorites(importIds);
     await s.delete(KEY_HISTORY);
     await s.delete(KEY_LAST_PLAYED);
     await s.delete(KEY_WIDGET_PLAYER_SNAPSHOT);
@@ -942,10 +997,23 @@ export class PreferenceService {
     return s.get('search_by_author', false).then((value): boolean => value === true);
   }
 
-  static async setSearchOptions(exact: boolean, byAuthor: boolean): Promise<void> {
+  static async getSearchTextOnly(): Promise<boolean> {
+    const s = await PreferenceService.ensureStore();
+    return s.get('search_text_only', false).then((value): boolean => value === true);
+  }
+
+  static async getSearchAudioOnly(): Promise<boolean> {
+    const s = await PreferenceService.ensureStore();
+    return s.get('search_audio_only', false).then((value): boolean => value === true);
+  }
+
+  static async setSearchOptions(exact: boolean, byAuthor: boolean,
+    textOnly: boolean = false, audioOnly: boolean = false): Promise<void> {
     const s = await PreferenceService.ensureStore();
     await s.put('search_exact', exact);
     await s.put('search_by_author', byAuthor);
+    await s.put('search_text_only', textOnly);
+    await s.put('search_audio_only', audioOnly);
     await s.flush();
   }
 
@@ -999,6 +1067,8 @@ export class PreferenceService {
     snapshot.descendingBookIds = [];
     snapshot.favorites = (await PreferenceService.getFavorites())
       .filter((id: string) => !id.startsWith('import_'));
+    snapshot.pinnedFavorites = (await PreferenceService.getPinnedFavorites())
+      .filter((id: string): boolean => !id.startsWith('import_'));
     snapshot.history = (await PreferenceService.getHistory())
       .filter((item: PlayHistoryItem): boolean => !!item && typeof item.bookId === 'string' &&
         !item.bookId.startsWith('import_'));
@@ -1049,6 +1119,7 @@ export class PreferenceService {
     const s = await PreferenceService.ensureStore();
     const localFavorites = (await PreferenceService.getFavorites())
       .filter((id: string) => id.startsWith('import_'));
+    const existingPins = await PreferenceService.getPinnedFavorites();
     const localHistory = (await PreferenceService.getHistory())
       .filter((item: PlayHistoryItem) => item.bookId.startsWith('import_'));
     const restoredFavorites = snapshot.favorites
@@ -1056,6 +1127,10 @@ export class PreferenceService {
     const restoredHistory = snapshot.history
       .filter((item: PlayHistoryItem) => !!item && !!item.bookId && !item.bookId.startsWith('import_'));
     await s.put(KEY_FAVORITES, JSON.stringify(localFavorites.concat(restoredFavorites)));
+    const restoredPins = snapshot.pinnedFavorites ?? existingPins;
+    const nextPins = existingPins.filter((id: string): boolean => localFavorites.includes(id))
+      .concat(restoredPins.filter((id: string): boolean => restoredFavorites.includes(id)));
+    await s.put(KEY_PINNED_FAVORITES, JSON.stringify(Array.from(new Set(nextPins))));
     await s.put(KEY_HISTORY, JSON.stringify(localHistory.concat(restoredHistory).slice(0, 50)));
     if (snapshot.lastPlayed && !snapshot.lastPlayed.bookId.startsWith('import_')) {
       await s.put(KEY_LAST_PLAYED, JSON.stringify(snapshot.lastPlayed));
