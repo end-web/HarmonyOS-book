@@ -26,6 +26,7 @@ class ProfileItem {
 }
 
 const CONTENT_ITEMS: ProfileItem[] = [
+  new ProfileItem($r('sys.symbol.star_fill'), $r('app.string.achievement_title'), 'achievements', '#E6A23C'),
   new ProfileItem($r('sys.symbol.arrow_down_circle'), '本地导入', 'import', '#34C759'),
   new ProfileItem($r('sys.symbol.arrow_down_circle'), '下载管理', 'downloads', '#0A84FF')
 ];
@@ -70,6 +71,8 @@ export struct ProfilePage {
       this.navStack.pushPathByName('import', '');
     } else if (id === 'downloads') {
       this.navStack.pushPathByName('downloads', '');
+    } else if (id === 'achievements') {
+      this.navStack.pushPathByName('achievements', '');
     } else if (id === 'account') {
       this.navStack.pushPathByName('account', '');
     } else if (id === 'settings') {

@@ -1492,7 +1492,7 @@ export struct PlayerPage {
       Column() {
         Stack({ alignContent: Alignment.End }) {
           SymbolGlyph($r('sys.symbol.chevron_left_2'))
-            .fontSize(22)
+            .fontSize(23)
             .rotate({ angle: 180 })
             .fontColor([this.hasSkipConfig() ? AppColor.Brand : '#B3B3B3'])
         }

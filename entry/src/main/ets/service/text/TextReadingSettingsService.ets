@@ -59,6 +59,9 @@ export class TextReadingSettingsService {
       TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
     const result = TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
       pageTurnMode, showReadingStatus);
+    const imageMode = store.getSync('background_image_mode', 'cover');
+    result.backgroundImageMode = TextReadingSettings.normalizeBackgroundImageMode(
+      typeof imageMode === 'string' ? imageMode : 'cover');
     const alignment = store.getSync('text_alignment', 'justify');
     result.textAlignment = TextReadingSettings.normalizeTextAlignment(typeof alignment === 'string' ? alignment : 'justify');
     const tapLeftPercent = store.getSync('tapLeftPercent', 33);
@@ -157,6 +160,7 @@ export class TextReadingSettingsService {
     store.putSync(KEY_CUSTOM_BACKGROUND, normalizeHex(settings.customBackground));
     store.putSync(KEY_PATTERN, TextReadingSettings.normalizePattern(settings.pattern));
     store.putSync(KEY_BACKGROUND_IMAGE, settings.backgroundImage);
+    store.putSync('background_image_mode', TextReadingSettings.normalizeBackgroundImageMode(settings.backgroundImageMode));
     store.putSync(KEY_OVERLAY_ALPHA, TextReadingSettings.normalizeOverlay(settings.overlayAlpha));
     store.putSync(KEY_PAGE_TURN_MODE, TextReadingSettings.normalizePageTurnMode(settings.pageTurnMode));
     store.putSync(KEY_SHOW_READING_STATUS, settings.showReadingStatus);

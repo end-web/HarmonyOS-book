@@ -26,6 +26,11 @@ export class RankingParser {
     if (platform === 'ximalaya') return RankingParser.ximalaya(boardId, body);
     if (platform === 'qimao') return RankingParser.qimao(body);
     if (platform === 'jjwxc') return RankingParser.jjwxc(body);
+    if (platform === 'qidian') {
+      const records = RankingParser.qidianPage(boardId, body);
+      // 完结入口只使用带明确完本状态的结构化记录，不能回退到页面中的推荐书。
+      if (records.length > 0 || boardId === 'qd-finished') return records;
+    }
     const blocks = platform === 'qidian'
       ? body.match(/<a\b[^>]*href="(?:https?:)?\/\/m\.qidian\.com\/book\/\d+\/"[^>]*>[\s\S]*?<\/a>/g) ?? []
       : body.match(/<li\s+class="book-item"[^>]*>[\s\S]*?<\/li>/g) ?? [];
@@ -64,11 +69,61 @@ export class RankingParser {
     return books;
   }
 
+  private static qidianPage(boardId: string, body: string): RankingBook[] {
+    const data = /<script\b[^>]*\bid=["']vite-plugin-ssr_pageContext["'][^>]*>([\s\S]*?)<\/script>/.exec(body)?.[1] ?? '';
+    if (!data) return [];
+    try {
+      const root = new JsonObj(JSON.parse(data));
+      const records = root.getObj('pageContext').getObj('pageProps').getObj('pageData').getArr('records');
+      const books: RankingBook[] = [];
+      const seen = new Set<string>();
+      for (let index = 0; index < Math.min(records.length(), 100); index++) {
+        const item = records.getObj(index);
+        const id = item.getString('bid');
+        if (!/^\d+$/.test(id) || seen.has(id)) continue;
+        if (boardId === 'qd-finished' && item.getString('state') !== '完本' &&
+          item.getString('state') !== '已经完本') continue;
+        const book = new RankingBook();
+        book.id = `qidian:${id}`;
+        book.platformId = 'qidian';
+        book.title = RankingParser.text(item.getString('bName'));
+        if (!book.title) continue;
+        book.author = RankingParser.text(item.getString('bAuth'));
+        book.intro = RankingParser.text(item.getString('desc'));
+        book.coverUrl = `https://bookcover.yuewen.com/qdbimg/349573/${id}/600`;
+        book.originalUrl = `https://m.qidian.com/book/${id}/`;
+        book.contentType = 'text';
+        const rank = item.getInt('rankNum');
+        book.rank = rank > 0 ? rank : index + 1;
+        seen.add(id);
+        books.push(book);
+      }
+      return books;
+    } catch (_error) {
+      return [];
+    }
+  }
+
   private static ximalaya(boardId: string, body: string): RankingBook[] {
     const root = new JsonObj(JSON.parse(body));
     if (root.getInt('ret') !== 200) return [];
-    const list = root.getObj('data').getObj(boardId === 'xm-paid' ? 'paidAlbumRank' : 'freeAlbumRank')
+    let list = root.getObj('data').getObj(boardId === 'xm-paid' ? 'paidAlbumRank' : 'freeAlbumRank')
       .getArr('rankListInfo');
+    if (boardId !== 'xm-free' && boardId !== 'xm-paid') {
+      const rankId = boardId === 'xm-hot' ? 48 : boardId === 'xm-new' ? 71 :
+        boardId === 'xm-reputation' ? 117 : boardId === 'xm-vip' ? 282 : 0;
+      if (rankId === 0) return [];
+      const ranks = root.getObj('data').getArr('rankList');
+      let matched = false;
+      for (let index = 0; index < ranks.length(); index++) {
+        const rank = ranks.getObj(index);
+        if (rank.getInt('rankId') !== rankId) continue;
+        list = rank.getArr('albums');
+        matched = true;
+        break;
+      }
+      if (!matched) return [];
+    }
     const books: RankingBook[] = [];
     const seen = new Set<string>();
     for (let index = 0; index < Math.min(list.length(), 100); index++) {
@@ -80,7 +135,9 @@ export class RankingParser {
       book.platformId = 'ximalaya';
       book.title = RankingParser.text(item.getString('albumTitle'));
       book.narrator = RankingParser.text(item.getString('anchorName'));
-      book.coverUrl = RankingParser.imageUrl(item.getString('cover'));
+      const cover = item.getString('cover');
+      book.coverUrl = /^(storages\/|group\d+\/)[A-Za-z0-9_./-]+$/.test(cover)
+        ? `https://imagev2.xmcdn.com/${cover}` : RankingParser.imageUrl(cover);
       book.originalUrl = `https://www.ximalaya.com/album/${id}`;
       book.contentType = 'audio';
       book.intro = RankingParser.text(item.getString('description'));
@@ -130,8 +187,16 @@ export class RankingParser {
       book.id = `jjwxc:${id}`;
       book.platformId = 'jjwxc';
       book.title = RankingParser.capture(link, /\btitle="([^"]+)"/);
+      if (!book.title) {
+        book.title = RankingParser.capture(row,
+          /<a\b[^>]*href="onebook\.php\?novelid=\d+"[^>]*>([\s\S]*?)<\/a>/);
+      }
       const authorLink = tags.find((tag: string): boolean => tag.includes('oneauthor.php?authorid='));
       book.author = RankingParser.capture(authorLink ?? '', /\btitle="([^"]+)"/);
+      if (!book.author) {
+        book.author = RankingParser.capture(row,
+          /<a\b[^>]*href="oneauthor\.php\?authorid=\d+"[^>]*>([\s\S]*?)<\/a>/);
+      }
       book.intro = RankingParser.capture(link, /\brel="([^"]*)"/);
       book.coverUrl = `https://i9-static.jjwxc.net/novelimage.php?novelid=${id}`;
       book.originalUrl = `https://www.jjwxc.net/onebook.php?novelid=${id}`;

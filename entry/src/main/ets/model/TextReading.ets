@@ -1,4 +1,4 @@
-import { ReaderPattern, ReaderThemeId, ReaderCustomTheme, findThemePreset, normalizeHex, resolvePalette } from './ReaderTheme';
+import { ReaderPattern, ReaderImageMode, ReaderThemeId, ReaderCustomTheme, findThemePreset, normalizeHex, resolvePalette } from './ReaderTheme';
 
 export class TextChapterContent {
   title: string = '';
@@ -133,6 +133,14 @@ export class TextReadingSettings {
   pattern: string = ReaderPattern.None;
   /** pattern=image 时的沙箱内图片路径 */
   backgroundImage: string = '';
+  backgroundImageMode: ReaderImageMode = ReaderImageMode.Cover;
+
+  static normalizeBackgroundImageMode(value: string): ReaderImageMode {
+    if (value === ReaderImageMode.Contain) return ReaderImageMode.Contain;
+    if (value === ReaderImageMode.Tile) return ReaderImageMode.Tile;
+    if (value === ReaderImageMode.Stretch) return ReaderImageMode.Stretch;
+    return ReaderImageMode.Cover;
+  }
   /** 背景图上的底色蒙层浓度 */
   overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   /** 音量加上一页、音量减下一页；默认保留系统音量行为。 */

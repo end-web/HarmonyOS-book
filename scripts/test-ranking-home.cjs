@@ -55,6 +55,26 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   assert.equal(qd[0].contentType, 'text');
   assert.equal(qd[0].coverUrl, 'https://bookcover.yuewen.com/qdbimg/349573/123/600');
   assert.equal(RankingParser.parse('qidian', 'qd-month', '<script>challenge()</script>').length, 0);
+  const page = records => '<script id="vite-plugin-ssr_pageContext" type="application/json">' +
+    JSON.stringify({ pageContext: { pageProps: { pageData: { records } } } }) + '</script>';
+  const completeRecords = [
+    { bid: 100, bName: '完本甲', bAuth: '作者甲', state: '完本', desc: '简介' },
+    { bid: '101', bName: '连载乙', state: '连载' },
+    { bid: '102', bName: '完本丙', state: '已经完本' },
+    { bid: 100, bName: '重复甲', state: '完本' },
+    { bid: 'javascript:bad', bName: '非法', state: '完本' }
+  ];
+  const finished = RankingParser.parse('qidian', 'qd-finished', page(completeRecords) + qidian);
+  assert.deepEqual(Array.from(finished, book => book.id), ['qidian:100', 'qidian:102']);
+  assert.deepEqual(Array.from(finished, book => book.rank), [1, 3], 'keep source order when filtering records');
+  assert.equal(finished[0].author, '作者甲');
+  assert.equal(finished[0].coverUrl, 'https://bookcover.yuewen.com/qdbimg/349573/100/600');
+  assert.equal(RankingParser.parse('qidian', 'qd-finished', qidian).length, 0,
+    'finished board must not pick unrelated page recommendations');
+  assert.equal(RankingParser.parse('qidian', 'qd-finished',
+    '<script id="vite-plugin-ssr_pageContext">broken</script>' + qidian).length, 0);
+  assert.equal(RankingParser.parse('qidian', 'qd-reading',
+    page([{ bid: 200, bName: '榜单书', rankNum: 21 }]))[0].rank, 21);
   assert.equal(RankingParser.imageUrl('javascript:alert(1)'), '');
   assert.equal(RankingParser.parse('qidian', 'qd-month', 'x'.repeat(2 * 1024 * 1024 + 1)).length, 0);
   const lr = RankingParser.parse('lrts', 'lr-hot', '<li class="book-item"><a href="/book/42"><img src="https://bookpic.lrts.me/42.png"></a><a class="book-item-name">夜无疆|多人有声剧</a><a class="author">辰东</a>主播：<a>演播甲</a><p class="book-item-desc weaken">简介</p></li>');
@@ -68,6 +88,27 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   ] } } });
   assert.equal(RankingParser.parse('ximalaya', 'xm-free', xm).length, 1);
   assert.equal(RankingParser.parse('ximalaya', 'xm-free', '{"ret":400}').length, 0);
+
+  const v3 = albums => JSON.stringify({ ret: 200, data: { rankList: [
+    { rankId: 999, albums: [{ id: 999, albumTitle: 'unrelated' }] },
+    { rankId: 48, albums }
+  ] } });
+  const albums = [{ id: 5, albumTitle: '热播书', cover: 'storages/audio/cover.jpg' },
+    { id: 5, albumTitle: 'duplicate' }, { id: 'bad', albumTitle: 'invalid' }];
+  const hot = RankingParser.parse('ximalaya', 'xm-hot', v3(albums));
+  assert.equal(hot.length, 1);
+  assert.equal(hot[0].coverUrl, 'https://imagev2.xmcdn.com/storages/audio/cover.jpg');
+  assert.equal(RankingParser.parse('ximalaya', 'xm-new', v3(albums)).length, 0);
+  assert.equal(RankingParser.parse('ximalaya', 'xm-unknown', xm).length, 0);
+  assert.equal(RankingParser.parse('ximalaya', 'xm-hot', v3(Array.from({length: 120},
+    (_, id) => ({id, albumTitle: 'book'})))).length, 100);
+  for (const platform of ['qidian', 'lrts', 'ximalaya', 'qimao', 'jjwxc']) {
+    assert.equal(RankingService.boards().filter(board => board.platformId === platform).length, 6);
+  }
+
+  const vip = RankingParser.parse('jjwxc', 'jj-vip', '<tr><td><a href="onebook.php?novelid=123">强推书</a></td><td><a href="oneauthor.php?authorid=45">作者</a></td></tr>');
+  assert.equal(vip[0].title, '强推书');
+  assert.equal(vip[0].author, '作者');
 
   response = qidian;
   let board = RankingService.boards()[0];
@@ -131,7 +172,19 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   assert.equal(called, 1, 'cancel prevents additional source scheduling');
   assert.equal(progressCount, before, 'late results do not overwrite new selection');
 
-  if (process.argv[2]) {
+  if (process.argv[2] === '--qidian-live') {
+    for (const board of RankingService.boards().filter(board => board.platformId === 'qidian')) {
+      const response = await fetch(board.endpoint, { signal: AbortSignal.timeout(20000) });
+      assert.equal(response.status, 200, board.id);
+      const bytes = await response.arrayBuffer();
+      const encoding = /charset=([^;\s]+)/i.exec(response.headers.get('content-type') || '')?.[1] || 'utf-8';
+      const books = RankingParser.parse(board.platformId, board.id, new TextDecoder(encoding).decode(bytes));
+      assert.ok(books.length >= 3, `${board.id}: public response must contain real entries`);
+      assert.equal(new Set(books.map(book => book.id)).size, books.length);
+      assert.ok(books.every(book => book.title && book.coverUrl.startsWith('https://')));
+      console.log(`LIVE ${board.id}: ${books.length} books; first: ${books[0].title}`);
+    }
+  } else if (process.argv[2]) {
     for (const board of RankingService.boards()) {
       const raw = fs.readFileSync(path.join(process.argv[2], board.id + '.txt'), 'utf8');
       const books = RankingParser.parse(board.platformId, board.id, raw);

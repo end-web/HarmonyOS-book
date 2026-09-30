@@ -325,6 +325,7 @@ export struct MainPage {
       HdsTabs({ controller: this.tabController }) {
         TabContent() {
           HomePage({
+            visible: this.currentTab === 0,
             onManageSources: (resume: () => void): void => {
               this.navStack.pushPath({ name: 'ruleSources', onPop: (): void => resume() });
             },

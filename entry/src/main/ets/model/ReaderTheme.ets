@@ -13,6 +13,14 @@ export enum ReaderPattern {
   Image = 'image'
 }
 
+/** 自定义背景图显示方式；裁剪为兼容旧版本的默认值。 */
+export enum ReaderImageMode {
+  Contain = 'contain',
+  Tile = 'tile',
+  Stretch = 'stretch',
+  Cover = 'cover'
+}
+
 /** 预设、自定义配色与图片主题 id。 */
 export enum ReaderThemeId {
   Parchment = 'parchment',

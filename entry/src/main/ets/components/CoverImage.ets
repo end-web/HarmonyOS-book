@@ -13,6 +13,7 @@ export struct CoverImage {
   @Param useFixedHeight: boolean = false;
   @Param aspectRatioValue: number = 0.75;
   @Param radius: number = AppRadius.Md;
+  @Param imageFit: ImageFit = ImageFit.Cover;
   @Param decodeW: number = 300;
   @Param decodeH: number = 400;
   @Param highPriority: boolean = true;
@@ -50,8 +51,9 @@ export struct CoverImage {
         .width(this.imgWidth)
         .height(this.imgHeight)
         .borderRadius(this.radius)
-        .objectFit(ImageFit.Cover)
-        .sourceSize({ width: this.decodeW, height: this.decodeH })
+        .clip(true)
+        .objectFit(this.imageFit)
+        .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
         .alt($r('app.media.app_icon_legacy'))
         .onError(() => {
           this.scheduleRetry();
@@ -61,8 +63,9 @@ export struct CoverImage {
         .width(this.imgWidth)
         .aspectRatio(this.aspectRatioValue)
         .borderRadius(this.radius)
-        .objectFit(ImageFit.Cover)
-        .sourceSize({ width: this.decodeW, height: this.decodeH })
+        .clip(true)
+        .objectFit(this.imageFit)
+        .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
         .alt($r('app.media.app_icon_legacy'))
         .onError(() => {
           this.scheduleRetry();
@@ -77,13 +80,15 @@ export struct CoverImage {
         .width(this.imgWidth)
         .height(this.imgHeight)
         .borderRadius(this.radius)
-        .objectFit(ImageFit.Cover)
+        .clip(true)
+        .objectFit(this.imageFit)
     } else {
       Image($r('app.media.app_icon_legacy'))
         .width(this.imgWidth)
         .aspectRatio(this.aspectRatioValue)
         .borderRadius(this.radius)
-        .objectFit(ImageFit.Cover)
+        .clip(true)
+        .objectFit(this.imageFit)
     }
   }
 

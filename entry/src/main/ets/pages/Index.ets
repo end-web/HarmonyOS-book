@@ -9,6 +9,7 @@ import { AppIconPage } from './AppIconPage';
 import { AboutPage } from './AboutPage';
 import { TechnicalSupportPage } from './TechnicalSupportPage';
 import { AccountPage } from './AccountPage';
+import { AchievementPage } from './AchievementPage';
 import { GuidePage } from './GuidePage';
 import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
@@ -331,6 +332,8 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor('#F5F2EA')
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'achievements') {
+      AchievementPage({ navStack: this.navStack })
     } else if (name === 'account') {
       AccountPage({ navStack: this.navStack })
     } else if (name === 'settings') {

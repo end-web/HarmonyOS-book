@@ -9,6 +9,7 @@ export class LocalRuleDebugResult {
   success: boolean = false;
   data: string = '';
   error: string = '';
+  warning: string = '';
 }
 
 export class LocalRuleDebugService {
@@ -25,14 +26,17 @@ export class LocalRuleDebugService {
         if (explored.books.length === 0) throw new Error('发现请求完成，但未提取到书籍');
         result.data = LocalRuleDebugService.searchPreview(explored.books);
       } else if (stage === 'search' || stage === 'full') {
-        const books = await LocalRuleDebugService.search(source, keyword, variables);
+        const books = stage === 'full'
+          ? await LocalRuleDebugService.fullChainBooks(source, keyword, variables, result)
+          : await LocalRuleDebugService.search(source, keyword, variables);
         result.data = LocalRuleDebugService.searchPreview(books);
         if (stage === 'full') {
           const book = books[0];
           LocalRuleDebugService.merge(variables, book.variables);
           const info = await LocalRuleDebugService.detail(source, book.bookUrl, variables);
           const chapters = await LocalRuleDebugService.toc(source, info.tocUrl || book.bookUrl, variables);
-          const chapter = chapters.find(item => !item.isVolume && item.url.length > 0);
+          const chapter = chapters.find(item => !item.isVolume && item.url.length > 0 &&
+            (!result.warning || (!item.isVip && !item.isPay)));
           if (chapter === undefined) throw new Error('目录没有可读取的章节');
           LocalRuleDebugService.merge(variables, chapter.variables);
           result.data = await LocalRuleDebugService.content(source, chapter.url, variables,
@@ -60,14 +64,54 @@ export class LocalRuleDebugService {
       }
       LocalRuleDiagnostics.check(variables);
       result.success = true;
+      if (result.warning) result.data = `部分可用：发现、详情、目录与内容解析完成。\n${result.warning}\n${result.data}`;
       LocalRuleDiagnostics.record(variables, 'success', '调试完成');
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);
+      if (result.warning) result.error = `${result.warning}；后续链路失败：${result.error}`;
       LocalRuleDiagnostics.record(variables, 'error', '调试失败', result.error);
     }
     result.data = LocalRuleDiagnostics.redact(result.data).substring(0, 16000);
     result.error = LocalRuleDiagnostics.redact(result.error);
+    result.warning = LocalRuleDiagnostics.redact(result.warning);
     return result;
+  }
+
+  private static async fullChainBooks(source: LocalRuleSource, keyword: string,
+    variables: Record<string, string>, result: LocalRuleDebugResult): Promise<SearchResult[]> {
+    try {
+      return await LocalRuleDebugService.search(source, keyword, variables);
+    } catch (error) {
+      LocalRuleDiagnostics.check(variables);
+      const message = error instanceof Error ? error.message : String(error);
+      result.warning = `搜索未通过：${message}`;
+      LocalRuleDiagnostics.record(variables, 'warn', '搜索未通过，继续验证发现链路', message);
+    }
+    variables['__debugStage'] = 'explore';
+    LocalRuleDiagnostics.check(variables);
+    if (!source.enabledExplore || !source.exploreUrl.trim()) {
+      throw new Error('缺少发现地址或发现未启用');
+    }
+    const panel = await LocalRulePanelService.load(source, false, variables);
+    const categories = panel.entries.filter(entry => entry.url.trim().length > 0).slice(0, 8);
+    let lastError = '发现没有可请求的分类';
+    for (const category of categories) {
+      LocalRuleDiagnostics.check(variables);
+      try {
+        const explored = await LocalRuleDispatcher.explore(source, category.url, 1, variables);
+        LocalRuleDiagnostics.check(variables);
+        if (explored.books.length > 0) {
+          LocalRuleDiagnostics.record(variables, 'success', `发现解析出 ${explored.books.length} 本书`);
+          return explored.books;
+        }
+        lastError = '发现请求完成，但未提取到书籍';
+      } catch (error) {
+        LocalRuleDiagnostics.check(variables);
+        lastError = error instanceof Error ? error.message : String(error);
+        LocalRuleDiagnostics.record(variables, 'warn', '发现分类失败，尝试下一分类', lastError);
+      }
+    }
+    throw new Error(lastError);
   }
 
   private static async search(source: LocalRuleSource, keyword: string,

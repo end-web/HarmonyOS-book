@@ -282,6 +282,12 @@ export class BookSourceService {
   }
 
   static async testLocalSource(source: LocalRuleSource, keyword: string): Promise<LocalRuleSourceHealth> {
+    const health = await BookSourceService.testLocalSourceSearchChain(source, keyword);
+    return BookSourceService.completeSourceHealth(source, health);
+  }
+
+  private static async testLocalSourceSearchChain(source: LocalRuleSource,
+    keyword: string): Promise<LocalRuleSourceHealth> {
     const health = new LocalRuleSourceHealth();
     health.sourceUrl = source.bookSourceUrl;
     health.checkedAt = Date.now();
@@ -300,6 +306,7 @@ export class BookSourceService {
     }
 
     try {
+      BookSourceService.requireSearchCapability(source);
       if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
         const results = await TalebookSourceAdapter.search(source, cleanKeyword);
         if (results.length === 0) {
@@ -325,7 +332,7 @@ export class BookSourceService {
 
   /** 搜索校验允许无匹配结果；发现/阅读校验必须取得实际内容。 */
   static async testLocalSourceAvailability(source: LocalRuleSource,
-    keyword: string): Promise<LocalRuleSourceHealth> {
+    keyword: string, isCancelled: () => boolean = (): boolean => false): Promise<LocalRuleSourceHealth> {
     const health = new LocalRuleSourceHealth();
     health.sourceUrl = source.bookSourceUrl;
     health.checkedAt = Date.now();
@@ -344,6 +351,8 @@ export class BookSourceService {
     }
 
     try {
+      BookSourceService.checkHealthCancellation(isCancelled);
+      BookSourceService.requireSearchCapability(source);
       const results = NativeRuleSourceDispatcher.isSource(source)
         ? await NativeRuleSourceDispatcher.searchForHealthCheck(source, cleanKeyword, 1)
         : await LocalRuleDispatcher.searchForHealthCheck(source, cleanKeyword, 1);
@@ -356,6 +365,30 @@ export class BookSourceService {
       console.warn(`[BookSourceService] availability ${source.bookSourceName} failed: ${health.message}`);
     }
     health.responseTimeMs = Date.now() - startedAt;
+    return BookSourceService.completeSourceHealth(source, health, isCancelled);
+  }
+
+  private static requireSearchCapability(source: LocalRuleSource): void {
+    if (!NativeRuleSourceDispatcher.isSource(source) &&
+      !TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl) && !source.hasSearchCapability()) {
+      throw new Error('未配置完整搜索规则');
+    }
+  }
+
+  /** 搜索链路失败只说明该入口不可用；发现取得实际内容后仍可判定部分可用。 */
+  private static async completeSourceHealth(source: LocalRuleSource, health: LocalRuleSourceHealth,
+    isCancelled: () => boolean = (): boolean => false): Promise<LocalRuleSourceHealth> {
+    BookSourceService.checkHealthCancellation(isCancelled);
+    if (health.status !== LocalRuleSourceStatus.FAILED || !source.canExecute() ||
+      !source.enabledExplore || !source.exploreUrl.trim()) return health;
+    const discovery = await BookSourceService.testLocalSourceExploreReading(source, isCancelled);
+    BookSourceService.checkHealthCancellation(isCancelled);
+    const searchMessage = health.message;
+    health.status = discovery.status;
+    health.message = discovery.status === LocalRuleSourceStatus.READY
+      ? `部分可用：${discovery.message}；搜索链路未通过：${searchMessage}`
+      : `搜索链路未通过：${searchMessage}；发现/阅读未通过：${discovery.message}`;
+    health.responseTimeMs = Date.now() - health.checkedAt;
     return health;
   }
 

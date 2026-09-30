@@ -34,7 +34,7 @@ import {
   ReaderJumpChapterEvent
 } from '../model/TextReading';
 import { emitter } from '@kit.BasicServicesKit';
-import { ReaderPalette, ReaderPattern, ReaderThemeId, ReaderCustomTheme, resolvePalette, resolveEffectiveThemeId } from '../model/ReaderTheme';
+import { ReaderPalette, ReaderPattern, ReaderImageMode, ReaderThemeId, ReaderCustomTheme, resolvePalette, resolveEffectiveThemeId } from '../model/ReaderTheme';
 import { ReaderBackground } from '../components/ReaderBackground';
 import { ReaderContinuousComponent } from '../components/ReaderContinuousComponent';
 import { ReaderPageTurnComponent } from '../components/ReaderPageTurnComponent';
@@ -121,6 +121,7 @@ export struct ReaderPage {
   @Local effectiveThemeId: string = TextReadingSettings.THEME_DEFAULT;
   @Local backgroundPattern: string = ReaderPattern.None;
   @Local bgImagePath: string = '';
+  @Local backgroundImageMode: ReaderImageMode = ReaderImageMode.Cover;
   @Local overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   @Local tapRegions: string = ReaderTapPolicy.DEFAULT;
   @Local tapLeftPercent: number = 33;
@@ -858,6 +859,7 @@ export struct ReaderPage {
       this.imageFontColor = settings.imageFontColor;
       this.backgroundPattern = settings.pattern;
       this.bgImagePath = settings.backgroundImage;
+      this.backgroundImageMode = settings.backgroundImageMode;
       if (this.bgImagePath.length > 0 && !await fileIo.access(this.bgImagePath)) {
         this.bgImagePath = '';
         this.backgroundPattern = ReaderPattern.None;
@@ -915,6 +917,7 @@ export struct ReaderPage {
     this.imageFontColor = '';
     this.backgroundPattern = ReaderPattern.None;
     this.bgImagePath = '';
+    this.backgroundImageMode = ReaderImageMode.Cover;
     this.overlayAlpha = TextReadingSettings.OVERLAY_DEFAULT;
     this.tapLeftPercent = 33;
     this.tapRightPercent = 33;
@@ -960,6 +963,7 @@ export struct ReaderPage {
     settings.customThemeIndex = this.customThemeIndex;
     settings.imageBackground = this.imageBackground;
     settings.imageFontColor = this.imageFontColor;
+    settings.backgroundImageMode = this.backgroundImageMode;
     settings.fontPath = this.fontPath;
     settings.fontName = this.fontName;
     settings.screenOnMinutes = this.screenOnMinutes;
@@ -1184,6 +1188,7 @@ export struct ReaderPage {
       this.applyReadingSettings(false);
       const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
         this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
+      settings.backgroundImageMode = this.backgroundImageMode;
       settings.textAlignment = this.textAlignment;
       settings.fontWeight = this.fontWeight;
       settings.fontColor = this.fontColor;
@@ -1463,7 +1468,7 @@ export struct ReaderPage {
 
   private onlineTextTurnRevision(): string {
     return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:` +
-      `${this.textAlignment}:${this.fontFamily}:${this.systemTypographyRevision}:${this.fontWeight}:${this.fontColor}:${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.overlayAlpha}:` +
+      `${this.textAlignment}:${this.fontFamily}:${this.systemTypographyRevision}:${this.fontWeight}:${this.fontColor}:${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.backgroundImageMode}:${this.overlayAlpha}:` +
       `${this.readerHeaderHeight()}:${this.readerFooterHeight()}:${this.readerTopInsetVp()}:${this.leftSafeVp}:${this.rightSafeVp}:${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}:${this.palette.primary}`;
   }
 
@@ -1769,6 +1774,7 @@ export struct ReaderPage {
         palette: this.palette,
         pattern: this.systemNightOverride ? ReaderPattern.None : this.backgroundPattern,
         bgImagePath: this.bgImagePath,
+        imageMode: this.isOnlineTextBook() ? this.backgroundImageMode : ReaderImageMode.Cover,
         overlayAlpha: this.overlayAlpha
       })
         // 每个弹层使用独立宿主；同一节点连续 bindSheet 会覆盖前一个绑定。
@@ -1908,6 +1914,7 @@ export struct ReaderPage {
         palette: this.palette,
         pattern: this.systemNightOverride ? ReaderPattern.None : this.backgroundPattern,
         bgImagePath: this.bgImagePath,
+        imageMode: this.isOnlineTextBook() ? this.backgroundImageMode : ReaderImageMode.Cover,
         overlayAlpha: this.overlayAlpha
       })
       Column() {
@@ -2230,6 +2237,11 @@ export struct ReaderPage {
       },
       onCustomThemeSelect: (slot: number): void => this.handleCustomThemeSelect(slot),
       onImageTextChange: (light: boolean): void => this.handleImageTextChange(light),
+      supportsImageMode: this.isOnlineTextBook(),
+      onImageModeChange: (mode: ReaderImageMode): void => {
+        this.backgroundImageMode = mode;
+        this.saveReadingSettings();
+      },
       onPickFont: (): void => { this.pickReaderFont(); },
       onSystemFont: (): void => {
         this.fontFamily = ''; this.fontPath = ''; this.fontName = '';
@@ -2243,6 +2255,7 @@ export struct ReaderPage {
       themeId: this.themeId,
       pattern: this.systemNightOverride ? ReaderPattern.None : this.backgroundPattern,
       bgImagePath: this.bgImagePath,
+      imageMode: this.isOnlineTextBook() ? this.backgroundImageMode : ReaderImageMode.Cover,
       overlayAlpha: this.overlayAlpha,
       tapRegions: this.tapRegions,
           tapLeftPercent: this.tapLeftPercent,

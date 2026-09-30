@@ -43,6 +43,7 @@ function load(relative) {
   const migrated = await service.get({});
   assert.equal(migrated.fontSize, 22);
   assert.equal(migrated.textAlignment, 'justify', 'legacy preferences default to justified text');
+  assert.equal(migrated.backgroundImageMode, 'cover', 'legacy images keep their existing crop');
   assert.equal(migrated.marginLeft, migrated.marginRight);
   assert.equal(migrated.followSystemTheme, false);
   assert.equal(migrated.alwaysShowStatusBar, true, 'existing installations show the status bar by default');
@@ -250,6 +251,23 @@ function load(relative) {
   for (const text of ['#123', 'abc', '#aAbBcC', 'AABBCC', ' #123456 ']) assert.equal(isReaderHexColor(text), true);
   for (const text of ['', '#', '#12', '#12345', '#1234567', '#GGGGGG', '#12345678']) assert.equal(isReaderHexColor(text), false);
   assert.equal(normalizeHex('#abc'), '#AABBCC');
+  const imageSettings = await service.get({});
+  for (const mode of ['contain', 'tile', 'stretch', 'cover']) {
+    imageSettings.backgroundImageMode = mode;
+    await service.save({}, imageSettings);
+    assert.equal((await service.get({})).backgroundImageMode, mode, 'image display mode survives reload');
+  }
+  for (const invalid of ['invalid', '', 42, null]) {
+    values.set('background_image_mode', invalid);
+    assert.equal((await service.get({})).backgroundImageMode, 'cover');
+  }
+  imageSettings.backgroundImageMode = 'tile';
+  await service.save({}, imageSettings);
+  await backup.restoreSnapshot({}, await backup.createSnapshot({}));
+  assert.equal((await service.get({})).backgroundImageMode, 'tile', 'backup restore preserves local image options');
+  await service.save({}, new TextReadingSettings());
+  assert.equal((await service.get({})).backgroundImageMode, 'cover', 'reset restores the default image display mode');
+  console.log('PASS: four image display modes, legacy/invalid preferences, backup isolation and reset');
   console.log('PASS: five independent theme slots, legacy single-theme migration, selected-slot reload, manual HEX validation');
   console.log('PASS: theme isolation, switching/reload, system override, legacy color/image migration, contrast');
   console.log('PASS: settings migration/reset, four alignments, persistence, backup round trip, legacy backup, typography and margins');

@@ -67,8 +67,8 @@ class HomeCategoryDataSource implements IDataSource {
 const DOMAIN = 0x0000;
 const TAG = 'HomePage';
 
-/** 等待准备帧完成布局，再提交展开动画，避免 animateTo 同步刷新整批新书卡。 */
-class HomeCarouselReadyFrame extends FrameCallback {
+/** 等待布局完成后执行轮播动画或菜单滚动定位。 */
+class HomeLayoutReadyFrame extends FrameCallback {
   private callback: () => void;
 
   constructor(callback: () => void) {
@@ -320,6 +320,7 @@ struct HomeLoadingSkeleton {
 
 @ComponentV2
 export struct HomePage {
+  @Param visible: boolean = true;
   @Local rankingMode: boolean = false;
   @Local homeResolved: boolean = false;
   private rankingBackHandler: (() => boolean) | undefined = undefined;
@@ -690,7 +691,7 @@ export struct HomePage {
     if (prepareExpansion) {
       // 展开比收起多了推荐节点创建、隐藏封面恢复和滚动占位扩展。
       // 这些工作先提交到准备帧；反向切换直接续接当前弹簧，不等待空闲帧。
-      this.getUIContext().postFrameCallback(new HomeCarouselReadyFrame((): void => {
+      this.getUIContext().postFrameCallback(new HomeLayoutReadyFrame((): void => {
         if (serial === this.carouselAnimationSerial) this.startCarouselAnimation(target, serial);
       }));
       return;
@@ -1030,7 +1031,7 @@ export struct HomePage {
     this.headerScrollOffset = 0;
   }
 
-  private filterHomeSources(value: string): void {
+  private filterHomeSources(value: string, resetPosition: boolean = true): void {
     this.homeSourceKeyword = value;
     const keyword = value.trim().toLowerCase();
     const matches = this.homeSources.filter((source: LocalRuleSource): boolean =>
@@ -1039,7 +1040,7 @@ export struct HomePage {
       source.bookSourceGroup.toLowerCase().includes(keyword));
     this.homeSourceMenuData.setItems(matches);
     this.homeSourceMatchCount = matches.length;
-    this.homeSourceMenuScroller.scrollTo({ xOffset: 0, yOffset: 0 });
+    if (resetPosition) this.homeSourceMenuScroller.scrollTo({ xOffset: 0, yOffset: 0 });
   }
 
   private homeSourceMenuOptions(): CustomPopupOptions {
@@ -1047,9 +1048,19 @@ export struct HomePage {
       builder: this.buildHomeSourceMenu,
       placement: Placement.BottomRight,
       popupColor: Color.Transparent,
+      radius: AppRadius.Xl,
       enableArrow: false,
       focusable: true,
-      onStateChange: (event): void => { this.homeSourceMenuVisible = event.isVisible; }
+      onStateChange: (event): void => {
+        this.homeSourceMenuVisible = event.isVisible;
+        if (event.isVisible) {
+          this.getUIContext().postFrameCallback(new HomeLayoutReadyFrame((): void => {
+            if (!this.homeSourceMenuVisible || this.homeSourceKeyword.length > 0 || this.homeSourceMatchCount === 0) return;
+            this.homeSourceMenuScroller.scrollToIndex(this.rankingMode ? 0 : Math.max(0, this.homeSourceIndex),
+              false, this.rankingMode ? ScrollAlign.START : ScrollAlign.CENTER);
+          }));
+        }
+      }
     };
     if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
     else options.backgroundBlurStyle = AppMaterial.SheetBlur;
@@ -1058,9 +1069,12 @@ export struct HomePage {
 
   @LocalBuilder
   buildHomeSourceMenu() {
-    Column({ space: AppSpace.Xs }) {
-      Text($r('app.string.ranking_home')).fontSize(16).fontColor(AppColor.Brand)
-        .width('100%').height(48).padding({ left: 12, right: 12 })
+    Column({ space: 2 }) {
+      Text($r('app.string.ranking_home')).fontSize(16)
+        .fontColor(this.rankingMode ? AppColor.Brand : $r('sys.color.font_primary'))
+        .width('100%').height(40).padding({ left: 12, right: 12 })
+        .borderRadius(AppRadius.Xl - AppSpace.Xs)
+        .backgroundColor(this.rankingMode ? AppColor.BrandSoft : Color.Transparent)
         .onClick((): void => {
           this.homeSourceMenuVisible = false;
           PreferenceService.setHomeSourceUrl(RankingService.HOME_URL).catch((): void => {
@@ -1068,7 +1082,8 @@ export struct HomePage {
           });
         })
       Search({ value: this.homeSourceKeyword, placeholder: $r('app.string.rule_source_search_placeholder') })
-        .width('100%').height(40)
+        .width('100%').height(40).margin(0)
+        .borderRadius(AppRadius.Xl - AppSpace.Xs)
         .fontColor($r('sys.color.font_primary'))
         .placeholderColor($r('sys.color.font_tertiary'))
         .onChange((value: string): void => this.filterHomeSources(value))
@@ -1077,7 +1092,8 @@ export struct HomePage {
           .fontSize(14).fontColor($r('sys.color.font_secondary'))
           .width('100%').height(64).textAlign(TextAlign.Center)
       } else {
-        List({ scroller: this.homeSourceMenuScroller }) {
+        List({ scroller: this.homeSourceMenuScroller,
+          initialIndex: this.rankingMode || this.homeSourceKeyword.length > 0 ? 0 : Math.max(0, this.homeSourceIndex) }) {
           LazyForEach(this.homeSourceMenuData, (source: LocalRuleSource) => {
             ListItem() {
               Text(source.bookSourceName)
@@ -1085,7 +1101,7 @@ export struct HomePage {
                 .fontColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
                   AppColor.Brand : $r('sys.color.font_primary'))
                 .width('100%').height(48).padding({ left: AppSpace.Sm, right: AppSpace.Sm })
-                .borderRadius(AppRadius.Sm)
+                .borderRadius(AppRadius.Xl - AppSpace.Xs)
                 .backgroundColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
                   AppColor.BrandSoft : Color.Transparent)
                 .onClick((): void => {
@@ -1137,7 +1153,7 @@ export struct HomePage {
         .enabled(!this.savingHomeSource)
         .accessibilityDescription($r('app.string.home_source_setting'))
         .onClick((): void => {
-          this.filterHomeSources('');
+          if (!this.homeSourceMenuVisible) this.filterHomeSources('', false);
           this.homeSourceMenuVisible = !this.homeSourceMenuVisible;
         })
         .bindPopup(this.homeSourceMenuVisible, this.homeSourceMenuOptions())
@@ -1192,7 +1208,7 @@ export struct HomePage {
       if (!this.homeResolved) {
         LoadingProgress().width(28).height(28).color(AppColor.Brand)
       } else if (this.rankingMode) {
-        RankingHomePage({ headerBuilder: (): void => this.buildSearchTitleBar(), onBookTap: this.onRankingBookTap,
+        RankingHomePage({ visible: this.visible, headerBuilder: (): void => this.buildSearchTitleBar(), onBookTap: this.onRankingBookTap,
           onSearchTap: this.onSearchTap, onManageSources: this.onManageSources,
           onScrollerReady: this.onScrollerReady,
           onBackHandlerChange: (handler: (() => boolean) | undefined): void => { this.rankingBackHandler = handler; }

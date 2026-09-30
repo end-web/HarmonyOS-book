@@ -58,7 +58,7 @@ class DefaultLocalRuleSourceBulkTestExecutor implements LocalRuleSourceBulkTestE
     if (this.mode === 'exploreReading') {
       return BookSourceService.testLocalSourceExploreReading(source, this.isCancelled);
     }
-    return BookSourceService.testLocalSourceAvailability(source, keyword);
+    return BookSourceService.testLocalSourceAvailability(source, keyword, this.isCancelled);
   }
 }
 

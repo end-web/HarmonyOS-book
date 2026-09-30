@@ -17,6 +17,7 @@ import { TextReadingSettings, PageTurnMode } from '../model/TextReading';
 import {
   ReaderPalette,
   ReaderPattern,
+  ReaderImageMode,
   ReaderThemeId,
   ReaderThemePreset,
   ReaderCustomTheme,
@@ -309,6 +310,9 @@ export struct ReaderSettingsSheet {
   @Param themeId: string = ReaderThemeId.Parchment;
   @Param pattern: string = ReaderPattern.None;
   @Param bgImagePath: string = '';
+  @Param imageMode: ReaderImageMode = ReaderImageMode.Cover;
+  @Param supportsImageMode: boolean = true;
+  @Event onImageModeChange: (mode: ReaderImageMode) => void = () => {};
   @Param overlayAlpha: number = TextReadingSettings.OVERLAY_DEFAULT;
   @Param tapRegions: string = ReaderTapPolicy.DEFAULT;
   @Param tapLeftPercent: number = 33;
@@ -353,6 +357,7 @@ export struct ReaderSettingsSheet {
         palette: this.palette,
         pattern: this.pattern,
         bgImagePath: this.bgImagePath,
+        imageMode: this.imageMode,
         overlayAlpha: this.overlayAlpha
       })
 
@@ -542,6 +547,7 @@ export struct ReaderSettingsSheet {
           this.buildImageThemeSwatch()
         }
         .width('100%')
+        .alignItems(VerticalAlign.Top)
         .justifyContent(FlexAlign.SpaceBetween)
 
         if (this.effectiveThemeId === ReaderThemeId.Image) {
@@ -576,39 +582,44 @@ export struct ReaderSettingsSheet {
   @Builder
   buildImageThemeSwatch() {
     Column({ space: 6 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.picture'))
-          .fontSize(20)
-          .fontColor([this.effectiveThemeId === ReaderThemeId.Image ? $r('sys.color.font_primary') : $r('sys.color.font_secondary')])
-      }
-      .width(40)
-      .height(40)
-      .borderRadius(20)
-      .backgroundColor(AppColor.GlassSheetControlTint)
-      .border({
-        width: this.effectiveThemeId === ReaderThemeId.Image ? 2 : 0.5,
-        color: this.effectiveThemeId === ReaderThemeId.Image ? AppColor.Brand : AppColor.GlassSheetStroke
-      })
-      .margin({ top: 2, bottom: 2 })
+      Column({ space: 6 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.picture'))
+            .fontSize(20)
+            .fontColor([this.effectiveThemeId === ReaderThemeId.Image ? $r('sys.color.font_primary') : $r('sys.color.font_secondary')])
+        }
+        .width(40)
+        .height(40)
+        .borderRadius(20)
+        .backgroundColor(AppColor.GlassSheetControlTint)
+        .border({
+          width: this.effectiveThemeId === ReaderThemeId.Image ? 2 : 0.5,
+          color: this.effectiveThemeId === ReaderThemeId.Image ? AppColor.Brand : AppColor.GlassSheetStroke
+        })
+        .margin({ top: 2, bottom: 2 })
 
-      Text($r('app.string.reader_custom_image'))
-        .fontSize(10)
-        .fontColor(this.effectiveThemeId === ReaderThemeId.Image ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
-        .maxLines(1)
+        Text($r('app.string.reader_custom_image'))
+          .fontSize(10)
+          .fontColor(this.effectiveThemeId === ReaderThemeId.Image ? $r('sys.color.font_primary') : $r('sys.color.font_secondary'))
+          .maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Center)
+      .onClick((): void => this.onThemeChange(ReaderThemeId.Image))
+
+      if (this.bgImagePath.length > 0) {
+        Button($r('app.string.reader_change_image'))
+          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_primary'))
+          .height(32).padding({ left: 10, right: 10 })
+          .backgroundColor(AppColor.GlassSheetControlTint)
+          .onClick((): void => this.onPickImage())
+      }
     }
     .alignItems(HorizontalAlign.Center)
-    .onClick((): void => this.onThemeChange(ReaderThemeId.Image))
   }
 
   @Builder
   buildImageControls() {
     Column({ space: AppSpace.Sm }) {
-      Row({ space: AppSpace.Sm }) {
-        Image(this.bgImagePath).width(48).height(56).objectFit(ImageFit.Cover).borderRadius(8)
-        Button($r('app.string.reader_change_image'))
-          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_primary'))
-          .backgroundColor(AppColor.GlassSheetControlTint).onClick(() => this.onPickImage())
-      }.width('100%')
       Row({ space: AppSpace.Sm }) {
         Text($r('app.string.reader_image_text')).fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_secondary')).layoutWeight(1)
@@ -616,6 +627,23 @@ export struct ReaderSettingsSheet {
           selected: hexLuminance(this.imageFontColor.length > 0 ? this.imageFontColor : this.palette.primary) > 0.55 ? 1 : 0,
           onSelect: (index: number): void => this.onImageTextChange(index === 1) })
       }.width('100%')
+      if (this.supportsImageMode) {
+        Row({ space: AppSpace.Sm }) {
+          Text($r('app.string.reader_image_mode')).fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+          ImmersiveOptionTabs({
+            labels: [$r('app.string.reader_image_contain'), $r('app.string.reader_image_tile'),
+              $r('app.string.reader_image_stretch'), $r('app.string.reader_image_cover')],
+            selected: [ReaderImageMode.Contain, ReaderImageMode.Tile, ReaderImageMode.Stretch,
+              ReaderImageMode.Cover].indexOf(this.imageMode),
+            onSelect: (index: number): void => this.onImageModeChange(
+              [ReaderImageMode.Contain, ReaderImageMode.Tile, ReaderImageMode.Stretch,
+                ReaderImageMode.Cover][index] ?? ReaderImageMode.Cover)
+          })
+        }.width('100%')
+        Text(this.imageModeHint())
+          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).width('100%')
+      }
       Row({ space: AppSpace.Sm }) {
         Text($r('app.string.reader_image_overlay'))
           .fontSize(AppFont.Caption)
@@ -653,6 +681,13 @@ export struct ReaderSettingsSheet {
         .width('100%')
     }
     .width('100%')
+  }
+
+  private imageModeHint(): ResourceStr {
+    if (this.imageMode === ReaderImageMode.Contain) return $r('app.string.reader_image_contain_hint');
+    if (this.imageMode === ReaderImageMode.Tile) return $r('app.string.reader_image_tile_hint');
+    if (this.imageMode === ReaderImageMode.Stretch) return $r('app.string.reader_image_stretch_hint');
+    return $r('app.string.reader_image_cover_hint');
   }
 
   @Builder
