@@ -1,5 +1,6 @@
 import { AppColor, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { PlayerState } from '../model/PlayerState';
+import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 
 @ComponentV2
 export struct MiniPlayer {
@@ -9,6 +10,12 @@ export struct MiniPlayer {
   @Event onToggle: () => void = () => {};
   @Event onNext: () => void = () => {};
   @Event onExpand: () => void = () => {};
+  @Event onPlayerPanStart: (offsetY: number) => void = () => {};
+  @Event onPlayerPanUpdate: (offsetY: number) => void = () => {};
+  @Event onPlayerPanEnd: (offsetY: number, velocityY: number) => void = () => {};
+  @Event onPlayerPanCancel: () => void = () => {};
+  private draggingPlayer: boolean = false;
+  @Local dragState: PlayerDragState = PlayerDragTransition.getInstance().state;
 
   @Computed
   get chapterProgressPercent(): number {
@@ -29,7 +36,7 @@ export struct MiniPlayer {
           .height('100%')
           .objectFit(ImageFit.Cover)
           .sourceSize({ width: 300, height: 400 })
-          .id('mini-cover-img')
+          .id('mini-player-cover-image')
       } else if (this.playerState.currentBook.cover
         && (this.playerState.currentBook.cover.startsWith('/') || this.playerState.currentBook.cover.startsWith('file://'))) {
         // 判断条件与 BookCard.isLocalFile 对齐:file:// 前缀的本地封面不能掉进 $rawfile 分支
@@ -38,21 +45,21 @@ export struct MiniPlayer {
           .height('100%')
           .objectFit(ImageFit.Cover)
           .sourceSize({ width: 300, height: 400 })
-          .id('mini-cover-img-file')
+          .id('mini-player-cover-image')
       } else if (this.playerState.currentBook.cover) {
         // rawfile 分支不设 sourceSize:列表(BookCard/FavoritePage)的 rawfile 分支也没设,保持缓存一致
         Image($rawfile(this.playerState.currentBook.cover))
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
-          .id('mini-cover-img-raw')
+          .id('mini-player-cover-image')
       } else {
         // 无封面:用 app 图标占位(替代旧的绿色书形占位)
         Image($r('app.media.app_icon_legacy'))
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
-          .id('mini-cover-img-fallback')
+          .id('mini-player-cover-image')
       }
     }
   }
@@ -81,6 +88,7 @@ export struct MiniPlayer {
           .borderRadius(this.collapsed ? 999 : 22)
           .backgroundColor($r('sys.color.comp_background_tertiary'))
           .clip(true)
+          .opacity(this.dragState.active ? 0 : 1)
         }
         .width(this.collapsed ? '100%' : 44)
         .height(this.collapsed ? '100%' : 44)
@@ -132,6 +140,24 @@ export struct MiniPlayer {
       }
       .width('100%')
       .height('100%')
+      .id('mini-player-bar')
+      .opacity(this.dragState.sourceOpacity)
+      .gesture(PanGesture({ direction: PanDirection.Vertical, distance: 8 })
+        .onActionStart((event: GestureEvent): void => {
+          this.draggingPlayer = event.offsetY < 0;
+          if (this.draggingPlayer) this.onPlayerPanStart(event.offsetY);
+        })
+        .onActionUpdate((event: GestureEvent): void => {
+          if (this.draggingPlayer) this.onPlayerPanUpdate(event.offsetY);
+        })
+        .onActionEnd((event: GestureEvent): void => {
+          if (this.draggingPlayer) this.onPlayerPanEnd(event.offsetY, event.velocityY);
+          this.draggingPlayer = false;
+        })
+        .onActionCancel((): void => {
+          if (this.draggingPlayer) this.onPlayerPanCancel();
+          this.draggingPlayer = false;
+        }))
       .padding({
         left: this.collapsed ? 0 : AppSpace.Xs,
         right: this.collapsed ? 0 : AppSpace.Md

@@ -13,6 +13,15 @@ export struct AchievementPage {
   @Local medalBusy: boolean = false;
   private readonly medals: MedalDefinition[] = MEDALS;
 
+  private awardDateLabel(id: string): ResourceStr {
+    const award = this.medalService.awards.find((value: MedalAward): boolean => value.medalId === id);
+    if (award === undefined) return $r('app.string.medal_locked');
+    if (award.historical || award.unlockedAt <= 0) return $r('app.string.medal_historical_date');
+    const date = new Date(award.unlockedAt);
+    const formatted = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+    return $r('app.string.medal_obtained_date', formatted);
+  }
+
   private async loadMedals(): Promise<void> {
     const context = this.getUIContext().getHostContext();
     if (!context || this.medalBusy) return;
@@ -96,35 +105,46 @@ export struct AchievementPage {
         .padding({ top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
           left: AppSpace.Sm, right: AppSpace.Md, bottom: AppSpace.Sm })
 
+        // 两个方向均使用原生弹簧反馈；横向内容与视口等宽，仅作边界回弹。
         Scroll() {
-          Column({ space: AppSpace.Lg }) {
-            if (this.auth.isLoggedIn) {
-              this.medalCard()
-            } else {
-              Column({ space: AppSpace.Md }) {
-                Text($r('app.string.achievement_login_hint'))
-                  .fontSize(AppFont.Body)
-                  .fontColor($r('sys.color.font_secondary'))
-                Button($r('app.string.hw_auth_login_title'))
-                  .fontColor(Color.White)
-                  .backgroundColor(AppColor.Brand)
-                  .enabled(!this.auth.logging && !this.auth.restoring)
-                  .onClick(() => this.navStack.pushPathByName('account', ''))
+          Scroll() {
+            Column({ space: AppSpace.Lg }) {
+              if (this.auth.isLoggedIn) {
+                this.medalCard()
+              } else {
+                Column({ space: AppSpace.Md }) {
+                  Text($r('app.string.achievement_login_hint'))
+                    .fontSize(AppFont.Body)
+                    .fontColor($r('sys.color.font_secondary'))
+                  Button($r('app.string.hw_auth_login_title'))
+                    .fontColor(Color.White)
+                    .backgroundColor(AppColor.Brand)
+                    .enabled(!this.auth.logging && !this.auth.restoring)
+                    .onClick(() => this.navStack.pushPathByName('account', ''))
+                }
+                .width('100%')
+                .padding(AppSpace.Lg)
+                .backgroundColor($r('sys.color.comp_background_primary'))
+                .borderRadius(AppRadius.Lg)
               }
-              .width('100%')
-              .padding(AppSpace.Lg)
-              .backgroundColor($r('sys.color.comp_background_primary'))
-              .borderRadius(AppRadius.Lg)
             }
+            .width('100%')
+            .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm,
+              bottom: WindowUtils.getBottomSafeVp() + AppSpace.Xl })
           }
           .width('100%')
-          .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm,
-            bottom: WindowUtils.getBottomSafeVp() + AppSpace.Xl })
+          .height('100%')
+          .scrollable(ScrollDirection.Vertical)
+          .align(Alignment.TopStart)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         }
+        .width('100%')
         .layoutWeight(1)
+        .scrollable(ScrollDirection.Horizontal)
         .align(Alignment.TopStart)
         .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       }
       .width('100%')
       .height('100%')
@@ -174,15 +194,15 @@ export struct AchievementPage {
                   .fontColor($r('sys.color.font_primary'))
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text(item.hours === 0 ? $r('app.string.account_national_day_medal_date') :
-                  $r('app.string.medal_hours', item.hours))
+                Text(this.awardDateLabel(item.id))
                   .fontSize(11)
                   .fontColor($r('sys.color.font_secondary'))
-                Text(this.medalService.selectedMedalId === item.id ? $r('app.string.medal_wearing') :
-                  this.medalService.isUnlocked(item.id) ? $r('app.string.medal_unlocked') : $r('app.string.medal_locked'))
-                  .fontSize(11)
-                  .fontColor(this.medalService.selectedMedalId === item.id ? AppColor.Brand :
-                    $r('sys.color.font_tertiary'))
+                  .textAlign(TextAlign.Center)
+                if (this.medalService.selectedMedalId === item.id) {
+                  Text($r('app.string.medal_wearing'))
+                    .fontSize(11)
+                    .fontColor(AppColor.Brand)
+                }
               }
               .width('100%')
               .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })

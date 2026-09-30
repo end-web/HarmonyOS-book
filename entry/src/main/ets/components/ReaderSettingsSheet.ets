@@ -46,9 +46,6 @@ const LINE_HEIGHT_PRESETS: LineHeightPreset[] = [
   LineHeightPreset.of('宽松', 2.2)
 ];
 
-const PREVIEW_TEXT: string = '　　夜色像一层薄薄的墨，慢慢洇进窗棂。他合上书页，听见远处传来一声钟响，'
-  + '于是想起许多年前的那个黄昏，也是这样的光，这样的静。';
-
 /**
  * 设置分组卡片。
  * 内容走 @BuilderParam + 尾随闭包；UI 描述不能当普通 lambda 参数传，
@@ -307,6 +304,9 @@ export struct ReaderSettingsSheet {
   @Event onMarginChange: (edge: string, value: number, commit: boolean) => void = () => {};
   @Param fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   @Param lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
+  @Param paragraphSpacing: number = TextReadingSettings.PARAGRAPH_SPACING_DEFAULT;
+  @Param paragraphSpacingEnabled: boolean = true;
+  @Event onParagraphSpacingChange: (value: number, commit: boolean) => void = () => {};
   @Param themeId: string = ReaderThemeId.Parchment;
   @Param pattern: string = ReaderPattern.None;
   @Param bgImagePath: string = '';
@@ -375,26 +375,35 @@ export struct ReaderSettingsSheet {
         }
         .width('100%')
 
-        Text(PREVIEW_TEXT)
-          .width('100%')
-          .fontSize(this.fontSize)
-          .fontFamily(this.fontFamily.length > 0 ? this.fontFamily : undefined)
-          .fontWeight(this.fontWeight, { enableVariableFontWeight: true })
-          .fontColor(this.palette.primary)
-          .lineHeight(this.fontSize * this.lineHeight)
-          .textAlign(this.textAlignment === 'start' ? TextAlign.Start :
-            this.textAlignment === 'center' ? TextAlign.Center :
-            this.textAlignment === 'end' ? TextAlign.End : TextAlign.JUSTIFY)
-          .maxLines(4)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+        Column({ space: this.getUIContext().px2vp(this.getUIContext().fp2px(this.fontSize)) * this.paragraphSpacing }) {
+          ForEach([
+            $r('app.string.reader_paragraph_preview_first'),
+            $r('app.string.reader_paragraph_preview_second')
+          ], (paragraph: Resource) => {
+            Text(paragraph)
+              .width('100%')
+              .fontSize(this.fontSize)
+              .fontFamily(this.fontFamily.length > 0 ? this.fontFamily : undefined)
+              .fontWeight(this.fontWeight, { enableVariableFontWeight: true })
+              .fontColor(this.palette.primary)
+              .lineHeight(this.getUIContext().px2vp(this.getUIContext().fp2px(this.fontSize)) * this.lineHeight)
+              .textAlign(this.textAlignment === 'start' ? TextAlign.Start :
+                this.textAlignment === 'center' ? TextAlign.Center :
+                this.textAlignment === 'end' ? TextAlign.End : TextAlign.JUSTIFY)
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }, (paragraph: Resource): string => `${paragraph.id}`)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .clip(true)
       }
       .width('100%')
       .height('100%')
       .padding({ left: 18, right: 18, top: AppSpace.Sm, bottom: AppSpace.Sm })
     }
     .width('100%')
-    .height(120)
+    .height(180)
     .borderRadius(AppRadius.Lg)
     .clip(true)
     .border({ width: 0.5, color: ReaderPalette.withAlpha(this.palette.primary, 0x1f) })
@@ -522,6 +531,45 @@ export struct ReaderSettingsSheet {
         .alignItems(VerticalAlign.Center)
       }
       .width('100%')
+    }
+  }
+
+  @Builder
+  buildParagraphSpacingSection() {
+    ReaderSettingCard({ title: $r('app.string.reader_paragraph_spacing'), compact: true }) {
+      Row({ space: AppSpace.Sm }) {
+        this.stepper($r('sys.symbol.minus'), this.paragraphSpacing > TextReadingSettings.PARAGRAPH_SPACING_MIN, () => {
+          this.onParagraphSpacingChange(TextReadingSettings.normalizeParagraphSpacing(this.paragraphSpacing - 0.1), true);
+        })
+        Slider({
+          value: this.paragraphSpacing,
+          min: TextReadingSettings.PARAGRAPH_SPACING_MIN,
+          max: TextReadingSettings.PARAGRAPH_SPACING_MAX,
+          step: 0.1,
+          style: SliderStyle.InSet
+        })
+          .layoutWeight(1)
+          .height(40)
+          .blockColor(AppColor.OnBrand)
+          .trackColor($r('sys.color.comp_divider'))
+          .selectedColor(AppColor.Brand)
+          .trackThickness(6)
+          .accessibilityText($r('app.string.reader_paragraph_spacing'))
+          .onChange((value: number, mode: SliderChangeMode): void => {
+            this.onParagraphSpacingChange(value, mode === SliderChangeMode.End || mode === SliderChangeMode.Click);
+          })
+        this.stepper($r('sys.symbol.plus'), this.paragraphSpacing < TextReadingSettings.PARAGRAPH_SPACING_MAX, () => {
+          this.onParagraphSpacingChange(TextReadingSettings.normalizeParagraphSpacing(this.paragraphSpacing + 0.1), true);
+        })
+        Text(`${this.paragraphSpacing.toFixed(1)}`)
+          .fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary'))
+          .fontWeight(FontWeight.Medium)
+          .width(28)
+          .textAlign(TextAlign.End)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
     }
   }
 
@@ -971,6 +1019,9 @@ export struct ReaderSettingsSheet {
             this.buildThemeSection()
             this.buildFontSizeSection()
             this.buildLineHeightSection()
+            if (this.paragraphSpacingEnabled) {
+              this.buildParagraphSpacingSection()
+            }
             this.buildFontWeightSection()
             this.buildTextAlignmentSection()
             this.buildFontAppearance()

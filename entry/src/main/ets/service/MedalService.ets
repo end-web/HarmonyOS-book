@@ -129,7 +129,9 @@ export class MedalService {
       throw new Error(String(error));
     }
     this.state = MedalService.copy(next);
-    this.awards = this.state.awards.slice();
+    // 历史款仅保留备份记录，不参与展示、数量统计或佩戴。
+    this.awards = this.state.awards.filter((award: MedalAward): boolean =>
+      MEDALS.some((medal: MedalDefinition): boolean => medal.id === award.medalId));
     this.selectedMedalId = this.state.selectedMedalId;
   }
 
@@ -181,7 +183,8 @@ export class MedalService {
 
   private static copy(value: MedalSnapshot): MedalSnapshot {
     const copy = new MedalSnapshot();
-    copy.selectedMedalId = value.selectedMedalId;
+    copy.selectedMedalId = MEDALS.some((medal: MedalDefinition): boolean => medal.id === value.selectedMedalId) ?
+      value.selectedMedalId : '';
     copy.awards = value.awards.map((award: MedalAward): MedalAward =>
       new MedalAward(award.medalId, award.unlockedAt, award.historical));
     return copy;
@@ -189,14 +192,15 @@ export class MedalService {
 
   static isValidSnapshot(value: MedalSnapshot): boolean {
     if (!value || value.version !== 1 || typeof value.selectedMedalId !== 'string' ||
-      !Array.isArray(value.awards) || value.awards.length < 1 || value.awards.length > MEDALS.length) return false;
+      !Array.isArray(value.awards) || value.awards.length > MEDALS.length + 2) return false;
     const seen = new Set<string>();
     for (const award of value.awards) {
-      if (!award || !MEDALS.some((medal: MedalDefinition): boolean => medal.id === award.medalId) ||
+      if (!award || (!MEDALS.some((medal: MedalDefinition): boolean => medal.id === award.medalId) &&
+        award.medalId !== 'national_day' && award.medalId !== 'reading_3000h') ||
         seen.has(award.medalId) || !Number.isSafeInteger(award.unlockedAt) || award.unlockedAt < 0 ||
         typeof award.historical !== 'boolean' || (!award.historical && award.unlockedAt === 0)) return false;
       seen.add(award.medalId);
     }
-    return seen.has('national_day') && (value.selectedMedalId === '' || seen.has(value.selectedMedalId));
+    return value.selectedMedalId === '' || seen.has(value.selectedMedalId);
   }
 }

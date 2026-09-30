@@ -79,6 +79,14 @@ export class TextReadingSettings {
   static readonly LINE_HEIGHT_MIN: number = 1;
   static readonly LINE_HEIGHT_MAX: number = 2.4;
   static readonly LINE_HEIGHT_DEFAULT: number = 1.9;
+  /** 段后额外留白，以字号倍数计；默认保留原来的紧接排版。 */
+  static readonly PARAGRAPH_SPACING_MIN: number = 0;
+  static readonly PARAGRAPH_SPACING_MAX: number = 2;
+  static readonly PARAGRAPH_SPACING_DEFAULT: number = 0;
+
+  static normalizeParagraphSpacing(value: number): number {
+    return Number.isFinite(value) ? Math.round(Math.max(0, Math.min(2, value)) * 10) / 10 : 0;
+  }
   /** 背景图蒙层浓度：0 = 图片原样，0.85 = 几乎被底色盖住 */
   static readonly OVERLAY_MIN: number = 0;
   static readonly OVERLAY_MAX: number = 0.85;
@@ -125,6 +133,7 @@ export class TextReadingSettings {
 
   fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
+  paragraphSpacing: number = TextReadingSettings.PARAGRAPH_SPACING_DEFAULT;
   /** 预设主题 id，或 ReaderThemeId.Image 表示自定义图片 */
   themeId: string = TextReadingSettings.THEME_DEFAULT;
   /** 自定义主题底色 */

@@ -1,5 +1,6 @@
 import { AppRadius } from '../theme/Theme';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
+import { CoverAspectRatio } from '../utils/CoverAspectRatio';
 
 /**
  * 网络封面图：失败自动延迟重试，直到出图或达到上限。
@@ -17,6 +18,7 @@ export struct CoverImage {
   @Param decodeW: number = 300;
   @Param decodeH: number = 400;
   @Param highPriority: boolean = true;
+  @Event onImageSize: (url: string, width: number, height: number) => void = () => {};
 
   @Local showImage: boolean = true;
   @Local giveUp: boolean = false;
@@ -54,7 +56,13 @@ export struct CoverImage {
         .clip(true)
         .objectFit(this.imageFit)
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
-        .alt($r('app.media.app_icon_legacy'))
+        .alt($r('app.media.book_cover_placeholder'))
+        .onComplete((event) => {
+          // 数据加载阶段为原图尺寸；不能用 sourceSize 缩略解码后的尺寸覆盖它。
+          if (event?.loadingStatus !== 0) return;
+          CoverAspectRatio.remember(this.url, event.width, event.height);
+          this.onImageSize(this.url, event.width, event.height);
+        })
         .onError(() => {
           this.scheduleRetry();
         })
@@ -66,7 +74,12 @@ export struct CoverImage {
         .clip(true)
         .objectFit(this.imageFit)
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
-        .alt($r('app.media.app_icon_legacy'))
+        .alt($r('app.media.book_cover_placeholder'))
+        .onComplete((event) => {
+          if (event?.loadingStatus !== 0) return;
+          CoverAspectRatio.remember(this.url, event.width, event.height);
+          this.onImageSize(this.url, event.width, event.height);
+        })
         .onError(() => {
           this.scheduleRetry();
         })
@@ -76,14 +89,14 @@ export struct CoverImage {
   @Builder
   private placeholderImage() {
     if (this.useFixedHeight) {
-      Image($r('app.media.app_icon_legacy'))
+      Image($r('app.media.book_cover_placeholder'))
         .width(this.imgWidth)
         .height(this.imgHeight)
         .borderRadius(this.radius)
         .clip(true)
         .objectFit(this.imageFit)
     } else {
-      Image($r('app.media.app_icon_legacy'))
+      Image($r('app.media.book_cover_placeholder'))
         .width(this.imgWidth)
         .aspectRatio(this.aspectRatioValue)
         .borderRadius(this.radius)

@@ -15,6 +15,7 @@ import { FavoritePage } from './FavoritePage';
 import { ReadingStatsPage } from './ReadingStatsPage';
 import { ProfilePage } from './ProfilePage';
 import { MiniPlayer } from '../components/MiniPlayer';
+import { PlayerDragTransition } from '../utils/PlayerDragTransition';
 import { AudioService } from '../service/AudioService';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
@@ -48,6 +49,8 @@ const TAB_RESTORE_HEIGHT_GROWTH: number = 80;
 export struct MainPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBackHandlerChange: (handler: (() => boolean) | undefined) => void = () => {};
+  @Event onHomeShownHandlerChange: (handler: (() => void) | undefined) => void = () => {};
+  private pendingHomeResume: (() => void) | undefined = undefined;
   private homeBackHandler: (() => boolean) | undefined = undefined;
   private shelfBackHandler: (() => boolean) | undefined = undefined;
   @Local currentTab: number = 0;
@@ -80,6 +83,11 @@ export struct MainPage {
     };
 
   aboutToAppear(): void {
+    this.onHomeShownHandlerChange((): void => {
+      const resume = this.pendingHomeResume;
+      this.pendingHomeResume = undefined;
+      resume?.();
+    });
     this.onBackHandlerChange((): boolean => {
       if (this.currentTab === 1) return this.shelfBackHandler?.() ?? false;
       return this.currentTab === 0 && (this.homeBackHandler?.() ?? false);
@@ -96,6 +104,8 @@ export struct MainPage {
   }
 
   aboutToDisappear(): void {
+    this.onHomeShownHandlerChange(undefined);
+    this.pendingHomeResume = undefined;
     this.onBackHandlerChange(undefined);
     this.cancelLayoutTimers();
     WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
@@ -275,6 +285,11 @@ export struct MainPage {
       MiniPlayer({
         playerState: this.playerState,
         collapsed: this.miniBarCollapsed,
+        onPlayerPanStart: (offsetY: number): void => this.beginPlayerDrag(offsetY),
+        onPlayerPanUpdate: (offsetY: number): void => PlayerDragTransition.getInstance().update(offsetY),
+        onPlayerPanEnd: (offsetY: number, velocityY: number): void =>
+          PlayerDragTransition.getInstance().end(offsetY, velocityY),
+        onPlayerPanCancel: (): void => { PlayerDragTransition.getInstance().cancel(); },
         onTapBody: () => {
           // 折叠态:点击封面 → 展开迷你栏(不进播放器);展开态:进播放器
           if (PlatformCompat.floatingTabs && this.miniBarCollapsed) {
@@ -327,10 +342,13 @@ export struct MainPage {
           HomePage({
             visible: this.currentTab === 0,
             onManageSources: (resume: () => void): void => {
-              this.navStack.pushPath({ name: 'ruleSources', onPop: (): void => resume() });
+              this.pendingHomeResume = resume;
+              this.navStack.pushPath({ name: 'ruleSources' });
             },
             onRankingBookTap: (id: string, resume: () => void): void => {
-              this.navStack.pushPath({ name: 'detail', param: id, onPop: (): void => resume() });
+              // 普通返回和侧滑返回不带 result，不能依赖 onPop 恢复匹配弹层。
+              this.pendingHomeResume = resume;
+              this.navStack.pushPath({ name: 'detail', param: id });
             },
             onBackHandlerChange: (handler: (() => boolean) | undefined): void => {
               this.homeBackHandler = handler;
@@ -456,8 +474,20 @@ export struct MainPage {
     this.navStack.pushPathByName('blockMore', params);
   }
 
+  private beginPlayerDrag(offsetY: number): void {
+    const book = this.playerState.currentBook;
+    const paths = this.navStack.getAllPathName();
+    if (book === null || paths[paths.length - 1] !== 'home') return;
+    const transition = PlayerDragTransition.getInstance();
+    if (transition.state.active) return;
+    const origin = transition.capture(this.getUIContext());
+    if (origin === undefined || !transition.begin(this.viewportHeight, offsetY, origin)) return;
+    // 必须保留 Navigation 动画，才能建立可取消的原生交互式路由。
+    this.navStack.pushPathByName('player', book.id);
+  }
+
   private navigateToPlayer(): void {
-    if (!this.playerState.currentBook) return;
+    if (!this.playerState.currentBook || PlayerDragTransition.getInstance().state.active) return;
     const bookId = this.playerState.currentBook.id;
     this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', bookId, false);

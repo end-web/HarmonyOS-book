@@ -161,3 +161,42 @@ const existingNode = controller.node;
 controller.update(cachedPages[0], new highlighter.SpeechHighlightRange(), palette);
 assert.equal(controller.node, existingNode, 'reflow updates the mounted node without rebuilding it');
 console.log('PASS one measurement across 40 viewport changes, cache invalidation and native node reuse');
+
+// Paragraph spacing adds no source characters and no gap at the top of a new page.
+const sample = '甲\n乙\n丙丁';
+const compact = native.OnlineTextPaginator.paginate(sample, 100, 60, 18, 1.9, '', 400, 'justify', 0);
+const spaced = native.OnlineTextPaginator.paginate(sample, 100, 60, 18, 1.9, '', 400, 'justify', 1);
+assert.equal(compact.length, 1);
+assert.equal(spaced.length, 2);
+assert.equal(spaced[0].layoutHeight, 58);
+assert.equal(spaced[1].layoutHeight, 20);
+assert.equal(spaced[1].lineShifts[0], 0);
+assert.equal(spaced[0].endOffset, spaced[1].startOffset);
+assert.equal(spaced[1].endOffset, sample.length);
+assert.equal(native.OnlineTextPaginator.pageIndexForOffset(spaced, sample.indexOf('丙')), 1);
+assert.notEqual(compact[0].layoutKey, spaced[0].layoutKey, 'spacing participates in the layout cache key');
+const rows = native.OnlineTextPaginator.paginate(sample, 100, 1, 18, 1.9, '', 400, 'justify', 1);
+assert.deepEqual(Array.from(rows, row => row.trailingSpacing), [18, 18, 0]);
+assert.deepEqual(Array.from(rows, row => row.layoutHeight), [20, 20, 20]);
+const whole = native.OnlineTextPaginator.paginate(sample, 100, 100, 18, 1.9, '', 400, 'justify', 1)[0];
+assert.equal(whole.layoutHeight, 96);
+assert.deepEqual(Array.from(whole.lineShifts), [0, 18, 36]);
+whole.paragraph.updateColor = color => { paintedColor = color; };
+whole.paragraph.getTextLines = () => [0, 1, 2].map(index => ({
+  paint: (_canvas, x, y) => paints.push({ index, x, y, color: paintedColor })
+}));
+whole.paragraph.getRectsForRange = () => [0, 1, 2].map(index => ({
+  rect: { left: 0, right: 100, top: index * 20, bottom: (index + 1) * 20 }
+}));
+const allRange = new highlighter.SpeechHighlightRange();
+allRange.start = 0; allRange.end = whole.text.length;
+controller.update(whole, allRange, palette);
+paints.length = 0;
+const highlighted = [];
+node.onDraw({ canvas: {
+  save() {}, restore() {}, clipRect() {}, attachBrush() {}, detachBrush() {},
+  drawRect(left, top, right, bottom) { highlighted.push([top, bottom]); }
+} });
+assert.deepEqual(paints.slice(0, 3).map(p => p.y), [0, 18, 36]);
+assert.deepEqual(highlighted, [[0, 20], [38, 58], [76, 96]], 'speech highlight skips the added paragraph gaps');
+console.log('PASS paragraph spacing pagination, scroll gaps, source position, cache and speech highlight');

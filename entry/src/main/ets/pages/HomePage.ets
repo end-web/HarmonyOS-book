@@ -12,7 +12,9 @@ import { Book, Chapter } from '../model/Book';
 import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
+import { OneShotCoverState, OneShotTransitionCoordinator, OneShotTransitionIds } from '../utils/OneShotTransition';
 import { CoverImage } from '../components/CoverImage';
+import { RankingPosterBackground } from '../components/RankingPosterBackground';
 import {
   HomeCoverCarousel, homeCoverPerspective, homeCoverCarouselHeight, homeCoverSize, homeCoverSideDistance
 } from '../components/HomeCoverCarousel';
@@ -328,6 +330,7 @@ export struct HomePage {
   @Event onRankingBookTap: (id: string, resume: () => void) => void = () => {};
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local carouselBooks: SearchResult[] = [];
+  @Local carouselCover: string = '';
   @Local loadingHome: boolean = false;
   @Local homeError: ResourceStr = '';
   @Local homeSourceName: string = '';
@@ -801,6 +804,38 @@ export struct HomePage {
     return selected && selected.url === cat.url;
   }
 
+  @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
+  private coverNodePrefix: string = OneShotTransitionIds.nextSourceId('home');
+  @Local openingCarouselBook: boolean = false;
+
+  private coverNodeId(r: SearchResult, kind: string): string {
+    return this.coverNodePrefix + '-' + kind + '-' + OneShotTransitionIds.sourceCover(this.homeBookId(r));
+  }
+
+  private openCoverBook(r: SearchResult, nodeId: string, radius: number): void {
+    const book = this.homeBookFromResult(r);
+    OneShotTransitionCoordinator.getInstance().capture(this.getUIContext(), book.id, nodeId, radius);
+    this.openBook(book);
+  }
+
+  private async openCarouselBook(r: SearchResult, nodeId: string, radius: number): Promise<void> {
+    if (this.openingCarouselBook) return;
+    this.openingCarouselBook = true;
+    const coordinator = OneShotTransitionCoordinator.getInstance();
+    try {
+      const book = this.homeBookFromResult(r);
+      // 同步截图会等待 GPU 回读，轮播封面较大时会堵住点击所在的 UI 帧。
+      await coordinator.captureAsync(this.getUIContext(), book.id, nodeId, radius);
+      if (!this.visible || this.selectedCategoryIndex !== -1) {
+        coordinator.discardPending();
+        return;
+      }
+      this.openBook(book);
+    } finally {
+      this.openingCarouselBook = false;
+    }
+  }
+
   private homeBookId(r: SearchResult): string {
     return r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl || '', r.bookUrl || r.name) :
       BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name);
@@ -886,6 +921,7 @@ export struct HomePage {
     if (carousel.length !== this.carouselBooks.length ||
       carousel.some((book: SearchResult, index: number): boolean => book !== this.carouselBooks[index])) {
       this.carouselBooks = carousel;
+      this.carouselCover = carousel[0]?.coverUrl ?? '';
     }
     this.homeBlockDataSource.setBlocks(blocks);
   }
@@ -1164,9 +1200,11 @@ export struct HomePage {
     .alignItems(VerticalAlign.Center)
     .backgroundColor(Color.Transparent)
     // 原生显隐只负责收起标题区域；自定义搜索内容同步移动，避免到阈值才原地消失。
-    .translate({ y: -Math.min(SEARCH_FIELD_ROW_HEIGHT, this.headerScrollOffset) })
-    .opacity(Math.max(0, Math.min(1, (SEARCH_FIELD_ROW_HEIGHT - this.headerScrollOffset) / 24)))
-    .visibility(this.headerScrollOffset >= SEARCH_FIELD_ROW_HEIGHT - 0.5 ? Visibility.Hidden : Visibility.Visible)
+    // 全网榜单由 RankingHomePage 的滚动容器统一控制搜索前景。
+    .translate({ y: this.rankingMode ? 0 : -Math.min(SEARCH_FIELD_ROW_HEIGHT, this.headerScrollOffset) })
+    .opacity(this.rankingMode ? 1 : Math.max(0, Math.min(1, (SEARCH_FIELD_ROW_HEIGHT - this.headerScrollOffset) / 24)))
+    .visibility(!this.rankingMode && this.headerScrollOffset >= SEARCH_FIELD_ROW_HEIGHT - 0.5
+      ? Visibility.Hidden : Visibility.Visible)
   }
 
   /** 位于分类 Tab 下方、推荐内容上方的下拉刷新指示器。 */
@@ -1225,12 +1263,19 @@ export struct HomePage {
   @Builder
   buildSourceHome() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Column()
+      Stack({ alignContent: Alignment.TopStart }) {
+        RankingPosterBackground({ cover: this.carouselCover,
+          suspended: !this.visible || this.openingCarouselBook || this.coverState.detailBookId.length > 0,
+          imageHeight: this.contentHeight + this.topSafeVp + this.bottomSafeVp })
+      }
         .width('100%')
         .height('100%')
         .backgroundColor(HomeTheme.BgNeutral)
+        .clip(true)
+        .hitTestBehavior(HitTestMode.None)
+        .accessibilityLevel('no')
         .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
-          [SafeAreaEdge.TOP, SafeAreaEdge.START, SafeAreaEdge.END])
+          [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
 
       // 固定视口的原生渐变模糊，搜索和轮播整体从其后方经过。
       HdsNavigation() {
@@ -1604,7 +1649,7 @@ export struct HomePage {
         // 大卡片 + 简介：竖向 List
         Column({ space: AppSpace.Sm }) {
           ForEach(block.books, (r: SearchResult) => {
-            this.buildHomeListItem(r)
+            this.buildHomeListItem(r, block.title + block.moreUrl)
           }, (r: SearchResult) => `${block.sourceUrl}#${r.bookUrl}`)
         }
         .width('100%')
@@ -1657,24 +1702,29 @@ export struct HomePage {
   buildFeaturedRow(r: SearchResult, showDivider: boolean) {
     Column() {
       Row({ space: AppSpace.Sm }) {
-        if (r.coverUrl && r.coverUrl.startsWith('http')) {
-          CoverImage({
-            url: r.coverUrl,
-            imgWidth: FEATURED_COVER_SIZE,
-            imgHeight: FEATURED_COVER_SIZE,
-            useFixedHeight: true,
-            radius: AppRadius.Sm,
-            decodeW: 180,
-            decodeH: 180,
-            highPriority: true
-          })
-        } else {
-          Image($r('app.media.app_icon_legacy'))
-            .width(FEATURED_COVER_SIZE)
-            .height(FEATURED_COVER_SIZE)
-            .borderRadius(AppRadius.Sm)
-            .objectFit(ImageFit.Cover)
+        Stack() {
+          if (r.coverUrl && r.coverUrl.startsWith('http')) {
+            CoverImage({
+              url: r.coverUrl,
+              imgWidth: FEATURED_COVER_SIZE,
+              imgHeight: FEATURED_COVER_SIZE,
+              useFixedHeight: true,
+              radius: AppRadius.Sm,
+              decodeW: 180,
+              decodeH: 180,
+              highPriority: true
+            })
+          } else {
+            Image($r('app.media.app_icon_legacy'))
+              .width(FEATURED_COVER_SIZE)
+              .height(FEATURED_COVER_SIZE)
+              .borderRadius(AppRadius.Sm)
+              .objectFit(ImageFit.Cover)
+          }
         }
+        .width(FEATURED_COVER_SIZE).height(FEATURED_COVER_SIZE)
+        .id(this.coverNodeId(r, 'featured'))
+        .opacity(this.coverState.hiddenSourceId === this.coverNodeId(r, 'featured') ? 0 : 1)
 
         Column({ space: AppSpace.Xxs }) {
           Text(r.name)
@@ -1717,8 +1767,7 @@ export struct HomePage {
       .alignItems(VerticalAlign.Center)
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
       .onClick(() => {
-        const book = this.homeBookFromResult(r);
-        this.openBook(book);
+        this.openCoverBook(r, this.coverNodeId(r, 'featured'), AppRadius.Sm);
       })
 
       if (showDivider) {
@@ -1749,27 +1798,33 @@ export struct HomePage {
   }
 
   @Builder
-  buildHomeListItem(r: SearchResult) {
+  buildHomeListItem(r: SearchResult, sectionId: string) {
     Row({ space: AppSpace.Md }) {
-      if (r.coverUrl && r.coverUrl.startsWith('http')) {
-        CoverImage({
-          url: r.coverUrl,
-          imgWidth: 72,
-          imgHeight: 72,
-          useFixedHeight: true,
-          radius: AppRadius.Sm,
-          decodeW: 216,
-          decodeH: 216,
-          highPriority: true
-        })
-      } else {
-        Stack() {
-          Column().width('100%').height('100%').backgroundColor($r('sys.color.brand'))
-          Text(r.name ? r.name.substring(0, 1) : '?')
-            .fontSize(24).fontColor($r('sys.color.font_on_primary')).fontWeight(FontWeight.Bold)
+      Stack() {
+        if (r.coverUrl && r.coverUrl.startsWith('http')) {
+          CoverImage({
+            url: r.coverUrl,
+            imgWidth: 72,
+            imgHeight: 72,
+            useFixedHeight: true,
+            radius: AppRadius.Sm,
+            decodeW: 216,
+            decodeH: 216,
+            highPriority: true
+          })
+        } else {
+          Stack() {
+            Column().width('100%').height('100%').backgroundColor($r('sys.color.brand'))
+            Text(r.name ? r.name.substring(0, 1) : '?')
+              .fontSize(24).fontColor($r('sys.color.font_on_primary')).fontWeight(FontWeight.Bold)
+          }
+          .width(72).height(72).borderRadius(AppRadius.Sm).clip(true)
         }
-        .width(72).height(72).borderRadius(AppRadius.Sm).clip(true)
       }
+      .width(72).height(72)
+      .id(this.coverNodeId(r, 'list-' + sectionId))
+      .opacity(this.coverState.hiddenSourceId === this.coverNodeId(r, 'list-' + sectionId) ? 0 : 1)
+
       Column({ space: 4 }) {
         Text(r.name)
           .fontSize(AppFont.Body)
@@ -1802,8 +1857,7 @@ export struct HomePage {
     .width('100%')
     .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
     .onClick(() => {
-      const book = this.homeBookFromResult(r);
-      this.openBook(book);
+      this.openCoverBook(r, this.coverNodeId(r, 'list-' + sectionId), AppRadius.Sm);
     })
   }
 
@@ -1835,8 +1889,12 @@ export struct HomePage {
               HomeCoverCarousel({
                 books: this.carouselBooks,
                 landscape: this.landscapeCarousel,
-                active: this.selectedCategoryIndex === -1 && !this.carouselTransitioning && !this.isSearchCollapsed,
-                onBookTap: (book: SearchResult) => this.openBook(this.homeBookFromResult(book))
+                active: this.visible && this.selectedCategoryIndex === -1 && !this.carouselTransitioning &&
+                  !this.isSearchCollapsed && !this.openingCarouselBook,
+                onCoverChange: (cover: string): void => { this.carouselCover = cover; },
+                onBookTap: (book: SearchResult, nodeId: string, radius: number): void => {
+                  this.openCarouselBook(book, nodeId, radius).catch((_error: Error): void => {});
+                }
               })
                 .padding({ left: AppSpace.Md, right: AppSpace.Md })
             }

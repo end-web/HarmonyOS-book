@@ -7,6 +7,9 @@ export class OnlineTextPaintState {
 
 export class OnlineTextPage {
   firstLine: number = 0;
+  // Each native line keeps its geometry; only paragraph boundaries add a vertical translation.
+  lineShifts: number[] = [];
+  trailingSpacing: number = 0;
   lineMetrics: graphicsText.LineMetrics[] = [];
   paintState: OnlineTextPaintState = new OnlineTextPaintState();
   text: string = '';
@@ -105,6 +108,7 @@ export class OnlineTextIndentedContent {
 export class OnlineTextMeasuredLine {
   startOffset: number = 0;
   heightPx: number = 0;
+  spacingAfterPx: number = 0;
 
   static of(startOffset: number, heightPx: number): OnlineTextMeasuredLine {
     const line = new OnlineTextMeasuredLine();
@@ -201,8 +205,8 @@ export class OnlineTextPaginator {
 
   static paginate(content: string, widthPx: number, heightPx: number,
     fontSizePx: number, lineHeight: number, fontFamily: string = '', fontWeight: number = 400,
-    alignment: string = 'justify'): OnlineTextPage[] {
-    const layout = OnlineTextPaginator.measure(content, widthPx, fontSizePx, lineHeight, fontFamily, fontWeight, alignment);
+    alignment: string = 'justify', paragraphSpacing: number = 0): OnlineTextPage[] {
+    const layout = OnlineTextPaginator.measure(content, widthPx, fontSizePx, lineHeight, fontFamily, fontWeight, alignment, paragraphSpacing);
     const displayed = layout.displayed;
     const metrics = layout.metrics;
     const pages = OnlineTextPaginator.paginateMeasuredLines(displayed.text, layout.lines, heightPx);
@@ -218,10 +222,15 @@ export class OnlineTextPaginator {
       if (first !== undefined) {
         page.layoutTop = first.baseline - first.ascent;
         let last = first;
+        let shift = 0;
         while (lineIndex < metrics.length && metrics[lineIndex].startIndex < page.endOffset) {
-          last = metrics[lineIndex++];
+          page.lineShifts.push(shift);
+          last = metrics[lineIndex];
+          page.trailingSpacing = layout.lines[lineIndex].spacingAfterPx;
+          shift += page.trailingSpacing;
+          lineIndex++;
         }
-        page.layoutHeight = last.baseline + last.descent - page.layoutTop;
+        page.layoutHeight = last.baseline + last.descent - page.layoutTop + shift - page.trailingSpacing;
         page.lineMetrics = metrics.slice(page.firstLine, lineIndex);
       }
     }
@@ -229,8 +238,9 @@ export class OnlineTextPaginator {
   }
 
   private static measure(content: string, widthPx: number, fontSizePx: number, lineHeight: number,
-    fontFamily: string, fontWeight: number, alignment: string): OnlineTextLayout {
-    const key = `${widthPx}:${fontSizePx}:${lineHeight}:${fontWeight}:${alignment}:${fontFamily}`;
+    fontFamily: string, fontWeight: number, alignment: string, paragraphSpacing: number): OnlineTextLayout {
+    const spacing = Number.isFinite(paragraphSpacing) ? Math.max(0, Math.min(2, paragraphSpacing)) : 0;
+    const key = `${widthPx}:${fontSizePx}:${lineHeight}:${fontWeight}:${alignment}:${fontFamily}:${spacing}`;
     const cachedIndex = OnlineTextPaginator.layouts.findIndex((item: OnlineTextLayout): boolean =>
       item.key === key && item.source === content);
     if (cachedIndex >= 0) {
@@ -274,7 +284,12 @@ export class OnlineTextPaginator {
     const metrics = paragraph.getLineMetrics();
     const lines: OnlineTextMeasuredLine[] = [];
     for (let i = 0; i < metrics.length; i++) {
-      lines.push(OnlineTextMeasuredLine.of(metrics[i].startIndex, metrics[i].height));
+      const line = OnlineTextMeasuredLine.of(metrics[i].startIndex, metrics[i].height);
+      const next = metrics[i + 1];
+      if (next !== undefined && layout.displayed.text.charAt(next.startIndex - 1) === '\n') {
+        line.spacingAfterPx = safeFontSize * spacing;
+      }
+      lines.push(line);
     }
     layout.width = safeWidth;
     layout.paragraph = paragraph;
@@ -308,15 +323,18 @@ export class OnlineTextPaginator {
     const safeHeight = Math.max(1, heightPx);
     let pageStart = 0;
     let usedHeight = 0;
+    let pendingSpacing = 0;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineStart = Math.max(pageStart, Math.min(line.startOffset, content.length));
-      if (usedHeight > 0 && usedHeight + line.heightPx > safeHeight && lineStart > pageStart) {
+      if (usedHeight > 0 && usedHeight + pendingSpacing + line.heightPx > safeHeight && lineStart > pageStart) {
         pages.push(OnlineTextPage.of(content, pageStart, lineStart));
         pageStart = lineStart;
         usedHeight = 0;
+        pendingSpacing = 0;
       }
-      usedHeight += line.heightPx;
+      usedHeight += pendingSpacing + line.heightPx;
+      pendingSpacing = line.spacingAfterPx;
     }
     if (pageStart < content.length || pages.length === 0) {
       pages.push(OnlineTextPage.of(content, pageStart, content.length));

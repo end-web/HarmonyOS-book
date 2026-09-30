@@ -25,6 +25,7 @@ import { TextReaderRouteParams, TextReadingPosition, EVT_READER_JUMP_CHAPTER, Re
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
 import { OneShotTransitionIds } from '../utils/OneShotTransition';
 import { CoverImage } from '../components/CoverImage';
+import { CoverAspectRatio } from '../utils/CoverAspectRatio';
 
 const DETAIL_LOG_DOMAIN: number = 0x0000;
 const DETAIL_LOG_TAG: string = 'BookDetailPage';
@@ -33,7 +34,11 @@ const DETAIL_LOG_TAG: string = 'BookDetailPage';
 export struct BookDetailPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
+  @Param transitionCoverHidden: boolean = false;
+  @Param deferEntry: boolean = false;
+  private entryStarted: boolean = false;
   @Local book: Book | null = null;
+  @Local coverRatio: number = 1;
   @Local loadingDetail: boolean = true;
   @Local loadFailed: boolean = false;
   @Local isFavorite: boolean = false;
@@ -91,11 +96,18 @@ export struct BookDetailPage {
     // 命中 SearchCache 时同步可拿到 book,首屏立刻有内容;
     // 首帧先展示缓存内容，再推迟数据加载到转场后。
     this.primeBookFromCache();
+    this.syncCoverRatio();
     this.downloadTick = this.downloadTick + 1;
     this.chapterDownloadTick = this.chapterDownloadTick + 1;
     emitter.on(EVT_DOWNLOAD_UPDATED, this.downloadHandler);
     WindowUtils.setStatusBarLight(false);
-    // I/O 本身异步，立即开始目录恢复和请求，避免固定增加 200ms 等待。
+    this.finishEntering();
+  }
+
+  @Monitor('deferEntry')
+  private finishEntering(): void {
+    if (!this.detailActive || this.deferEntry || this.entryStarted) return;
+    this.entryStarted = true;
     this.loadBook();
   }
 
@@ -111,8 +123,7 @@ export struct BookDetailPage {
       this.loadingDetail = false;
       // 音频搜索结果只有基础信息时，首帧直接展示目录骨架，避免先闪出”暂无章节信息”。
       this.loadingToc = cached.contentType === 'text' ? cached.chapters.length === 0 : this.needsAudioTocLoad(cached);
-      AudioService.getInstance().prewarmBookSource(cached);
-      this.refreshDisplayedChapters(cached.chapters);
+      if (!this.deferEntry) this.refreshDisplayedChapters(cached.chapters);
     } else {
       hilog.warn(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'primeBookFromCache: NO cached book found in SearchCache');
     }
@@ -166,11 +177,24 @@ export struct BookDetailPage {
   }
 
   private detailCoverWidth(): number {
-    return AdaptiveLayout.detailCoverWidth(this.viewportWidth, this.viewportHeight);
+    return CoverAspectRatio.fittedWidth(this.coverRatio,
+      AdaptiveLayout.detailCoverWidth(this.viewportWidth, this.viewportHeight),
+      AdaptiveLayout.detailCoverHeight(this.viewportWidth, this.viewportHeight));
   }
 
   private detailCoverHeight(): number {
-    return AdaptiveLayout.detailCoverHeight(this.viewportWidth, this.viewportHeight);
+    return this.detailCoverWidth() / this.coverRatio;
+  }
+
+  @Monitor('book')
+  private syncCoverRatio(): void {
+    this.coverRatio = CoverAspectRatio.get(this.book?.cover ?? '');
+  }
+
+  private rememberCoverSize(url: string, width: number, height: number): void {
+    if (url !== this.book?.cover) return;
+    CoverAspectRatio.remember(url, width, height);
+    this.coverRatio = CoverAspectRatio.get(url);
   }
 
   /** 将历史缓存或源端的内部类型值转换为详情页可见文案。 */
@@ -934,9 +958,12 @@ export struct BookDetailPage {
             imgHeight: this.detailCoverHeight(),
             useFixedHeight: true,
             radius: AppRadius.Sm,
+            imageFit: ImageFit.Contain,
             decodeW: 300,
             decodeH: 400,
-            highPriority: true
+            highPriority: true,
+            onImageSize: (url: string, width: number, height: number): void =>
+              this.rememberCoverSize(url, width, height)
           })
         } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
           // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
@@ -944,22 +971,27 @@ export struct BookDetailPage {
             .width(this.detailCoverWidth())
             .height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
-            .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: 400 })
+            .objectFit(ImageFit.Contain)
+            .onComplete((event) => {
+              if (event?.loadingStatus === 0) this.rememberCoverSize(this.book?.cover ?? '', event.width, event.height);
+            })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else if (this.book!.cover) {
           Image($rawfile(this.book!.cover))
             .width(this.detailCoverWidth())
             .height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
-            .objectFit(ImageFit.Cover)
+            .objectFit(ImageFit.Contain)
+            .onComplete((event) => {
+              if (event?.loadingStatus === 0) this.rememberCoverSize(this.book?.cover ?? '', event.width, event.height);
+            })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else {
           // 无封面:用 app 图标占位(替代旧的书形占位)
           Image($r('app.media.app_icon_legacy'))
             .width(this.detailCoverWidth()).height(this.detailCoverHeight())
             .borderRadius(AppRadius.Sm)
-            .objectFit(ImageFit.Cover)
+            .objectFit(ImageFit.Contain)
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         }
       }
@@ -968,6 +1000,7 @@ export struct BookDetailPage {
       .borderRadius(AppRadius.Sm)
       .clip(true)
       .id(OneShotTransitionIds.detailCover(this.bookId))
+      .opacity(this.transitionCoverHidden ? 0 : 1)
 
       // 书名信息
       Column({ space: AppSpace.Xs }) {
@@ -1276,7 +1309,7 @@ export struct BookDetailPage {
       }
 
       // 章节列表
-      if (this.loadingToc && this.book!.chapters.length === 0) {
+      if (this.deferEntry || (this.loadingToc && this.book!.chapters.length === 0)) {
         // 首次拉目录：骨架屏占位，避免空白后章节突然闪现
         ChapterLoadingSkeleton({
           horizontalInset: this.horizontalPadding(),

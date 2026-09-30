@@ -16,8 +16,6 @@ export class MedalDefinition {
 }
 
 export const MEDALS: MedalDefinition[] = [
-  new MedalDefinition('national_day', 0, $r('app.media.national_day_medal'),
-    $r('app.string.account_national_day_badge'), $r('app.media.national_day_badge')),
   new MedalDefinition('reading_1h', 1, $r('app.media.reading_medal_1h'), $r('app.string.account_reading_medal_1h_name')),
   new MedalDefinition('reading_10h', 10, $r('app.media.reading_medal_10h'), $r('app.string.account_reading_medal_10h_name')),
   new MedalDefinition('reading_50h', 50, $r('app.media.reading_medal_50h'), $r('app.string.account_reading_medal_50h_name')),
@@ -25,7 +23,8 @@ export const MEDALS: MedalDefinition[] = [
   new MedalDefinition('reading_300h', 300, $r('app.media.reading_medal_300h'), $r('app.string.account_reading_medal_300h_name')),
   new MedalDefinition('reading_500h', 500, $r('app.media.reading_medal_500h'), $r('app.string.account_reading_medal_500h_name')),
   new MedalDefinition('reading_1000h', 1000, $r('app.media.reading_medal_1000h'), $r('app.string.account_reading_medal_1000h_name')),
-  new MedalDefinition('reading_3000h', 3000, $r('app.media.reading_medal_3000h'), $r('app.string.account_reading_medal_3000h_name'))
+  new MedalDefinition('reading_2000h', 2000, $r('app.media.reading_medal_2000h'), $r('app.string.account_reading_medal_2000h_name')),
+  new MedalDefinition('reading_5000h', 5000, $r('app.media.reading_medal_5000h'), $r('app.string.account_reading_medal_5000h_name'))
 ];
 
 export class MedalAward {
@@ -42,6 +41,6 @@ export class MedalAward {
 
 export class MedalSnapshot {
   version: number = 1;
-  selectedMedalId: string = 'national_day';
-  awards: MedalAward[] = [new MedalAward('national_day')];
+  selectedMedalId: string = '';
+  awards: MedalAward[] = [];
 }

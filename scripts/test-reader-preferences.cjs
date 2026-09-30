@@ -42,6 +42,11 @@ function load(relative) {
   values.set('font_size', 22); // Existing installations have no new preference keys.
   const migrated = await service.get({});
   assert.equal(migrated.fontSize, 22);
+  assert.equal(migrated.paragraphSpacing, 0, 'old settings keep existing paragraph layout');
+  assert.equal(TextReadingSettings.normalizeParagraphSpacing(NaN), 0);
+  assert.equal(TextReadingSettings.normalizeParagraphSpacing(-1), 0);
+  assert.equal(TextReadingSettings.normalizeParagraphSpacing(10), 2);
+  migrated.paragraphSpacing = 1.2;
   assert.equal(migrated.textAlignment, 'justify', 'legacy preferences default to justified text');
   assert.equal(migrated.backgroundImageMode, 'cover', 'legacy images keep their existing crop');
   assert.equal(migrated.marginLeft, migrated.marginRight);
@@ -59,6 +64,7 @@ function load(relative) {
   await service.save({}, migrated);
   const restored = await service.get({});
   assert.equal(restored.pageTurnMode, 'vertical');
+  assert.equal(restored.paragraphSpacing, 1.2, 'paragraph spacing survives reload');
   assert.equal(restored.volumeKeyPageTurn, true);
   assert.equal(restored.followSystemTheme, true);
   assert.equal(restored.alwaysShowStatusBar, false, 'toolbar-following mode survives a preferences reload');
@@ -81,6 +87,7 @@ function load(relative) {
   assert.equal(reset.volumeKeyPageTurn, false);
   assert.equal(reset.alwaysShowStatusBar, true);
   assert.equal(reset.marginLeft, 16);
+  assert.equal(reset.paragraphSpacing, 0);
   assert.equal(reset.marginRight, 16);
   assert.equal(flushes, 2);
   const { ReaderThemeId, resolvePalette } = load('model/ReaderTheme');
@@ -126,18 +133,23 @@ function load(relative) {
   const { ReadingBackupService: backup } = load('service/text/ReadingBackupService');
   typography.volumeKeyPageTurn = true;
   typography.textAlignment = 'end';
+  typography.paragraphSpacing = 1.4;
   await service.save({}, typography);
   const snapshot = await backup.createSnapshot({});
   assert.equal(snapshot.settings.textAlignment, 'end');
+  assert.equal(snapshot.settings.paragraphSpacing, 1.4);
   assert.equal(snapshot.settings.volumeKeyPageTurn, true);
   await service.save({}, new TextReadingSettings());
   await backup.restoreSnapshot({}, snapshot);
   assert.equal((await service.get({})).textAlignment, 'end');
+  assert.equal((await service.get({})).paragraphSpacing, 1.4);
   assert.equal((await service.get({})).volumeKeyPageTurn, true);
   delete snapshot.settings.volumeKeyPageTurn;
   delete snapshot.settings.textAlignment;
+  delete snapshot.settings.paragraphSpacing;
   await backup.restoreSnapshot({}, snapshot);
   assert.equal((await service.get({})).textAlignment, 'justify', 'old backups adopt justified text');
+  assert.equal((await service.get({})).paragraphSpacing, 0, 'old backups use the original paragraph layout');
   assert.equal((await service.get({})).volumeKeyPageTurn, false, 'old backups keep system volume behavior');
   // Theme ownership: custom colors must never leak into a preset or image theme.
   const { resolveEffectiveThemeId, readerColorContrast, recommendedReaderFontColor } = load('model/ReaderTheme');

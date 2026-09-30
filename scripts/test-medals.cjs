@@ -53,25 +53,25 @@ function processFixture(seconds = 0) {
 }
 async function check(name, run) { fs.rmSync(disk, { force: true }); await run(); passed++; console.log(`PASS ${name}`); }
 (async () => {
-  await check('first install keeps national medal; locked medals cannot be equipped', async () => {
+  await check('first install hides national medal; locked medals cannot be equipped', async () => {
     const { service } = processFixture(); await service.init(context);
-    assert.equal(service.awards.length, 1); assert.equal(service.selectedMedalId, 'national_day');
+    assert.equal(service.awards.length, 0); assert.equal(service.selectedMedalId, '');
     await assert.rejects(service.equipMedal('reading_1h')); await assert.rejects(service.equipMedal('invalid'));
   });
-  await check('all 8 boundaries unlock at exact seconds and never replace selected medal', async () => {
+  await check('all 9 boundaries unlock at exact seconds and never replace selected medal', async () => {
     const f = processFixture(); await f.service.init(context);
-    for (const h of [1, 10, 50, 100, 300, 500, 1000, 3000]) {
+    for (const h of [1, 10, 50, 100, 300, 500, 1000, 2000, 5000]) {
       f.control.seconds = h * 3600 - 1; await f.service.refreshUnlocks();
       assert.equal(f.service.isUnlocked(`reading_${h}h`), false);
       f.control.seconds++; await f.service.refreshUnlocks();
       assert.equal(f.service.isUnlocked(`reading_${h}h`), true);
-      assert.equal(f.service.selectedMedalId, 'national_day');
+      assert.equal(f.service.selectedMedalId, '');
     }
     assert.equal(f.service.awards.length, 9);
   });
   await check('historical hours grant multiple medals without invented dates', async () => {
     const f = processFixture(120 * 3600); await f.service.init(context);
-    assert.equal(f.service.awards.length, 5);
+    assert.equal(f.service.awards.length, 4);
     assert.ok(f.service.awards.every(a => a.historical && a.unlockedAt === 0));
     assert.equal(f.service.newAwardCount, 0);
   });
@@ -90,13 +90,13 @@ async function check(name, run) { fs.rmSync(disk, { force: true }); await run();
   await check('duplicate refreshes grant once and avoid repeated writes', async () => {
     const f = processFixture(); await f.service.init(context); const before = f.control.writes;
     f.control.seconds = 3600; await Promise.all([f.service.refreshUnlocks(), f.service.refreshUnlocks(), f.service.refreshUnlocks()]);
-    assert.equal(f.service.awards.length, 2); assert.equal(f.service.newAwardCount, 1); assert.equal(f.control.writes, before + 1);
+    assert.equal(f.service.awards.length, 1); assert.equal(f.service.newAwardCount, 1); assert.equal(f.control.writes, before + 1);
   });
   await check('failed equip rolls back and does not poison future operations', async () => {
     const f = processFixture(3600); await f.service.init(context); f.control.failWrite = true;
-    await assert.rejects(f.service.equipMedal('reading_1h')); assert.equal(f.service.selectedMedalId, 'national_day');
+    await assert.rejects(f.service.equipMedal('reading_1h')); assert.equal(f.service.selectedMedalId, '');
     f.control.failWrite = false; await f.service.refreshUnlocks();
-    const next = processFixture(3600); await next.service.init(context); assert.equal(next.service.selectedMedalId, 'national_day');
+    const next = processFixture(3600); await next.service.init(context); assert.equal(next.service.selectedMedalId, '');
   });
   await check('failed unlock retries even after statistics are deleted', async () => {
     const f = processFixture(); await f.service.init(context); f.control.failWrite = true;
@@ -116,28 +116,48 @@ async function check(name, run) { fs.rmSync(disk, { force: true }); await run();
     const f = processFixture(3600); await f.service.init(context); await f.service.equipMedal('');
     const saved = await f.service.exportSnapshot(context, f.control.seconds);
     f.control.seconds = 360000; await f.service.refreshUnlocks(); await f.service.equipMedal('reading_100h');
-    await f.service.restoreSnapshot(context, saved); assert.equal(f.service.awards.length, 5); assert.equal(f.service.selectedMedalId, '');
-    saved.awards.length = 0; assert.equal(f.service.awards.length, 5);
+    await f.service.restoreSnapshot(context, saved); assert.equal(f.service.awards.length, 4); assert.equal(f.service.selectedMedalId, '');
+    saved.awards.length = 0; assert.equal(f.service.awards.length, 4);
   });
   await check('legacy backup grants restored hours as historical and keeps current choice', async () => {
     const f = processFixture(); await f.service.init(context); await f.service.equipMedal('');
     f.control.seconds = 36000; f.event(true); await f.service.restoreSnapshot(context, undefined);
-    assert.equal(f.service.awards.length, 3); assert.equal(f.service.selectedMedalId, '');
+    assert.equal(f.service.awards.length, 2); assert.equal(f.service.selectedMedalId, '');
     assert.ok(f.service.awards.every(a => a.historical && a.unlockedAt === 0));
   });
   await check('backup uses sanitized totals without initializing broken original statistics', async () => {
     const f = processFixture(); f.control.statsUnavailable = true;
     const saved = await f.service.exportSnapshot(context, 36000);
-    assert.equal(saved.awards.length, 3); assert.equal(f.service.ready, false); assert.equal(fs.existsSync(disk), false);
+    assert.equal(saved.awards.length, 2); assert.equal(f.service.ready, false); assert.equal(fs.existsSync(disk), false);
   });
   await check('malformed, duplicate and locked-selection backups are rejected', async () => {
-    const f = processFixture(); await f.service.init(context);
+    const f = processFixture(3600); await f.service.init(context);
     const valid = await f.service.exportSnapshot(context, f.control.seconds);
-    const variants = [null, {}, { ...valid, version: 2 }, { ...valid, selectedMedalId: 'reading_1h' },
+    const variants = [null, {}, { ...valid, version: 2 }, { ...valid, selectedMedalId: 'reading_10h' },
       { ...valid, awards: [valid.awards[0], valid.awards[0]] },
       { ...valid, awards: [{ medalId: 'national_day', unlockedAt: -1, historical: true }] }];
     for (const v of variants) { assert.equal(f.MedalService.isValidSnapshot(v), false); await assert.rejects(f.service.restoreSnapshot(context, v)); }
     assert.equal(f.service.awards.length, 1);
+  });
+  await check('old national and 3000h awards stay backup-compatible but hidden after restart and restore', async () => {
+    const legacy = { version: 1, selectedMedalId: 'national_day', awards: [
+      { medalId: 'national_day', unlockedAt: 0, historical: true },
+      { medalId: 'reading_1h', unlockedAt: 123, historical: false },
+      { medalId: 'reading_3000h', unlockedAt: 0, historical: true }
+    ] };
+    fs.writeFileSync(disk, JSON.stringify(legacy));
+    const f = processFixture(); await f.service.init(context);
+    assert.equal(f.service.awards.length, 1); assert.equal(f.service.selectedMedalId, '');
+    assert.equal(f.service.selected(), undefined);
+    await assert.rejects(f.service.equipMedal('national_day'));
+    await assert.rejects(f.service.equipMedal('reading_3000h'));
+    await f.service.equipMedal('reading_1h');
+    legacy.selectedMedalId = 'reading_3000h';
+    await f.service.restoreSnapshot(context, legacy);
+    assert.equal(f.service.selectedMedalId, ''); assert.equal(f.service.awards.length, 1);
+    const exported = await f.service.exportSnapshot(context, 0);
+    assert.equal(exported.awards.length, 3); assert.ok(f.MedalService.isValidSnapshot(exported));
+    assert.equal(f.service.awards[0].unlockedAt, 123);
   });
   await check('real app backup carries medal selection and rejects invalid medal data', async () => {
     const backup = require('./backup-test-harness.cjs');

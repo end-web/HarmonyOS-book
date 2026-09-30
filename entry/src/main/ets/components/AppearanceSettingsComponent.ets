@@ -29,8 +29,8 @@ const MATERIAL_CHOICES: MaterialChoice[] = [
 ];
 
 const ACCENT_CHOICES: AccentChoice[] = [
-  new AccentChoice('', $r('app.string.appearance_accent_default')),
-  new AccentChoice('#C4475B', $r('app.string.appearance_accent_rose')),
+  new AccentChoice('#FF6B3D', $r('app.string.appearance_accent_orange')),
+  new AccentChoice('', $r('app.string.appearance_accent_rose')),
   new AccentChoice('#8E55B8', $r('app.string.appearance_accent_purple')),
   new AccentChoice('#2869B8', $r('app.string.appearance_accent_blue')),
   new AccentChoice('#008577', $r('app.string.appearance_accent_teal')),
@@ -63,7 +63,7 @@ export struct AppearanceSettingsComponent {
     this.saving = true;
     try {
       await PreferenceService.setAccentColor(value);
-      this.customHex = value || '#FF6B3D';
+      this.customHex = value || AppAppearance.defaultAccent;
       this.colorInvalid = false;
     } catch (_e) {
       this.showSaveError();
@@ -100,11 +100,11 @@ export struct AppearanceSettingsComponent {
         ForEach(ACCENT_CHOICES, (choice: AccentChoice) => {
           Column({ space: AppSpace.Xs }) {
             Stack() {
-              Row().width(42).height(42).borderRadius(21).backgroundColor(choice.color || '#FF6B3D')
-              if (this.appearance.accent === choice.color) {
+              Row().width(42).height(42).borderRadius(21).backgroundColor(choice.color || AppAppearance.defaultAccent)
+              if ((this.appearance.accent || AppAppearance.defaultAccent) === (choice.color || AppAppearance.defaultAccent)) {
                 SymbolGlyph($r('sys.symbol.checkmark'))
                   .fontSize(20)
-                  .fontColor([AppAppearance.foreground(choice.color || '#FF6B3D')])
+                  .fontColor([AppAppearance.foreground(choice.color || AppAppearance.defaultAccent)])
               }
             }
             Text(choice.label).fontSize(AppFont.Caption).fontColor($r('sys.color.font_primary'))
@@ -162,11 +162,10 @@ export struct AppearanceSettingsComponent {
         Row().width(22).height(22).borderRadius(11).backgroundColor(AppColor.Brand)
         Text(this.appearance.accent || $r('app.string.appearance_accent_default')).fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
-        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('sys.color.font_tertiary')])
       }
       .width('100%').padding(AppSpace.Md).constraintSize({ minHeight: 56 })
       .onClick(() => {
-        this.customHex = this.appearance.accent || '#FF6B3D';
+        this.customHex = this.appearance.accent || AppAppearance.defaultAccent;
         this.colorInvalid = false;
         this.showAccent = true;
       })

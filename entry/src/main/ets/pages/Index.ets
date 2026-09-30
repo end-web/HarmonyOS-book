@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
-import { curves } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { MainPage } from './MainPage';
+import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
@@ -42,6 +42,7 @@ import { LocalImportRouteParams } from '../utils/FileOpenRouting';
 import {
   BookOneShotPayload,
   NavigationOneShotRunner,
+  OneShotLayoutCallback,
   OneShotRect,
   OneShotTransitionCoordinator,
   OneShotTransitionIds
@@ -60,11 +61,12 @@ struct Index {
   @Local navStack: NavPathStack = new NavPathStack();
   @Local playerRenderGroup: boolean = false;
   @Local playerOpacity: number = 1;
-  // detail 路由自定义转场:缩放淡入,无方向位移
-  @Local detailScale: number = 1;
+  @Local playerDragState: PlayerDragState = PlayerDragTransition.getInstance().state;
+  @Local navigationEnabled: boolean = true;
   @Local detailOpacity: number = 1;
   private widgetSubscribed: boolean = false;
   private homeBackHandler: (() => boolean) | undefined = undefined;
+  private homeShownHandler: (() => void) | undefined = undefined;
   /** 已消费过的路由 ts，避免冷启动时 AppStorage + emitter 两条路径同时触发同一个 push */
   private lastConsumedRouteTs: number = 0;
   private browserLoginOpener: (route: RuleSourceLoginRouteParams) => void = (route: RuleSourceLoginRouteParams): void => {
@@ -165,6 +167,36 @@ struct Index {
 
   private oneShotNavigationTransition(from: NavContentInfo, to: NavContentInfo,
     operation: NavigationOperation): NavigationAnimatedTransition | undefined {
+    if (operation === NavigationOperation.PUSH && to.name === 'player' && this.playerDragState.active) {
+      const drag = PlayerDragTransition.getInstance();
+      const animation: NavigationAnimatedTransition = {
+        isInteractive: true,
+        transition: (proxy: NavigationTransitionProxy): void => {
+          // 原生记录终态动画；进度由 MiniPlayer 的 PanGesture 驱动，不禁用源手势。
+          this.playerOpacity = 1;
+          this.playerRenderGroup = false;
+          const viewport = PlayerDragTransition.measure(this.getUIContext(), 'player-drag-surface');
+          const cover = PlayerDragTransition.measure(this.getUIContext(), 'player-page-cover');
+          // 整个播放页从迷你栏的实际矩形/圆角展开，封面独立对齐播放页封面。
+          this.getUIContext().animateTo({ duration: 360, curve: Curve.Linear }, (): void => {
+            drag.expandToPlayer(cover, viewport);
+          });
+          this.getUIContext().animateTo({ duration: 160, curve: Curve.Linear }, (): void => {
+            this.playerDragState.contentOpacity = 1;
+          });
+          this.getUIContext().animateTo({ duration: 80, curve: Curve.Linear }, (): void => {
+            this.playerDragState.sourceOpacity = 0;
+          });
+          this.getUIContext().postFrameCallback(new OneShotLayoutCallback((): void => drag.attach(proxy)));
+        },
+        onTransitionEnd: (success: boolean): void => {
+          drag.complete();
+          if (success) PlayerEntryDecider.markEntered();
+          else PlayerEntryDecider.markLeaving();
+        }
+      };
+      return animation;
+    }
     const toName = to.name ?? '';
     const coordinator = OneShotTransitionCoordinator.getInstance();
     if (!coordinator.canHandle(from, to, operation)) {
@@ -174,9 +206,11 @@ struct Index {
     const animatedTransition: NavigationAnimatedTransition = {
       timeout: 1800,
       onTransitionEnd: (success: boolean): void => {
+        this.navigationEnabled = true;
         if (!success) console.warn('[Index] advanced one-shot transition did not finish successfully');
       },
       transition: (transitionProxy: NavigationTransitionProxy): void => {
+        this.navigationEnabled = false;
         coordinator.run(operation, from, to, transitionProxy);
       }
     };
@@ -189,6 +223,9 @@ struct Index {
       NavDestination() {
         MainPage({
           navStack: this.navStack,
+          onHomeShownHandlerChange: (handler: (() => void) | undefined): void => {
+            this.homeShownHandler = handler;
+          },
           onBackHandlerChange: (handler: (() => boolean) | undefined): void => {
             this.homeBackHandler = handler;
           }
@@ -197,6 +234,7 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.NONE)
+      .onShown((): void => { this.homeShownHandler?.(); })
       .onBackPressed((): boolean => {
         if (this.homeBackHandler?.()) return true;
         // 根页返回:移到后台而不是 pop,保证退出应用
@@ -211,41 +249,39 @@ struct Index {
       })
     } else if (name === 'detail') {
       NavDestination() {
-        DetailPageWrapper({ navStack: this.navStack, bookId: param as Object as string })
+        DetailPageWrapper({
+          navStack: this.navStack,
+          bookId: param as Object as string,
+          onTransitionFinished: (): void => { this.navigationEnabled = true; }
+        })
       }
       .hideTitleBar(true)
       .backgroundColor(Color.Transparent)
-      // 关闭系统默认转场,用 customTransition 做缩放淡入,无位移方向感
+      // 封面转场由根 Navigation 接管；其他入口仅淡入淡出。
       .systemTransition(NavigationSystemTransitionType.NONE)
-      .scale({ x: this.detailScale, y: this.detailScale })
       .opacity(this.detailOpacity)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
         if (op === NavigationOperation.PUSH && isEnter) {
-          // 进:从 0.94 放大到 1.0,透明度 0→1,减速曲线
-          this.detailScale = 0.94;
+          // 无可用封面时保留轻量淡入。
           this.detailOpacity = 0;
           return [{
             duration: 320,
             curve: Curve.LinearOutSlowIn,
             event: () => {
-              this.detailScale = 1;
               this.detailOpacity = 1;
             },
             onTransitionEnd: () => {}
           }];
         } else if (op === NavigationOperation.POP && !isEnter) {
-          // 出:缩到 0.94 + 淡出,加速曲线(开始稍快)
-          this.detailScale = 1;
+          // 无可用封面时淡出返回。
           this.detailOpacity = 1;
           return [{
             duration: 240,
             curve: Curve.FastOutLinearIn,
             event: () => {
-              this.detailScale = 0.94;
               this.detailOpacity = 0;
             },
             onTransitionEnd: () => {
-              this.detailScale = 1;
               this.detailOpacity = 1;
             }
           }];
@@ -254,13 +290,14 @@ struct Index {
       })
     } else if (name === 'player') {
       NavDestination() {
-        PlayerPageWrapper({ navStack: this.navStack, param: param as Object })
+        PlayerPageWrapper({ navStack: this.navStack, param: param as Object, deferEntry: this.playerDragState.active })
       }
       .hideTitleBar(true)
       // 关闭系统默认转场,让 customTransition 接管上滑(进)/下滑(返回)
       .systemTransition(NavigationSystemTransitionType.NONE)
       // 抽屉(章节/定时/跳过)打开时,右滑/返回先关抽屉而不是退整页
       .onBackPressed((): boolean => {
+        if (PlayerDragTransition.getInstance().cancel()) return true;
         if (PlayerBackInterceptor.consume()) return true;
         PlayerEntryDecider.markLeaving();
         this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutLinearIn }, () => {
@@ -268,7 +305,7 @@ struct Index {
         });
         return true;
       })
-      .backgroundColor('#000000')
+      .backgroundColor(this.playerDragState.active ? Color.Transparent : '#000000')
       .renderGroup(this.playerRenderGroup)
       .opacity(this.playerOpacity)
       .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
@@ -440,6 +477,7 @@ struct Index {
       // home 已在 aboutToAppear 中 push,根内容留空
     }
     .backgroundColor('#000000')
+    .enabled(this.navigationEnabled)
     .navDestination(this.routerMap)
     .customNavContentTransition((from: NavContentInfo, to: NavContentInfo,
       operation: NavigationOperation): NavigationAnimatedTransition | undefined => {
@@ -457,285 +495,217 @@ struct Index {
 struct DetailPageWrapper {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
+  @Event onTransitionFinished: () => void = () => {};
+  @Local detailOpacity: number = 1;
+  @Local coverHidden: boolean = false;
+  @Local previewVisible: boolean = false;
+  @Local previewX: number = 0;
+  @Local previewY: number = 0;
+  @Local previewWidth: number = 0;
+  @Local previewHeight: number = 0;
+  @Local previewBaseWidth: number = 1;
+  @Local previewBaseHeight: number = 1;
+  @Local previewRadius: number = AppRadius.Md;
+  @Local previewOpacity: number = 1;
+  @Local entryReady: boolean = true;
 
-  @Local detailSurfaceScale: number = 1;
-  @Local detailSurfaceTranslateX: number = 0;
-  @Local detailSurfaceTranslateY: number = 0;
-  @Local detailSurfaceWidth: Dimension = '100%';
-  @Local detailSurfaceHeight: Dimension = '100%';
-  @Local detailSurfaceRadius: number = 0;
-  @Local detailSurfaceOpacity: number = 1;
-  @Local detailSurfaceClipEnabled: boolean = false;
-  @Local transitionPreviewVisible: boolean = false;
-  @Local transitionPreviewX: number = 0;
-  @Local transitionPreviewY: number = 0;
-  @Local transitionPreviewWidth: number = 0;
-  @Local transitionPreviewHeight: number = 0;
-  @Local transitionPreviewRadius: number = AppRadius.Md;
-  @Local transitionPreviewOpacity: number = 1;
-
-  private transitionPayload: BookOneShotPayload | undefined = undefined;
-  private transitionSnapshot: image.PixelMap | undefined = undefined;
-  private transitionRunning: boolean = false;
+  private payload: BookOneShotPayload | undefined = undefined;
+  private snapshot: image.PixelMap | undefined = undefined;
+  private running: boolean = false;
+  private disposed: boolean = false;
+  private watchdog: number = -1;
   private navigationRunner: NavigationOneShotRunner =
-    (isPush: boolean, transitionProxy: NavigationTransitionProxy): void => {
-      this.runNavigationTransition(isPush, transitionProxy);
-    };
+    (isPush: boolean, proxy: NavigationTransitionProxy): void => this.runTransition(isPush, proxy);
 
   aboutToAppear(): void {
-    if (this.transitionPayload !== undefined) return;
     const payload = OneShotTransitionCoordinator.getInstance().claim(this.bookId);
     if (payload === undefined || payload.snapshot === undefined) return;
-    this.transitionPayload = payload;
-    this.transitionSnapshot = payload.snapshot;
-    this.configureSurfaceStart(payload.sourceRect, payload.viewportRect);
-    this.applyPreviewRect(payload.sourceRect, payload.viewportRect, AppRadius.Md);
-    this.detailSurfaceOpacity = 0.08;
-    this.detailSurfaceClipEnabled = true;
-    this.transitionPreviewVisible = true;
-    this.transitionPreviewOpacity = 1;
+    this.payload = payload;
+    this.entryReady = false;
+    this.snapshot = payload.snapshot;
+    this.detailOpacity = 0;
+    this.coverHidden = true;
+    this.previewVisible = false;
+    this.applyRect(payload.sourceRect, payload.viewportRect, payload.sourceRadius);
     OneShotTransitionCoordinator.getInstance().register(this.bookId, this.navigationRunner);
   }
 
-  private configureSurfaceStart(sourceRect: OneShotRect, viewportRect: OneShotRect): void {
-    const widthScale = sourceRect.widthPx / viewportRect.widthPx;
-    const heightScale = sourceRect.heightPx / viewportRect.heightPx;
-    const initialScale = Math.max(widthScale, heightScale);
-    this.detailSurfaceScale = initialScale;
-    this.detailSurfaceTranslateX = WindowUtils.pxToVp(sourceRect.centerXPx() - viewportRect.centerXPx());
-    this.detailSurfaceTranslateY = WindowUtils.pxToVp(sourceRect.centerYPx() - viewportRect.centerYPx());
-    if (widthScale >= heightScale) {
-      this.detailSurfaceWidth = WindowUtils.pxToVp(viewportRect.widthPx);
-      this.detailSurfaceHeight = WindowUtils.pxToVp(sourceRect.heightPx / initialScale);
-    } else {
-      this.detailSurfaceWidth = WindowUtils.pxToVp(sourceRect.widthPx / initialScale);
-      this.detailSurfaceHeight = WindowUtils.pxToVp(viewportRect.heightPx);
-    }
-    this.detailSurfaceRadius = AppRadius.Md / initialScale;
-    this.detailSurfaceClipEnabled = true;
+  aboutToDisappear(): void {
+    this.disposed = true;
+    this.running = false;
+    this.clearWatchdog();
+    this.onTransitionFinished();
+    this.restoreSource();
+    OneShotTransitionCoordinator.getInstance().unregister(this.bookId);
+    OneShotTransitionCoordinator.releaseSnapshot(this.snapshot);
+    this.snapshot = undefined;
   }
 
-  private configureSurfaceEnd(opacityValue: number): void {
-    this.detailSurfaceScale = 1;
-    this.detailSurfaceTranslateX = 0;
-    this.detailSurfaceTranslateY = 0;
-    this.detailSurfaceWidth = '100%';
-    this.detailSurfaceHeight = '100%';
-    this.detailSurfaceRadius = 34;
-    this.detailSurfaceOpacity = opacityValue;
-    this.detailSurfaceClipEnabled = true;
+  private clearWatchdog(): void {
+    if (this.watchdog >= 0) clearTimeout(this.watchdog);
+    this.watchdog = -1;
   }
 
-  private applyPreviewRect(rect: OneShotRect, viewportRect: OneShotRect, radius: number): void {
-    this.transitionPreviewX = WindowUtils.pxToVp(rect.leftPx - viewportRect.leftPx);
-    this.transitionPreviewY = WindowUtils.pxToVp(rect.topPx - viewportRect.topPx);
-    this.transitionPreviewWidth = WindowUtils.pxToVp(rect.widthPx);
-    this.transitionPreviewHeight = WindowUtils.pxToVp(rect.heightPx);
-    this.transitionPreviewRadius = radius;
+  private restoreSource(): void {
+    const state = OneShotTransitionCoordinator.getInstance().coverState;
+    if (state.hiddenSourceId === this.payload?.sourceNodeId) state.hiddenSourceId = '';
   }
 
-  private measureRect(componentId: string): OneShotRect | undefined {
+  private measureRect(id: string): OneShotRect | undefined {
     try {
-      const info = this.getUIContext().getComponentUtils().getRectangleById(componentId);
-      const rect = OneShotRect.fromComponentInfo(info);
+      const rect = OneShotRect.fromComponentInfo(this.getUIContext().getComponentUtils().getRectangleById(id));
       return rect.isValid() ? rect : undefined;
     } catch (_error) {
       return undefined;
     }
   }
 
-  private viewportMatches(first: OneShotRect, second: OneShotRect): boolean {
-    return Math.abs(first.widthPx - second.widthPx) < 2 &&
-      Math.abs(first.heightPx - second.heightPx) < 2;
+  private applyRect(rect: OneShotRect, viewport: OneShotRect, radius: number): void {
+    this.previewX = WindowUtils.pxToVp(rect.leftPx - viewport.leftPx);
+    this.previewY = WindowUtils.pxToVp(rect.topPx - viewport.topPx);
+    this.previewWidth = WindowUtils.pxToVp(rect.widthPx);
+    this.previewHeight = WindowUtils.pxToVp(rect.heightPx);
+    this.previewRadius = radius;
   }
 
-  private rectIntersectsViewport(rect: OneShotRect, viewportRect: OneShotRect): boolean {
-    const rectRight = rect.leftPx + rect.widthPx;
-    const rectBottom = rect.topPx + rect.heightPx;
-    const viewportRight = viewportRect.leftPx + viewportRect.widthPx;
-    const viewportBottom = viewportRect.topPx + viewportRect.heightPx;
-    return rectRight > viewportRect.leftPx && rect.leftPx < viewportRight &&
-      rectBottom > viewportRect.topPx && rect.topPx < viewportBottom;
+  private afterLayout(action: () => void): void {
+    // 用连续帧确认布局已提交，不等 onIdle：目录加载繁忙时可能连续多帧没有空闲时间。
+    this.getUIContext().postFrameCallback(new OneShotLayoutCallback((): void => {
+      if (this.disposed || !this.running) return;
+      this.getUIContext().postFrameCallback(new OneShotLayoutCallback((): void => {
+        if (!this.disposed && this.running) action();
+      }));
+    }));
   }
 
-  private runNavigationTransition(isPush: boolean, transitionProxy: NavigationTransitionProxy): void {
-    if (this.transitionRunning) {
-      transitionProxy.finishTransition();
+  private finish(proxy: NavigationTransitionProxy, isPush: boolean): void {
+    if (!this.running) return;
+    this.running = false;
+    this.clearWatchdog();
+    this.onTransitionFinished();
+    this.restoreSource();
+    this.coverHidden = false;
+    this.previewVisible = false;
+    this.detailOpacity = isPush ? 1 : 0;
+    proxy.finishTransition();
+    if (isPush) this.entryReady = true;
+  }
+
+  private runTransition(isPush: boolean, proxy: NavigationTransitionProxy): void {
+    if (this.running || this.disposed) {
+      this.onTransitionFinished();
+      proxy.finishTransition();
       return;
     }
-    this.transitionRunning = true;
-    if (isPush) {
-      this.preparePushTransition(transitionProxy);
-    } else {
-      this.preparePopTransition(transitionProxy);
-    }
+    this.running = true;
+    // 早于 Navigation 的 timeout 清理，布局未就绪/旋转/离屏也不能留下透明页面。
+    this.watchdog = setTimeout((): void => this.finish(proxy, isPush), 1200);
+    this.afterLayout((): void => this.prepareTransition(isPush, proxy));
   }
 
-  private preparePushTransition(transitionProxy: NavigationTransitionProxy): void {
-    const payload = this.transitionPayload;
-    if (payload === undefined) {
-      this.finishFailedTransition(transitionProxy);
+  private prepareTransition(isPush: boolean, proxy: NavigationTransitionProxy): void {
+    const payload = this.payload;
+    const viewport = this.measureRect(OneShotTransitionIds.DETAIL_SURFACE);
+    const target = this.measureRect(OneShotTransitionIds.detailCover(this.bookId));
+    if (payload === undefined || viewport === undefined || target === undefined) {
+      this.fadeFallback(isPush, proxy);
       return;
     }
-    const viewportRect = this.measureRect(OneShotTransitionIds.ROOT_NAVIGATION) ?? payload.viewportRect;
-    // Measure the destination at its final geometry while the surface remains invisible.
-    this.configureSurfaceEnd(0);
-    setTimeout((): void => {
-      const targetRect = this.measureRect(OneShotTransitionIds.detailCover(this.bookId));
-      if (targetRect === undefined) {
-        this.finishFailedTransition(transitionProxy);
+    if (isPush) payload.viewportRect = viewport;
+    const source = isPush ? payload.sourceRect : this.measureRect(payload.sourceNodeId);
+    if (source === undefined || source.topPx + source.heightPx <= viewport.topPx ||
+      source.topPx >= viewport.topPx + viewport.heightPx ||
+      source.leftPx + source.widthPx <= viewport.leftPx || source.leftPx >= viewport.leftPx + viewport.widthPx ||
+      (!isPush && (Math.abs(viewport.widthPx - payload.viewportRect.widthPx) > 2 ||
+      Math.abs(viewport.heightPx - payload.viewportRect.heightPx) > 2))) {
+      this.fadeFallback(isPush, proxy);
+      return;
+    }
+    if (!isPush) {
+      // 返回使用当前详情图片，避免详情刷新封面后倒退成进入前的截图。
+      try {
+        const snapshot = this.getUIContext().getComponentSnapshot().getSync(OneShotTransitionIds.detailCover(this.bookId));
+        OneShotTransitionCoordinator.releaseSnapshot(this.snapshot);
+        this.snapshot = snapshot;
+      } catch (_error) {
+        this.fadeFallback(false, proxy);
         return;
       }
-      this.configureSurfaceStart(payload.sourceRect, viewportRect);
-      this.applyPreviewRect(payload.sourceRect, viewportRect, AppRadius.Md);
-      this.detailSurfaceOpacity = 0.08;
-      this.transitionPreviewVisible = true;
-      this.transitionPreviewOpacity = 1;
-      setTimeout((): void => {
-        this.animatePush(targetRect, viewportRect, transitionProxy);
-      }, 0);
-    }, 0);
-  }
-
-  private animatePush(targetRect: OneShotRect, viewportRect: OneShotRect,
-    transitionProxy: NavigationTransitionProxy): void {
-    this.getUIContext().animateTo({
-      curve: curves.interpolatingSpring(0, 1, 328, 36),
-      onFinish: (): void => {
-        this.transitionRunning = false;
-        this.transitionPreviewVisible = false;
-        this.detailSurfaceClipEnabled = false;
-        this.detailSurfaceRadius = 0;
-        transitionProxy.finishTransition();
-      }
-    }, (): void => {
-      this.configureSurfaceEnd(1);
-      this.applyPreviewRect(targetRect, viewportRect, AppRadius.Sm);
-    });
-    this.getUIContext().animateTo({
-      duration: 220,
-      delay: 180,
-      curve: Curve.FastOutSlowIn
-    }, (): void => {
-      this.transitionPreviewOpacity = 0;
+    }
+    this.applyRect(isPush ? source : target, viewport, isPush ? payload.sourceRadius : AppRadius.Sm);
+    this.previewBaseWidth = Math.max(1, this.previewWidth);
+    this.previewBaseHeight = Math.max(1, this.previewHeight);
+    this.previewOpacity = 1;
+    this.previewVisible = true;
+    this.coverHidden = true;
+    OneShotTransitionCoordinator.getInstance().coverState.hiddenSourceId = payload.sourceNodeId;
+    // 起止位置均为最终布局坐标，不再缩放整个详情或在运动途中淡掉封面。
+    this.afterLayout((): void => {
+      this.getUIContext().animateTo({
+        duration: isPush ? 420 : 350,
+        curve: Curve.FastOutSlowIn,
+        onFinish: (): void => {
+          if (!this.running || this.disposed) return;
+          if (isPush) this.handoffCover(proxy);
+          else this.finish(proxy, false);
+        }
+      }, (): void => {
+        this.applyRect(isPush ? target : source, viewport, isPush ? AppRadius.Sm : payload.sourceRadius);
+        this.detailOpacity = isPush ? 1 : 0;
+      });
     });
   }
 
-  private preparePopTransition(transitionProxy: NavigationTransitionProxy): void {
-    const payload = this.transitionPayload;
-    if (payload === undefined) {
-      this.finishFailedTransition(transitionProxy);
-      return;
-    }
-    const viewportRect = this.measureRect(OneShotTransitionIds.ROOT_NAVIGATION) ?? payload.viewportRect;
-    if (!this.viewportMatches(payload.viewportRect, viewportRect)) {
-      this.animateFallbackPop(transitionProxy);
-      return;
-    }
-    const targetRect = this.measureRect(OneShotTransitionIds.detailCover(this.bookId));
-    if (targetRect === undefined) {
-      this.animateFallbackPop(transitionProxy);
-      return;
-    }
-    const currentSourceRect = this.measureRect(payload.sourceNodeId);
-    if (currentSourceRect === undefined || !this.rectIntersectsViewport(currentSourceRect, viewportRect)) {
-      this.animateFallbackPop(transitionProxy);
-      return;
-    }
-    this.configureSurfaceEnd(1);
-    this.applyPreviewRect(targetRect, viewportRect, AppRadius.Sm);
-    this.transitionPreviewVisible = true;
-    this.transitionPreviewOpacity = 1;
-    setTimeout((): void => {
-      this.animatePop(currentSourceRect, viewportRect, transitionProxy);
-    }, 0);
-  }
-
-  private animatePop(sourceRect: OneShotRect, viewportRect: OneShotRect,
-    transitionProxy: NavigationTransitionProxy): void {
-    this.getUIContext().animateTo({
-      duration: 350,
-      curve: Curve.EaseInOut,
-      onFinish: (): void => {
-        transitionProxy.finishTransition();
-        this.finishReturnTransition();
-      }
-    }, (): void => {
-      this.configureSurfaceStart(sourceRect, viewportRect);
-      this.detailSurfaceOpacity = 0;
-      this.applyPreviewRect(sourceRect, viewportRect, AppRadius.Md);
+  private handoffCover(proxy: NavigationTransitionProxy): void {
+    this.coverHidden = false;
+    // 封面已经到达目标位置，再交接真实图片，两个位置不会同时可见。
+    this.afterLayout((): void => {
+      this.getUIContext().animateTo({
+        duration: 100,
+        curve: Curve.Linear,
+        onFinish: (): void => this.finish(proxy, true)
+      }, (): void => { this.previewOpacity = 0; });
     });
   }
 
-  private animateFallbackPop(transitionProxy: NavigationTransitionProxy): void {
-    this.transitionPreviewVisible = false;
+  private fadeFallback(isPush: boolean, proxy: NavigationTransitionProxy): void {
+    this.coverHidden = false;
+    this.previewVisible = false;
+    this.restoreSource();
     this.getUIContext().animateTo({
-      duration: 220,
-      curve: Curve.FastOutLinearIn,
-      onFinish: (): void => {
-        transitionProxy.finishTransition();
-        this.finishReturnTransition();
-      }
-    }, (): void => {
-      this.detailSurfaceOpacity = 0;
-    });
-  }
-
-  private finishFailedTransition(transitionProxy: NavigationTransitionProxy): void {
-    this.configureSurfaceEnd(1);
-    this.detailSurfaceClipEnabled = false;
-    this.detailSurfaceRadius = 0;
-    this.transitionPreviewVisible = false;
-    this.transitionRunning = false;
-    transitionProxy.finishTransition();
-    OneShotTransitionCoordinator.getInstance().unregister(this.bookId);
-    this.releaseSnapshot();
-  }
-
-  private finishReturnTransition(): void {
-    this.transitionRunning = false;
-    this.transitionPreviewVisible = false;
-    this.configureSurfaceEnd(1);
-    this.detailSurfaceClipEnabled = false;
-    this.detailSurfaceRadius = 0;
-    OneShotTransitionCoordinator.getInstance().unregister(this.bookId);
-    this.releaseSnapshot();
-  }
-
-  private releaseSnapshot(): void {
-    const snapshot = this.transitionSnapshot;
-    this.transitionSnapshot = undefined;
-    OneShotTransitionCoordinator.releaseSnapshot(snapshot);
+      duration: 200,
+      curve: Curve.EaseOut,
+      onFinish: (): void => this.finish(proxy, isPush)
+    }, (): void => { this.detailOpacity = isPush ? 1 : 0; });
   }
 
   build() {
-    Stack({ alignContent: Alignment.Center }) {
-      Stack() {
-        BookDetailPage({ navStack: this.navStack, bookId: this.bookId })
-      }
-      .width(this.detailSurfaceWidth)
-      .height(this.detailSurfaceHeight)
-      .scale({ x: this.detailSurfaceScale, y: this.detailSurfaceScale })
-      .translate({ x: this.detailSurfaceTranslateX, y: this.detailSurfaceTranslateY })
-      .borderRadius(this.detailSurfaceRadius)
-      .clip(this.detailSurfaceClipEnabled)
-      .opacity(this.detailSurfaceOpacity)
-      .id(OneShotTransitionIds.DETAIL_SURFACE)
-
-      if (this.transitionPreviewVisible && this.transitionSnapshot !== undefined) {
-        Image(this.transitionSnapshot)
-          .width(this.transitionPreviewWidth)
-          .height(this.transitionPreviewHeight)
-          .position({ x: this.transitionPreviewX, y: this.transitionPreviewY })
-          .borderRadius(this.transitionPreviewRadius)
+    Stack({ alignContent: Alignment.TopStart }) {
+      BookDetailPage({ navStack: this.navStack, bookId: this.bookId,
+        transitionCoverHidden: this.coverHidden, deferEntry: !this.entryReady })
+        .width('100%')
+        .height('100%')
+        .renderGroup(!this.entryReady)
+        .opacity(this.detailOpacity)
+      if (this.previewVisible && this.snapshot !== undefined) {
+        Image(this.snapshot)
+          // 尺寸固定，只改变绘制变换，避免每帧重新测量详情页。
+          .width(this.previewBaseWidth)
+          .height(this.previewBaseHeight)
+          .scale({ x: this.previewWidth / this.previewBaseWidth,
+            y: this.previewHeight / this.previewBaseHeight, centerX: 0, centerY: 0 })
+          .translate({ x: this.previewX, y: this.previewY })
+          .borderRadius(this.previewRadius)
           .clip(true)
-          .objectFit(ImageFit.Cover)
-          .opacity(this.transitionPreviewOpacity)
+          .objectFit(ImageFit.Contain)
+          .opacity(this.previewOpacity)
+          .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%')
     .height('100%')
     .clip(true)
+    .id(OneShotTransitionIds.DETAIL_SURFACE)
   }
 }
 
@@ -743,6 +713,8 @@ struct DetailPageWrapper {
 struct PlayerPageWrapper {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param param: Object = '';
+  @Param deferEntry: boolean = false;
+  @Local dragState: PlayerDragState = PlayerDragTransition.getInstance().state;
 
   private resolveBookId(): string {
     if (typeof this.param === 'string') return this.param as string;
@@ -764,12 +736,44 @@ struct PlayerPageWrapper {
   }
 
   build() {
-    PlayerPage({
-      navStack: this.navStack,
-      bookId: this.resolveBookId(),
-      resumeChapterId: this.resolveChapterId(),
-      resumeProgressMs: this.resolveProgressMs()
-    })
+    Stack({ alignContent: Alignment.TopStart }) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        PlayerPage({
+          navStack: this.navStack,
+          bookId: this.resolveBookId(),
+          deferEntry: this.deferEntry,
+          resumeChapterId: this.resolveChapterId(),
+          resumeProgressMs: this.resolveProgressMs()
+        })
+          .width(this.dragState.active ? this.dragState.viewportWidth : '100%')
+          .height(this.dragState.active ? this.dragState.viewportHeight : '100%')
+          .translate({ x: this.dragState.active ? -this.dragState.frameX : 0,
+            y: this.dragState.active ? -this.dragState.frameY : 0 })
+          .opacity(this.dragState.contentOpacity)
+        if (this.dragState.active && this.dragState.snapshot !== undefined) {
+          Image(this.dragState.snapshot)
+            .width(this.dragState.coverWidth)
+            .height(this.dragState.coverHeight)
+            .position({ x: 0, y: 0 })
+            .translate({ x: this.dragState.coverX - this.dragState.frameX,
+              y: this.dragState.coverY - this.dragState.frameY })
+            .borderRadius(this.dragState.coverRadius)
+            .clip(true)
+            .objectFit(ImageFit.Cover)
+            .hitTestBehavior(HitTestMode.None)
+        }
+      }
+      .width(this.dragState.active ? this.dragState.frameWidth : '100%')
+      .height(this.dragState.active ? this.dragState.frameHeight : '100%')
+      .translate({ x: this.dragState.active ? this.dragState.frameX : 0,
+        y: this.dragState.active ? this.dragState.frameY : 0 })
+      .borderRadius(this.dragState.active ? this.dragState.radius : 0)
+      .backgroundColor('#000000')
+      .clip(true)
+    }
+    .width('100%')
+    .height('100%')
+    .id('player-drag-surface')
   }
 }
 

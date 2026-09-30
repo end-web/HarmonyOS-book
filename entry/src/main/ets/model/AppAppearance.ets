@@ -1,6 +1,7 @@
 /** App 外观偏好。阅读纸张主题独立保存，不随 App 强调色变化。 */
 @ObservedV2
 export class AppAppearance {
+  static readonly defaultAccent: string = '#C4475B';
   private static singleton: AppAppearance | null = null;
 
   static get current(): AppAppearance {
@@ -12,7 +13,7 @@ export class AppAppearance {
 
   /** 2 强、3 均衡、4 弱；兼容旧超薄/超厚偏好。 */
   @Trace material: number = 3;
-  /** 空字符串表示使用随深浅模式变化的默认品牌色。 */
+  /** 空字符串表示使用默认玫瑰红。 */
   @Trace accent: string = '';
 
   static normalizeMaterial(value: number): number {

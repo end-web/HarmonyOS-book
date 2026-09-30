@@ -2,6 +2,7 @@ import { AttributeUpdater, matrix4 } from '@kit.ArkUI';
 import { SearchResult } from '../model/BookSource';
 import { CoverImage } from './CoverImage';
 import { AppColor, AppRadius } from '../theme/Theme';
+import { OneShotCoverState, OneShotLayoutCallback, OneShotTransitionCoordinator, OneShotTransitionIds } from '../utils/OneShotTransition';
 
 const HOME_COVER_SIDE_ANGLE: number = 55 * Math.PI / 180;
 const HOME_COVER_SIDE_WIDTH_RATIO: number = Math.cos(HOME_COVER_SIDE_ANGLE);
@@ -97,6 +98,10 @@ class HomeCoverMotion extends AttributeUpdater<StackAttribute> {
     this.updateMotion();
   }
 
+  isCentered(): boolean {
+    return Math.abs(this.position) < 0.001;
+  }
+
   private updateMotion(): void {
     // 真机在节点尚未绑定时可能返回 null，统一为未就绪状态。
     const attribute = this.attribute ?? undefined;
@@ -115,7 +120,9 @@ struct HomeCarouselCover {
   @Param book: SearchResult | undefined = undefined;
   @Param cardSize: number = 180;
   @Param motion: HomeCoverMotion = new HomeCoverMotion();
-  @Event onOpen: () => void = () => {};
+  @Event onOpen: (nodeId: string, radius: number) => void = () => {};
+  @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
+  private nodeId: string = OneShotTransitionIds.nextSourceId('carousel');
 
   build() {
     Stack() {
@@ -133,8 +140,12 @@ struct HomeCarouselCover {
       .width(this.cardSize).height(this.cardSize)
       .borderRadius(AppRadius.Md)
       .shadow({ radius: 18, color: '#40000000', offsetY: 8 })
+      // 封面、裁剪和阴影合成一次，滑动只更新合成层的透视与透明度。
+      .renderGroup(true)
       .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
       .attributeModifier(this.motion)
+      .id(this.nodeId)
+      .visibility(this.coverState.hiddenSourceId === this.nodeId ? Visibility.Hidden : Visibility.Visible)
     }
     // Swiper 只负责外层页面布局，封面的尺寸和透视由内层节点保持。
     .width('100%').height(this.cardSize + HOME_COVER_VERTICAL_SPACE)
@@ -142,7 +153,7 @@ struct HomeCarouselCover {
     .accessibilityGroup(true)
     .accessibilityText(this.book?.name ?? '')
     .accessibilityDescription($r('app.string.home_carousel_open'))
-    .onClick(() => this.onOpen())
+    .onClick(() => this.onOpen(this.nodeId, AppRadius.Md))
   }
 }
 
@@ -152,27 +163,83 @@ export struct HomeCoverCarousel {
   @Param books: SearchResult[] = [];
   @Param active: boolean = true;
   @Param landscape: boolean = false;
-  @Event onBookTap: (book: SearchResult) => void = () => {};
+  @Event onBookTap: (book: SearchResult, nodeId: string, radius: number) => void = () => {};
+  @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
+  private nodePrefix: string = OneShotTransitionIds.nextSourceId('carousel-landscape');
+  @Event onCoverChange: (cover: string) => void = () => {};
   @Local contentWidth: number = 336;
   @Local inViewport: boolean = false;
   private swiperController: SwiperController = new SwiperController();
   private coverMotions: Map<string, HomeCoverMotion> = new Map();
   private indexedMotions: HomeCoverMotion[] = [];
   private selectedIndex: number = 0;
+  private pendingOpen: (() => void) | undefined = undefined;
+
+  aboutToDisappear(): void {
+    this.pendingOpen = undefined;
+  }
+
+  private openPortraitCover(book: SearchResult, index: number, nodeId: string, radius: number): void {
+    if (this.pendingOpen !== undefined) return;
+    if (this.motionForBook(book, index).isCentered()) {
+      this.onBookTap(book, nodeId, radius);
+      return;
+    }
+    // 透视节点的原始截图不含自身矩阵：先连续转到正面，再从正面封面进入详情。
+    this.pendingOpen = (): void => {
+      if (this.active && !this.landscape && this.books[this.selectedIndex] === book) {
+        this.onBookTap(book, nodeId, radius);
+      }
+    };
+    this.swiperController.changeIndex(index, true);
+  }
+
+  private finishCoverMotion(): void {
+    // 点击侧封面进入详情时优先截图，不同时启动背景解码和滤镜绘制。
+    if (this.pendingOpen === undefined) {
+      this.publishCover();
+      return;
+    }
+    this.getUIContext().postFrameCallback(new OneShotLayoutCallback((): void => {
+      const open = this.pendingOpen;
+      this.pendingOpen = undefined;
+      open?.();
+    }));
+  }
 
   aboutToAppear(): void {
     this.syncCoverMotions(true);
+    this.selectCover(this.selectedIndex);
+    this.publishCover();
   }
 
   @Monitor('books')
   private resetSelection(): void {
+    this.pendingOpen = undefined;
     this.selectedIndex = 0;
     this.syncCoverMotions(true);
     this.swiperController.changeIndex(0, false);
+    this.selectCover(0);
+    this.publishCover();
+  }
+
+  private selectCover(index: number): void {
+    const count: number = this.books.length;
+    this.selectedIndex = count > 0 ? ((index % count) + count) % count : 0;
+  }
+
+  private publishCover(): void {
+    this.onCoverChange(this.books[this.selectedIndex]?.coverUrl ?? '');
+  }
+
+  @Monitor('active')
+  private resumeCover(): void {
+    if (this.active && this.pendingOpen === undefined) this.publishCover();
   }
 
   @Monitor('landscape')
   private restorePortraitMotions(): void {
+    this.pendingOpen = undefined;
     // 切换结构时丢弃旧布局的中间滑动位置，按当前页恢复静止透视。
     // 不切换 Swiper 索引，继续保留用户正在浏览的书籍。
     if (!this.landscape) this.syncCoverMotions(true);
@@ -223,6 +290,10 @@ export struct HomeCoverCarousel {
     this.indexedMotions = indexedMotions;
   }
 
+  private landscapeNodeId(book: SearchResult): string {
+    return this.nodePrefix + OneShotTransitionIds.sourceCover(book.sourceUrl + '#' + book.bookUrl);
+  }
+
   @Builder
   landscapeCard(book: SearchResult) {
     Row({ space: 16 }) {
@@ -236,6 +307,8 @@ export struct HomeCoverCarousel {
         decodeH: 324
       })
         .width(81).height(108).flexShrink(0)
+        .id(this.landscapeNodeId(book))
+        .opacity(this.coverState.hiddenSourceId === this.landscapeNodeId(book) ? 0 : 1)
       Column({ space: 6 }) {
         Text(book.name)
           .fontSize(18).fontWeight(FontWeight.Medium)
@@ -262,7 +335,7 @@ export struct HomeCoverCarousel {
     .accessibilityGroup(true)
     .accessibilityText(book.name)
     .accessibilityDescription($r('app.string.home_carousel_open'))
-    .onClick(() => this.onBookTap(book))
+    .onClick(() => this.onBookTap(book, this.landscapeNodeId(book), AppRadius.Sm))
   }
 
   build() {
@@ -276,7 +349,7 @@ export struct HomeCoverCarousel {
               book: book,
               cardSize: this.coverSize(),
               motion: this.motionForBook(book, index),
-              onOpen: () => this.onBookTap(book)
+              onOpen: (nodeId: string, radius: number) => this.openPortraitCover(book, index, nodeId, radius)
             })
           }
         }, (book: SearchResult) => `${book.sourceUrl}#${book.bookUrl}`)
@@ -289,12 +362,14 @@ export struct HomeCoverCarousel {
       .prevMargin(this.landscape ? 0 : (this.contentWidth - this.coverSize()) / 2)
       .nextMargin(this.landscape ? 0 : (this.contentWidth - this.coverSize()) / 2)
       .loop(this.books.length > 2)
-      .autoPlay(this.active && this.books.length > 1 && this.inViewport, { stopWhenTouched: true })
+      .autoPlay(this.active && this.books.length > 1 && this.inViewport &&
+        this.coverState.detailBookId.length === 0, { stopWhenTouched: true })
       .interval(4500).duration(400).curve(Curve.EaseOut)
       .indicator(this.landscape && this.books.length > 1 ?
         Indicator.dot().itemWidth(4).itemHeight(4).selectedItemWidth(10).selectedItemHeight(4)
           .color(AppColor.Divider).selectedColor(AppColor.Brand).bottom(0) : false)
-      .onChange((index: number) => { this.selectedIndex = index; })
+      .onChange((index: number) => this.selectCover(index))
+      .onAnimationEnd((): void => this.finishCoverMotion())
       .onContentDidScroll((_selectedIndex: number, index: number, position: number) => {
         // 每个可见页都有自己的原生位置，循环和换向时也不推导或重置中间进度。
         const count = this.indexedMotions.length;

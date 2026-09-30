@@ -1,9 +1,10 @@
-import { HdsNavigation, HdsNavigationTitleMode, TitleBarContentOptions, BottomBuilderParams, BuilderOptions } from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode, HideMode, TitleBarContentOptions, BottomBuilderParams, BuilderOptions } from '@kit.UIDesignKit';
 import { RankingBoard, RankingBook, RankingPlatform } from '../model/Ranking';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
 import { FrameCallback, LengthMetrics } from '@kit.ArkUI';
 import { CoverImage } from '../components/CoverImage';
-import { AppColor, AppMaterial, HomeTheme, AppSpace } from '../theme/Theme';
+import { RankingPosterBackground } from '../components/RankingPosterBackground';
+import { AppColor, AppMaterial, HomeTheme, AppSpace, AppRadius } from '../theme/Theme';
 import { HdsCompat } from '../utils/HdsCompat';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PlatformCompat } from '../utils/PlatformCompat';
@@ -25,7 +26,9 @@ function rankingUpdateTime(timestamp: number): Resource {
 }
 
 // 轮播、骨架、导航收起范围和正文占位共用同一高度。
-const RANKING_POSTER_HEIGHT: number = 268;
+const RANKING_POSTER_HEIGHT: number = 232;
+const RANKING_DECK_HEIGHT: number = 208;
+const RANKING_SEARCH_HEIGHT: number = 56;
 
 @ComponentV2
 struct RankingBookRow {
@@ -35,7 +38,7 @@ struct RankingBookRow {
   build() {
     Row({ space: 14 }) {
       Text(this.book.rank.toString().padStart(2, '0'))
-        .fontSize(26).fontWeight(FontWeight.Lighter).fontStyle(FontStyle.Italic)
+        .fontSize(26).fontWeight(FontWeight.Medium).fontStyle(FontStyle.Italic)
         .fontColor(this.book.rank <= 3 ? AppColor.Brand : $r('sys.color.font_tertiary')).width(34)
       CoverImage({ url: this.book.coverUrl, imgWidth: 58,
         imgHeight: this.book.platformId === 'qidian' ? 58 / 0.75 : 78, useFixedHeight: true,
@@ -67,8 +70,12 @@ struct RankingSection {
     Column({ space: 16 }) {
       Row() {
         Column({ space: 5 }) {
-          Text(this.board.platformName).fontSize(11).fontWeight(FontWeight.Medium).fontColor(AppColor.Brand)
-          Text(this.board.title).fontSize(23).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
+          Text() {
+            Span(this.board.title).fontSize(23).fontWeight(FontWeight.Bold)
+            Span($r('app.string.ranking_label_separator')).fontSize(16)
+            Span(this.board.platformName).fontSize(16).fontWeight(FontWeight.Medium)
+          }.fontColor($r('sys.color.font_primary')).maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
           if (this.board.fetchedAt > 0) {
             Text(rankingUpdateTime(this.board.fetchedAt)).fontSize(11).fontColor($r('sys.color.font_secondary'))
           }
@@ -120,12 +127,8 @@ struct RankingSection {
 
 class RankingPosterItem {
   book: RankingBook;
-  platformName: Resource;
-  boardName: Resource;
-  constructor(book: RankingBook, platformName: Resource, boardName: Resource) {
+  constructor(book: RankingBook) {
     this.book = book;
-    this.platformName = platformName;
-    this.boardName = boardName;
   }
 }
 
@@ -135,21 +138,14 @@ struct RankingPosterIntroduction {
   @Event onChoose: (book: RankingBook) => void = () => {};
   build() {
     Column({ space: 9 }) {
-      Text(this.item.platformName).fontSize(11).letterSpacing(1).fontColor(AppColor.Brand)
       Text(this.item.book.title).fontSize(23).fontWeight(FontWeight.Bold).maxLines(2)
         .fontColor($r('sys.color.font_primary')).textOverflow({ overflow: TextOverflow.Ellipsis })
       Text(this.item.book.author || this.item.book.narrator).fontSize(12).maxLines(1)
         .fontColor($r('sys.color.font_secondary')).textOverflow({ overflow: TextOverflow.Ellipsis })
       if (this.item.book.intro.trim().length > 0) {
-        Text(this.item.book.intro).fontSize(12).lineHeight(19).maxLines(3)
+        Text(this.item.book.intro).fontSize(12).lineHeight(19).maxLines(4)
           .fontColor($r('sys.color.font_secondary')).textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      Text(this.item.boardName).fontSize(11).maxLines(1).fontColor(AppColor.Brand)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Row({ space: 5 }) {
-        Text($r('app.string.ranking_find_source')).fontSize(12).fontWeight(FontWeight.Medium).fontColor(AppColor.Brand)
-        SymbolGlyph($r('sys.symbol.arrow_right')).fontSize(13).fontColor([AppColor.Brand])
-      }.height(36)
     }.width('100%').alignItems(HorizontalAlign.Start).onClick(() => this.onChoose(this.item.book))
   }
 }
@@ -292,7 +288,7 @@ struct RankingPoster {
       this.lastTouchY = point.windowY;
       this.canDragCover = !this.turning && this.items.length > 1 &&
         point.windowX >= this.deckLeft - 12 && point.windowX <= this.deckLeft + this.deckWidth + 30 &&
-        point.windowY >= this.deckTop - 12 && point.windowY <= this.deckTop + 236;
+        point.windowY >= this.deckTop - 12 && point.windowY <= this.deckTop + RANKING_DECK_HEIGHT + 12;
       this.touchStarted = Date.now();
       this.stopTimer();
       return;
@@ -359,23 +355,23 @@ struct RankingPoster {
             .hitTestBehavior(HitTestMode.None)
             .accessibilityLevel('no')
           }, (item: RankingPosterItem): string => item.book.id)
-        }.width('43%').constraintSize({ maxWidth: 160.5 }).height(224)
+        }.width('43%').constraintSize({ maxWidth: 160.5 }).height(RANKING_DECK_HEIGHT)
         .onAreaChange((_old: Area, area: Area): void => {
           this.deckWidth = Number(area.width);
           this.deckLeft = Number(area.globalPosition.x);
           this.deckTop = Number(area.globalPosition.y);
         })
         // 覆盖右侧整叠牌及周围留白，不延伸到左侧介绍。
-        .responseRegion({ x: -12, y: -12, width: this.deckWidth + 42, height: 248 })
+        .responseRegion({ x: -12, y: -12, width: this.deckWidth + 42, height: RANKING_DECK_HEIGHT + 24 })
         .accessibilityGroup(true).accessibilityText(this.items[this.current]?.book.title ?? '')
       }.width('100%').layoutWeight(1).padding({ left: 24, right: 42, top: 8 })
       Row({ space: 5 }) {
         ForEach(this.items, (indicatorItem: RankingPosterItem, index: number) => {
           Row().width(index === this.current ? 16 : 5).height(5).borderRadius(3)
             .id('ranking-poster-dot-' + indicatorItem.book.id)
-            .backgroundColor(index === this.current ? AppColor.Brand : AppColor.Divider)
+            .backgroundColor(index === this.current ? $r('sys.color.font_secondary') : AppColor.Divider)
         }, (item: RankingPosterItem): string => item.book.id)
-      }.height(20).justifyContent(FlexAlign.Center)
+      }.height(16).justifyContent(FlexAlign.Center)
     }.height(RANKING_POSTER_HEIGHT).width('100%').clip(true)
     .onTouch((event: TouchEvent): void => this.handleTouch(event))
     .onTouchTestDone((_event: BaseGestureEvent, recognizers: GestureRecognizer[]): void => {
@@ -452,8 +448,10 @@ export struct RankingHomePage {
   private matchScroller: Scroller = new Scroller();
   private matchOffset: number = 0;
   private matchSuspended: boolean = false;
+  private matchScrolling: boolean = false;
+  private pendingMatchProgress: RankingMatchProgress | undefined = undefined;
   private readonly navigationBottomBuilder: CustomBuilder = (): void => this.navigationBottom();
-  private readonly searchHeaderBuilder: CustomBuilder = (): void => this.headerBuilder();
+  private readonly searchHeaderBuilder: CustomBuilder = (): void => this.searchHeader();
   private matcher: BookMatchService = new BookMatchService();
   private generation: number = 0;
   private matchGeneration: number = 0;
@@ -481,6 +479,7 @@ export struct RankingHomePage {
 
   aboutToDisappear(): void {
     this.alive = false;
+    this.pendingMatchProgress = undefined;
     this.generation++;
     this.matchGeneration++;
     this.matcher.cancel();
@@ -508,6 +507,10 @@ export struct RankingHomePage {
 
   private syncBoards(): void {
     const visible = this.boards.filter((board: RankingBoard): boolean => !this.platformId || board.platformId === this.platformId);
+    if (this.platformId.length === 0) {
+      const hotIndex = visible.findIndex((board: RankingBoard): boolean => board.id === 'lr-hot');
+      if (hotIndex > 0) visible.unshift(visible.splice(hotIndex, 1)[0]);
+    }
     this.boardData.setItems(visible);
     if (!this.boards.some((board: RankingBoard): boolean =>
       board.platformId === this.posterPlatformId && board.books.length > 0)) {
@@ -524,7 +527,7 @@ export struct RankingHomePage {
         const book = board.books[index];
         if (book === undefined || seen.has(book.id) || posters.length >= 6) continue;
         seen.add(book.id);
-        posters.push(new RankingPosterItem(book, board.platformName, board.title));
+        posters.push(new RankingPosterItem(book));
       }
     }
     const posterIdentity = posters.map((item: RankingPosterItem): string => item.book.id).join('|');
@@ -623,6 +626,8 @@ export struct RankingHomePage {
     const context = this.getUIContext().getHostContext();
     if (!context || !this.keyword.trim()) return;
     const generation = ++this.matchGeneration;
+    this.matchScrolling = false;
+    this.pendingMatchProgress = undefined;
     this.searching = true;
     this.matchError = false;
     this.sourceTotal = -1;
@@ -635,17 +640,33 @@ export struct RankingHomePage {
     try {
       await this.matcher.search(context, this.selectedBook, this.keyword.trim(), (progress: RankingMatchProgress): void => {
         if (generation !== this.matchGeneration || !this.alive) return;
-        this.sourceTotal = progress.total;
-        this.completed = progress.completed;
-        this.failed = progress.failed;
-        this.allMatches = progress.matches.slice();
-        this.filterMatches();
+        // 拖动和惯性滚动期间保留当前顺序，停止后一次性应用最新结果。
+        if (this.matchScrolling) this.pendingMatchProgress = progress;
+        else this.applyMatchProgress(progress);
       });
     } catch (_error) {
       if (generation === this.matchGeneration) this.matchError = true;
     } finally {
       if (generation === this.matchGeneration) this.searching = false;
     }
+  }
+
+  private applyMatchProgress(progress: RankingMatchProgress): void {
+    this.sourceTotal = progress.total;
+    this.completed = progress.completed;
+    this.failed = progress.failed;
+    // 单源失败或返回空结果只更新进度，不触发 LazyForEach 全量刷新。
+    if (progress.matches.length === this.allMatches.length &&
+      progress.matches.every((match: RankingMatch, index: number): boolean => match === this.allMatches[index])) return;
+    this.allMatches = progress.matches.slice();
+    this.filterMatches();
+  }
+
+  private finishMatchScroll(): void {
+    this.matchScrolling = false;
+    const progress = this.pendingMatchProgress;
+    this.pendingMatchProgress = undefined;
+    if (this.alive && progress) this.applyMatchProgress(progress);
   }
 
   private filterMatches(): void {
@@ -656,6 +677,7 @@ export struct RankingHomePage {
   }
 
   private selectMatchType(type: string): void {
+    if (type === this.matchType) return;
     this.matchType = type;
     this.matchOffset = 0;
     this.filterMatches();
@@ -717,7 +739,7 @@ export struct RankingHomePage {
         Column({ space: 14 }) {
           Row().height(22).width('80%').backgroundColor(AppColor.Divider).borderRadius(6)
           Row().height(16).width('55%').backgroundColor(AppColor.Divider).borderRadius(5)
-          LoadingProgress().width(24).height(24).color(AppColor.Brand)
+          LoadingProgress().width(24).height(24).color($r('sys.color.icon_secondary'))
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         Row().width('43%').height(210).borderRadius(10).backgroundColor(AppColor.Divider)
       }.height(RANKING_POSTER_HEIGHT).width('100%').padding(26)
@@ -740,6 +762,18 @@ export struct RankingHomePage {
       }.layoutWeight(1).height(34).listDirection(Axis.Horizontal).scrollBar(BarState.Off)
       .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(24) })
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).cachedCount(1)
+      if (this.isSearchCollapsed) {
+        Stack() {
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              .fontSize(21).fontColor([$r('sys.color.icon_primary')])
+          }.width(42).height(42).borderRadius(AppRadius.Pill)
+            .backgroundColor(Color.Transparent)
+            .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
+            .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
+            .onClick(() => this.onSearchTap())
+        }.width(42).height(42)
+      }
     }.height(48).width('100%').padding({ left: AppSpace.Md, right: AppSpace.Md, top: 3, bottom: 3 })
   }
 
@@ -753,8 +787,8 @@ export struct RankingHomePage {
             Flex({ wrap: FlexWrap.Wrap, space: { main: LengthMetrics.vp(10), cross: LengthMetrics.vp(10) } }) {
               ForEach(this.boards.filter((board: RankingBoard): boolean => board.platformId === platform.id),
                 (board: RankingBoard) => {
-                  Button(board.title, { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor(AppColor.Brand)
-                    .height(44).backgroundColor(AppColor.BrandSoft).onClick(() => this.openBoard(board))
+                  Button(board.title, { buttonStyle: ButtonStyleMode.TEXTUAL }).fontColor($r('sys.color.font_primary'))
+                    .height(44).backgroundColor(AppColor.Divider).onClick(() => this.openBoard(board))
                 }, (board: RankingBoard): string => board.id)
             }.width('100%')
           }.alignItems(HorizontalAlign.Start).padding(18).width('100%').borderRadius(16)
@@ -767,10 +801,10 @@ export struct RankingHomePage {
   private refreshIndicator() {
     Row() {
       if (this.refreshing) {
-        LoadingProgress().width(24).height(24).color(AppColor.Brand)
+        LoadingProgress().width(24).height(24).color($r('sys.color.icon_secondary'))
       } else {
         Progress({ value: Math.min(100, this.refreshPullOffset / 96 * 100), total: 100, type: ProgressType.Ring })
-          .width(24).height(24).color(AppColor.Brand).backgroundColor(Color.Transparent)
+          .width(24).height(24).color($r('sys.color.icon_secondary')).backgroundColor(Color.Transparent)
           .style({ strokeWidth: 2, enableSmoothEffect: false })
       }
     }.width('100%').height(this.refreshPullOffset).justifyContent(FlexAlign.Center)
@@ -791,13 +825,15 @@ export struct RankingHomePage {
             radius: 7, imageFit: ImageFit.Contain })
           Column({ space: 7 }) {
             Text(this.selectedBook.title).fontSize(18).fontWeight(FontWeight.Bold).maxLines(2)
-              .fontColor($r('sys.color.font_primary')).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%').fontColor($r('sys.color.font_primary'))
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
             Text(this.selectedBook.author || this.selectedBook.narrator).fontSize(12).maxLines(1)
-              .fontColor($r('sys.color.font_secondary'))
+              .width('100%').fontColor($r('sys.color.font_secondary'))
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        }.width('100%')
+        }.width('100%').padding({ right: 40 })
         Search({ value: this.keyword, placeholder: $r('app.string.ranking_search_keyword') })
-          .height(44).searchButton($r('app.string.ranking_search'), { fontColor: AppColor.Brand })
+          .height(44).searchButton($r('app.string.ranking_search'), { fontColor: $r('sys.color.font_primary') })
           .onChange((text: string): void => { this.keyword = text; })
           .onSubmit(() => this.searchMatches())
         Row({ space: 8 }) {
@@ -812,7 +848,7 @@ export struct RankingHomePage {
         }.width('100%').height(40)
         if (this.searching) {
           Row({ space: 8 }) {
-            LoadingProgress().width(18).height(18).color(AppColor.Brand)
+            LoadingProgress().width(18).height(18).color($r('sys.color.icon_secondary'))
             Text($r('app.string.ranking_matching', this.completed, Math.max(0, this.sourceTotal)))
               .fontSize(12).fontColor($r('sys.color.font_secondary'))
           }.width('100%')
@@ -830,11 +866,11 @@ export struct RankingHomePage {
             ListItem() {
               Column({ space: 7 }) {
                 Row() {
-                  Text(match.sourceName).fontSize(12).fontColor(AppColor.Brand).layoutWeight(1).maxLines(1)
+                  Text(match.sourceName).fontSize(12).fontColor($r('sys.color.font_secondary')).layoutWeight(1).maxLines(1)
                   Text(match.book.contentType === 'text' ? $r('app.string.search_type_text') : $r('app.string.search_type_audio'))
                     .fontSize(10).fontColor($r('sys.color.font_secondary')).margin({ right: 8 })
                   if (match.remembered) {
-                    Text($r('app.string.ranking_last_choice')).fontSize(10).fontColor(AppColor.Brand)
+                    Text($r('app.string.ranking_last_choice')).fontSize(10).fontColor($r('sys.color.font_secondary'))
                   }
                 }.width('100%')
                 Text(match.book.title).fontSize(16).fontWeight(FontWeight.Medium).maxLines(2)
@@ -846,28 +882,48 @@ export struct RankingHomePage {
               .onClick(() => this.chooseMatch(match))
             }
           }, (match: RankingMatch): string => `${match.book.sourceUrl}\u001f${match.book.bookUrl}`)
-        }.width('100%').layoutWeight(1).cachedCount(2)
+        }.width('100%').layoutWeight(1).cachedCount(4)
+        .onScrollStart((): void => { this.matchScrolling = true; })
+        .onScrollStop((): void => this.finishMatchScroll())
         if (!this.searching && this.matchesCount === 0) {
           Button($r('app.string.ranking_manage_sources'), { buttonStyle: ButtonStyleMode.TEXTUAL })
-            .fontColor(AppColor.Brand).height(44).onClick(() => this.manageSources())
+            .fontColor($r('sys.color.font_primary')).height(44).onClick(() => this.manageSources())
         }
     }.width('100%').height('100%').padding({ left: 24, right: 24, top: 14, bottom: 24 })
     .alignItems(HorizontalAlign.Start)
   }
 
   @Computed
-  get headerRange(): number { return RANKING_POSTER_HEIGHT; }
+  get headerRange(): number { return RANKING_SEARCH_HEIGHT + RANKING_POSTER_HEIGHT; }
 
   @Computed
-  get posterViewportHeight(): number {
-    return Math.max(0, this.headerRange - this.headerOffset);
+  get posterBackgroundHeight(): number { return this.topSafe + this.headerRange + 48; }
+
+  @Computed
+  get searchViewportHeight(): number {
+    return Math.max(0, RANKING_SEARCH_HEIGHT - this.headerOffset);
+  }
+
+  @Computed
+  get isSearchCollapsed(): boolean { return this.headerOffset >= this.headerRange - 0.5; }
+
+  @Computed
+  get searchTitleContent(): TitleBarContentOptions {
+    const content: TitleBarContentOptions = {
+      title: { mainTitle: '' }, stackBuilder: this.searchHeaderBuilder
+    };
+    if (PlatformCompat.supports(26)) {
+      const builder: BuilderOptions = { builder: this.searchHeaderBuilder, updated: false };
+      content.stackBuilderContent = builder;
+    }
+    return content;
   }
 
   @Computed
   get navigationTitleContent(): TitleBarContentOptions {
     const bottom: BottomBuilderParams = {
       builder: this.navigationBottomBuilder,
-      height: this.posterViewportHeight + 48
+      height: RANKING_POSTER_HEIGHT + 48
     };
     if (PlatformCompat.supports(26)) {
       const builderContent: BuilderOptions = { builder: this.navigationBottomBuilder, updated: false };
@@ -876,7 +932,6 @@ export struct RankingHomePage {
     const content: TitleBarContentOptions = {
       title: { mainTitle: '' }, bottomBuilder: bottom
     };
-    content.stackBuilder = this.searchHeaderBuilder;
     return content;
   }
 
@@ -909,7 +964,7 @@ export struct RankingHomePage {
 
   private syncHeaderScroll(): void {
     const previousOffset = this.headerOffset;
-    this.headerOffset = Math.max(0, this.headerScroller.currentOffset().yOffset);
+    this.headerOffset = Math.max(0, Math.min(this.headerRange, this.headerScroller.currentOffset().yOffset));
     // 首页双击回顶时联动正文；独立榜单不改变这两个滚动控制器。
     if (this.activeBoard === undefined && previousOffset >= 0.5 &&
       this.headerOffset < 0.5 && this.scroller.currentOffset().yOffset > 0.5) {
@@ -918,14 +973,50 @@ export struct RankingHomePage {
   }
 
   @LocalBuilder
+  private searchHeader() {
+    Row() { this.headerBuilder() }
+      .width('100%').height(RANKING_SEARCH_HEIGHT)
+      .translate({ y: -Math.min(RANKING_SEARCH_HEIGHT, this.headerOffset) })
+      .opacity(Math.min(1, this.searchViewportHeight / 24))
+      .visibility(this.searchViewportHeight <= 0.5 ? Visibility.Hidden : Visibility.Visible)
+  }
+
+  @LocalBuilder
   private navigationBottom() {
     Column() {
-        Stack({ alignContent: Alignment.Top }) {
-          Column() { this.heroContent() }.width('100%').height(RANKING_POSTER_HEIGHT)
-            .translate({ y: -Math.min(this.headerRange, this.headerOffset) })
-        }.width('100%').height(this.posterViewportHeight).clip(true)
-        this.platformTabs()
-    }.width('100%').height(this.posterViewportHeight + 48)
+      Column() { this.heroContent() }.width('100%').height(RANKING_POSTER_HEIGHT)
+        .flexShrink(0).clip(true)
+        .opacity(Math.max(0, Math.min(1, (this.headerRange - this.headerOffset) / 64)))
+        .enabled(!this.isSearchCollapsed)
+      this.platformTabs()
+    }.width('100%').height(RANKING_POSTER_HEIGHT + 48)
+  }
+
+  @Builder
+  private rankingNavigation() {
+    // 与书源首页相同：整段导航随外层 Scroll 移动，内部标题和占位始终保持完整高度。
+    HdsNavigation() {
+      Column() {
+        Column().width('100%').height(this.topSafe + this.headerRange + 48)
+        this.rankingContent()
+      }.width('100%').clip(false).backgroundColor(Color.Transparent)
+    }
+    .titleBar({
+      avoidLayoutSafeArea: true,
+      content: this.navigationTitleContent,
+      style: {
+        scrollEffectOpts: { scrollEffectType: HdsCompat.scrollEffect },
+        originalStyle: { backgroundStyle: { backgroundColor: Color.Transparent } },
+        scrollEffectStyle: { backgroundStyle: { backgroundColor: Color.Transparent } },
+        thermoCtrl: true, systemMaterialEffect: HdsCompat.material
+      }
+    })
+    .titleMode(HdsNavigationTitleMode.MINI).hideBackButton(true).mode(NavigationMode.Stack)
+    .bindToScrollable([this.scroller])
+    .systemBarStyle({ statusBarContentColor: WindowUtils.getSystemBarContentColor() },
+      { statusBarContentColor: WindowUtils.getSystemBarContentColor() })
+    .width('100%').height(this.contentHeight + this.headerRange).flexShrink(0)
+    .backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -948,11 +1039,12 @@ export struct RankingHomePage {
         Text($r('app.string.ranking_footer')).fontSize(11).fontColor($r('sys.color.font_tertiary'))
           .textAlign(TextAlign.Center).width('100%').padding({ top: 30, bottom: 120, left: 24, right: 24 })
       }
-    }.width('100%').height(this.contentHeight + this.headerRange)
-    .contentStartOffset(this.topSafe + 56 + RANKING_POSTER_HEIGHT + 48)
+    }.width('100%').height(Math.max(1, this.contentHeight - this.topSafe - 48))
     .scrollBar(BarState.Off).cachedCount(1)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .nestedScroll({ scrollForward: NestedScrollMode.PARENT_FIRST, scrollBackward: NestedScrollMode.SELF_FIRST })
+    // 与书源首页一致：让滚出视口的书籍继续绘制在分类胶囊背后，供沉浸材质采样。
+    .clip(false).backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -962,8 +1054,12 @@ export struct RankingHomePage {
         List({ scroller: this.boardScroller }) {
           ListItem() {
             Column({ space: 10 }) {
-              Text(board.platformName).fontSize(12).fontColor(AppColor.Brand)
-              Text(board.title).fontSize(34).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
+              Text() {
+                Span(board.title).fontSize(34).fontWeight(FontWeight.Bold)
+                Span($r('app.string.ranking_label_separator')).fontSize(22)
+                Span(board.platformName).fontSize(22).fontWeight(FontWeight.Medium)
+              }.fontColor($r('sys.color.font_primary')).maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
               Text(board.fetchedAt > 0
                 ? rankingUpdateTime(board.fetchedAt)
                 : $r('app.string.ranking_unavailable')).fontSize(11).fontColor($r('sys.color.font_secondary'))
@@ -1017,23 +1113,21 @@ export struct RankingHomePage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (this.posterCover.length > 0) {
         Stack({ alignContent: Alignment.Top }) {
-          Image(this.posterCover).width('100%').height(this.topSafe + 56 + 600)
-            .objectFit(ImageFit.Cover).sourceSize({ width: 100, height: 140 }).blur(55).opacity(0.22)
-          Column().width('100%').height(this.topSafe + 56 + 600)
+          RankingPosterBackground({ cover: this.posterCover, imageHeight: this.posterBackgroundHeight })
+          Column().width('100%').height(this.posterBackgroundHeight)
             .linearGradient({ angle: 180, colors: [[Color.Transparent, 0.25], [HomeTheme.BgNeutral, 1]] })
-        }.width('100%').height(this.topSafe + 56 + 600)
+        }.width('100%').height(this.posterBackgroundHeight)
           .translate({ y: -this.headerOffset }).clip(true).hitTestBehavior(HitTestMode.None)
           .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
             [SafeAreaEdge.TOP, SafeAreaEdge.START, SafeAreaEdge.END])
           .accessibilityLevel('no')
-      }
       HdsNavigation() {
         Refresh({ refreshing: $$this.refreshing, builder: this.emptyRefreshIndicator() }) {
           Scroll(this.headerScroller) {
-            Column() { this.rankingContent() }
+            Column() { this.rankingNavigation() }
               .width('100%').height(this.contentHeight + this.headerRange).clip(false)
+              .translate({ y: -this.refreshPullOffset })
           }.width('100%').height('100%').scrollBar(BarState.Off)
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).clip(false)
             .onDidScroll((): void => this.syncHeaderScroll())
@@ -1044,22 +1138,32 @@ export struct RankingHomePage {
       }
       .titleBar({
         avoidLayoutSafeArea: true,
-        content: this.navigationTitleContent,
+        content: this.searchTitleContent,
         style: {
-          scrollEffectOpts: { scrollEffectType: HdsCompat.scrollEffect },
+          // 外层仅承载搜索，不创建会覆盖内层分类前景的模糊/材质层。
+          scrollEffectOpts: { enableScrollEffect: false },
           originalStyle: {
-            backgroundStyle: { backgroundColor: Color.Transparent },
+            backgroundStyle: { backgroundColor: Color.Transparent,
+              maskExtraHeight: 0 },
             contentStyle: { backIconStyle: { iconColor: $r('sys.color.icon_primary') } }
           },
           scrollEffectStyle: {
-            backgroundStyle: { backgroundColor: Color.Transparent },
+            backgroundStyle: { backgroundColor: Color.Transparent,
+              maskExtraHeight: 0 },
             contentStyle: { backIconStyle: { iconColor: $r('sys.color.icon_primary') } }
           },
-          thermoCtrl: true, systemMaterialEffect: HdsCompat.material
+          thermoCtrl: true
         }
       })
       .titleMode(HdsNavigationTitleMode.MINI).hideBackButton(true).mode(NavigationMode.Stack)
-      .bindToScrollable([this.headerScroller, this.scroller]).backgroundColor(Color.Transparent)
+      .bindToScrollable([this.headerScroller]).backgroundColor(Color.Transparent)
+      .dynamicHideTitleBar({
+        hideTitleArea: true,
+        hideBottomBuilder: true,
+        hideStatusBar: false,
+        mode: HideMode.SCROLL_UP_TO,
+        hideRatio: 1.0
+      })
       .padding({ left: this.leftSafe, right: this.rightSafe })
       .enabled(this.activeBoard === undefined)
       .accessibilityLevel(this.activeBoard === undefined ? 'auto' : 'no-hide-descendants')
@@ -1070,7 +1174,8 @@ export struct RankingHomePage {
       }
       if (this.refreshPullOffset > 0) {
         Column() { this.refreshIndicator() }.width('100%')
-          .position({ x: 0, y: this.topSafe + 56 + (this.activeBoard === undefined ? this.posterViewportHeight + 48 : 0) })
+          .position({ x: 0, y: this.topSafe + (this.activeBoard === undefined
+            ? Math.max(0, this.headerRange - this.headerOffset) + 48 : RANKING_SEARCH_HEIGHT) })
           .hitTestBehavior(HitTestMode.None)
       }
     }.width('100%').height('100%').backgroundColor(HomeTheme.BgNeutral)
@@ -1092,6 +1197,7 @@ export struct RankingHomePage {
         }));
       },
       onDisappear: (): void => {
+        this.finishMatchScroll();
         if (!this.showSheet && !this.matchSuspended) {
           this.matcher.cancel(); this.matchGeneration++; this.searching = false;
         }

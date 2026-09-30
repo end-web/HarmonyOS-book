@@ -24,6 +24,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { ChapterCacheService, EVT_CHAPTER_DURATION_UPDATED } from '../service/ChapterCacheService';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
+import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
@@ -100,6 +101,8 @@ export class PlayerEntryDecider {
 export struct PlayerPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
+  @Param deferEntry: boolean = false;
+  @Local dragState: PlayerDragState = PlayerDragTransition.getInstance().state;
   @Param resumeChapterId: string = '';
   @Param resumeProgressMs: number = 0;
   @Local book: Book | null = null;
@@ -205,10 +208,12 @@ export struct PlayerPage {
     PlayerEntryDecider.setEntered(() => this.finishEntering());
     PlayerBackInterceptor.set((): boolean => this.handleBack());
     this.primeFromCache();
-    AudioService.getInstance().setPlayMode(PlayMode.Sequence);
-    this.deferredLoadTimerId = setTimeout(() => {
-      this.finishEntering();
-    }, AppMotion.Page + 80);
+    // 上拖预览期间只展示当前书籍，手势取消不能触发播放初始化或重载。
+    if (!this.deferEntry) {
+      this.deferredLoadTimerId = setTimeout(() => {
+        this.finishEntering();
+      }, AppMotion.Page + 80);
+    }
   }
 
   /** 同步从 SearchCache 取得 book，避免首帧空白 */
@@ -228,6 +233,7 @@ export struct PlayerPage {
   private finishEntering(): void {
     if (this.entryFinished || this.isLeaving) return;
     this.entryFinished = true;
+    AudioService.getInstance().setPlayMode(PlayMode.Sequence);
     this.cancelPendingClearTimers();
     WindowUtils.setStatusBarLight(true);
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
@@ -1238,6 +1244,8 @@ export struct PlayerPage {
       .borderRadius(16)
       .clip(true)
       .geometryTransition('player-cover')
+      .id('player-page-cover')
+      .opacity(this.dragState.active ? 0 : 1)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Center)
@@ -1492,7 +1500,7 @@ export struct PlayerPage {
       Column() {
         Stack({ alignContent: Alignment.End }) {
           SymbolGlyph($r('sys.symbol.chevron_left_2'))
-            .fontSize(23)
+            .fontSize(25)
             .rotate({ angle: 180 })
             .fontColor([this.hasSkipConfig() ? AppColor.Brand : '#B3B3B3'])
         }
@@ -1531,7 +1539,7 @@ export struct PlayerPage {
 
       Stack({ alignContent: Alignment.End }) {
         SymbolGlyph($r('sys.symbol.music_note_list'))
-          .fontSize(20)
+          .fontSize(21)
           .fontColor(['#B3B3B3'])
       }
       .width(44)

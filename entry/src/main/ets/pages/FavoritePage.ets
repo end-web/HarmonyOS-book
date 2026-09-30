@@ -123,6 +123,7 @@ export struct FavoritePage {
   @Local missingFavoriteCount: number = 0;
   @Local viewMode: number = 0; // 0=网格，1=列表
   @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
+  @Local topSafeVp: number = WindowUtils.getStatusBarHeightVp();
   @Local textProgressMap: Map<string, TextReadingPosition> = new Map();
   @Param visible: boolean = false;
   @Local showBookActions: boolean = false;
@@ -157,6 +158,8 @@ export struct FavoritePage {
   };
   private textProgressLoadSerial: number = 0;
   private textProgressChangedHandler: () => void = () => { this.refreshTextProgress(); };
+  private safeAreaChangedHandler: (topVp: number, bottomVp: number) => void =
+    (topVp: number, _bottomVp: number): void => { this.topSafeVp = topVp; };
 
   @Computed
   get shelfAudioCount(): number {
@@ -217,6 +220,7 @@ export struct FavoritePage {
   }
 
   aboutToAppear(): void {
+    WindowUtils.addSafeAreaListener(this.safeAreaChangedHandler);
     this.onBackHandlerChange((): boolean => this.handleManageBack());
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.loadFavorites();
@@ -227,6 +231,7 @@ export struct FavoritePage {
   }
 
   aboutToDisappear(): void {
+    WindowUtils.removeSafeAreaListener(this.safeAreaChangedHandler);
     this.onBackHandlerChange(undefined);
     this.favoritesLoadSerial++;
     emitter.off(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
@@ -1079,17 +1084,19 @@ export struct FavoritePage {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.refreshIndicator() }) {
           if (this.viewMode === 0) {
             // 三列书卡复用 List 的首尾边界，内容不足一屏时回弹后仍停留在安全起点。
-            List({ scroller: this.listScroller, space: AppSpace.Md }) {
-              LazyForEach(this.bookDataSource, (book: Book) => {
-                ListItem() {
-                  this.buildBookTile(book)
+            List({ scroller: this.listScroller }) {
+              ListItemGroup({ header: this.buildShelfContentInset(), space: AppSpace.Md }) {
+                LazyForEach(this.bookDataSource, (book: Book) => {
+                  ListItem() {
+                    this.buildBookTile(book)
+                  }
+                  // key 带上"总章数 + 当前章索引":LazyForEach 对相同 key 的项会复用旧节点、
+                  // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
+                  // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
+                }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
+                if (!this.isManaging) {
+                  ListItem() { this.buildAddTile() }
                 }
-                // key 带上"总章数 + 当前章索引":LazyForEach 对相同 key 的项会复用旧节点、
-                // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
-                // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
-              }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-              if (!this.isManaging) {
-                ListItem() { this.buildAddTile() }
               }
             }
             .lanes(3, AppSpace.Sm)
@@ -1100,8 +1107,6 @@ export struct FavoritePage {
               left: AppSpace.Md,
               right: AppSpace.Md
             })
-            .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
-              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
             .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + (this.isManaging ? 72 : 0))
             .scrollBar(BarState.Off)
             // 空书架只有添加入口，也需要在上下边界提供原生回弹。
@@ -1109,14 +1114,21 @@ export struct FavoritePage {
             .backgroundColor(Color.Transparent)
           } else {
             List({ scroller: this.listScroller }) {
-              LazyForEach(this.bookDataSource, (book: Book) => {
-                ListItem() {
-                  this.buildListItem(book)
+              ListItemGroup({ header: this.buildShelfContentInset() }) {
+                LazyForEach(this.bookDataSource, (book: Book) => {
+                  ListItem() {
+                    this.buildListItem(book)
+                  }
+                }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
+                if (!this.isManaging) {
+                  ListItem() { this.buildAddListItem() }
                 }
-              }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-              if (!this.isManaging) {
-                ListItem() { this.buildAddListItem() }
               }
+              .divider({
+                strokeWidth: 1,
+                color: $r('sys.color.comp_divider'),
+                startMargin: 88
+              })
             }
             .cachedCount(6)
             .width('100%')
@@ -1125,14 +1137,7 @@ export struct FavoritePage {
               left: AppSpace.Md,
               right: AppSpace.Md
             })
-            .contentStartOffset(WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET +
-              SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
             .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + (this.isManaging ? 72 : 0))
-            .divider({
-              strokeWidth: 1,
-              color: $r('sys.color.comp_divider'),
-              startMargin: 88
-            })
             .scrollBar(BarState.Off)
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .backgroundColor(Color.Transparent)
@@ -1323,6 +1328,15 @@ export struct FavoritePage {
       .translate({
         y: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET + SHELF_FILTER_ROW_HEIGHT
       })
+  }
+
+  @Builder
+  buildShelfContentInset() {
+    // 使用真实的全宽组头预留导航空间，避免沉浸导航绑定后的滚动偏移影响首行位置。
+    Column()
+      .width('100%')
+      .height(this.topSafeVp + SHELF_FILTER_TOP_OFFSET + SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
+      .hitTestBehavior(HitTestMode.None)
   }
 
   @Builder

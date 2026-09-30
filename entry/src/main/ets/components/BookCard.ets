@@ -1,16 +1,16 @@
 import { Book } from '../model/Book';
 import { AppRadius, AppSpace, AppFont, AppMotion, AppCurve } from '../theme/Theme';
 import { CoverImage } from './CoverImage';
+import { CoverAspectRatio } from '../utils/CoverAspectRatio';
 import {
-  BookOneShotPayload,
-  OneShotRect,
+  OneShotCoverState,
   OneShotTransitionCoordinator,
   OneShotTransitionIds
 } from '../utils/OneShotTransition';
 
 /**
  * 书架卡片：封面 + 标题 + 作者
- * 点击进入详情；按压有微缩反馈；封面参与 Navigation 高级一镜到底转场
+ * 点击进入详情；按压保持封面坐标稳定；封面参与 Navigation 高级一镜到底转场
  */
 @ComponentV2
 export struct BookCard {
@@ -21,7 +21,7 @@ export struct BookCard {
   @Param showSourceBadge: boolean = true;
   @Event onTap: (id: string) => void = () => {};
 
-  @Local pressed: boolean = false;
+  @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
   @Local imageLoadFailed: boolean = false;
   @Local appeared: boolean = false;
 
@@ -64,25 +64,8 @@ export struct BookCard {
   }
 
   private prepareOneShotTransition(): void {
-    const coordinator = OneShotTransitionCoordinator.getInstance();
-    try {
-      const uiContext = this.getUIContext();
-      const sourceInfo = uiContext.getComponentUtils().getRectangleById(this.transitionNodeId);
-      const viewportInfo = uiContext.getComponentUtils().getRectangleById(OneShotTransitionIds.ROOT_NAVIGATION);
-      const sourceRect = OneShotRect.fromComponentInfo(sourceInfo);
-      const viewportRect = OneShotRect.fromComponentInfo(viewportInfo);
-      if (!sourceRect.isValid() || !viewportRect.isValid()) {
-        coordinator.discardPending();
-        return;
-      }
-      const snapshot = uiContext.getComponentSnapshot().getSync(this.transitionNodeId);
-      const payload = BookOneShotPayload.create(
-        this.book.id, this.transitionNodeId, sourceRect, viewportRect, snapshot);
-      coordinator.prepare(payload);
-    } catch (error) {
-      coordinator.discardPending();
-      console.warn(`[BookCard] prepare one-shot transition failed: ${error}`);
-    }
+    OneShotTransitionCoordinator.getInstance().capture(
+      this.getUIContext(), this.book.id, this.transitionNodeId, AppRadius.Md);
   }
 
   build() {
@@ -105,6 +88,9 @@ export struct BookCard {
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
             .sourceSize({ width: 300, height: this.coverAspectRatio < 1 ? 400 : 300 })
+            .onComplete((event) => {
+              if (event?.loadingStatus === 0) CoverAspectRatio.remember(this.book.cover, event.width, event.height);
+            })
             .onError(() => { this.imageLoadFailed = true; })
         } else if (this.book.cover && !this.book.cover.startsWith('http') && !this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image($rawfile(this.book.cover))
@@ -112,6 +98,9 @@ export struct BookCard {
             .aspectRatio(this.coverAspectRatio)
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
+            .onComplete((event) => {
+              if (event?.loadingStatus === 0) CoverAspectRatio.remember(this.book.cover, event.width, event.height);
+            })
             .onError(() => { this.imageLoadFailed = true; })
         } else {
           // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
@@ -140,6 +129,7 @@ export struct BookCard {
       .clip(true)
       .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
       .id(this.transitionNodeId)
+      .opacity(this.coverState.hiddenSourceId === this.transitionNodeId ? 0 : 1)
 
       Column({ space: 2 }) {
         Text(this.book.title)
@@ -160,17 +150,13 @@ export struct BookCard {
       .alignItems(HorizontalAlign.Start)
     }
     .scale({
-      x: this.pressed ? 0.96 : (this.appeared ? 1 : 0.92),
-      y: this.pressed ? 0.96 : (this.appeared ? 1 : 0.92)
+      x: this.appeared ? 1 : 0.92,
+      y: this.appeared ? 1 : 0.92
     })
     .opacity(this.appeared ? 1 : 0)
     .translate({ y: this.appeared ? 0 : 20 })
     .animation({ duration: AppMotion.Base, curve: AppCurve.Emphasized })
-    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.97 })
-    .onTouch((e: TouchEvent) => {
-      if (e.type === TouchType.Down) this.pressed = true;
-      else if (e.type === TouchType.Up || e.type === TouchType.Cancel) this.pressed = false;
-    })
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 1 })
     .onClick(() => {
       this.prepareOneShotTransition();
       this.onTap(this.book.id);

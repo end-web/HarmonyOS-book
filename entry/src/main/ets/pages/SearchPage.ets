@@ -22,7 +22,7 @@ import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
-import { HomeSourceService } from '../service/rulesource/HomeSourceService';
+import { HomeSourceContent, HomeSourceService } from '../service/rulesource/HomeSourceService';
 
 const DOMAIN = 0x0000;
 const TAG = 'SearchPage';
@@ -37,7 +37,7 @@ const HISTORY_HEADING_HEIGHT: number = 52;
 const SEARCH_ENTRY_SETTLE_MS: number = 500;
 const SEARCH_RECOMMENDATION_COUNT: number = 5;
 const SEARCH_RECOMMENDATION_SOURCE_LIMIT: number = 6;
-const SEARCH_RECOMMENDATION_BATCH_SIZE: number = 3;
+const SEARCH_RECOMMENDATION_CONCURRENCY: number = 3;
 const SEARCH_RECOMMENDATION_KEYWORDS: string[] = [
   '斗破苍穹', '三体', '凡人修仙传', '诡秘之主', '红楼梦', '盗墓笔记', '西游记', '庆余年'
 ];
@@ -296,13 +296,21 @@ export struct SearchPage {
       const orderedSources = this.shuffleSources(sources);
       const books: Book[] = [];
       const seen = new Set<string>();
+      // 返回页面后继续补齐，已展示的推荐不清空、不重新洗牌。
+      for (const book of this.recommendationBooks) this.appendRecommendationBook(book, books, seen);
 
       for (const source of orderedSources) {
         if (!(source instanceof LocalRuleSource) || !HomeSourceService.isEligible(source)) continue;
         try {
-          const content = await HomeSourceService.loadHome(source);
+          const content = await HomeSourceService.loadHome(source, false,
+            (partial: HomeSourceContent): void => {
+              if (generation !== this.recommendationGen) return;
+              this.appendHomeRecommendationBooks(source, partial.blocks, books, seen);
+              this.publishRecommendationBooks(books, generation);
+            });
           if (generation !== this.recommendationGen) return;
           this.appendHomeRecommendationBooks(source, content.blocks, books, seen);
+          this.publishRecommendationBooks(books, generation);
         } catch (error) {
           hilog.warn(DOMAIN, TAG, 'load source home recommendations failed: %{public}s', String(error));
         }
@@ -313,11 +321,9 @@ export struct SearchPage {
         await this.appendSearchRecommendationBooks(orderedSources, books, seen, generation);
       }
       if (generation !== this.recommendationGen) return;
-      this.recommendationBooks = this.pickRecommendationBooks(books);
-      this.prefetchCovers(this.recommendationBooks);
+      this.publishRecommendationBooks(books, generation);
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'load recommendations failed: %{public}s', String(error));
-      if (generation === this.recommendationGen) this.recommendationBooks = [];
     } finally {
       if (generation === this.recommendationGen) {
         this.recommendationsStarted = false;
@@ -364,22 +370,24 @@ export struct SearchPage {
       candidates.push(source);
       if (candidates.length >= SEARCH_RECOMMENDATION_SOURCE_LIMIT) break;
     }
-    for (let start = 0; start < candidates.length; start += SEARCH_RECOMMENDATION_BATCH_SIZE) {
-      if (generation !== this.recommendationGen) return;
-      const tasks: Promise<Book[]>[] = [];
-      const end = Math.min(candidates.length, start + SEARCH_RECOMMENDATION_BATCH_SIZE);
-      for (let index = start; index < end; index++) {
+    let nextIndex: number = 0;
+    const worker = async (): Promise<void> => {
+      while (generation === this.recommendationGen && books.length < SEARCH_RECOMMENDATION_COUNT &&
+        nextIndex < candidates.length) {
+        const source = candidates[nextIndex++];
         const keywordIndex = Math.floor(Math.random() * SEARCH_RECOMMENDATION_KEYWORDS.length);
-        tasks.push(this.loadSourceRecommendationBooks(candidates[index],
-          SEARCH_RECOMMENDATION_KEYWORDS[keywordIndex]));
-      }
-      const batches = await Promise.all(tasks);
-      if (generation !== this.recommendationGen) return;
-      for (const batch of batches) {
+        const batch = await this.loadSourceRecommendationBooks(source,
+          SEARCH_RECOMMENDATION_KEYWORDS[keywordIndex]);
+        if (generation !== this.recommendationGen) return;
         for (const book of batch) this.appendRecommendationBook(book, books, seen);
+        this.publishRecommendationBooks(books, generation);
       }
-      if (books.length >= SEARCH_RECOMMENDATION_COUNT * 2) return;
+    };
+    const tasks: Promise<void>[] = [];
+    for (let index = 0; index < Math.min(SEARCH_RECOMMENDATION_CONCURRENCY, candidates.length); index++) {
+      tasks.push(worker());
     }
+    await Promise.all(tasks);
   }
 
   private async loadSourceRecommendationBooks(source: BookSource, keyword: string): Promise<Book[]> {
@@ -400,21 +408,22 @@ export struct SearchPage {
   }
 
   private appendRecommendationBook(book: Book, books: Book[], seen: Set<string>): void {
+    if (books.length >= SEARCH_RECOMMENDATION_COUNT) return;
     const key = `${book.sourceUrl}\u001f${book.bookUrl}`;
     if (book.title.trim().length === 0 || book.bookUrl.trim().length === 0 || seen.has(key)) return;
     seen.add(key);
     books.push(book);
   }
 
-  private pickRecommendationBooks(books: Book[]): Book[] {
-    const shuffled = books.slice();
-    for (let index = shuffled.length - 1; index > 0; index--) {
-      const randomIndex = Math.floor(Math.random() * (index + 1));
-      const current = shuffled[index];
-      shuffled[index] = shuffled[randomIndex];
-      shuffled[randomIndex] = current;
+  private publishRecommendationBooks(books: Book[], generation: number): void {
+    if (generation !== this.recommendationGen || books.length <= this.recommendationBooks.length) return;
+    const appended = books.slice(this.recommendationBooks.length);
+    this.recommendationBooks = books.slice();
+    this.prefetchCovers(appended);
+    if (books.length >= SEARCH_RECOMMENDATION_COUNT) {
+      this.recommendationsLoaded = true;
+      this.recommendationsLoading = false;
     }
-    return shuffled.slice(0, SEARCH_RECOMMENDATION_COUNT);
   }
 
   private async doSearch(): Promise<void> {

@@ -30,6 +30,7 @@ export struct ReaderContinuousComponent {
   @Param textAlignment: string = 'justify';
   @Param fontSize: number = 18;
   @Param lineHeight: number = 1.9;
+  @Param paragraphSpacing: number = 0;
   @Param palette: ReaderPalette = new ReaderPalette();
   @Param speechState: TextToSpeechState = new TextToSpeechState();
   @Param bookId: string = '';
@@ -66,7 +67,7 @@ export struct ReaderContinuousComponent {
     emitter.on('app.reader.background', this.backgroundHandler);
   }
 
-  @Monitor('revision', 'fontFamily', 'fontWeight', 'fontSize', 'lineHeight', 'textAlignment')
+  @Monitor('revision', 'fontFamily', 'fontWeight', 'fontSize', 'lineHeight', 'paragraphSpacing', 'textAlignment')
   onRevisionChanged(): void { this.scheduleReset(); }
 
   private scheduleReset(): void {
@@ -108,7 +109,7 @@ export struct ReaderContinuousComponent {
     const fontPx = ui.fp2px(this.fontSize);
     this.rowHeight = ui.px2vp(fontPx) * this.lineHeight;
     // 高度 1px 将测量结果按行输出；列表按像素连续滚动，不做分页吸附。
-    const lines = OnlineTextPaginator.paginate(content, ui.vp2px(this.contentWidth), 1, fontPx, this.lineHeight, this.fontFamily, this.fontWeight, this.textAlignment);
+    const lines = OnlineTextPaginator.paginate(content, ui.vp2px(this.contentWidth), 1, fontPx, this.lineHeight, this.fontFamily, this.fontWeight, this.textAlignment, this.paragraphSpacing);
     return OnlineTextScrollChapter.create(index, this.getKey(index), this.getTitle(index), content, lines);
   }
 
@@ -297,6 +298,7 @@ export struct ReaderContinuousComponent {
                 highlightEnabled: this.speechState.bookId === this.bookId && this.speechState.chapterIndex === row.chapterIndex
               })
                 .width('100%').height(this.getUIContext().px2vp(row.page.layoutHeight))
+                .margin({ bottom: this.getUIContext().px2vp(row.page.trailingSpacing) })
             }
           }
         }, (row: OnlineTextScrollRow): string => row.key)

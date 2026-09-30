@@ -13,6 +13,7 @@ export class ReadingSettingsBackup {
   textAlignment: string = 'justify';
   fontSize: number = 18;
   lineHeight: number = 1.9;
+  paragraphSpacing: number = TextReadingSettings.PARAGRAPH_SPACING_DEFAULT;
   fontWeight: number = 400;
   themeId: string | undefined = undefined;
   tapRegions: string = ReaderTapPolicy.DEFAULT;
@@ -62,6 +63,7 @@ export class ReadingBackupService {
     saved.textAlignment = settings.textAlignment;
     saved.fontSize = settings.fontSize;
     saved.lineHeight = settings.lineHeight;
+    saved.paragraphSpacing = settings.paragraphSpacing;
     saved.fontWeight = settings.fontWeight;
     if (findThemePreset(settings.themeId) !== null) saved.themeId = settings.themeId;
     saved.tapLeftPercent = settings.tapLeftPercent;
@@ -116,6 +118,7 @@ export class ReadingBackupService {
     settings.textAlignment = TextReadingSettings.normalizeTextAlignment(saved.textAlignment);
     settings.fontSize = saved.fontSize;
     settings.lineHeight = saved.lineHeight;
+    settings.paragraphSpacing = TextReadingSettings.normalizeParagraphSpacing(saved.paragraphSpacing);
     settings.fontWeight = saved.fontWeight;
     if (saved.themeId !== undefined) {
       settings.themeId = saved.themeId;
@@ -183,6 +186,7 @@ export class ReadingBackupService {
     return !!settings && ReadingBackupService.inRange(settings.fontSize, 14, 50) &&
       (settings.textAlignment === undefined || ['justify', 'start', 'center', 'end'].includes(settings.textAlignment)) &&
       ReadingBackupService.inRange(settings.lineHeight, 1, 2.4) &&
+      (settings.paragraphSpacing === undefined || ReadingBackupService.inRange(settings.paragraphSpacing, 0, 2)) &&
       ReadingBackupService.inRange(settings.fontWeight, 100, 900) &&
       (settings.themeId === undefined || findThemePreset(settings.themeId) !== null) &&
       ['cover', 'none', 'simulation', 'slide', 'vertical'].includes(settings.pageTurnMode) &&

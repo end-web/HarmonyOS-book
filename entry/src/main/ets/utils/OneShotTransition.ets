@@ -1,4 +1,4 @@
-import { componentUtils } from '@kit.ArkUI';
+import { componentUtils, FrameCallback, UIContext } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { WindowUtils } from './WindowUtils';
 
@@ -42,6 +42,7 @@ export class BookOneShotPayload {
   viewportRect: OneShotRect = new OneShotRect();
   snapshot: image.PixelMap | undefined = undefined;
   createdAt: number = 0;
+  sourceRadius: number = 12;
 
   static create(bookId: string, sourceNodeId: string, sourceRect: OneShotRect,
     viewportRect: OneShotRect, snapshot: image.PixelMap): BookOneShotPayload {
@@ -56,10 +57,37 @@ export class BookOneShotPayload {
   }
 }
 
+/** 在布局提交之后读取目标位置，避免零延时定时器读到上一帧布局。 */
+export class OneShotLayoutCallback extends FrameCallback {
+  private action: () => void;
+
+  constructor(action: () => void) {
+    super();
+    this.action = action;
+  }
+
+  onFrame(_frameTimeInNano: number): void {
+    this.action();
+  }
+}
+
+@ObservedV2
+export class OneShotCoverState {
+  @Trace hiddenSourceId: string = '';
+  @Trace detailBookId: string = '';
+}
+
 export type NavigationOneShotRunner =
   (isPush: boolean, transitionProxy: NavigationTransitionProxy) => void;
 
 export class OneShotTransitionIds {
+  private static sourceSeed: number = 0;
+
+  static nextSourceId(prefix: string): string {
+    OneShotTransitionIds.sourceSeed++;
+    return prefix + '-' + OneShotTransitionIds.sourceSeed.toString();
+  }
+
   static readonly ROOT_NAVIGATION: string = 'one-shot-root-navigation';
   static readonly DETAIL_SURFACE: string = 'one-shot-detail-surface';
 
@@ -87,7 +115,9 @@ export class OneShotTransitionIds {
 export class OneShotTransitionCoordinator {
   private static readonly MAX_PENDING_AGE_MS: number = 1500;
   private static readonly instance: OneShotTransitionCoordinator = new OneShotTransitionCoordinator();
+  readonly coverState: OneShotCoverState = new OneShotCoverState();
   private pending: BookOneShotPayload | undefined = undefined;
+  private captureGeneration: number = 0;
   private activeBookId: string = '';
   private activeRunner: NavigationOneShotRunner | undefined = undefined;
   private activeNavDestinationId: string = '';
@@ -98,9 +128,66 @@ export class OneShotTransitionCoordinator {
     return OneShotTransitionCoordinator.instance;
   }
 
+  capture(uiContext: UIContext, bookId: string, nodeId: string, radius: number): void {
+    try {
+      const sourceRect = OneShotRect.fromComponentInfo(uiContext.getComponentUtils().getRectangleById(nodeId));
+      const viewportRect = OneShotRect.fromComponentInfo(
+        uiContext.getComponentUtils().getRectangleById(OneShotTransitionIds.ROOT_NAVIGATION));
+      if (!sourceRect.isValid() || !viewportRect.isValid()) {
+        this.discardPending();
+        return;
+      }
+      const snapshot = uiContext.getComponentSnapshot().getSync(nodeId);
+      const payload = BookOneShotPayload.create(bookId, nodeId, sourceRect, viewportRect, snapshot);
+      payload.sourceRadius = radius;
+      this.prepare(payload);
+    } catch (_error) {
+      this.discardPending();
+    }
+  }
+
   prepare(payload: BookOneShotPayload): void {
     this.releasePendingSnapshot();
     this.pending = payload;
+  }
+
+  async captureAsync(uiContext: UIContext, bookId: string, nodeId: string, radius: number): Promise<void> {
+    this.discardPending();
+    const generation = this.captureGeneration;
+    try {
+      const sourceRect = OneShotRect.fromComponentInfo(uiContext.getComponentUtils().getRectangleById(nodeId));
+      const viewportRect = OneShotRect.fromComponentInfo(
+        uiContext.getComponentUtils().getRectangleById(OneShotTransitionIds.ROOT_NAVIGATION));
+      if (!sourceRect.isValid() || !viewportRect.isValid()) return;
+      // 截图只服务于动效；GPU 忙时及时进入详情，迟到的像素图直接释放。
+      await new Promise<void>((resolve: () => void): void => {
+        let settled: boolean = false;
+        const timer = setTimeout((): void => {
+          settled = true;
+          resolve();
+        }, 160);
+        uiContext.getComponentSnapshot().get(nodeId, {
+          scale: Math.min(1, 600 / Math.max(sourceRect.widthPx, sourceRect.heightPx))
+        }).then((snapshot: image.PixelMap): void => {
+          if (settled || generation !== this.captureGeneration) {
+            OneShotTransitionCoordinator.releaseSnapshot(snapshot);
+          } else {
+            const payload = BookOneShotPayload.create(bookId, nodeId, sourceRect, viewportRect, snapshot);
+            payload.sourceRadius = radius;
+            this.prepare(payload);
+          }
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        }).catch((_error: Error): void => {
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    } catch (_error) {
+      this.discardPending();
+    }
   }
 
   claim(bookId: string): BookOneShotPayload | undefined {
@@ -115,12 +202,14 @@ export class OneShotTransitionCoordinator {
   }
 
   discardPending(): void {
+    this.captureGeneration++;
     this.releasePendingSnapshot();
     this.pending = undefined;
   }
 
   register(bookId: string, runner: NavigationOneShotRunner): void {
     this.activeBookId = bookId;
+    this.coverState.detailBookId = bookId;
     this.activeRunner = runner;
     this.activeNavDestinationId = '';
     this.activeDestinationIndex = -1;
@@ -130,6 +219,7 @@ export class OneShotTransitionCoordinator {
   unregister(bookId: string): void {
     if (this.activeBookId !== bookId) return;
     this.activeBookId = '';
+    this.coverState.detailBookId = '';
     this.activeRunner = undefined;
     this.activeNavDestinationId = '';
     this.activeDestinationIndex = -1;

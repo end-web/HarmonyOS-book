@@ -36,7 +36,7 @@ class ReaderParagraphFrameNode extends FrameNode {
     for (let index = 0; index < this.page.lineMetrics.length; index++) {
       const line = lines[this.page.firstLine + index];
       if (line !== undefined) {
-        line.paint(canvas, 0, -this.page.layoutTop);
+        line.paint(canvas, 0, -this.page.layoutTop + (this.page.lineShifts[index] ?? 0));
       }
     }
   }
@@ -65,17 +65,26 @@ class ReaderParagraphFrameNode extends FrameNode {
       paragraph.updateColor(this.color(this.palette.background));
       const highlightedLines = paragraph.getTextLines();
       for (const box of boxes) {
-        const top = Math.max(0, box.rect.top - page.layoutTop);
-        const bottom = Math.min(page.layoutHeight, box.rect.bottom - page.layoutTop);
-        if (bottom <= top) continue;
-        canvas.save();
-        canvas.clipRect({ left: box.rect.left, top: top, right: box.rect.right, bottom: bottom },
-          drawing.ClipOp.INTERSECT, true);
-        canvas.attachBrush(brush);
-        canvas.drawRect(box.rect.left, top, box.rect.right, bottom);
-        canvas.detachBrush();
-        this.paintLines(canvas, highlightedLines);
-        canvas.restore();
+        // Range boxes are still in native paragraph coordinates. Translate each visible line
+        // exactly like the text, keeping paragraph gaps outside the speech highlight.
+        for (let index = 0; index < page.lineMetrics.length; index++) {
+          const metric = page.lineMetrics[index];
+          const nativeTop = Math.max(box.rect.top, metric.baseline - metric.ascent);
+          const nativeBottom = Math.min(box.rect.bottom, metric.baseline + metric.descent);
+          if (nativeBottom <= nativeTop) continue;
+          const shift = page.lineShifts[index] ?? 0;
+          const top = Math.max(0, nativeTop - page.layoutTop + shift);
+          const bottom = Math.min(page.layoutHeight, nativeBottom - page.layoutTop + shift);
+          if (bottom <= top) continue;
+          canvas.save();
+          canvas.clipRect({ left: box.rect.left, top: top, right: box.rect.right, bottom: bottom },
+            drawing.ClipOp.INTERSECT, true);
+          canvas.attachBrush(brush);
+          canvas.drawRect(box.rect.left, top, box.rect.right, bottom);
+          canvas.detachBrush();
+          this.paintLines(canvas, highlightedLines);
+          canvas.restore();
+        }
       }
       // Paragraphs are shared by all visible rows. Never leave a highlight color on the shared layout.
       paragraph.updateColor(foreground);

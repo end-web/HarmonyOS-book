@@ -7,6 +7,7 @@ import { ReaderPattern, ReaderThemeId, ReaderCustomTheme, normalizeHex, resolveP
 const STORE_NAME: string = 'text_reading_settings';
 const KEY_FONT_SIZE: string = 'font_size';
 const KEY_LINE_HEIGHT: string = 'line_height';
+const KEY_PARAGRAPH_SPACING: string = 'paragraph_spacing';
 const KEY_THEME_ID: string = 'theme_id';
 const KEY_CUSTOM_BACKGROUND: string = 'custom_background';
 const KEY_PATTERN: string = 'background_pattern';
@@ -59,6 +60,9 @@ export class TextReadingSettingsService {
       TextReadingSettings.SHOW_READING_STATUS_DEFAULT;
     const result = TextReadingSettings.ofAll(fontSize, lineHeight, themeId, background, pattern, image, overlay,
       pageTurnMode, showReadingStatus);
+    const paragraphSpacing = store.getSync(KEY_PARAGRAPH_SPACING, TextReadingSettings.PARAGRAPH_SPACING_DEFAULT);
+    result.paragraphSpacing = TextReadingSettings.normalizeParagraphSpacing(
+      typeof paragraphSpacing === 'number' ? paragraphSpacing : TextReadingSettings.PARAGRAPH_SPACING_DEFAULT);
     const imageMode = store.getSync('background_image_mode', 'cover');
     result.backgroundImageMode = TextReadingSettings.normalizeBackgroundImageMode(
       typeof imageMode === 'string' ? imageMode : 'cover');
@@ -156,6 +160,7 @@ export class TextReadingSettingsService {
     store.putSync('text_alignment', TextReadingSettings.normalizeTextAlignment(settings.textAlignment));
     store.putSync(KEY_FONT_SIZE, TextReadingSettings.normalizeFontSize(settings.fontSize));
     store.putSync(KEY_LINE_HEIGHT, TextReadingSettings.normalizeLineHeight(settings.lineHeight));
+    store.putSync(KEY_PARAGRAPH_SPACING, TextReadingSettings.normalizeParagraphSpacing(settings.paragraphSpacing));
     store.putSync(KEY_THEME_ID, TextReadingSettings.normalizeThemeId(settings.themeId));
     store.putSync(KEY_CUSTOM_BACKGROUND, normalizeHex(settings.customBackground));
     store.putSync(KEY_PATTERN, TextReadingSettings.normalizePattern(settings.pattern));

@@ -96,6 +96,8 @@ export struct ReaderPage {
   @Local currentChapterTitle: string = '';
   @Local fontSize: number = TextReadingSettings.FONT_SIZE_DEFAULT;
   @Local lineHeight: number = TextReadingSettings.LINE_HEIGHT_DEFAULT;
+  @Local paragraphSpacing: number = TextReadingSettings.PARAGRAPH_SPACING_DEFAULT;
+  @Local previewParagraphSpacing: number = -1;
   @Local pickingBackgroundImage: boolean = false;
   @Local followSystemTheme: boolean = false;
   @Local systemNightOverride: boolean = false;
@@ -674,7 +676,7 @@ export struct ReaderPage {
       Math.max(1, this.readerTextHeightVp - READER_TEXT_LAYOUT_GUARD) :
       Math.max(80, viewportHeightVp - reservedHeightVp);
     return OnlineTextPaginator.paginate(content, contentWidthVp * density,
-      contentHeightVp * density, this.fontSize * scaledDensity, this.lineHeight, this.fontFamily, this.fontWeight, this.textAlignment);
+      contentHeightVp * density, this.fontSize * scaledDensity, this.lineHeight, this.fontFamily, this.fontWeight, this.textAlignment, this.paragraphSpacing);
   }
 
   private currentOnlineTextCharOffset(): number {
@@ -851,6 +853,7 @@ export struct ReaderPage {
       }
       this.fontSize = settings.fontSize;
       this.lineHeight = settings.lineHeight;
+      this.paragraphSpacing = settings.paragraphSpacing;
       this.themeId = settings.themeId;
       this.customBackground = settings.customBackground;
       this.customThemes = settings.customThemes;
@@ -899,7 +902,7 @@ export struct ReaderPage {
     this.marginTop = 12;
     this.marginBottom = 12;
     this.textAlignment = 'justify';
-    this.previewFontSize = 0; this.previewLineHeight = 0; this.previewFontWeight = 0;
+    this.previewFontSize = 0; this.previewLineHeight = 0; this.previewParagraphSpacing = -1; this.previewFontWeight = 0;
     this.fontWeight = 400;
     this.fontColor = '';
     this.fontFamily = '';
@@ -909,6 +912,7 @@ export struct ReaderPage {
     this.screenOn.configure(0);
     this.fontSize = TextReadingSettings.FONT_SIZE_DEFAULT;
     this.lineHeight = TextReadingSettings.LINE_HEIGHT_DEFAULT;
+    this.paragraphSpacing = TextReadingSettings.PARAGRAPH_SPACING_DEFAULT;
     this.themeId = TextReadingSettings.THEME_DEFAULT;
     this.customBackground = TextReadingSettings.CUSTOM_BACKGROUND_DEFAULT;
     this.customThemes = ReaderCustomTheme.defaults();
@@ -956,6 +960,7 @@ export struct ReaderPage {
     if (currentContext === null) return;
     const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
       this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
+    settings.paragraphSpacing = this.paragraphSpacing;
     settings.textAlignment = this.textAlignment;
     settings.fontWeight = this.fontWeight;
     settings.fontColor = this.fontColor;
@@ -1038,6 +1043,16 @@ export struct ReaderPage {
     if (!commit) return;
     this.fontSize = this.previewFontSize;
     this.previewFontSize = 0;
+    this.cancelReaderSettingsRefresh();
+    this.applyReadingSettings();
+    this.saveReadingSettings();
+  }
+
+  private handleParagraphSpacingChange(value: number, commit: boolean): void {
+    this.previewParagraphSpacing = TextReadingSettings.normalizeParagraphSpacing(value);
+    if (!commit) return;
+    this.paragraphSpacing = this.previewParagraphSpacing;
+    this.previewParagraphSpacing = -1;
     this.cancelReaderSettingsRefresh();
     this.applyReadingSettings();
     this.saveReadingSettings();
@@ -1189,6 +1204,7 @@ export struct ReaderPage {
       const settings = TextReadingSettings.ofAll(this.fontSize, this.lineHeight, this.themeId,
         this.customBackground, this.backgroundPattern, this.bgImagePath, this.overlayAlpha, this.pageTurnMode, this.showReadingStatus);
       settings.backgroundImageMode = this.backgroundImageMode;
+      settings.paragraphSpacing = this.paragraphSpacing;
       settings.textAlignment = this.textAlignment;
       settings.fontWeight = this.fontWeight;
       settings.fontColor = this.fontColor;
@@ -1467,7 +1483,7 @@ export struct ReaderPage {
   }
 
   private onlineTextTurnRevision(): string {
-    return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:` +
+    return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:${this.paragraphSpacing}:` +
       `${this.textAlignment}:${this.fontFamily}:${this.systemTypographyRevision}:${this.fontWeight}:${this.fontColor}:${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.backgroundImageMode}:${this.overlayAlpha}:` +
       `${this.readerHeaderHeight()}:${this.readerFooterHeight()}:${this.readerTopInsetVp()}:${this.leftSafeVp}:${this.rightSafeVp}:${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}:${this.palette.primary}`;
   }
@@ -1861,7 +1877,7 @@ export struct ReaderPage {
           systemMaterial: AppMaterial.ReaderSheetThick,
           onDisappear: (): void => {
             this.showSettingsSheet = false;
-            this.previewFontSize = 0; this.previewLineHeight = 0; this.previewFontWeight = 0;
+            this.previewFontSize = 0; this.previewLineHeight = 0; this.previewParagraphSpacing = -1; this.previewFontWeight = 0;
             if (!this.leaving) {
               this.saveReadingSettings();
               if (!this.showChapterSheet) this.showReaderBar();
@@ -1954,7 +1970,7 @@ export struct ReaderPage {
               content: this.onlineTextContent, charOffset: this.currentOnlineTextCharOffset(),
               chapterCount: this.book?.chapters.length ?? 0,
               chapterStep: this.book !== null ? PreferenceService.chapterStep(this.book) : 1,
-              fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette,
+              fontSize: this.fontSize, lineHeight: this.lineHeight, paragraphSpacing: this.paragraphSpacing, palette: this.palette,
               textAlignment: this.textAlignment,
               fontFamily: this.fontFamily, fontWeight: this.fontWeight,
               bookId: this.bookId, speechState: this.speechState, followOffset: this.continuousFollowOffset,
@@ -2252,6 +2268,11 @@ export struct ReaderPage {
       },
       fontSize: this.previewFontSize || this.fontSize,
       lineHeight: this.previewLineHeight || this.lineHeight,
+      paragraphSpacing: this.previewParagraphSpacing >= 0 ? this.previewParagraphSpacing : this.paragraphSpacing,
+      paragraphSpacingEnabled: this.isOnlineTextBook(),
+      onParagraphSpacingChange: (value: number, commit: boolean): void => {
+        this.handleParagraphSpacingChange(value, commit);
+      },
       themeId: this.themeId,
       pattern: this.systemNightOverride ? ReaderPattern.None : this.backgroundPattern,
       bgImagePath: this.bgImagePath,
