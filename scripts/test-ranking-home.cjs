@@ -1,0 +1,144 @@
+// Real ArkTS ranking parsers, caching and matching, with bounded platform substitutes.
+// DEVECO_HOME=<Release IDE> node scripts/test-ranking-home.cjs [live-response-directory]
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ts = require(path.join(process.env.DEVECO_HOME, 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
+function load(relative, modules = {}) {
+  const filename = path.join(__dirname, '../entry/src/main/ets', relative);
+  const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const module = { exports: {} };
+  vm.runInNewContext(code, { module, exports: module.exports, $r: value => value,
+    require: name => { assert.ok(modules[name], `Unexpected import: ${name}`); return modules[name]; }
+  }, { filename });
+  return module.exports;
+}
+const model = load('model/Ranking.ets');
+const json = load('service/builtin/JsonValue.ets');
+const parser = load('service/ranking/RankingParser.ets', {
+  '../../model/Ranking': model, '../builtin/JsonValue': json
+});
+const { RankingParser } = parser;
+const identity = load('utils/BookIdentity.ets');
+const disk = new Map();
+const storage = { RankingStorage: {
+  read: async (_context, key) => disk.get(key) || '',
+  write: async (_context, key, content) => disk.set(key, content)
+} };
+let requests = 0, response = '', networkFail = false;
+const { RankingService } = load('service/ranking/RankingService.ets', {
+  '../../model/Ranking': model, './RankingParser': parser, './RankingStorage': storage,
+  '../builtin/JsonValue': json, '../http/HttpClient': { HttpClient: {
+    request: async () => { requests++; if (networkFail) throw Error('offline'); return { statusCode: 200, body: response }; }
+  } }
+});
+let sources = [], searchFn = async () => [], concurrency = 2;
+const { BookMatchService } = load('service/ranking/BookMatchService.ets', {
+  '../../utils/BookIdentity': identity, './RankingStorage': storage, '../builtin/JsonValue': json,
+  '../SourceDataService': { SourceDataService: { getEnabledSources: async () => sources } },
+  '../BookSourceService': { BookSourceService: { searchBooks: (...args) => searchFn(...args) } },
+  '../PreferenceService': { PreferenceService: { getSearchConcurrency: async () => concurrency } }
+});
+function result(source, name = '夜无疆', type = 'text') {
+  return { name, author: '辰东', intro: '作者辰东', bookUrl: '/book/1', sourceUrl: source.bookSourceUrl,
+    sourceName: source.bookSourceName, coverUrl: 'https://cover.example/1.jpg', kind: '', lastChapter: '', contentType: type };
+}
+const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data-src="//bookcover.yuewen.com/qdbimg/349573/123/180"><h2 class="_title_x">夜无疆</h2><p class="_bookDesc_x">风起&amp;云涌</p><p class="_subTitle_x">辰东 <em>·</em> 玄幻</p></a>';
+(async () => {
+  const qd = RankingParser.parse('qidian', 'qd-month', qidian + qidian);
+  assert.equal(qd.length, 1, 'duplicate entries are removed without changing ranks');
+  assert.equal(qd[0].author, '辰东');
+  assert.equal(qd[0].intro, '风起&云涌');
+  assert.equal(qd[0].contentType, 'text');
+  assert.equal(qd[0].coverUrl, 'https://bookcover.yuewen.com/qdbimg/349573/123/600');
+  assert.equal(RankingParser.parse('qidian', 'qd-month', '<script>challenge()</script>').length, 0);
+  assert.equal(RankingParser.imageUrl('javascript:alert(1)'), '');
+  assert.equal(RankingParser.parse('qidian', 'qd-month', 'x'.repeat(2 * 1024 * 1024 + 1)).length, 0);
+  const lr = RankingParser.parse('lrts', 'lr-hot', '<li class="book-item"><a href="/book/42"><img src="https://bookpic.lrts.me/42.png"></a><a class="book-item-name">夜无疆|多人有声剧</a><a class="author">辰东</a>主播：<a>演播甲</a><p class="book-item-desc weaken">简介</p></li>');
+  assert.equal(lr[0].narrator, '演播甲');
+  assert.equal(BookMatchService.keyword(lr[0]), '夜无疆');
+  assert.equal(BookMatchService.score(qd[0], { ...result({ bookSourceUrl: 'a' }), name: '另一本书' }), 0,
+    'same author must not cause an unrelated book to match');
+  const xm = JSON.stringify({ ret: 200, data: { freeAlbumRank: { rankListInfo: [
+    { id: 1, albumTitle: '夜无疆', anchorName: '主播乙', cover: '//imagev2.xmcdn.com/1.jpg' },
+    { id: 1, albumTitle: 'duplicate' }, { id: 'bad' }
+  ] } } });
+  assert.equal(RankingParser.parse('ximalaya', 'xm-free', xm).length, 1);
+  assert.equal(RankingParser.parse('ximalaya', 'xm-free', '{"ret":400}').length, 0);
+
+  response = qidian;
+  let board = RankingService.boards()[0];
+  board = await RankingService.load({}, board, false);
+  assert.equal(board.books.length, 1);
+  board = await RankingService.cached({}, RankingService.boards()[0]);
+  await RankingService.load({}, board, false);
+  assert.equal(requests, 1, 'fresh disk cache avoids repeated requests');
+  networkFail = true;
+  const stale = await RankingService.load({}, board, true);
+  assert.equal(stale.books.length, 1, 'failed refresh preserves previous entries');
+  assert.equal(stale.stale, true);
+  const absent = await RankingService.load({}, RankingService.boards()[1], true);
+  assert.equal(absent.unavailable, true);
+  disk.set('qd-month', 'corrupt json');
+  assert.equal((await RankingService.cached({}, RankingService.boards()[0])).books.length, 0);
+
+  const service = new BookMatchService();
+  let last;
+  await service.search({}, qd[0], '夜无疆', state => { last = state; });
+  assert.equal(last.total, 0, 'no-source state is explicit');
+  sources = [0, 1, 2, 3].map(i => ({ bookSourceUrl: 'source-' + i, bookSourceName: '来源' + i, bookSourceType: 0 }));
+  let running = 0, peak = 0;
+  searchFn = async source => {
+    running++; peak = Math.max(peak, running);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    running--;
+    if (source.bookSourceUrl === 'source-1') throw Error('broken source');
+    return [result(source), result(source), result(source, '夜无疆', 'audio')];
+  };
+  await service.search({}, qd[0], '夜无疆', state => { last = state; });
+  assert.equal(last.completed, 4);
+  assert.equal(last.failed, 1);
+  assert.equal(last.matches.length, 3, 'dedupe by source and book URL');
+  assert.ok(peak <= 2, 'honors search concurrency');
+  const chosen = last.matches[2];
+  await BookMatchService.remember({}, qd[0], chosen);
+  await service.search({}, qd[0], '夜无疆', state => { last = state; });
+  assert.equal(last.matches[0].book.sourceUrl, chosen.book.sourceUrl);
+  assert.equal(last.matches[0].remembered, true);
+  assert.equal(last.matches[0].book.id,
+    identity.BookIdentity.onlineTextBookId(chosen.book.sourceUrl, chosen.book.bookUrl));
+
+  searchFn = async source => [result(source), { ...result(source, '夜无疆', 'audio'), bookUrl: '/audio/1' }];
+  await service.search({}, qd[0], '夜无疆', state => { last = state; });
+  assert.equal(last.matches.filter(match => match.book.contentType === 'text').length, 4);
+  assert.equal(last.matches.filter(match => match.book.contentType === 'audio').length, 4,
+    'a text ranking must also return matching audio versions for the result groups');
+  const audioVersion = last.matches.find(match => match.book.contentType === 'audio');
+  assert.equal(audioVersion.book.id,
+    identity.BookIdentity.onlineAudioBookId(audioVersion.book.sourceUrl, audioVersion.book.bookUrl));
+
+  concurrency = 1;
+  let resolveRequest, called = 0, progressCount = 0;
+  searchFn = source => { called++; return new Promise(resolve => { resolveRequest = () => resolve([result(source)]); }); };
+  const pending = service.search({}, qd[0], '夜无疆', () => progressCount++);
+  while (!resolveRequest) await new Promise(resolve => setImmediate(resolve));
+  service.cancel();
+  const before = progressCount;
+  resolveRequest(); await pending;
+  assert.equal(called, 1, 'cancel prevents additional source scheduling');
+  assert.equal(progressCount, before, 'late results do not overwrite new selection');
+
+  if (process.argv[2]) {
+    for (const board of RankingService.boards()) {
+      const raw = fs.readFileSync(path.join(process.argv[2], board.id + '.txt'), 'utf8');
+      const books = RankingParser.parse(board.platformId, board.id, raw);
+      assert.ok(books.length >= 3, `${board.id}: public response must contain real entries`);
+      assert.ok(books.every(book => book.id && book.title && book.coverUrl.startsWith('https://')));
+      console.log(`LIVE ${board.id}: ${books.length} books; first: ${books[0].title}`);
+    }
+  }
+  console.log('PASS ranking parser, cache fallback, matching identity, dedupe, failure isolation and cancellation');
+})().catch(error => { console.error(error); process.exitCode = 1; });

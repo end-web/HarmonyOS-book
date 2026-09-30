@@ -40,7 +40,7 @@ function harness() {
     pickerCalls: 0, restoreCount: 0, selectedData: null, backupPreferences: snapshot().preferences,
     backupStats: [], speechReloads: 0,
     cloudCopyUnsupported: false, cloudWriteError: 0, cloudStateError: 0, onCloudWrite: null,
-    initialCompleted: false, fileStates: new Map()
+    initialCompleted: false, fileStates: new Map(), autoSettingsFlushError: false
   };
   const preferenceStores = new Map();
   const stored = name => {
@@ -57,7 +57,9 @@ function harness() {
       putSync: (key, value) => values.set(key, value),
       deleteSync: key => values.delete(key),
       getAll: async () => Object.fromEntries(values),
-      flush: async () => {}
+      flush: async () => {
+        if (name === 'auto_backup_local' && control.autoSettingsFlushError) throw new Error('settings disk full');
+      }
     };
   } };
   const syncTasks = [], downloadTasks = [], timers = new Map(), intervals = new Map();
@@ -192,7 +194,7 @@ function harness() {
       }).outputText);
     }
     vm.runInNewContext(compiled.get(relative), {
-      exports, console, ObservedV2: value => value, Trace: () => {},
+      exports, console, $r: name => ({ id: name }), ObservedV2: value => value, Trace: () => {},
       setTimeout: cb => { const id = ++timerId; timers.set(id, cb); return id; },
       clearTimeout: id => timers.delete(id),
       setInterval: cb => { const id = ++timerId; intervals.set(id, cb); return id; },
@@ -203,7 +205,7 @@ function harness() {
         if (name === '../model/AppAppearance') return { AppAppearance: {
           current: { material: 0, accent: '' }, normalizeMaterial: value => value, normalizeAccent: value => value
         } };
-        if (name === '@kit.BasicServicesKit') return { emitter: { emit() {} } };
+        if (name === '@kit.BasicServicesKit') return { emitter: { emit() {}, on() {} } };
         if (name === '@kit.CoreFileKit') return { fileIo, picker, cloudSync, fileUri: { getUriFromPath: p => 'file://' + p } };
         if (name === '@kit.ArkTS') return { util: {
           TextEncoder: class { encodeInto(s) { return new Uint8Array(Buffer.from(s)); } }, generateRandomUUID: () => randomUUID()
@@ -224,7 +226,9 @@ function harness() {
           }
         };
         if (name === './StatsService') return { StatsService: {
-          init: async () => {}, exportBackupStats: async () => control.backupStats, restoreBackupStats: async () => { control.localRestores++; }
+          init: async () => {}, getCachedStatsBundle: () => ({ summary: { totalSeconds: control.backupStats.reduce((n, v) => n + v.listenSeconds, 0) } }),
+          exportBackupStats: async () => control.backupStats, restoreBackupStats: async records => {
+            control.backupStats = records; control.localRestores++; }
         } };
         if (name === './DataService') return { DataService: {
           setContext: () => {}, exportBackupBookShells: async () => [],

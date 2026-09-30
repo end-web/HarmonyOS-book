@@ -95,16 +95,20 @@ export struct AppIconPage {
                         .borderRadius(20)
                         .clip(true)
                       if (this.service.supported && !this.loading && !this.loadFailed && this.current === option.name) {
-                        SymbolGlyph($r('sys.symbol.checkmark'))
-                          .fontSize(14)
-                          .fontWeight(FontWeight.Bold)
-                          .fontColor([AppColor.OnBrand])
-                          .width(24)
-                          .height(24)
-                          .backgroundColor(AppColor.Brand)
-                          .borderRadius(12)
-                          .margin({ right: 4, bottom: 4 })
-                          .accessibilityText($r('app.string.app_icon_current'))
+                        Stack({ alignContent: Alignment.Center }) {
+                          SymbolGlyph($r('sys.symbol.checkmark'))
+                            .fontSize(14)
+                            .fontWeight(FontWeight.Bold)
+                            .fontColor([Color.White])
+                        }
+                        .width(24)
+                        .height(24)
+                        .backgroundColor('#222222')
+                        .border({ width: 2, color: Color.White })
+                        .borderRadius(12)
+                        .margin({ right: 4, bottom: 4 })
+                        .hitTestBehavior(HitTestMode.None)
+                        .accessibilityText($r('app.string.app_icon_current'))
                       }
                     }
                     .width('100%')

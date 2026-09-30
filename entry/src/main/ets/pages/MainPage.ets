@@ -325,6 +325,12 @@ export struct MainPage {
       HdsTabs({ controller: this.tabController }) {
         TabContent() {
           HomePage({
+            onManageSources: (resume: () => void): void => {
+              this.navStack.pushPath({ name: 'ruleSources', onPop: (): void => resume() });
+            },
+            onRankingBookTap: (id: string, resume: () => void): void => {
+              this.navStack.pushPath({ name: 'detail', param: id, onPop: (): void => resume() });
+            },
             onBackHandlerChange: (handler: (() => boolean) | undefined): void => {
               this.homeBackHandler = handler;
             },

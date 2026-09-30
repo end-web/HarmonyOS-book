@@ -6,6 +6,7 @@ import { preferences } from '@kit.ArkData';
 import { textToSpeech } from '@kit.CoreSpeechKit';
 import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { systemDateTime } from '@kit.BasicServicesKit';
 import { Book } from '../../model/Book';
 import { SpeechPosition, SpeechVoice, TextToSpeechState } from '../../model/TextToSpeechState';
 import { StatsService } from '../StatsService';
@@ -50,7 +51,7 @@ export class TextToSpeechService {
   private sleepDeadline: number = 0;
   private flushChain: Promise<void> = Promise.resolve();
   private lastSaveAt: number = 0;
-  private spokenSince: number = 0;
+  private spokenSince: number = -1;
   private pendingListenMs: number = 0;
   private listeners: Set<() => void> = new Set();
   private audioSession: audio.AudioSessionManager | null = null;
@@ -459,7 +460,7 @@ export class TextToSpeechService {
       const listener: textToSpeech.SpeakListener = {
         onStart: (id: string, _response: textToSpeech.StartResponse): void => {
           if (id !== this.requestId) return;
-          this.spokenSince = Date.now();
+          if (this.spokenSince < 0) this.spokenSince = systemDateTime.getUptime(systemDateTime.TimeType.STARTUP);
           this.highlightParagraph();
           this.state.loading = false;
           this.state.playing = true;
@@ -662,7 +663,7 @@ export class TextToSpeechService {
       try {
         await player.speak(context, config, text, this.state.speed, id, (): void => {
           if (!this.valid(ticket) || id !== this.requestId) return;
-          this.spokenSince = Date.now();
+          if (this.spokenSince < 0) this.spokenSince = systemDateTime.getUptime(systemDateTime.TimeType.STARTUP);
           this.state.loading = false;
           this.state.playing = true;
           this.highlightParagraph();
@@ -701,15 +702,15 @@ export class TextToSpeechService {
   }
 
   private recordSpokenTime(): void {
-    if (this.spokenSince <= 0 || this.book === null) return;
-    this.pendingListenMs += Math.max(0, Date.now() - this.spokenSince);
-    this.spokenSince = 0;
+    if (this.spokenSince < 0 || this.book === null) return;
+    this.pendingListenMs += Math.max(0, systemDateTime.getUptime(systemDateTime.TimeType.STARTUP) - this.spokenSince);
+    this.spokenSince = -1;
     const seconds = Math.floor(this.pendingListenMs / 1000);
     if (seconds < 1) return;
     this.pendingListenMs -= seconds * 1000;
     const book = this.book;
     StatsService.addListenSeconds(seconds, { bookId: book.id, title: book.title, author: book.author,
-      cover: book.cover, sourceUrl: book.sourceUrl, bookUrl: book.bookUrl })
+      cover: book.cover, sourceUrl: book.sourceUrl, bookUrl: book.bookUrl }, Date.now())
       .catch((error: Error): void => this.report(error));
   }
 

@@ -14,6 +14,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { cacheDownload } from '@kit.BasicServicesKit';
 import { HttpClient } from './http/HttpClient';
 import { PlatformCompat } from '../utils/PlatformCompat';
+import { http } from '@kit.NetworkKit';
 
 const DOMAIN = 0x0000;
 const TAG = 'CoverPrefetcher';
@@ -32,6 +33,24 @@ const MAX_ATTEMPTS: number = 5;
 const IN_FLIGHT_WATCHDOG_MS: number = 50000;
 
 export class CoverPrefetcher {
+  /** 超分读取原始图片，沿用书源图片请求头，不使用列表解码后的缩略图。 */
+  static async loadOriginal(url: string): Promise<ArrayBuffer> {
+    const request = http.createHttp();
+    try {
+      const response = await request.request(url, {
+        header: CoverPrefetcher.requestHeaders.get(url) ?? COVER_HEADERS,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: 10000, readTimeout: 15000, maxLimit: 4 * 1024 * 1024
+      });
+      if (response.responseCode !== 200 || !(response.result instanceof ArrayBuffer) ||
+        response.result.byteLength === 0 || response.result.byteLength > 4 * 1024 * 1024) {
+        throw new Error('Invalid cover image');
+      }
+      return response.result;
+    } finally {
+      request.destroy();
+    }
+  }
   private static initialized: boolean = false;
   private static pending: string[] = [];
   private static inFlight: Set<string> = new Set();

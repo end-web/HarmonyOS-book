@@ -1,4 +1,5 @@
 import { Book, Chapter } from '../model/Book';
+import { BookCoverPolicy } from './BookCoverPolicy';
 
 /** 最大缓存条目数，防止内存无限增长 */
 const MAX_CACHE_SIZE = 80;
@@ -16,9 +17,7 @@ export class SearchCache {
         book.chapterCount = existing.chapters.length;
       }
     }
-    if (existing && book.cover.trim().length === 0 && existing.cover.trim().length > 0) {
-      book.cover = existing.cover;
-    }
+    if (existing) BookCoverPolicy.merge(book, existing);
     // 若已存在先删除，确保重新插入后在 Map 末尾（LRU 顺序）
     if (searchCache.has(id)) {
       searchCache.delete(id);

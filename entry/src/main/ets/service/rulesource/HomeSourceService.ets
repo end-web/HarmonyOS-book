@@ -5,6 +5,7 @@ import { PreferenceService } from '../PreferenceService';
 import { SourceDataService } from '../SourceDataService';
 import { LocalRulePanelService } from './LocalRulePanelService';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
+import { RankingService } from '../ranking/RankingService';
 
 export class HomeSourceCategory {
   name: string;
@@ -123,8 +124,10 @@ export class HomeSourceService {
   }
 
   static async getSelectedSource(): Promise<LocalRuleSource | undefined> {
-    return HomeSourceService.selectAvailable(await HomeSourceService.getSources(),
-      await PreferenceService.getHomeSourceUrl());
+    const preferred = await PreferenceService.getHomeSourceUrl();
+    if (!preferred || preferred === RankingService.HOME_URL) return undefined;
+    return (await HomeSourceService.getSources()).find((source: LocalRuleSource): boolean =>
+      source.bookSourceUrl === preferred);
   }
 
   static async setSelectedSource(sourceUrl: string): Promise<void> {

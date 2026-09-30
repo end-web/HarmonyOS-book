@@ -14,12 +14,29 @@
 # 这些属性来自外部 JSON（Legado 书源格式）或本地持久化，
 # 通过 JSON.parse / JSON.stringify 访问，混淆器无法静态追踪，必须显式保留。
 -keep-property-name
+  # Medal preferences and backup JSON
+  medals
+  selectedMedalId
+  awards
+  medalId
+  unlockedAt
+  historical
   # Huawei account persisted identity
   unionID
   openID
   loginAt
   nickName
   avatarFile
+  # Local automatic-backup schedule must survive release upgrades
+  intervalDays
+  lastSuccessAt
+  digest
+  nextCheckAt
+  failures
+  errorCode
+  systemCode
+  trusted
+  needsDecision
   # System / personal cloud backup snapshot fields
   exportedAt
   preferences
@@ -88,6 +105,9 @@
   listenSeconds
   days
   day
+  # Statistics disk snapshot envelope must survive release upgrades
+  revision
+  records
   validationStatus
   validationMessage
   variable

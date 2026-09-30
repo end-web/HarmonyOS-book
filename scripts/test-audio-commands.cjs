@@ -32,8 +32,12 @@ class Watcher {
   isArmed() { return this.armed; }
 }
 
-async function fixture(initialState = 'paused') {
+async function fixture(initialState = 'paused', realUsage = false) {
   const events = new Map();
+  const usage = [];
+  const usageTimers = new Map();
+  let uptime = 0;
+  let timerId = 0;
   const savedPositions = [];
   const player = {
     state: initialState, duration: 180000, currentTime: 42000,
@@ -108,7 +112,10 @@ async function fixture(initialState = 'paused') {
     } },
     '@kit.AudioKit': { audio },
     '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },
-    '@kit.BasicServicesKit': { emitter: { emit() {} } },
+    '@kit.BasicServicesKit': { emitter: { emit() {} },
+      systemDateTime: { TimeType: { STARTUP: 0 }, getUptime: () => uptime } },
+    './StatsService': { StatsService: { addListenSeconds: async (seconds, book, endedAt) =>
+      usage.push({ seconds, book, endedAt }) } },
     '@kit.AVSessionKit': { avSession: {} },
     '@kit.CoreFileKit': { fileIo: {} },
     '../utils/PlatformCompat': { PlatformCompat: platformCompat },
@@ -130,7 +137,9 @@ async function fixture(initialState = 'paused') {
   }).outputText, { module: downloadPolicy, exports: downloadPolicy.exports });
   modules['./DownloadPolicy'] = downloadPolicy.exports;
   vm.runInNewContext(code, {
-    module, exports: module.exports, console, setTimeout, clearTimeout, setInterval, clearInterval,
+    module, exports: module.exports, console, setTimeout, clearTimeout,
+    setInterval: realUsage ? callback => { const id = ++timerId; usageTimers.set(id, callback); return id; } : setInterval,
+    clearInterval: realUsage ? id => usageTimers.delete(id) : clearInterval,
     require(name) {
       if (modules[name]) return modules[name];
       // Unused business dependencies remain unloaded; unexpected calls fail normally.
@@ -144,12 +153,14 @@ async function fixture(initialState = 'paused') {
   service.persistHistory = async () => { savedPositions.push(state.progressMs); };
   service.syncPlaybackState = () => {};
   service.syncPlaybackStateNow = async () => {};
-  service.startTick = () => {};
-  service.stopTick = () => {};
+  if (!realUsage) {
+    service.startTick = () => {};
+    service.stopTick = () => {};
+  }
   service.initAVSession();
   await service.ensurePlayer();
   return { service, player, state, session, savedPositions, events, preference, cacheCalls,
-    mediaSources, platformCompat };
+    mediaSources, platformCompat, usage, usageTimers, advance: ms => { uptime += ms; } };
 }
 
 let passed = 0;
@@ -619,6 +630,43 @@ async function check(name, test) {
     assert.equal(f.preference.chapterStep(book), 1);
     await f.service.playNext();
     assert.equal(played.at(-1), 'b');
+  });
+  await check('统计保留暂停尾段与零碎秒，缓冲和重复暂停不计时', async () => {
+    const f = await fixture('playing', true);
+    f.service.startTick();
+    f.advance(7400);
+    f.player.transition('paused');
+    assert.equal(f.usage.reduce((n, item) => n + item.seconds, 0), 7);
+    f.advance(60000);
+    f.service.stopTick();
+    f.state.isPlaying = true; f.player.state = 'playing';
+    f.service.startTick();
+    f.advance(600);
+    f.player.emit('bufferingUpdate', 1, 0);
+    assert.equal(f.usage.reduce((n, item) => n + item.seconds, 0), 8);
+    f.advance(60000);
+    f.player.emit('bufferingUpdate', 2, 0);
+    f.advance(2000);
+    f.player.transition('paused');
+    assert.equal(f.usage.reduce((n, item) => n + item.seconds, 0), 10);
+    assert.equal(f.usageTimers.size, 0);
+  });
+  await check('统计按实际经过时间结算，延迟回调和换书不串账', async () => {
+    const f = await fixture('playing', true);
+    f.service.startTick();
+    f.advance(47000);
+    f.state.progressMs += 3600000; f.state.speed = 2;
+    for (const tick of f.usageTimers.values()) tick();
+    assert.equal(f.usage[0].seconds, 47);
+    f.advance(3000);
+    f.state.currentBook = { id: 'book-2', chapters: [] };
+    f.service.startTick();
+    f.advance(4000);
+    f.service.stopTick();
+    assert.equal(f.usage.filter(item => item.book.bookId === 'book-1').reduce((n, item) => n + item.seconds, 0), 50);
+    assert.equal(f.usage.filter(item => item.book.bookId === 'book-2').reduce((n, item) => n + item.seconds, 0), 4);
+    assert.ok(f.usage.every(item => Number.isFinite(item.endedAt)));
+    assert.equal(f.usageTimers.size, 0);
   });
   console.log(`${passed} audio command checks passed`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

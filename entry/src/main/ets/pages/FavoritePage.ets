@@ -1,3 +1,4 @@
+import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
@@ -74,6 +75,8 @@ function cloneBook(book: Book): Book {
     author: book.author,
     narrator: book.narrator,
     cover: book.cover,
+      coverFromDetail: book.coverFromDetail,
+      coverFallback: book.coverFallback,
     category: book.category,
     intro: book.intro,
     wordCount: book.wordCount,
@@ -507,8 +510,8 @@ export struct FavoritePage {
         let newCount = oldCount;
         if (bookInfo) {
           // 更新封面/简介/作者等元数据
-          if (bookInfo.coverUrl && bookInfo.coverUrl !== nextBook.cover) {
-            nextBook.cover = bookInfo.coverUrl;
+          if (bookInfo.coverUrl && (bookInfo.coverUrl !== nextBook.cover || !nextBook.coverFromDetail)) {
+            BookCoverPolicy.setDetail(nextBook, bookInfo.coverUrl);
             hasChange = true;
           }
           if (bookInfo.intro && bookInfo.intro !== nextBook.intro) {

@@ -1,3 +1,4 @@
+import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { HdsCompat } from '../utils/HdsCompat';
 import { CompatibleGridInsets, PlatformCompat } from '../utils/PlatformCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
@@ -583,7 +584,7 @@ export struct SearchPage {
     if (gen !== this.searchGen || info === null) return undefined;
     const coverUrl = info.coverUrl.trim();
     if (coverUrl.length === 0) return undefined;
-    book.cover = coverUrl;
+    BookCoverPolicy.setDetail(book, coverUrl);
     const hydratedBook = this.cloneBook(book);
     SearchCache.put(hydratedBook);
     return hydratedBook;
@@ -619,6 +620,8 @@ export struct SearchPage {
       author: book.author,
       narrator: book.narrator,
       cover: book.cover,
+      coverFromDetail: book.coverFromDetail,
+      coverFallback: book.coverFallback,
       category: book.category,
       intro: book.intro,
       wordCount: book.wordCount,

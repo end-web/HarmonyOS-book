@@ -1,4 +1,5 @@
 import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
+import { PlayerCoverImage } from '../components/PlayerCoverImage';
 import { BookSourceSwitchSheet } from '../components/BookSourceSwitchSheet';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
@@ -467,6 +468,8 @@ export struct PlayerPage {
       author: book.author,
       narrator: book.narrator,
       cover: book.cover,
+      coverFromDetail: book.coverFromDetail,
+      coverFallback: book.coverFallback,
       category: book.category,
       intro: intro,
       wordCount: book.wordCount,
@@ -1208,63 +1211,13 @@ export struct PlayerPage {
   }
 
   @Builder
-  coverContent() {
-    if (this.book!.cover && this.book!.cover.startsWith('http')) {
-      Image(this.book!.cover)
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .sourceSize({ width: 300, height: 300 })
-        .alt($r('app.media.app_icon_legacy'))
-        .onError(() => {
-          console.error('[PlayerPage] cover image load failed: ' + this.book!.cover);
-        })
-    } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
-      // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
-      Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .sourceSize({ width: 300, height: 300 })
-    } else if (this.book!.cover) {
-      Image($rawfile(this.book!.cover))
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-    } else {
-      // 无封面:用 app 图标占位(替代旧的绿色书形占位)
-      Image($r('app.media.app_icon_legacy'))
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-    }
-  }
-
-  @Builder
-  highQualityCoverContent() {
-    if (this.book!.cover && this.book!.cover.startsWith('http')) {
-      Image(this.book!.cover)
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .sourceSize({ width: 960, height: 960 })
-    } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
-      Image('file://' + this.book!.cover.replace(/^file:\/\//, ''))
-        .width('100%')
-        .height('100%')
-        .objectFit(ImageFit.Cover)
-        .sourceSize({ width: 960, height: 960 })
-    }
-  }
-
-  @Builder
   buildCover() {
     Column() {
       Stack({ alignContent: Alignment.TopStart }) {
-        this.coverContent()
-        if (this.highQualityCover) {
-          this.highQualityCoverContent()
-        }
+        PlayerCoverImage({
+          url: this.book!.cover, fallback: this.book!.coverFallback ?? '',
+          highQuality: this.highQualityCover
+        })
         if (this.sourceName !== '') {
           Text(this.sourceName)
             .fontSize(AppFont.Caption)
@@ -1504,7 +1457,7 @@ export struct PlayerPage {
             .maxLines(1)
             .constraintSize({ maxWidth: 48 })
             .height(14)
-            .position({ x: 29, y: 4 })
+            .position({ x: 29, y: 6 })
             .hitTestBehavior(HitTestMode.None)
         }
       }
@@ -1539,7 +1492,7 @@ export struct PlayerPage {
       Column() {
         Stack({ alignContent: Alignment.End }) {
           SymbolGlyph($r('sys.symbol.chevron_left_2'))
-            .fontSize(20)
+            .fontSize(22)
             .rotate({ angle: 180 })
             .fontColor([this.hasSkipConfig() ? AppColor.Brand : '#B3B3B3'])
         }
@@ -2170,7 +2123,9 @@ export struct PlayerPage {
     const b = this.book;
     const cloned: Book = {
       id: b.id, title: b.title, author: b.author, narrator: b.narrator,
-      cover: b.cover, category: b.category, intro: b.intro,
+      cover: b.cover,
+      coverFromDetail: b.coverFromDetail,
+      coverFallback: b.coverFallback, category: b.category, intro: b.intro,
       wordCount: b.wordCount, latestChapterTitle: b.latestChapterTitle, updateTime: b.updateTime,
       totalDuration: b.totalDuration, chapterCount: b.chapterCount,
       rating: b.rating, tags: b.tags, chapters: b.chapters,

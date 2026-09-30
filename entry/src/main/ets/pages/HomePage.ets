@@ -30,6 +30,8 @@ import { emitter } from '@kit.BasicServicesKit';
 import { LocalRuleSource } from '../model/LocalRuleSource';
 import { EVT_HOME_SOURCE_CHANGED, EVT_FAVORITES_CHANGED, PreferenceService } from '../service/PreferenceService';
 import { HomeSourceCategory, HomeSourceContent, HomeSourceService } from '../service/rulesource/HomeSourceService';
+import { RankingHomePage } from './RankingHomePage';
+import { RankingService } from '../service/ranking/RankingService';
 
 class HomeCategoryDataSource implements IDataSource {
   private categories: HomeSourceCategory[] = [];
@@ -318,6 +320,11 @@ struct HomeLoadingSkeleton {
 
 @ComponentV2
 export struct HomePage {
+  @Local rankingMode: boolean = false;
+  @Local homeResolved: boolean = false;
+  private rankingBackHandler: (() => boolean) | undefined = undefined;
+  @Event onManageSources: (resume: () => void) => void = () => {};
+  @Event onRankingBookTap: (id: string, resume: () => void) => void = () => {};
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local carouselBooks: SearchResult[] = [];
   @Local loadingHome: boolean = false;
@@ -396,6 +403,7 @@ export struct HomePage {
   aboutToAppear(): void {
     WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
     this.onBackHandlerChange((): boolean => {
+      if (this.rankingMode) return this.rankingBackHandler?.() ?? false;
       if (this.selectedCategoryIndex === -1) return false;
       this.switchCategory(-1);
       return true;
@@ -548,9 +556,13 @@ export struct HomePage {
     this.categoryDS.setBooks([]);
     try {
       const sources: LocalRuleSource[] = await HomeSourceService.getSources();
-      const source = HomeSourceService.selectAvailable(sources, await PreferenceService.getHomeSourceUrl());
+      const preferred = await PreferenceService.getHomeSourceUrl();
+      const source = sources.find((item: LocalRuleSource): boolean => item.bookSourceUrl === preferred);
       if (generation !== this.homeGen) return;
       this.homeSources = sources;
+      this.rankingMode = source === undefined;
+      this.homeResolved = true;
+      if (!this.rankingMode) this.onScrollerReady(this.headerScroller);
       this.homeSourceIndex = sources.findIndex((item: LocalRuleSource): boolean =>
         item.bookSourceUrl === source?.bookSourceUrl);
       if (source === undefined || source.bookSourceUrl !== this.currentSource?.bookSourceUrl) {
@@ -586,6 +598,8 @@ export struct HomePage {
       CoverPrefetcher.prefetchMany(covers, 12);
     } catch (error) {
       if (generation !== this.homeGen) return;
+      this.rankingMode = true;
+      this.homeResolved = true;
       this.homeError = $r('app.string.home_source_load_failed');
       hilog.error(DOMAIN, TAG, 'loadHomeBlocks failed: %{public}s', String(error));
     } finally {
@@ -1045,6 +1059,14 @@ export struct HomePage {
   @LocalBuilder
   buildHomeSourceMenu() {
     Column({ space: AppSpace.Xs }) {
+      Text($r('app.string.ranking_home')).fontSize(16).fontColor(AppColor.Brand)
+        .width('100%').height(48).padding({ left: 12, right: 12 })
+        .onClick((): void => {
+          this.homeSourceMenuVisible = false;
+          PreferenceService.setHomeSourceUrl(RankingService.HOME_URL).catch((): void => {
+            this.showHomeSourceToast($r('app.string.rule_source_operation_failed'));
+          });
+        })
       Search({ value: this.homeSourceKeyword, placeholder: $r('app.string.rule_source_search_placeholder') })
         .width('100%').height(40)
         .fontColor($r('sys.color.font_primary'))
@@ -1101,7 +1123,7 @@ export struct HomePage {
       .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
       .onClick(() => this.onSearchTap())
 
-      Text(this.homeSourceName || $r('app.string.home_source_setting'))
+      Text(this.rankingMode ? $r('app.string.ranking_home') : this.homeSourceName || $r('app.string.home_source_setting'))
         .fontSize(13).fontWeight(FontWeight.Medium)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .fontColor(AppColor.Brand)
@@ -1112,7 +1134,7 @@ export struct HomePage {
         .borderRadius(AppRadius.Pill)
         .backgroundColor(Color.Transparent)
         .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
-        .enabled(this.homeSources.length > 0 && !this.savingHomeSource)
+        .enabled(!this.savingHomeSource)
         .accessibilityDescription($r('app.string.home_source_setting'))
         .onClick((): void => {
           this.filterHomeSources('');
@@ -1166,6 +1188,26 @@ export struct HomePage {
   }
 
   build() {
+    Stack() {
+      if (!this.homeResolved) {
+        LoadingProgress().width(28).height(28).color(AppColor.Brand)
+      } else if (this.rankingMode) {
+        RankingHomePage({ headerBuilder: (): void => this.buildSearchTitleBar(), onBookTap: this.onRankingBookTap,
+          onSearchTap: this.onSearchTap, onManageSources: this.onManageSources,
+          onScrollerReady: this.onScrollerReady,
+          onBackHandlerChange: (handler: (() => boolean) | undefined): void => { this.rankingBackHandler = handler; }
+        })
+      } else {
+        this.buildSourceHome()
+      }
+    }.width('100%').height('100%')
+      .onVisibleAreaChange([0, 1], (visible: boolean): void => {
+        if (visible && this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) this.reloadSource();
+      })
+  }
+
+  @Builder
+  buildSourceHome() {
     Stack({ alignContent: Alignment.TopStart }) {
       Column()
         .width('100%')

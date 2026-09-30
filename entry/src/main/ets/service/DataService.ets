@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { Book, Chapter } from '../model/Book';
+import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { PreferenceService } from './PreferenceService';
 import { TextReadingProgressService } from './text/TextReadingProgressService';
 import { StorageMigrationService } from './StorageMigrationService';
@@ -380,6 +381,8 @@ export class DataService {
       author: b.author,
       narrator: b.narrator,
       cover: b.cover,
+      coverFromDetail: b.coverFromDetail,
+      coverFallback: b.coverFallback,
       category: b.category,
       intro: '',
       wordCount: b.wordCount,
@@ -500,6 +503,7 @@ export class DataService {
     const list = await DataService.loadCachedBooks();
     const idx = list.findIndex((b) => b.id === book.id);
     if (idx >= 0) {
+      BookCoverPolicy.merge(book, list[idx]);
       list.splice(idx, 1);
     }
     list.unshift(book); // 内存保留完整书(含章节),本会话内访问瞬时
@@ -632,17 +636,24 @@ export class DataService {
   /**
    * 在 book.chapters 中定位历史记录对应的章节索引。
    * 章节 id 是位置型(`${book.id}-c${idx}`),连载更新/TOC 重排后会漂移,
-   * 因此优先用 chapterTitle 匹配(标题对同一集是稳定的),id 仅作兜底。
+   * 优先同时匹配 id 与标题，避免重名章节跳到第一条同名记录。
+   * 目录变动时仅用唯一标题纠正位置；标题重复时保留 id 对应的位置。
    * 返回 -1 表示定位失败(章节已不存在)。
    */
   static resolveChapterIndex(book: Book, chapterId: string, chapterTitle?: string): number {
     if (!book || !book.chapters || book.chapters.length === 0) return -1;
-    // 标题优先:连载在头部插新章后,旧 id 会指向错误位置,标题能纠正
+    const byId = chapterId ? book.chapters.findIndex((c: Chapter) => c.id === chapterId) : -1;
+    if (byId >= 0 && (!chapterTitle || book.chapters[byId].title === chapterTitle)) return byId;
+    // 只有唯一标题才能纠正目录重排，不能把第一条重名章节当成目标。
     if (chapterTitle) {
-      const byTitle = book.chapters.findIndex((c) => c.title === chapterTitle);
+      let byTitle: number = -1;
+      for (let i = 0; i < book.chapters.length; i++) {
+        if (book.chapters[i].title !== chapterTitle) continue;
+        if (byTitle >= 0) return byId;
+        byTitle = i;
+      }
       if (byTitle >= 0) return byTitle;
     }
-    // 兜底:老记录没存标题时回退到 id
-    return book.chapters.findIndex((c) => c.id === chapterId);
+    return byId;
   }
 }

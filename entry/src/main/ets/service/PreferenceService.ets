@@ -22,6 +22,8 @@ const KEY_ACCENT_COLOR = 'accent_color';
 const KEY_IMPORTED_BOOKS = 'imported_books';
 const KEY_DEFAULT_TAB = 'default_tab';
 const KEY_AUTO_PLAY_ON_LAUNCH = 'auto_play_on_launch';
+const KEY_COVER_SUPER_RESOLUTION = 'cover_super_resolution';
+export const EVT_COVER_SUPER_RESOLUTION_CHANGED = 'app.cover.super_resolution.changed';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
@@ -766,6 +768,24 @@ export class PreferenceService {
   static async getAutoPlayOnLaunch(): Promise<boolean> {
     const store = await PreferenceService.ensureStore();
     return (await store.get(KEY_AUTO_PLAY_ON_LAUNCH, false)) === true;
+  }
+
+  static async getCoverSuperResolution(): Promise<boolean> {
+    const store = await PreferenceService.ensureStore();
+    return (await store.get(KEY_COVER_SUPER_RESOLUTION, false)) === true;
+  }
+
+  static async setCoverSuperResolution(enabled: boolean): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    const previous = await store.get(KEY_COVER_SUPER_RESOLUTION, false);
+    try {
+      await store.put(KEY_COVER_SUPER_RESOLUTION, enabled);
+      await store.flush();
+    } catch (error) {
+      await store.put(KEY_COVER_SUPER_RESOLUTION, previous);
+      throw new Error(`Failed to save cover super resolution preference: ${String(error)}`);
+    }
+    emitter.emit(EVT_COVER_SUPER_RESOLUTION_CHANGED);
   }
 
   static async setAutoPlayOnLaunch(enabled: boolean): Promise<void> {

@@ -36,6 +36,7 @@ const book = (id = 'book', texts = ['第一句。第二句！', '第三句。'])
   sourceUrl: 'https://source.example', bookUrl: `https://book.example/${id}`, author: 'author', cover: '',
   chapters: texts.map((text, index) => ({ id: String(index), title: `章节${index}`, source: { value: `${id}/${index}`, type: 'url' }, text })) });
 function harness(memory = new Map()) {
+  let uptime = 0;
   const engines = [], spoken = [], timers = new Map(), cached = new Map(), stats = [], httpSpoken = [], httpPrepared = [];
   let id = 0, failContent = false, createDeferred = null, focusCallback = null, deviceCallback = null;
   const coordinator = load('service/PlaybackCoordinator.ets');
@@ -56,6 +57,7 @@ function harness(memory = new Map()) {
       engines.push(engine); return engine;
     } };
   const dependencies = {
+    '@kit.BasicServicesKit': { systemDateTime: { TimeType: { STARTUP: 0 }, getUptime: () => uptime } },
     '../../model/CustomTtsConfig': { CustomTtsConfig },
     './CustomTtsConfigParser': { CustomTtsConfigParser },
     './HttpTtsPlayer': { HttpTtsAudioOutput: class { async release() {} }, HttpTtsPlayer: class {
@@ -107,7 +109,8 @@ function harness(memory = new Map()) {
   });
   const service = TextToSpeechService.getInstance();
   const context = { resourceManager: { getStringSync: key => key } };
-  return { service, tts, memory, spoken, engines, timers, session, httpSpoken, httpPrepared, coordinator: coordinator.PlaybackCoordinator,
+  return { service, tts, memory, spoken, engines, timers, session, httpSpoken, httpPrepared, stats,
+    advance: ms => { uptime += ms; }, coordinator: coordinator.PlaybackCoordinator,
     init: () => service.initialize(context), reloadSettings: () => TextToSpeechService.reloadSettings(context),
     failContent: value => { failContent = value; },
     deferEngine: value => { createDeferred = value; }, focus: (reason = 0) => focusCallback?.({ reason }),
@@ -431,6 +434,18 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
     const long = SpeechTextSegmenter.split('长'.repeat(179) + '😀。短句。再一句。', true);
     assert.equal(long.map(item => item.text).join(''), '长'.repeat(179) + '😀。短句。再一句。');
     assert.ok(long.every(item => item.text.length <= 182));
+  });
+  await check('朗读统计只累计实际播报，重复开始不丢时长，暂停不重复结算', async () => {
+    const h = harness(); await h.init();
+    await h.service.start(book(), 0, 0); await settle();
+    h.advance(2500);
+    const request = h.spoken.at(-1);
+    request.engine.listener.onStart(request.id, {});
+    h.advance(1500);
+    h.service.pause();
+    assert.equal(h.stats.reduce((n, item) => n + item[0], 0), 4);
+    h.advance(60000); h.service.pause();
+    assert.equal(h.stats.reduce((n, item) => n + item[0], 0), 4);
   });
   console.log(`${passed} TTS regressions passed`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

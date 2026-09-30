@@ -21,7 +21,8 @@ export enum CloudBackupErrorCode {
   INVALID_BACKUP,
   LOCAL_FAILURE,
   RESTORE_FAILED,
-  CLOUD_FILE_FAILURE
+  CLOUD_FILE_FAILURE,
+  EXISTING_BACKUP
 }
 
 export class CloudBackupError extends Error {
@@ -54,6 +55,18 @@ export class CloudBackupInfo {
     this.bookCount = snapshot.preferences.favorites.length;
     this.sourceCount = snapshot.ruleSources?.length ?? 0;
   }
+}
+
+export class CloudBackupOptions {
+  previousDigest: string = '';
+  protectExisting: boolean = false;
+}
+
+export class CloudBackupResult {
+  accountId: string = '';
+  uploaded: boolean = false;
+  exportedAt: number = 0;
+  digest: string = '';
 }
 
 class CloudBackupFile {
@@ -106,7 +119,7 @@ export class CloudBackupService {
     } catch (_error) { /* 云空间未就绪或本机尚无该备份时保持未知，手动操作会给出具体错误。 */ }
   }
 
-  async backup(context: common.Context): Promise<void> {
+  async backup(context: common.Context, options: CloudBackupOptions = new CloudBackupOptions()): Promise<CloudBackupResult> {
     const accountId = this.begin();
     const staging = `${context.cacheDir}/cloud_backup_upload.json`;
     let pending = '';
@@ -121,13 +134,22 @@ export class CloudBackupService {
       stage = 'sync_before_upload';
       failureCode = CloudBackupErrorCode.SERVER;
       await this.sync(context, accountId);
+      await this.assertAccount(context, accountId);
+      // 必须先同步远端目录。新安装不能把本地暂时没有文件当作云端没有备份。
+      if (options.protectExisting && (await this.cloudFiles(context, legacyPath)).length > 0) {
+        throw new CloudBackupError(CloudBackupErrorCode.EXISTING_BACKUP);
+      }
       this.phase = CloudBackupPhase.PREPARING;
       stage = 'create_snapshot';
       failureCode = CloudBackupErrorCode.LOCAL_FAILURE;
       await AppBackupService.createSnapshot(context, staging, true);
       stage = 'validate_snapshot';
       const snapshot = await AppBackupService.readSnapshot(staging);
+      const result = new CloudBackupResult();
+      result.accountId = accountId;
+      result.digest = await this.snapshotDigest(snapshot);
       await this.assertAccount(context, accountId);
+      if (options.previousDigest && options.previousDigest === result.digest) return result;
       stage = 'copy_to_cloud';
       failureCode = CloudBackupErrorCode.CLOUD_FILE_FAILURE;
       const files = await this.cloudFiles(context, legacyPath);
@@ -147,6 +169,9 @@ export class CloudBackupService {
       await this.pruneCloudFiles(context, accountId, legacyPath, path);
       await this.assertAccount(context, accountId);
       this.lastBackupAt = snapshot.exportedAt;
+      result.uploaded = true;
+      result.exportedAt = snapshot.exportedAt;
+      return result;
     } catch (error) {
       const failure = this.normalizeError(error, failureCode);
       this.logFailure('backup', stage, failure);
@@ -160,6 +185,19 @@ export class CloudBackupService {
       await this.removeLocal(`${staging}.tmp`);
       this.end();
     }
+  }
+
+  private async snapshotDigest(snapshot: AppBackupSnapshot): Promise<string> {
+    const exportedAt = snapshot.exportedAt;
+    snapshot.exportedAt = 0;
+    const content = JSON.stringify(snapshot);
+    snapshot.exportedAt = exportedAt;
+    const digest = cryptoFramework.createMd('SHA256');
+    await digest.update({ data: new util.TextEncoder().encodeInto(content) });
+    const result = await digest.digest();
+    let value = '';
+    for (const byte of result.data) value += byte.toString(16).padStart(2, '0');
+    return value;
   }
 
   async restore(context: common.Context, confirm: (info: CloudBackupInfo) => Promise<boolean>): Promise<boolean> {

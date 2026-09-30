@@ -1,3 +1,4 @@
+import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { DataService } from './DataService';
 /** 用户导入规则源的统一内容门面。 */
 import { AudioSource, Book, Chapter } from '../model/Book';
@@ -216,7 +217,7 @@ export class BookSourceService {
       tocUrl = info.tocUrl || tocUrl;
       if (info.name.trim()) book.title = info.name;
       if (info.author.trim()) book.author = info.author;
-      if (info.coverUrl.trim()) book.cover = info.coverUrl;
+      BookCoverPolicy.setDetail(book, info.coverUrl);
       if (info.intro.trim()) book.intro = info.intro;
       else if (['=.=','==', '暂无', '暂无简介', '暂无介绍', '无'].includes(book.intro.replace(/\s+/g, ''))) book.intro = '';
       if (info.kind.trim()) book.category = info.kind;
@@ -720,7 +721,7 @@ export class BookSourceService {
     if (info !== null) {
       if (info.name.length > 0) value.title = info.name;
       if (info.author.length > 0) value.author = info.author;
-      if (info.coverUrl.length > 0) value.cover = info.coverUrl;
+      BookCoverPolicy.setDetail(value, info.coverUrl);
       if (info.intro.length > 0) value.intro = info.intro;
       if (info.kind.length > 0) value.category = info.kind;
       if (info.completed !== undefined) value.completed = info.completed;
@@ -822,6 +823,8 @@ export class BookSourceService {
       author: book.author,
       narrator: book.narrator,
       cover: book.cover,
+      coverFromDetail: book.coverFromDetail,
+      coverFallback: book.coverFallback,
       category: book.category,
       intro: book.intro,
       wordCount: book.wordCount,

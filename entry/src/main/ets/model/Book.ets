@@ -31,6 +31,10 @@ export interface Book {
   author: string;
   narrator: string;
   cover: string;
+  /** 详情规则返回的封面优先于后续搜索缩略图；旧数据未设置时按普通封面处理。 */
+  coverFromDetail?: boolean;
+  /** 详情封面加载失败时可回退的搜索封面。 */
+  coverFallback?: string;
   category: string;
   intro: string;
   /** 保留书源返回的文本，不将字数误当作目录章节数。 */

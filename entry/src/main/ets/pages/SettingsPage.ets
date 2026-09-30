@@ -16,6 +16,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { ReaderPage } from './ReaderPage';
 import { AppearanceSettingsComponent } from '../components/AppearanceSettingsComponent';
+import { CoverSuperResolutionService } from '../service/CoverSuperResolutionService';
 
 interface ThemeOption {
   mode: number;
@@ -84,6 +85,8 @@ export struct SettingsPage {
   @Local searchConcurrencyCustom: boolean = false;
   @Local isSavingSearchConcurrency: boolean = false;
   @Local isLoaded: boolean = false;
+  @Local coverSuperResolution: boolean = false;
+  @Local isSavingCoverSuperResolution: boolean = false;
   @Local isClearingCache: boolean = false;
   @Local isClearingBookshelf: boolean = false;
   @Local isClearingDownloads: boolean = false;
@@ -135,6 +138,7 @@ export struct SettingsPage {
     }
     this.defaultTab = await PreferenceService.getDefaultTab();
     this.autoPlayOnLaunch = await PreferenceService.getAutoPlayOnLaunch();
+    this.coverSuperResolution = await PreferenceService.getCoverSuperResolution();
     this.focusMode = await PreferenceService.getAudioInterruptMode();
     this.autoResume = await PreferenceService.getAudioAutoResume();
     this.preloadCount = await PreferenceService.getPreloadChapters();
@@ -149,6 +153,22 @@ export struct SettingsPage {
   private async setDefaultTab(idx: number): Promise<void> {
     this.defaultTab = idx;
     await PreferenceService.setDefaultTab(idx);
+  }
+
+  private async setCoverSuperResolution(enabled: boolean): Promise<void> {
+    if (this.isSavingCoverSuperResolution || !CoverSuperResolutionService.supported() ||
+      this.coverSuperResolution === enabled) return;
+    const previous = this.coverSuperResolution;
+    this.isSavingCoverSuperResolution = true;
+    this.coverSuperResolution = enabled;
+    try {
+      await PreferenceService.setCoverSuperResolution(enabled);
+    } catch (_error) {
+      this.coverSuperResolution = previous;
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_save_failed') });
+    } finally {
+      this.isSavingCoverSuperResolution = false;
+    }
   }
 
   private async setAutoPlayOnLaunch(enabled: boolean): Promise<void> {
@@ -466,6 +486,15 @@ export struct SettingsPage {
         .constraintSize({ minHeight: 56 })
 
         AppearanceSettingsComponent()
+        this.buildDivider()
+        this.buildSwitchItem(
+          $r('app.string.settings_cover_super_resolution'),
+          CoverSuperResolutionService.supported() ? $r('app.string.settings_cover_super_resolution_desc')
+            : $r('app.string.settings_cover_super_resolution_unavailable'),
+          this.coverSuperResolution,
+          (enabled: boolean): void => { this.setCoverSuperResolution(enabled); },
+          this.isLoaded && !this.isSavingCoverSuperResolution && CoverSuperResolutionService.supported()
+        )
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))

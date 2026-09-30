@@ -1,3 +1,4 @@
+import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
@@ -292,6 +293,8 @@ export struct BookDetailPage {
       author: book.author,
       narrator: book.narrator,
       cover: book.cover,
+      coverFromDetail: book.coverFromDetail,
+      coverFallback: book.coverFallback,
       category: book.category,
       intro: book.intro,
       wordCount: book.wordCount,
@@ -341,8 +344,9 @@ export struct BookDetailPage {
     if (cached && cached.chapters.length > 0 && !this.needsAudioTocLoad(cached)) return cached;
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     if (cached) {
-      // 保留搜索快照的最新封面/简介，只恢复目录及其解析变量；本地读失败仍能在线加载。
+      // 保留详情封面优先级，再恢复目录；本地读失败仍能在线加载。
       const stored = await DataService.getBookById(ctx, id).catch((): undefined => undefined);
+      if (stored) BookCoverPolicy.merge(cached, stored);
       if (stored && stored.tocComplete !== false && stored.chapters.length > 0) {
         cached.chapters = stored.chapters;
         cached.tocComplete = stored.tocComplete;

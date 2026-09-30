@@ -5,7 +5,7 @@ import { audio } from '@kit.AudioKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { emitter, BusinessError } from '@kit.BasicServicesKit';
+import { emitter, BusinessError, systemDateTime } from '@kit.BasicServicesKit';
 import { avSession } from '@kit.AVSessionKit';
 import { Book, Chapter, AudioSource } from '../model/Book';
 import { BookSource } from '../model/BookSource';
@@ -22,7 +22,7 @@ import { LiveAudioService } from './LiveAudioService';
 import { DownloadService } from './DownloadService';
 import { WidgetUpdater } from './WidgetUpdater';
 import { PlaybackStore } from './PlaybackStore';
-import { StatsService } from './StatsService';
+import { BookUsageInput, StatsService } from './StatsService';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
 import { ChapterProgressPolicy } from './ChapterProgressPolicy';
@@ -178,8 +178,10 @@ export class AudioService {
    *  避免依赖 tick 频繁落盘,配合低功耗渲染器长休眠周期 */
   private lastPersistAt: number = 0;
   private static readonly PERSIST_INTERVAL_MS: number = 5000;
-  private static readonly USAGE_TICK_SECONDS: number = 15;
   private static readonly USAGE_TICK_MS: number = 15000;
+  private usageSince: number = -1;
+  private usageBook: BookUsageInput | undefined = undefined;
+  private pendingUsageMs: number = 0;
   /** 续播 seek 目标(ms)。>0 表示正在等待 seek 生效:
    *  此期间 AVPlayer 可能先回调一个接近 0 的旧 timeUpdate,会把 progressMs 打回起点。
    *  守卫:位置尚未追上目标前忽略这些偏小的旧值,到达目标附近才解除。 */
@@ -378,6 +380,7 @@ export class AudioService {
     p.on('stateChange', (newState: media.AVPlayerState, reason: media.StateChangeReason) => {
       if (this.player !== p) return;
       this.tracePlayback(`state:${newState}:reason=${reason}`);
+      if (newState !== 'playing') this.stopTick();
       if (!this.state) return;
       if (newState === 'initialized') {
         // 听书内容声明为 AUDIOBOOK 流,系统据此挂载低功耗音频渲染器:
@@ -563,6 +566,12 @@ export class AudioService {
     });
     p.on('bufferingUpdate', (type: media.BufferingInfoType, value: number): void => {
       if (this.player !== p) return;
+      if (type === media.BufferingInfoType.BUFFERING_START) {
+        this.stopTick();
+      } else if (type === media.BufferingInfoType.BUFFERING_END && p.state === 'playing' &&
+        this.state?.isPlaying && !this.pauseRequested && !PlaybackCoordinator.speechActive) {
+        this.startTick();
+      }
       if (!this.state?.isLive) {
         if (type === media.BufferingInfoType.BUFFERING_START) {
           this.preloadBuffering = true;
@@ -711,6 +720,14 @@ export class AudioService {
 
   private startTick(): void {
     this.stopTick();
+    const book = this.state?.currentBook;
+    if (!book || !this.state?.currentChapter) return;
+    if (this.usageBook?.bookId !== book.id) this.pendingUsageMs = 0;
+    this.usageBook = {
+      bookId: book.id, title: book.title, author: book.author || book.narrator || '',
+      cover: book.cover || '', sourceUrl: book.sourceUrl || '', bookUrl: book.bookUrl || ''
+    };
+    this.usageSince = systemDateTime.getUptime(systemDateTime.TimeType.STARTUP);
     this.timer = setInterval(() => {
       this.persistHistory();
       this.recordListenUsage();
@@ -725,6 +742,8 @@ export class AudioService {
   }
 
   private stopTick(): void {
+    this.recordListenUsage();
+    this.usageSince = -1;
     if (this.timer >= 0) {
       clearInterval(this.timer);
       this.timer = -1;
@@ -732,16 +751,15 @@ export class AudioService {
   }
 
   private recordListenUsage(): void {
-    if (!this.state || !this.state.isPlaying || !this.state.currentBook || !this.state.currentChapter) return;
-    const book = this.state.currentBook;
-    StatsService.addListenSeconds(AudioService.USAGE_TICK_SECONDS, {
-      bookId: book.id,
-      title: book.title,
-      author: book.author || book.narrator || '',
-      cover: book.cover || '',
-      sourceUrl: book.sourceUrl || '',
-      bookUrl: book.bookUrl || ''
-    }).catch((err: Error) => {
+    if (this.usageSince < 0 || this.usageBook === undefined) return;
+    // STARTUP 含熄屏休眠，不受系统校时、倍速或拖动播放进度影响。
+    const now = systemDateTime.getUptime(systemDateTime.TimeType.STARTUP);
+    this.pendingUsageMs += Math.max(0, now - this.usageSince);
+    this.usageSince = now;
+    const seconds = Math.floor(this.pendingUsageMs / 1000);
+    if (seconds < 1) return;
+    this.pendingUsageMs -= seconds * 1000;
+    StatsService.addListenSeconds(seconds, this.usageBook, Date.now()).catch((err: Error) => {
       hilog.warn(DOMAIN, TAG, 'recordListenUsage failed: %{public}s', err?.message ?? JSON.stringify(err));
     });
   }
@@ -998,6 +1016,7 @@ export class AudioService {
 
   private async doPlayChapter(book: Book, chapter: Chapter, seekMs: number, forceReload: boolean = false): Promise<void> {
     if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
+    this.stopTick();
     const myGen = ++this.playGen;
     this.preloadBuffering = false;
     this.cancelLiveRecovery();

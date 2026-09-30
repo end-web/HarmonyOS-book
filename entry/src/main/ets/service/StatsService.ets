@@ -152,21 +152,22 @@ export class StatsService {
     return pending;
   }
 
-  static async addListenSeconds(seconds: number, book: BookUsageInput): Promise<void> {
+  static async addListenSeconds(seconds: number, book: BookUsageInput, endedAt?: number): Promise<void> {
     if (!Number.isFinite(seconds) || seconds < 1 || !book.bookId) return;
     // 在入队前固定书籍和日期，避免排队跨过零点后把昨日时长写入今天。
-    const recordedAt = Date.now();
+    const recordedAt = endedAt !== undefined && Number.isFinite(endedAt) ? endedAt : Date.now();
     const input: BookUsageInput = {
       bookId: book.bookId, title: book.title, author: book.author, cover: book.cover,
       sourceUrl: book.sourceUrl, bookUrl: book.bookUrl
     };
     await StatsService.enqueue(async (): Promise<void> => {
       await StatsService.ensureReady();
-      await StatsService.addSeconds(Math.floor(seconds), input, recordedAt);
+      await StatsService.addSeconds(Math.floor(seconds), input, recordedAt, endedAt !== undefined);
     });
   }
 
-  private static async addSeconds(delta: number, book: BookUsageInput, recordedAt: number): Promise<void> {
+  private static async addSeconds(delta: number, book: BookUsageInput, recordedAt: number,
+    splitInterval: boolean): Promise<void> {
     const records = StatsService.normalizeRecords(StatsService.records);
     const day = StatsService.formatDay(new Date(recordedAt));
     let rec = records.find((item: BookUsageStats): boolean => item.bookId === book.bookId);
@@ -184,17 +185,31 @@ export class StatsService {
     rec.updatedAt = recordedAt;
     if (book.sourceUrl) rec.sourceUrl = book.sourceUrl;
     if (book.bookUrl) rec.bookUrl = book.bookUrl;
-    let dayItem = rec.days.find((item: BookUsageDay): boolean => item.day === day);
-    if (dayItem === undefined) {
-      dayItem = { day, listenSeconds: 0 };
-      rec.days.push(dayItem);
+    let remaining = delta;
+    let intervalEnd = recordedAt;
+    while (remaining > 0) {
+      const date = new Date(splitInterval ? intervalEnd - 1 : intervalEnd);
+      const dayKey = StatsService.formatDay(date);
+      const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+      const portion = splitInterval ? Math.min(remaining, Math.ceil((intervalEnd - dayStart) / 1000)) : remaining;
+      let dayItem = rec.days.find((item: BookUsageDay): boolean => item.day === dayKey);
+      if (dayItem === undefined) {
+        dayItem = { day: dayKey, listenSeconds: 0 };
+        rec.days.push(dayItem);
+      }
+      dayItem.listenSeconds += portion;
+      remaining -= portion;
+      intervalEnd = dayStart;
     }
     rec.listenSeconds += delta;
-    dayItem.listenSeconds += delta;
     rec.days = StatsService.trimDays(rec.days);
     records.sort((left: BookUsageStats, right: BookUsageStats): number => right.updatedAt - left.updatedAt);
-    await StatsService.commitRecords(records);
-    emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day, bookId: book.bookId } });
+    try {
+      await StatsService.commitRecords(records);
+    } finally {
+      // 双存储暂时失败时增量仍在缓存，页面与重试落盘使用同一份数值。
+      emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { day, bookId: book.bookId } });
+    }
   }
 
   static async getBookStats(): Promise<BookUsageStats[]> {
@@ -357,7 +372,7 @@ export class StatsService {
       await StatsService.ensureReady();
       const importedRecords = StatsService.records.filter((item: BookUsageStats): boolean => item.bookId.startsWith('import_'));
       await StatsService.commitRecords(importedRecords.concat(safeRecords));
-      emitter.emit(EVT_USAGE_STATS_UPDATED);
+      emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { historical: true } });
     });
   }
 
@@ -466,13 +481,15 @@ export class StatsService {
   }
 
   private static computeSummary(map: Map<string, DailyUsageStats>, totalSeconds: number): UsageStatsSummary {
-    const today = StatsService.formatDay(new Date());
-    const weekStart = StatsService.formatDay(StatsService.addDays(new Date(), -6));
-    const monthStart = StatsService.formatDay(StatsService.addDays(new Date(), -29));
+    const now = new Date();
+    const today = StatsService.formatDay(now);
+    const weekStart = StatsService.formatDay(StatsService.addDays(now, -6));
+    const monthStart = StatsService.formatDay(new Date(now.getFullYear(), now.getMonth(), 1));
     let todaySeconds = 0;
     let weekSeconds = 0;
     let monthSeconds = 0;
     for (const item of map.values()) {
+      if (item.day > today) continue;
       const secs = item.listenSeconds;
       if (item.day === today) todaySeconds += secs;
       if (item.day >= weekStart) weekSeconds += secs;

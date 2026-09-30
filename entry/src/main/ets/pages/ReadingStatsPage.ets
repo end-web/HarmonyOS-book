@@ -96,7 +96,8 @@ export struct ReadingStatsPage {
   @Local statsReady: boolean = false;
   @Local statsError: boolean = false;
   @Local streak: number = 0;
-  @Local sourceRecords: BookUsageStats[] = [];
+  @Local totalSeconds: number = 0;
+  @Local monthSeconds: number = 0;
   @Local records: ListenRecordView[] = [];
   @Local loading: boolean = true;
   @Local refreshing: boolean = false;
@@ -111,7 +112,11 @@ export struct ReadingStatsPage {
   private recoveryAttempted: Set<string> = new Set();
   private loadingStats: boolean = false;
   private reloadPending: boolean = false;
+  private dayTimer: number = -1;
   private statsHandler = (_evt: emitter.EventData): void => {
+    // 书籍明细可能还在异步加载；已提交的顶部累计不能等它完成才刷新。
+    const cached = StatsService.getCachedStatsBundle(1);
+    if (cached !== undefined) this.applyStatsBundle(cached);
     this.loadStats();
   };
   private favoritesHandler = (_evt: emitter.EventData): void => {
@@ -125,6 +130,7 @@ export struct ReadingStatsPage {
     if (cached !== undefined) this.applyStatsBundle(cached);
     this.onScrollerReady(this.scroller);
     this.loadStats();
+    this.scheduleDayRefresh();
     emitter.on(EVT_USAGE_STATS_UPDATED, this.statsHandler);
     emitter.on(EVT_FAVORITES_CHANGED, this.favoritesHandler);
     emitter.on(EVT_TEXT_READING_PROGRESS_CHANGED, this.statsHandler);
@@ -133,6 +139,8 @@ export struct ReadingStatsPage {
 
   aboutToDisappear(): void {
     this.recoveryActive = false;
+    if (this.dayTimer !== -1) clearTimeout(this.dayTimer);
+    this.dayTimer = -1;
     try {
       emitter.off(EVT_USAGE_STATS_UPDATED, this.statsHandler);
     } catch (_e) {
@@ -144,9 +152,22 @@ export struct ReadingStatsPage {
 
   private applyStatsBundle(bundle: StatsBundle): void {
     this.streak = bundle.streak;
-    this.sourceRecords = bundle.records;
+    this.totalSeconds = bundle.summary.totalSeconds;
+    this.monthSeconds = bundle.summary.monthSeconds;
     this.statsReady = true;
     this.statsError = false;
+  }
+
+  private scheduleDayRefresh(): void {
+    if (this.dayTimer !== -1) clearTimeout(this.dayTimer);
+    const now = new Date();
+    const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    this.dayTimer = setTimeout((): void => {
+      this.dayTimer = -1;
+      if (!this.recoveryActive) return;
+      this.loadStats();
+      this.scheduleDayRefresh();
+    }, Math.max(1000, nextDay.getTime() - now.getTime()));
   }
 
   private async loadStats(): Promise<void> {
@@ -161,7 +182,7 @@ export struct ReadingStatsPage {
       await StatsService.init(ctx);
       const bundle: StatsBundle = await StatsService.getStatsBundle(1);
       // 顶部统计独立于书籍明细；离线或某本书读取失败时仍显示持久化累计值。
-      this.applyStatsBundle(bundle);
+      this.applyStatsBundle(StatsService.getCachedStatsBundle(1) ?? bundle);
       await PreferenceService.ensureReady(ctx);
       const history = await PreferenceService.getHistory();
       const favoriteIds = new Set<string>(await PreferenceService.getFavorites());
@@ -379,22 +400,11 @@ export struct ReadingStatsPage {
   }
 
   private totalListenSeconds(): number {
-    return this.sourceRecords.reduce((acc, item) => acc + item.listenSeconds, 0);
+    return this.totalSeconds;
   }
 
   private monthListenSeconds(): number {
-    const currentMonth = this.formatMonthKey(new Date());
-    let total = 0;
-    for (const record of this.sourceRecords) {
-      if (record.days.length === 0) {
-        if (this.formatMonthKey(new Date(record.updatedAt)) === currentMonth) total += record.listenSeconds;
-        continue;
-      }
-      for (const day of record.days) {
-        if (day.day.startsWith(currentMonth)) total += day.listenSeconds;
-      }
-    }
-    return total;
+    return this.monthSeconds;
   }
 
   private equivalentBookCount(): number {
@@ -416,11 +426,6 @@ export struct ReadingStatsPage {
     if (total > 0) return this.formatDuration(total);
     if (item.progressMs > 0) return this.formatDuration(Math.floor(item.progressMs / 1000));
     return '刚刚开始';
-  }
-
-  private formatMonthKey(date: Date): string {
-    const m = date.getMonth() + 1;
-    return `${date.getFullYear()}-${m < 10 ? `0${m}` : `${m}`}`;
   }
 
   private toggleSelect(bookId: string): void {
@@ -636,6 +641,12 @@ export struct ReadingStatsPage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onVisibleAreaChange([0], (visible: boolean): void => {
+      if (visible && this.recoveryActive) {
+        this.loadStats();
+        this.scheduleDayRefresh();
+      }
+    })
   }
 
   @Builder

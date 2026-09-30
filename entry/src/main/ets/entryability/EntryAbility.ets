@@ -1,3 +1,4 @@
+import { MedalService } from '../service/MedalService';
 import { AVSessionService } from '../service/AVSessionService';
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want, Configuration } from '@kit.AbilityKit';
@@ -8,6 +9,7 @@ import { BusinessError, emitter } from '@kit.BasicServicesKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
 import { AuthService } from '../service/AuthService';
+import { AutoBackupService } from '../service/AutoBackupService';
 import { AudioService } from '../service/AudioService';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { DataService } from '../service/DataService';
@@ -131,6 +133,11 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, TAG, 'StatsService init failed: %{public}s', JSON.stringify(e));
     }
     try {
+      await MedalService.instance.init(this.context);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'MedalService init failed: %{public}s', String(error));
+    }
+    try {
       // 轻量：只读 download_store.json，不做全量文件 stat
       await DownloadService.getInstance().init(this.context);
     } catch (e) {
@@ -158,6 +165,7 @@ export default class EntryAbility extends UIAbility {
     // 下载文件校验 + 中断任务恢复：延后到 ready 之后，避免主线程扫盘卡死
     this.scheduleDownloadRecovery();
     this.startupServicesReady = true;
+    if (this.isInForeground) AutoBackupService.instance.setForeground(this.context, true);
     this.tryAutoPlayOnLaunch();
   }
 
@@ -435,6 +443,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   async onDestroy(): Promise<void> {
+    AutoBackupService.instance.setForeground(this.context, false);
     TextToSpeechService.getInstance().stop();
     this.isInForeground = false;
     this.startupPlaybackPending = false;
@@ -452,6 +461,7 @@ export default class EntryAbility extends UIAbility {
     }
     try {
       await StatsService.flush();
+      await MedalService.instance.flush();
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'StatsService flush failed: %{public}s', String(error));
     }
@@ -504,6 +514,7 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    AutoBackupService.instance.setForeground(this.context, false);
     emitter.emit('app.reader.background');
     AudioService.getInstance().setForeground(false);
     TextToSpeechService.getInstance().setForeground(false);
@@ -518,6 +529,7 @@ export default class EntryAbility extends UIAbility {
     }
     try {
       await StatsService.flush();
+      await MedalService.instance.flush();
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'onBackground stats flush failed: %{public}s', String(error));
     }
@@ -550,6 +562,7 @@ export default class EntryAbility extends UIAbility {
     this.isInForeground = true;
     // 不阻塞前台恢复；已保存的账号需重新核对系统登录状态。
     AuthService.instance.restore(this.context);
+    if (this.startupServicesReady) AutoBackupService.instance.setForeground(this.context, true);
     WindowUtils.refreshAvoidArea();
     try {
       // 等待 bootstrapAudioService 完成(带超时保护,避免初始化卡死时永久阻塞前台回调)

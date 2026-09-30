@@ -1,3 +1,5 @@
+import { MedalSnapshot } from '../model/Medal';
+import { MedalService } from './MedalService';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { fileIo } from '@kit.CoreFileKit';
@@ -79,6 +81,7 @@ export class AppBackupSnapshot {
   exportedAt: number = 0;
   preferences: PreferenceBackupSnapshot = new PreferenceBackupSnapshot();
   stats: BookUsageStats[] = [];
+  medals: MedalSnapshot | undefined = undefined;
   books: Book[] = [];
   ruleSources: BackupRuleSource[] = [];
   reading: ReadingBackupSnapshot | undefined = undefined;
@@ -101,6 +104,8 @@ export class AppBackupService {
     snapshot.preferences = AppBackupService.normalizePlaybackSnapshot(await PreferenceService.exportBackupSnapshot());
     snapshot.stats = (await StatsService.exportBackupStats(context))
       .filter((item: BookUsageStats): boolean => AppBackupService.validStats(item));
+    snapshot.medals = await MedalService.instance.exportSnapshot(context,
+      snapshot.stats.reduce((total: number, item: BookUsageStats): number => total + item.listenSeconds, 0));
     snapshot.books = await DataService.exportBackupBookShells();
     snapshot.reading = await ReadingBackupService.createSnapshot(context);
     try {
@@ -223,6 +228,7 @@ export class AppBackupService {
     }
     await PreferenceService.restoreBackupSnapshot(snapshot.preferences);
     await StatsService.restoreBackupStats(Array.isArray(snapshot.stats) ? snapshot.stats : []);
+    await MedalService.instance.restoreSnapshot(context, snapshot.medals);
     await DataService.restoreBackupBookShells(snapshot.books, strict);
     if (snapshot.reading !== undefined) await ReadingBackupService.restoreSnapshot(context, snapshot.reading);
     return true;
@@ -233,6 +239,9 @@ export class AppBackupService {
       !AppBackupService.validNumber(snapshot.exportedAt) || snapshot.exportedAt <= 0 ||
       !snapshot.preferences || !Array.isArray(snapshot.books) || snapshot.books.length > 10000 ||
       !Array.isArray(snapshot.stats) || snapshot.stats.length > 10000) return AppBackupService.invalidSnapshot('snapshot');
+    if (snapshot.medals !== undefined && !MedalService.isValidSnapshot(snapshot.medals)) {
+      return AppBackupService.invalidSnapshot('medals');
+    }
     const prefs = snapshot.preferences;
     if (prefs.descendingBookIds !== undefined && (!Array.isArray(prefs.descendingBookIds) ||
       prefs.descendingBookIds.length > 10000 ||

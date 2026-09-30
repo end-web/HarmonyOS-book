@@ -1,8 +1,11 @@
+import { MEDALS, MedalAward, MedalDefinition } from '../model/Medal';
+import { MedalService } from '../service/MedalService';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AccountAvatar } from '../components/AccountAvatar';
 import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import { AppBackupSnapshot } from '../service/AppBackupService';
+import { AutoBackupService } from '../service/AutoBackupService';
 import {
   LocalBackupError, LocalBackupErrorCode, LocalBackupPhase, LocalBackupService
 } from '../service/LocalBackupService';
@@ -18,6 +21,9 @@ export struct AccountPage {
   @Local auth: AuthService = AuthService.instance;
   @Local cloud: CloudBackupService = CloudBackupService.instance;
   @Local local: LocalBackupService = LocalBackupService.instance;
+  @Local automatic: AutoBackupService = AutoBackupService.instance;
+  @Local manualPending: boolean = false;
+  @Local autoReady: boolean = false;
   @Local message: ResourceStr = '';
   @Local hasMessage: boolean = false;
   @Local cloudSystemCode: number = 0;
@@ -27,17 +33,79 @@ export struct AccountPage {
   @Local cloudBackupExpanded: boolean = false;
   private finishConfirmation: ((confirmed: boolean) => void) | null = null;
 
+  @Local medalService: MedalService = MedalService.instance;
+  @Local medalBusy: boolean = false;
+  private readonly medals: MedalDefinition[] = MEDALS;
+
+  private async loadMedals(): Promise<void> {
+    const context = this.getUIContext().getHostContext();
+    if (!context || this.medalBusy) return;
+    this.medalBusy = true;
+    try {
+      await this.medalService.init(context);
+      await this.medalService.refreshUnlocks(true);
+    } catch (_error) {
+      this.toast($r('app.string.medal_load_failed'));
+    } finally {
+      this.medalBusy = false;
+    }
+  }
+
+  private async chooseMedal(item: MedalDefinition): Promise<void> {
+    if (!this.auth.isLoggedIn || !this.medalService.ready || this.medalBusy) return;
+    const unlocked = this.medalService.isUnlocked(item.id);
+    const wearing = this.medalService.selectedMedalId === item.id;
+    const award = this.medalService.awards.find((value: MedalAward): boolean => value.medalId === item.id);
+    let message: ResourceStr = $r('app.string.account_national_day_medal_date');
+    if (item.hours > 0) {
+      if (!unlocked) {
+        const minutes = Math.max(1, Math.ceil((item.hours * 3600 - this.medalService.totalSeconds) / 60));
+        message = $r('app.string.medal_remaining', item.hours, Math.floor(minutes / 60), minutes % 60);
+      } else if (award?.historical) {
+        message = $r('app.string.medal_historical', item.hours);
+      } else if (award !== undefined) {
+        const date = new Date(award.unlockedAt);
+        message = $r('app.string.medal_awarded_date', item.hours,
+          `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`);
+      }
+    }
+    this.medalBusy = true;
+    try {
+      const result = await this.getUIContext().getPromptAction().showDialog({
+        title: item.name,
+        message,
+        buttons: unlocked ? [
+          { text: $r('app.string.medal_close'), color: $r('sys.color.font_secondary') },
+          { text: wearing ? $r('app.string.medal_unequip') : $r('app.string.medal_equip'), color: AppColor.Brand }
+        ] : [{ text: $r('app.string.medal_close'), color: AppColor.Brand }]
+      });
+      if (unlocked && result.index === 1 && this.auth.isLoggedIn) {
+        await this.medalService.equipMedal(wearing ? '' : item.id);
+        this.toast(wearing ? $r('app.string.medal_unequipped') : $r('app.string.medal_equipped'));
+      }
+    } catch (_error) {
+      this.toast($r('app.string.medal_save_failed'));
+    } finally {
+      this.medalBusy = false;
+    }
+  }
+
   aboutToAppear(): void {
+    this.loadMedals();
     const context = this.getUIContext().getHostContext();
     if (context) {
-      this.auth.restore(context).then(() => this.cloud.refresh(context));
+      this.auth.restore(context).then(async (): Promise<void> => {
+        await this.automatic.refresh(context);
+        this.autoReady = true;
+        await this.cloud.refresh(context);
+      });
     }
   }
 
   aboutToDisappear(): void {
     this.finishConfirmation?.(false);
     this.finishConfirmation = null;
-    this.cloud.cancel();
+    if (!this.automatic.running) this.cloud.cancel();
     this.local.cancel();
   }
 
@@ -46,9 +114,75 @@ export struct AccountPage {
   }
 
   private interceptBack(): boolean {
-    if (!this.auth.dataOperation && !this.auth.logging) return false;
+    if (!this.manualPending && ((!this.auth.dataOperation && !this.auth.logging) || this.automatic.running)) return false;
     this.toast($r('app.string.account_wait_operation'));
     return true;
+  }
+
+  private manualAvailable(): boolean {
+    return !this.manualPending && !this.automatic.configuring && !this.auth.logging &&
+      (!this.auth.restoring || this.automatic.running) && (!this.auth.dataOperation || this.automatic.running);
+  }
+
+  private async runManual(action: () => Promise<void>): Promise<void> {
+    if (!this.manualAvailable()) return;
+    this.manualPending = true;
+    await this.automatic.pauseForManual();
+    try {
+      await action();
+    } finally {
+      this.automatic.resumeAfterManual();
+      this.manualPending = false;
+    }
+  }
+
+  private async setAutomatic(enabled: boolean, days: number): Promise<void> {
+    const context = this.getUIContext().getHostContext();
+    if (!context || !this.auth.isLoggedIn || !this.manualAvailable()) return;
+    try {
+      await this.automatic.configure(context, enabled, days);
+    } catch (_error) {
+      this.toast($r('app.string.auto_backup_save_failed'));
+    }
+  }
+
+  private autoFrequency(): ResourceStr {
+    return this.automatic.settings.intervalDays === 7 ? $r('app.string.auto_backup_weekly') :
+      this.automatic.settings.intervalDays === 3 ? $r('app.string.auto_backup_three_days') :
+        $r('app.string.auto_backup_daily');
+  }
+
+  private chooseFrequency(): void {
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: $r('app.string.auto_backup_frequency'),
+      buttons: [
+        { text: $r('app.string.auto_backup_daily'), color: AppColor.Brand },
+        { text: $r('app.string.auto_backup_three_days'), color: AppColor.Brand },
+        { text: $r('app.string.auto_backup_weekly'), color: AppColor.Brand }
+      ]
+    }).then((result): void => {
+      this.setAutomatic(this.automatic.settings.enabled, result.index === 2 ? 7 : result.index === 1 ? 3 : 1);
+    }).catch((): void => {});
+  }
+
+  private autoStatus(): ResourceStr {
+    if (!this.auth.isLoggedIn) return $r('app.string.auto_backup_login_required');
+    if (this.automatic.storageFailed) return $r('app.string.auto_backup_save_failed');
+    if (this.automatic.accountId !== this.auth.openID || !this.automatic.settings.enabled) {
+      return $r('app.string.auto_backup_off');
+    }
+    if (this.automatic.settings.needsDecision) return $r('app.string.auto_backup_existing');
+    if (this.automatic.running && this.cloud.busy) return $r('app.string.auto_backup_running');
+    if (this.automatic.settings.errorCode === CloudBackupErrorCode.CANCELLED) {
+      return $r('app.string.auto_backup_waiting');
+    }
+    if (this.automatic.settings.errorCode !== 0) return this.cloudErrorText(this.automatic.settings.errorCode);
+    return $r('app.string.auto_backup_ready');
+  }
+
+  private lastBackupAt(): number {
+    return Math.max(this.cloud.lastBackupAt,
+      this.automatic.accountId === this.auth.openID ? this.automatic.settings.lastSuccessAt : 0);
   }
 
   private async updateProfile(): Promise<void> {
@@ -57,6 +191,7 @@ export struct AccountPage {
     if (!context) return;
     try {
       await this.auth.login(context);
+      await this.automatic.refresh(context);
       await this.cloud.refresh(context);
       this.toast($r('app.string.account_profile_updated'));
     } catch (error) {
@@ -73,7 +208,7 @@ export struct AccountPage {
   }
 
   private logout(): void {
-    if (this.auth.dataOperation || this.auth.logging || this.auth.restoring) return;
+    if (!this.manualAvailable()) return;
     this.getUIContext().showAlertDialog({
       title: $r('app.string.hw_auth_logout_title'),
       message: $r('app.string.hw_auth_logout_message'),
@@ -81,7 +216,10 @@ export struct AccountPage {
         value: $r('app.string.hw_auth_logout_title'),
         fontColor: '#FF3B30',
         action: () => {
-          this.auth.logout().then(() => {
+          this.runManual(async (): Promise<void> => {
+            await this.auth.logout();
+            const context = this.getUIContext().getHostContext();
+            if (context) await this.automatic.refresh(context);
             this.cloud.lastBackupAt = 0;
             this.navStack.pop();
             this.toast($r('app.string.hw_auth_logout_success'));
@@ -99,7 +237,11 @@ export struct AccountPage {
     this.hasMessage = false;
     this.cloudSystemCode = 0;
     try {
-      await this.cloud.backup(context);
+      if (this.automatic.settings.needsDecision && !await this.confirmRestore(
+        $r('app.string.auto_backup_use_local_title'), $r('app.string.auto_backup_use_local_message'),
+        $r('app.string.auto_backup_use_local_title'))) return;
+      const result = await this.cloud.backup(context);
+      await this.automatic.recordManualSuccess(context, result);
       this.message = $r('app.string.cloud_backup_success');
       this.hasMessage = true;
     } catch (error) {
@@ -113,6 +255,7 @@ export struct AccountPage {
     if (!context) return;
     this.hasMessage = false;
     this.cloudSystemCode = 0;
+    const accountId = this.auth.openID;
     try {
       const restored = await this.cloud.restore(context,
         (info: CloudBackupInfo): Promise<boolean> => this.confirmRestore(
@@ -120,6 +263,7 @@ export struct AccountPage {
           $r('app.string.cloud_restore_confirm_message', this.formatDate(info.exportedAt),
             info.bookCount, info.sourceCount)));
       if (restored) {
+        await this.automatic.recordRestoreSuccess(context, accountId);
         this.message = $r('app.string.cloud_restore_success');
         this.hasMessage = true;
       }
@@ -191,7 +335,8 @@ export struct AccountPage {
     }
   }
 
-  private confirmRestore(title: ResourceStr, message: ResourceStr): Promise<boolean> {
+  private confirmRestore(title: ResourceStr, message: ResourceStr,
+    confirmText: ResourceStr = $r('app.string.cloud_restore_confirm')): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       const finish = (confirmed: boolean): void => {
         this.finishConfirmation = null;
@@ -201,7 +346,7 @@ export struct AccountPage {
       this.getUIContext().showAlertDialog({
         title,
         message,
-        primaryButton: { value: $r('app.string.cloud_restore_confirm'), action: () => finish(true) },
+        primaryButton: { value: confirmText, action: () => finish(true) },
         secondaryButton: { value: $r('app.string.hw_auth_cancel'), action: () => finish(false) },
         cancel: () => finish(false)
       });
@@ -289,7 +434,7 @@ export struct AccountPage {
                 .fontColor($r('sys.color.font_secondary'))
                 .backgroundColor($r('sys.color.comp_background_primary'))
                 .borderRadius(AppRadius.Lg)
-                .enabled(!this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
+                .enabled(this.manualAvailable())
                 .onClick(() => this.logout())
             }
           }
@@ -343,22 +488,70 @@ export struct AccountPage {
         .fontSize(AppFont.BodyL)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('sys.color.font_primary'))
-      Row() {
-        Column({ space: AppSpace.Sm }) {
-          Image($r('app.media.national_day_medal'))
-            .width(64)
-            .height(64)
-            .objectFit(ImageFit.Contain)
-            .interpolation(ImageInterpolation.Medium)
-            .accessibilityText($r('app.string.account_national_day_badge'))
-          Text($r('app.string.account_national_day_medal_date'))
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary'))
-        }
-        .width(96)
-        .alignItems(HorizontalAlign.Center)
+      if (this.medalService.failed) {
+        Button($r('app.string.medal_load_failed'))
+          .fontColor(AppColor.Brand)
+          .backgroundColor(Color.Transparent)
+          .enabled(!this.medalBusy)
+          .onClick(() => this.loadMedals())
       }
-      .width('100%')
+      if (this.medalService.ready) {
+        Text($r('app.string.medal_summary', this.medalService.awards.length, this.medals.length,
+          (Math.floor(this.medalService.totalSeconds / 360) / 10).toFixed(1)))
+          .fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_secondary'))
+        if (this.medalService.newAwardCount > 0) {
+          Text($r('app.string.medal_new_awards', this.medalService.newAwardCount))
+            .fontSize(AppFont.Caption)
+            .fontColor(AppColor.Brand)
+        }
+        Grid() {
+          ForEach(this.medals, (item: MedalDefinition) => {
+            GridItem() {
+              Column({ space: 4 }) {
+                Image(item.image)
+                  .width(64)
+                  .height(64)
+                  .objectFit(ImageFit.Contain)
+                  .interpolation(ImageInterpolation.Medium)
+                  .grayscale(this.medalService.isUnlocked(item.id) ? 0 : 1)
+                  .opacity(this.medalService.isUnlocked(item.id) ? 1 : 0.4)
+                  .accessibilityText(item.name)
+                Text(item.name)
+                  .fontSize(AppFont.Caption)
+                  .fontColor($r('sys.color.font_primary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(item.hours === 0 ? $r('app.string.account_national_day_medal_date') :
+                  $r('app.string.medal_hours', item.hours))
+                  .fontSize(11)
+                  .fontColor($r('sys.color.font_secondary'))
+                Text(this.medalService.selectedMedalId === item.id ? $r('app.string.medal_wearing') :
+                  this.medalService.isUnlocked(item.id) ? $r('app.string.medal_unlocked') : $r('app.string.medal_locked'))
+                  .fontSize(11)
+                  .fontColor(this.medalService.selectedMedalId === item.id ? AppColor.Brand :
+                    $r('sys.color.font_tertiary'))
+              }
+              .width('100%')
+              .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
+              .borderRadius(AppRadius.Md)
+              .border({ width: 1, color: this.medalService.selectedMedalId === item.id ? AppColor.Brand : Color.Transparent })
+              .alignItems(HorizontalAlign.Center)
+              .onClick(() => this.chooseMedal(item))
+              .enabled(!this.medalBusy)
+            }
+          }, (item: MedalDefinition) => item.id)
+        }
+        .columnsTemplate('1fr 1fr 1fr')
+        .columnsGap(AppSpace.Sm)
+        .rowsGap(AppSpace.Sm)
+        .width('100%')
+        Text($r('app.string.medal_scope_hint'))
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+      } else if (!this.medalService.failed) {
+        LoadingProgress().width(24).height(24).color(AppColor.Brand)
+      }
     }
     .alignItems(HorizontalAlign.Start)
     .width('100%')
@@ -383,10 +576,10 @@ export struct AccountPage {
     }
     .width(40)
     .height(40)
-    .enabled(!this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
+    .enabled(this.manualAvailable())
     .accessibilityText(this.auth.isLoggedIn ? $r('app.string.account_profile_refresh') :
       $r('app.string.hw_auth_login_title'))
-    .onClick(() => this.updateProfile())
+    .onClick(() => this.runManual((): Promise<void> => this.updateProfile()))
   }
 
   @Builder
@@ -416,8 +609,8 @@ export struct AccountPage {
           this.backupAction(false, true)
         }
         .width('100%')
-        .enabled(!this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
-        .opacity(this.auth.dataOperation ? 0.5 : 1)
+        .enabled(this.manualAvailable())
+        .opacity(this.manualAvailable() ? 1 : 0.5)
         if (this.local.busy) {
           Row({ space: AppSpace.Sm }) {
             LoadingProgress().width(20).height(20).color(AppColor.Brand)
@@ -447,6 +640,56 @@ export struct AccountPage {
   }
 
   @Builder
+  automaticBackupSettings() {
+    Column({ space: AppSpace.Sm }) {
+      Row({ space: AppSpace.Sm }) {
+        Text($r('app.string.auto_backup_title'))
+          .fontSize(AppFont.BodyL)
+          .fontColor($r('sys.color.font_primary'))
+          .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.auth.isLoggedIn &&
+          this.automatic.accountId === this.auth.openID && this.automatic.settings.enabled })
+          .selectedColor(AppColor.Brand)
+          .enabled(this.autoReady && this.auth.isLoggedIn && this.manualAvailable())
+          .accessibilityText($r('app.string.auto_backup_title'))
+          .onChange((enabled: boolean): void => { this.setAutomatic(enabled, this.automatic.settings.intervalDays); })
+      }
+      .width('100%')
+      .constraintSize({ minHeight: 44 })
+      if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID && this.automatic.settings.enabled) {
+        Row({ space: AppSpace.Sm }) {
+          Text($r('app.string.auto_backup_frequency'))
+            .fontSize(AppFont.Body)
+            .fontColor($r('sys.color.font_primary'))
+            .layoutWeight(1)
+          Text(this.autoFrequency()).fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary'))
+          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(20).fontColor([$r('sys.color.font_tertiary')])
+        }
+        .width('100%')
+        .constraintSize({ minHeight: 44 })
+        .enabled(this.manualAvailable())
+        .onClick(() => this.chooseFrequency())
+      }
+      Text(this.autoStatus()).fontSize(AppFont.Caption).lineHeight(19)
+        .fontColor($r('sys.color.font_secondary'))
+      if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID &&
+        this.automatic.settings.enabled && this.automatic.settings.errorCode !== 0 &&
+        !this.automatic.settings.needsDecision) {
+        Text($r('app.string.auto_backup_retry')).fontSize(AppFont.Caption)
+          .fontColor($r('sys.color.font_tertiary'))
+        if (this.automatic.settings.systemCode !== 0) {
+          Text($r('app.string.cloud_error_code', this.automatic.settings.systemCode)).fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_tertiary'))
+        }
+      }
+      Text($r('app.string.auto_backup_description')).fontSize(AppFont.Caption).lineHeight(19)
+        .fontColor($r('sys.color.font_tertiary'))
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
   backupCard() {
     Column({ space: AppSpace.Sm }) {
       Row({ space: AppSpace.Sm }) {
@@ -467,11 +710,13 @@ export struct AccountPage {
           .fontSize(AppFont.Body)
           .fontColor($r('sys.color.font_secondary'))
           .lineHeight(21)
-        Text(this.auth.isLoggedIn && this.cloud.lastBackupAt > 0
-          ? $r('app.string.cloud_last_backup', this.formatDate(this.cloud.lastBackupAt))
+        Text(this.auth.isLoggedIn && this.lastBackupAt() > 0
+          ? $r('app.string.cloud_last_backup', this.formatDate(this.lastBackupAt()))
           : $r('app.string.cloud_last_backup_unknown'))
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
+
+        this.automaticBackupSettings()
 
         Column() {
           this.backupAction(true, false)
@@ -479,8 +724,8 @@ export struct AccountPage {
           this.backupAction(false, false)
         }
         .width('100%')
-        .enabled(this.auth.isLoggedIn && !this.auth.dataOperation && !this.auth.logging && !this.auth.restoring)
-        .opacity(this.auth.isLoggedIn && !this.auth.dataOperation ? 1 : 0.5)
+        .enabled(this.auth.isLoggedIn && this.manualAvailable())
+        .opacity(this.auth.isLoggedIn && this.manualAvailable() ? 1 : 0.5)
 
         if (this.cloud.busy) {
           Row({ space: AppSpace.Sm }) {
@@ -550,9 +795,9 @@ export struct AccountPage {
     .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
     .onClick(() => {
       if (local) {
-        if (upload) this.exportLocal(); else this.restoreLocal();
+        this.runManual((): Promise<void> => upload ? this.exportLocal() : this.restoreLocal());
       } else {
-        if (upload) this.backup(); else this.restore();
+        this.runManual((): Promise<void> => upload ? this.backup() : this.restore());
       }
     })
   }

@@ -1,7 +1,7 @@
 import { AppSpace, AppFont } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 
-export const PRIVACY_POLICY_VERSION = '3.3.0';
+export const PRIVACY_POLICY_VERSION = '3.5.0';
 
 class PolicySection {
   id: string;

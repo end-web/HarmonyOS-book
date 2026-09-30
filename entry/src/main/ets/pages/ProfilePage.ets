@@ -1,3 +1,4 @@
+import { MedalService } from '../service/MedalService';
 import { HdsCompat } from '../utils/HdsCompat';
 import { AppColor, AppRadius, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
@@ -48,6 +49,7 @@ const MINI_TITLE_BAR_HEIGHT: number = 56;
 export struct ProfilePage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
+  @Local medalService: MedalService = MedalService.instance;
   @Local auth: AuthService = AuthService.instance;
 
   private scrollScroller: Scroller = new Scroller();
@@ -55,7 +57,12 @@ export struct ProfilePage {
   aboutToAppear(): void {
     this.onScrollerReady(this.scrollScroller);
     const context = this.getUIContext().getHostContext();
-    if (context) this.auth.restore(context);
+    if (context) {
+      this.auth.restore(context);
+      this.medalService.init(context).catch((error: Error): void => {
+        console.warn(`[ProfilePage] medals unavailable: ${error.message}`);
+      });
+    }
   }
 
   private onItemTap(id: string): void {
@@ -203,13 +210,13 @@ export struct ProfilePage {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .flexShrink(1)
-          if (this.auth.isLoggedIn) {
-            Image($r('app.media.national_day_badge'))
+          if (this.auth.isLoggedIn && this.medalService.ready && this.medalService.selectedMedalId !== '') {
+            Image(this.medalService.selected()?.badge)
               .width(20)
               .height(20)
               .objectFit(ImageFit.Contain)
               .flexShrink(0)
-              .accessibilityText($r('app.string.account_national_day_badge'))
+              .accessibilityText(this.medalService.selected()?.name ?? $r('app.string.account_medal_list'))
           }
         }
         .width('100%')
