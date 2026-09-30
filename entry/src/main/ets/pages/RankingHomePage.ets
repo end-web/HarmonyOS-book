@@ -739,7 +739,7 @@ export struct RankingHomePage {
         Column({ space: 14 }) {
           Row().height(22).width('80%').backgroundColor(AppColor.Divider).borderRadius(6)
           Row().height(16).width('55%').backgroundColor(AppColor.Divider).borderRadius(5)
-          LoadingProgress().width(24).height(24).color($r('sys.color.icon_secondary'))
+          LoadingProgress().width(24).height(24).color(AppColor.Brand)
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         Row().width('43%').height(210).borderRadius(10).backgroundColor(AppColor.Divider)
       }.height(RANKING_POSTER_HEIGHT).width('100%').padding(26)
@@ -801,10 +801,10 @@ export struct RankingHomePage {
   private refreshIndicator() {
     Row() {
       if (this.refreshing) {
-        LoadingProgress().width(24).height(24).color($r('sys.color.icon_secondary'))
+        LoadingProgress().width(24).height(24).color(AppColor.Brand)
       } else {
         Progress({ value: Math.min(100, this.refreshPullOffset / 96 * 100), total: 100, type: ProgressType.Ring })
-          .width(24).height(24).color($r('sys.color.icon_secondary')).backgroundColor(Color.Transparent)
+          .width(24).height(24).color(AppColor.Brand).backgroundColor(Color.Transparent)
           .style({ strokeWidth: 2, enableSmoothEffect: false })
       }
     }.width('100%').height(this.refreshPullOffset).justifyContent(FlexAlign.Center)
@@ -848,7 +848,7 @@ export struct RankingHomePage {
         }.width('100%').height(40)
         if (this.searching) {
           Row({ space: 8 }) {
-            LoadingProgress().width(18).height(18).color($r('sys.color.icon_secondary'))
+            LoadingProgress().width(18).height(18).color(AppColor.Brand)
             Text($r('app.string.ranking_matching', this.completed, Math.max(0, this.sourceTotal)))
               .fontSize(12).fontColor($r('sys.color.font_secondary'))
           }.width('100%')
@@ -1043,6 +1043,8 @@ export struct RankingHomePage {
     .scrollBar(BarState.Off).cachedCount(1)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .nestedScroll({ scrollForward: NestedScrollMode.PARENT_FIRST, scrollBackward: NestedScrollMode.SELF_FIRST })
+    // 外层抵消整页下拉以固定海报和分类；仅正文下移，为分类下方的刷新指示器留出空间。
+    .translate({ y: this.refreshPullOffset })
     // 与书源首页一致：让滚出视口的书籍继续绘制在分类胶囊背后，供沉浸材质采样。
     .clip(false).backgroundColor(Color.Transparent)
   }
