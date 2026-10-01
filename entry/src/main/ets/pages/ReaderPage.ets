@@ -1,4 +1,6 @@
 import { ReaderVolumeKeyService } from '../service/text/ReaderVolumeKeyService';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
+import { KeyCode } from '@kit.InputKit';
 import { ReaderTapPolicy } from '../utils/ReaderTapPolicy';
 import { ImmersiveCircleButton } from '../components/ImmersiveCircleButton';
 import { ChapterCacheIndicator } from '../components/ChapterCacheIndicator';
@@ -19,11 +21,11 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { image } from '@kit.ImageKit';
-import { curves, display } from '@kit.ArkUI';
+import { curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bookParser } from '@hms.core.readerservice.bookParser';
 import { readerCore } from '@hms.core.readerservice.readerComponent';
-import { EpubReaderComponent } from '../components/EpubReaderComponent';
+import { EpubReaderParams } from '../model/EpubReaderParams';
 import { Book, Chapter } from '../model/Book';
 import {
   TextReadingPosition,
@@ -196,7 +198,9 @@ export struct ReaderPage {
   private leaving: boolean = false;
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterListScroller: Scroller = new Scroller();
-  private readerKitController: readerCore.ReaderComponentController = new readerCore.ReaderComponentController();
+  // 普通文字阅读不触碰可选 ReaderKit HSP；仅在旧 EPUB 分支通过能力检查后创建。
+  private readerKitController: readerCore.ReaderComponentController | null = null;
+  @Local epubReaderBuilder: WrappedBuilder<[EpubReaderParams]> | null = null;
   private readerKitHandler: bookParser.BookParserHandler | null = null;
   private readerSetting: readerCore.ReaderSetting | null = null;
   private readerKitDomPos: string = '';
@@ -341,7 +345,7 @@ export struct ReaderPage {
   /** 上边距允许到阅读视口一半；换小屏后把已保存的超大值压回上限内。 */
   private updateMarginTopMax(): void {
     const height = this.readerViewportHeightVp > 0 ? this.readerViewportHeightVp :
-      WindowUtils.pxToVp(display.getDefaultDisplaySync().height);
+      WindowUtils.getWindowHeightVp();
     const nextMax = Math.max(TextReadingSettings.MARGIN_UI_MAX, Math.floor(height / 2));
     if (Math.abs(nextMax - this.marginTopMax) < 1) return;
     this.marginTopMax = nextMax;
@@ -660,15 +664,14 @@ export struct ReaderPage {
   }
 
   private paginateOnlineTextContent(content: string): OnlineTextPage[] {
-    const currentDisplay = display.getDefaultDisplaySync();
-    const density = currentDisplay.densityPixels > 0 ? currentDisplay.densityPixels : 1;
-    const scaledDensity = currentDisplay.scaledDensity > 0 ? currentDisplay.scaledDensity : density;
+    const density = this.getUIContext().vp2px(1);
+    const fontSizePx = this.getUIContext().fp2px(this.fontSize);
     const viewportWidthVp = this.readerViewportWidthVp > 0 ?
-      this.readerViewportWidthVp : currentDisplay.width / density;
+      this.readerViewportWidthVp : WindowUtils.getWindowWidthVp();
     const viewportHeightVp = this.readerViewportHeightVp > 0 ?
-      this.readerViewportHeightVp : currentDisplay.height / density;
+      this.readerViewportHeightVp : WindowUtils.getWindowHeightVp();
     const contentWidthVp = this.readerTextWidthVp > 0 ? this.readerTextWidthVp :
-      Math.max(80, viewportWidthVp - this.marginLeft - this.marginRight - this.leftSafeVp - this.rightSafeVp);
+      Math.max(80, viewportWidthVp - this.readerLeftPadding() - this.readerRightPadding());
     const reservedHeightVp = this.readerTopInsetVp() + this.readerTextBottomPaddingVp() +
       Math.max(0, this.marginTop - 12) + this.readerHeaderHeight() +
       this.readerFooterHeight() + READER_TEXT_LAYOUT_GUARD;
@@ -676,7 +679,7 @@ export struct ReaderPage {
       Math.max(1, this.readerTextHeightVp - READER_TEXT_LAYOUT_GUARD) :
       Math.max(80, viewportHeightVp - reservedHeightVp);
     return OnlineTextPaginator.paginate(content, contentWidthVp * density,
-      contentHeightVp * density, this.fontSize * scaledDensity, this.lineHeight, this.fontFamily, this.fontWeight, this.textAlignment, this.paragraphSpacing);
+      contentHeightVp * density, fontSizePx, this.lineHeight, this.fontFamily, this.fontWeight, this.textAlignment, this.paragraphSpacing);
   }
 
   private currentOnlineTextCharOffset(): number {
@@ -757,7 +760,16 @@ export struct ReaderPage {
 
   private async prepareReaderKitReader(book: Book, startPosition: TextReadingPosition): Promise<void> {
     this.readerKitReady = false;
-    this.readerKitController = new readerCore.ReaderComponentController();
+    if (!PlatformCompat.readerKit) {
+      this.failReader(this.getUIContext().getHostContext()?.resourceManager.getStringSync(
+        $r('app.string.reader_kit_unavailable').id) ?? '');
+      return;
+    }
+    // HSP 依赖必须放在动态模块边界之后；import lazy 仍会链接其共享模块。
+    const epubModule = await import('../components/EpubReaderComponent');
+    if (this.leaving) return;
+    this.readerKitController = epubModule.createEpubReaderController();
+    this.epubReaderBuilder = epubModule.createEpubReaderBuilder();
     this.readerKitHandler = await this.createReaderKitHandler(book);
     const count = Math.max(1, book.chapters.length);
     const resourceIndex = this.clampResourceIndex(startPosition.resourceIndex, count);
@@ -784,7 +796,8 @@ export struct ReaderPage {
       return cached;
     }
     // 缓存未命中，解析并缓存
-    const handler = await bookParser.getDefaultHandler(epubPath);
+    const parserModule = await import('@hms.core.readerservice.bookParser');
+    const handler = await parserModule.bookParser.getDefaultHandler(epubPath);
     // LRU 淘汰：缓存超限时移除最早的
     if (ReaderPage.epubHandlerCache.size >= ReaderPage.MAX_HANDLER_CACHE_SIZE) {
       const firstKey = ReaderPage.epubHandlerCache.keys().next().value as string;
@@ -997,9 +1010,10 @@ export struct ReaderPage {
   }
 
   private createReaderSetting(): readerCore.ReaderSetting {
-    const currentDisplay = display.getDefaultDisplaySync();
-    const scaledDensity = currentDisplay.scaledDensity > 0 ? currentDisplay.scaledDensity : 1;
-    const density = currentDisplay.densityPixels > 0 ? currentDisplay.densityPixels : 1;
+    const density = this.getUIContext().vp2px(1);
+    const scaledDensity = this.getUIContext().fp2px(1);
+    const widthVp = this.readerViewportWidthVp > 0 ? this.readerViewportWidthVp : WindowUtils.getWindowWidthVp();
+    const heightVp = this.readerViewportHeightVp > 0 ? this.readerViewportHeightVp : WindowUtils.getWindowHeightVp();
     const verticalSafePx = (this.readerTopInsetVp() + this.readerTextBottomPaddingVp() +
       this.readerFooterHeight() + Math.max(0, this.marginTop - 12)) * density;
     const pageConfig: readerCore.ReaderSetting = {
@@ -1015,8 +1029,8 @@ export struct ReaderPage {
       themeBgImg: !this.systemNightOverride && this.backgroundPattern === ReaderPattern.Image ? this.bgImagePath : '',
       flipMode: '0',
       scaledDensity: scaledDensity,
-      viewPortWidth: Math.max(1, currentDisplay.width - (this.marginLeft + this.marginRight + this.leftSafeVp + this.rightSafeVp) * density),
-      viewPortHeight: Math.max(1, currentDisplay.height - verticalSafePx)
+      viewPortWidth: Math.max(1, (widthVp - this.readerLeftPadding() - this.readerRightPadding()) * density),
+      viewPortHeight: Math.max(1, heightVp * density - verticalSafePx)
     };
     return pageConfig;
   }
@@ -1030,7 +1044,7 @@ export struct ReaderPage {
       const pageConfig = this.createReaderSetting();
       this.readerSetting = pageConfig;
       if (!this.readerKitReady) return;
-      this.readerKitController.setPageConfig(pageConfig);
+      this.readerKitController?.setPageConfig(pageConfig);
     } catch (e) {
       hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'apply settings failed: %{public}s',
         e instanceof Error ? e.message : String(e));
@@ -1351,7 +1365,7 @@ export struct ReaderPage {
       await this.loadOnlineTextChapter(resourceIndex, 0, 0, false, false);
       return;
     }
-    if (!this.readerKitReady) return;
+    if (!this.readerKitReady || this.readerKitController === null) return;
     this.jumpingResourceIndex = resourceIndex;
     try {
       await this.readerKitController.startPlay(resourceIndex, '');
@@ -1497,7 +1511,11 @@ export struct ReaderPage {
   }
 
   private canUseVolumeKeys(): boolean {
-    return this.volumeKeyPageTurn && this.readerVisible && !this.leaving && !this.loading &&
+    return this.volumeKeyPageTurn && this.canTurnWithKeyboard();
+  }
+
+  private canTurnWithKeyboard(): boolean {
+    return this.readerVisible && !this.leaving && !this.loading &&
       this.readerError.length === 0 && !this.showChapterSheet && !this.showSettingsSheet &&
       !this.showSpeechSheet && !this.showSourceSwitch && !this.pickingFont && !this.pickingBackgroundImage;
   }
@@ -1510,11 +1528,24 @@ export struct ReaderPage {
 
   private handleVolumePageTurn(forward: boolean): void {
     if (!this.canUseVolumeKeys()) return;
+    this.turnPageFromKey(forward);
+  }
+
+  private handleReaderKey(event: KeyEvent): void {
+    if (event.type !== KeyType.Down || !this.canTurnWithKeyboard() || this.readerBarVisible) return;
+    const forward = event.keyCode === KeyCode.KEYCODE_PAGE_DOWN || event.keyCode === KeyCode.KEYCODE_DPAD_RIGHT;
+    const backward = event.keyCode === KeyCode.KEYCODE_PAGE_UP || event.keyCode === KeyCode.KEYCODE_DPAD_LEFT;
+    if (!forward && !backward) return;
+    this.turnPageFromKey(forward);
+    event.stopPropagation();
+  }
+
+  private turnPageFromKey(forward: boolean): void {
     this.screenOn.touch();
     if (this.isOnlineTextBook()) {
       this.keyTurnRequest = (Math.abs(this.keyTurnRequest) + 1) * (forward ? 1 : -1);
     } else if (this.readerKitReady) {
-      try { this.readerKitController.flipPage(forward); } catch (_error) {}
+      try { this.readerKitController?.flipPage(forward); } catch (_error) {}
     }
   }
 
@@ -1536,6 +1567,19 @@ export struct ReaderPage {
 
   private readerHeaderHeight(): number {
     return this.showHeader && (this.showChapterTitle || this.showPageNumber) ? READER_TEXT_HEADER_HEIGHT : 0;
+  }
+
+  private readerGutter(): number {
+    const width = this.readerViewportWidthVp > 0 ? this.readerViewportWidthVp : WindowUtils.getWindowWidthVp();
+    return AdaptiveLayout.readerGutter(width, this.marginLeft + this.leftSafeVp, this.marginRight + this.rightSafeVp);
+  }
+
+  private readerLeftPadding(): number {
+    return this.marginLeft + this.leftSafeVp + this.readerGutter();
+  }
+
+  private readerRightPadding(): number {
+    return this.marginRight + this.rightSafeVp + this.readerGutter();
   }
 
   private readerFooterHeight(): number {
@@ -1811,36 +1855,29 @@ export struct ReaderPage {
             Stack({ alignContent: Alignment.Bottom }) {
               if (this.isOnlineTextBook()) {
                 this.buildOnlineTextReader()
-              } else {
-                EpubReaderComponent({
-                  tapRegions: this.tapRegions,
-          tapLeftPercent: this.tapLeftPercent,
-          tapRightPercent: this.tapRightPercent,
-          tapTopPercent: this.tapTopPercent,
-          tapBottomPercent: this.tapBottomPercent,
-
-                  controller: this.readerKitController,
-                  handler: this.readerKitHandler,
-                  startResourceIndex: this.currentResourceIndex,
-                  startDomPos: this.readerKitDomPos,
-                  pageConfig: this.readerSetting,
-                  onReady: () => {
-                    this.handleReaderKitReady();
-                  },
-                  onError: (message: string, code: number): void => {
-                    this.handleReaderKitError(message, code);
-                  },
-                  onReaderPageShow: (info: readerCore.PageDataInfo): void => {
-                    this.handleReaderKitPageShow(info);
-                  },
-                  onContentTap: (): void => {
-                    this.toggleReaderBar();
-                  }
-                })
+              } else if (this.epubReaderBuilder !== null && this.readerKitController !== null) {
+                Stack() {
+                  this.epubReaderBuilder.builder({
+                    controller: this.readerKitController,
+                    handler: this.readerKitHandler,
+                    tapRegions: this.tapRegions,
+                    tapLeftPercent: this.tapLeftPercent,
+                    tapRightPercent: this.tapRightPercent,
+                    tapTopPercent: this.tapTopPercent,
+                    tapBottomPercent: this.tapBottomPercent,
+                    startResourceIndex: this.currentResourceIndex,
+                    startDomPos: this.readerKitDomPos,
+                    pageConfig: this.readerSetting,
+                    onReady: (): void => this.handleReaderKitReady(),
+                    onError: (message: string, code: number): void => this.handleReaderKitError(message, code),
+                    onReaderPageShow: (info: readerCore.PageDataInfo): void => this.handleReaderKitPageShow(info),
+                    onContentTap: (): void => this.toggleReaderBar()
+                  })
+                }
                   .width('100%')
                   .height('100%')
                   .padding({
-                    left: this.marginLeft + this.leftSafeVp, right: this.marginRight + this.rightSafeVp,
+                    left: this.readerLeftPadding(), right: this.readerRightPadding(),
                     top: this.readerTopInsetVp() + Math.max(0, this.marginTop - 12),
                     bottom: this.readerTextBottomPaddingVp() + this.readerFooterHeight()
                   })
@@ -1912,6 +1949,9 @@ export struct ReaderPage {
       }
     })
     .onTouch((event: TouchEvent): void => { if (event.type === TouchType.Down) this.screenOn.touch(); })
+    .onKeyEvent((event: KeyEvent): void => this.handleReaderKey(event))
+    .focusable(true)
+    .defaultFocus(true)
     .onVisibleAreaChange([0, 1], (visible: boolean): void => {
       this.readerVisible = visible;
       this.screenOn.setVisible(visible);
@@ -2034,8 +2074,8 @@ export struct ReaderPage {
       .width('100%')
       .height('100%')
       .padding({
-        left: this.marginLeft + this.leftSafeVp,
-        right: this.marginRight + this.rightSafeVp,
+        left: this.readerLeftPadding(),
+        right: this.readerRightPadding(),
         // 只让正文避开系统栏；背景和翻页纸面始终使用完整视口，保持图片连续。
         top: this.readerTopInsetVp() + Math.max(0, this.marginTop - 12),
         bottom: this.readerTextBottomPaddingVp()

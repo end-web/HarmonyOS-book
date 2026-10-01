@@ -3,8 +3,8 @@
     "bundleName": "com.huan.listenbook",
     "cloudFileSyncEnabled": true,
     "vendor": "ylwang",
-    "versionCode": 1000039,
-    "versionName": "0.1.39",
+    "versionCode": 1000040,
+    "versionName": "0.1.40",
     "buildVersion": "1",
     "icon": "$media:app_icon",
     "alternateIcons": [
@@ -15,7 +15,10 @@
       { "name": "glass", "icon": "$media:app_icon_glass" },
       { "name": "origami", "icon": "$media:app_icon_origami" },
       { "name": "embroidery", "icon": "$media:app_icon_embroidery" },
-      { "name": "retro", "icon": "$media:app_icon_retro" }
+      { "name": "retro", "icon": "$media:app_icon_retro" },
+      { "name": "cartoon", "icon": "$media:app_icon_cartoon" },
+      { "name": "cartooncat", "icon": "$media:app_icon_cartooncat" },
+      { "name": "cartoondog", "icon": "$media:app_icon_cartoondog" }
     ],
     "label": "$string:app_name"
   }

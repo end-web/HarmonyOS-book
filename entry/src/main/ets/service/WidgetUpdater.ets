@@ -1,4 +1,5 @@
-import { formBindingData, formProvider } from '@kit.FormKit';
+import { PlatformCompat } from '../utils/PlatformCompat';
+import lazy { formBindingData, formProvider } from '@kit.FormKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { http } from '@kit.NetworkKit';
@@ -30,6 +31,7 @@ interface BuildBindingResult {
 
 /** 初次添加卡片时使用的空态数据；带封面的更新由 buildPlayerBinding 构造。 */
 export class PlayerFormData {
+  wearableLayout: boolean = PlatformCompat.wearable;
   hasBook: boolean = false;
   bookId: string = '';
   bookTitle: string = '没有正在播放的书';
@@ -222,6 +224,7 @@ export class WidgetUpdater {
   private static async buildPlayerBinding(snap: WidgetPlayerSnapshot, allowNetwork: boolean = true)
     : Promise<BuildBindingResult> {
     const data: Record<string, Object> = {
+      'wearableLayout': PlatformCompat.wearable,
       'hasBook': snap.bookId.length > 0,
       'bookId': snap.bookId,
       'bookTitle': snap.bookTitle || '没有正在播放的书',
@@ -301,6 +304,7 @@ export class WidgetUpdater {
 
   /** 把当前 PlayerState 写入快照,并广播给所有听书卡片 */
   static async updatePlayerCard(state: PlayerState | null, force: boolean = false): Promise<void> {
+    if (PlatformCompat.wearable) return;
     const generation = ++WidgetUpdater.updateGeneration;
     const snap = WidgetUpdater.buildSnapshot(state);
     const existing = await PreferenceService.getWidgetPlayerSnapshot();

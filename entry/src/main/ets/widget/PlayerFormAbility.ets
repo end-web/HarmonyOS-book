@@ -1,4 +1,5 @@
-import { formBindingData, FormExtensionAbility, formInfo } from '@kit.FormKit';
+import { formBindingData, FormExtensionAbility, formInfo, formProvider } from '@kit.FormKit';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Want } from '@kit.AbilityKit';
 import { PreferenceService } from '../service/PreferenceService';
@@ -73,7 +74,13 @@ export default class PlayerFormAbility extends FormExtensionAbility {
       if (!snap) {
         snap = await WidgetUpdater.seedSnapshotFromLastPlayed();
       }
-      if (!snap) return;
+      if (!snap) {
+        // 已安装的手表空卡片也需收到布局标识；手机维持原刷新逻辑。
+        if (PlatformCompat.wearable) {
+          await formProvider.updateForm(formId, formBindingData.createFormBindingData(new PlayerFormData()));
+        }
+        return;
+      }
       await WidgetUpdater.pushPlayerSnapshotToForm(formId, snap, true);
     }).catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'onUpdateForm failed: %{public}s',

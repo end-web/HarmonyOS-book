@@ -81,11 +81,19 @@ export class WindowUtils {
     if (colorMode !== undefined) {
       WindowUtils.colorMode = colorMode;
     }
-    await win.setWindowLayoutFullScreen(true);
-    await win.setWindowSystemBarProperties({
-      statusBarColor: '#00000000',
-      navigationBarColor: '#00000000'
-    });
+    // 先注册窗口监听；电脑没有手机系统栏时，样式能力失败不能中断尺寸/安全区同步。
+    win.on('avoidAreaChange', WindowUtils.handleAvoidAreaChange);
+    win.on('windowSizeChange', WindowUtils.handleWindowSizeChange);
+    if (canIUse('SystemCapability.Window.SessionManager')) {
+      win.on('windowStatusDidChange', WindowUtils.handleWindowStatusDidChange);
+    }
+    try {
+      await win.setWindowLayoutFullScreen(true);
+      await win.setWindowSystemBarProperties({
+        statusBarColor: '#00000000',
+        navigationBarColor: '#00000000'
+      });
+    } catch (_e) { /* 无手机系统栏的窗口保留系统默认装饰。 */ }
     try {
       if (PlatformCompat.supports(26)) {
         await win.setFloatNavigationAvoidAreaEnabled(true);
@@ -93,11 +101,48 @@ export class WindowUtils {
     } catch (_e) {
       // Keep the regular system/nav-indicator fallback on devices without float-navigation support.
     }
-    await WindowUtils.applySystemBarContent();
-    win.on('avoidAreaChange', WindowUtils.handleAvoidAreaChange);
-    win.on('windowSizeChange', WindowUtils.handleWindowSizeChange);
-    win.on('windowStatusDidChange', WindowUtils.handleWindowStatusDidChange);
+    try { await WindowUtils.applySystemBarContent(); } catch (_e) { /* 系统栏能力可选。 */ }
     WindowUtils.refreshAvoidArea();
+  }
+
+  static releaseWindow(): void {
+    const win = WindowUtils.mainWindow;
+    WindowUtils.cancelPendingRefreshes();
+    if (win !== null) {
+      try { win.off('avoidAreaChange', WindowUtils.handleAvoidAreaChange); } catch (_e) {}
+      try { win.off('windowSizeChange', WindowUtils.handleWindowSizeChange); } catch (_e) {}
+      try { win.off('windowStatusDidChange', WindowUtils.handleWindowStatusDidChange); } catch (_e) {}
+    }
+    WindowUtils.mainWindow = null;
+    WindowUtils.readerWindowShape = '';
+  }
+
+  static minimize(): void {
+    const win = WindowUtils.mainWindow;
+    if (win === null || !canIUse('SystemCapability.Window.SessionManager')) return;
+    try { win.minimize().catch((): void => {}); } catch (_e) {}
+  }
+
+  static getWindowWidthVp(): number {
+    try {
+      const win = WindowUtils.mainWindow;
+      if (win !== null) {
+        const width = win.getWindowProperties().windowRect.width;
+        if (width > 0) return win.getUIContext().px2vp(width);
+      }
+    } catch (_e) {}
+    return 360;
+  }
+
+  static getWindowHeightVp(): number {
+    try {
+      const win = WindowUtils.mainWindow;
+      if (win !== null) {
+        const height = win.getWindowProperties().windowRect.height;
+        if (height > 0) return win.getUIContext().px2vp(height);
+      }
+    } catch (_e) {}
+    return 640;
   }
 
   static addSafeAreaListener(listener: (topVp: number, bottomVp: number) => void): void {
@@ -218,14 +263,16 @@ export class WindowUtils {
       const screen = displayId === undefined ? display.getDefaultDisplaySync() : display.getDisplayByIdSync(displayId);
       if (!Number.isFinite(screen.width) || !Number.isFinite(screen.height) ||
         !Number.isFinite(screen.xDPI) || !Number.isFinite(screen.yDPI) ||
-        screen.width <= 0 || screen.height <= 0 || screen.xDPI <= 0 || screen.yDPI <= 0) return 300;
+        screen.width <= 0 || screen.height <= 0 || screen.xDPI <= 0 || screen.yDPI <= 0) return 450;
       const widthInches = screen.width / screen.xDPI;
       const heightInches = screen.height / screen.yDPI;
       const diagonalInches = Math.sqrt(widthInches * widthInches + heightInches * heightInches);
-      return diagonalInches <= 12 ? 250 : 300;
+      // 缓入缓出首尾的微小位移可能不计入可见帧；为 200/250/300ms 下限保留余量。
+      if (diagonalInches < 8.5) return 320;
+      return diagonalInches <= 12 ? 380 : 450;
     } catch (_e) {
       // 屏幕信息不可用时按最高下限兜底，避免未知大屏使用过短的转场。
-      return 300;
+      return 450;
     }
   }
 

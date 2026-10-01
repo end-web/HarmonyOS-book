@@ -1,5 +1,7 @@
 {
   "string": [
+    { "name": "epub_parser_unavailable", "value": "当前设备不支持 EPUB 解析，请转换为 TXT 后导入。" },
+    { "name": "reader_kit_unavailable", "value": "当前设备不支持 ReaderKit，无法打开旧版 EPUB 书籍。在线文字及已转换的本地书籍可正常阅读。" },
     { "name": "reader_paragraph_spacing", "value": "段落间距" },
     { "name": "reader_paragraph_preview_first", "value": "　　夜色渐深，他轻轻合上书。" },
     { "name": "reader_paragraph_preview_second", "value": "　　远处钟声响起，往事涌上心头。" },
@@ -31,6 +33,9 @@
     {"name": "app_icon_origami", "value": "折纸"},
     {"name": "app_icon_embroidery", "value": "刺绣"},
     {"name": "app_icon_retro", "value": "复古搪瓷"},
+    {"name": "app_icon_cartoon", "value": "小狐狸"},
+    {"name": "app_icon_cartooncat", "value": "卡通猫"},
+    {"name": "app_icon_cartoondog", "value": "卡通狗"},
     {"name": "app_icon_current", "value": "使用中"},
     {"name": "app_icon_blank", "value": " "},
     {"name": "app_icon_back", "value": "返回"},
@@ -1944,6 +1949,24 @@
     {"name": "ranking_words", "value": "字数排行榜"},
     {"name": "settings_cover_super_resolution", "value": "AI 封面超分"},
     {"name": "settings_cover_super_resolution_desc", "value": "增强播放页低清网络封面，首次处理需稍候；不可用时显示原图"},
-    {"name": "settings_cover_super_resolution_unavailable", "value": "当前系统不支持，需要 HarmonyOS 26 及支持图片超分的设备"}
+    {"name": "settings_cover_super_resolution_unavailable", "value": "当前系统不支持，需要 HarmonyOS 26 及支持图片超分的设备"},
+    {"name": "shelf_updates_title", "value": "书架更新"},
+    {"name": "shelf_update_daily_hint", "value": "每天自动检查一次，安静更新你的书架"},
+    {"name": "shelf_update_progress", "value": "正在检查 %d/%d"},
+    {"name": "shelf_update_error", "value": "更新暂未完成，请稍后重试"},
+    {"name": "shelf_update_time", "value": "最近检查 · %s"},
+    {"name": "shelf_update_book_count", "value": "%d 本有新内容"},
+    {"name": "shelf_update_checked_count", "value": "已检查 %d 本"},
+    {"name": "shelf_update_new_content", "value": "发现新内容"},
+    {"name": "shelf_update_text_total", "value": "%d → %d 章"},
+    {"name": "shelf_update_audio_total", "value": "%d → %d 集"},
+    {"name": "shelf_update_text_delta", "value": "+%d 章"},
+    {"name": "shelf_update_audio_delta", "value": "+%d 集"},
+    {"name": "shelf_update_checking", "value": "正在检查更新"},
+    {"name": "shelf_update_no_new", "value": "暂时没有新章节"},
+    {"name": "shelf_update_no_record", "value": "还没有更新记录"},
+    {"name": "shelf_update_empty_hint", "value": "在线收藏的最新章节将在这里汇总"},
+    {"name": "shelf_update_failed_count", "value": "%d 本暂未检查成功，可稍后重试"},
+    {"name": "shelf_update_check_now", "value": "立即检查"}
   ]
 }

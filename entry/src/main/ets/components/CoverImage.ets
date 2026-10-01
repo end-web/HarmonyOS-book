@@ -19,6 +19,7 @@ export struct CoverImage {
   @Param decodeH: number = 400;
   @Param highPriority: boolean = true;
   @Event onImageSize: (url: string, width: number, height: number) => void = () => {};
+  @Event onImageReady: (url: string) => void = () => {};
 
   @Local showImage: boolean = true;
   @Local giveUp: boolean = false;
@@ -62,6 +63,7 @@ export struct CoverImage {
           if (event?.loadingStatus !== 0) return;
           CoverAspectRatio.remember(this.url, event.width, event.height);
           this.onImageSize(this.url, event.width, event.height);
+          this.onImageReady(this.url);
         })
         .onError(() => {
           this.scheduleRetry();
@@ -79,6 +81,7 @@ export struct CoverImage {
           if (event?.loadingStatus !== 0) return;
           CoverAspectRatio.remember(this.url, event.width, event.height);
           this.onImageSize(this.url, event.width, event.height);
+          this.onImageReady(this.url);
         })
         .onError(() => {
           this.scheduleRetry();

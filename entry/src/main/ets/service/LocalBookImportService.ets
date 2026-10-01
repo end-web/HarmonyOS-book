@@ -29,6 +29,15 @@ export class LocalBookImportService {
   static readonly TEXT_EXTS: string[] = FileOpenRouting.TEXT_EXTS;
   static readonly AUDIO_EXTS: string[] = ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac'];
 
+  private static async openEpub(context: common.Context, path: string): Promise<bookParser.BookParserHandler> {
+    if (!canIUse('SystemCapability.Reader.ReaderService.BookParser')) {
+      throw new Error(context.resourceManager.getStringSync($r('app.string.epub_parser_unavailable').id));
+    }
+    // BookParser 同样依赖 ReaderKit HSP，不能在首页导入链中静态加载。
+    const parserModule = await import('@hms.core.readerservice.bookParser');
+    return parserModule.bookParser.getDefaultHandler(path);
+  }
+
   /** 选文件后预解析，不写入书架；临时封面在正式导入时复制到书籍目录。 */
   static async preview(context: common.Context, file: LocalImportFile): Promise<LocalBookPreview> {
     const result = new LocalBookPreview();
@@ -81,7 +90,7 @@ export class LocalBookImportService {
       if (expanded > 2 * 1024 * 1024 * 1024) throw new Error('Invalid EPUB expanded size');
       await LocalBookImportService.requireSpace(context, expanded * 2);
       await fileIo.moveFile(archive, epub);
-      const handler = await bookParser.getDefaultHandler(epub);
+      const handler = await LocalBookImportService.openEpub(context, epub);
       const info = handler.getBookInfo();
       result.title = info.bookTitle || file.name;
       result.author = info.bookCreator || await LocalBookImportService.epubCreator(handler);
@@ -323,7 +332,7 @@ export class LocalBookImportService {
         if (expanded > 2 * 1024 * 1024 * 1024) throw new Error('EPUB 解压内容超过 2 GiB');
         await LocalBookImportService.requireSpace(context, expanded * 2);
         await fileIo.moveFile(archive, epub);
-        const handler = await bookParser.getDefaultHandler(epub);
+        const handler = await LocalBookImportService.openEpub(context, epub);
         const info = handler.getBookInfo();
         if (book.cover.length === 0) book.cover = await EpubCoverService.extract(handler, directory);
         if (!title && info.bookTitle) book.title = info.bookTitle;

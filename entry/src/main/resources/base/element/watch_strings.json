@@ -1,0 +1,204 @@
+{
+  "string": [
+    {
+      "name": "watch_title",
+      "value": "简听"
+    },
+    {
+      "name": "watch_back",
+      "value": "返回"
+    },
+    {
+      "name": "watch_retry_init",
+      "value": "初始化失败，点此重试"
+    },
+    {
+      "name": "watch_shelf",
+      "value": "我的书架"
+    },
+    {
+      "name": "watch_search",
+      "value": "搜索听书"
+    },
+    {
+      "name": "watch_now_playing",
+      "value": "正在播放"
+    },
+    {
+      "name": "watch_sources",
+      "value": "导入书源"
+    },
+    {
+      "name": "watch_account",
+      "value": "我的账号"
+    },
+    {
+      "name": "watch_empty_shelf",
+      "value": "暂无书籍，请先导入有声书源并搜索收藏。"
+    },
+    {
+      "name": "watch_keyword",
+      "value": "书名 / 作者"
+    },
+    {
+      "name": "watch_more",
+      "value": "加载下一页"
+    },
+    {
+      "name": "watch_favorite",
+      "value": "加入书架"
+    },
+    {
+      "name": "watch_unfavorite",
+      "value": "移出书架"
+    },
+    {
+      "name": "watch_download_five",
+      "value": "下载当前起 5 集"
+    },
+    {
+      "name": "watch_pause_download",
+      "value": "暂停下载"
+    },
+    {
+      "name": "watch_resume_download",
+      "value": "继续 / 重试下载"
+    },
+    {
+      "name": "watch_confirm_delete",
+      "value": "确认删除本书下载"
+    },
+    {
+      "name": "watch_delete_download",
+      "value": "删除本书下载"
+    },
+    {
+      "name": "watch_offline",
+      "value": "已下载，可离线播放"
+    },
+    {
+      "name": "watch_pause",
+      "value": "暂停"
+    },
+    {
+      "name": "watch_play",
+      "value": "播放"
+    },
+    {
+      "name": "watch_rewind",
+      "value": "后退 15 秒"
+    },
+    {
+      "name": "watch_forward",
+      "value": "前进 15 秒"
+    },
+    {
+      "name": "watch_previous",
+      "value": "上一集"
+    },
+    {
+      "name": "watch_next",
+      "value": "下一集"
+    },
+    {
+      "name": "watch_download_current",
+      "value": "下载当前集"
+    },
+    {
+      "name": "watch_import_hint",
+      "value": "输入有声书源 HTTPS 链接导入（最多 2 MB）。书源保存在手表本地。"
+    },
+    {
+      "name": "watch_import",
+      "value": "导入"
+    },
+    {
+      "name": "watch_source_count",
+      "value": "已启用 %d 个书源"
+    },
+    {
+      "name": "watch_account_pending",
+      "value": "尚未识别到已授权账号"
+    },
+    {
+      "name": "watch_account_hint",
+      "value": "会优先尝试恢复手表系统中的华为账号授权。请在手机与手表使用同一华为账号；无法恢复时可在此授权。账号识别不会自动复制手机上的文件。"
+    },
+    {
+      "name": "watch_account_retry",
+      "value": "重新识别账号"
+    },
+    {
+      "name": "watch_account_login",
+      "value": "授权华为账号"
+    },
+    {
+      "name": "watch_account_ready",
+      "value": "账号已识别"
+    },
+    {
+      "name": "watch_operation_failed",
+      "value": "操作失败，请检查网络、书源或设备授权后重试。"
+    },
+    {
+      "name": "watch_play_failed",
+      "value": "播放失败，请检查书源、网络或本地文件后重试。"
+    },
+    {
+      "name": "watch_no_sources",
+      "value": "没有可搜索的有声书源，请先导入。"
+    },
+    {
+      "name": "watch_search_partial",
+      "value": "有 %d 个书源搜索失败，已保留其他结果。"
+    },
+    {
+      "name": "watch_no_results",
+      "value": "这一页暂无结果。"
+    },
+    {
+      "name": "watch_no_chapters",
+      "value": "暂无可播放章节。"
+    },
+    {
+      "name": "watch_book_failed",
+      "value": "目录加载失败，请返回重试。需网站登录的书源暂不支持在手表登录。"
+    },
+    {
+      "name": "watch_download_queued",
+      "value": "已将 %d 集加入下载队列"
+    },
+    {
+      "name": "watch_not_downloaded",
+      "value": "尚未下载"
+    },
+    {
+      "name": "watch_download_status",
+      "value": "已完成 %d / %d 集，失败 %d 集"
+    },
+    {
+      "name": "watch_imported",
+      "value": "已导入 %d 个书源"
+    },
+    {
+      "name": "watch_cloud_confirm",
+      "value": "云备份含 %d 本书、%d 个书源。恢复会替换手表的在线书架、进度和设置；本地音频不会从手机复制。是否恢复？"
+    },
+    {
+      "name": "watch_cloud_apply",
+      "value": "确认恢复到手表"
+    },
+    {
+      "name": "watch_cloud_hint",
+      "value": "先在手机“我的账号”完成云备份，再恢复到手表。两端需使用同一华为账号。音频需在手表重新下载。"
+    },
+    {
+      "name": "watch_cloud_restore",
+      "value": "从手机云备份恢复"
+    },
+    {
+      "name": "watch_cloud_restored",
+      "value": "书架和书源已恢复，请到书架选书。"
+    }
+  ]
+}

@@ -1,6 +1,8 @@
-import { MedalService } from '../service/MedalService';
+import { PlatformCompat } from '../utils/PlatformCompat';
+import lazy { WearableRuntime } from '../service/wearable/WearableRuntime';
+import lazy { MedalService } from '../service/MedalService';
 import { AVSessionService } from '../service/AVSessionService';
-import { TextToSpeechService } from '../service/text/TextToSpeechService';
+import lazy { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want, Configuration } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, AppStorageV2 } from '@kit.ArkUI';
@@ -8,17 +10,17 @@ import { rpc } from '@kit.IPCKit';
 import { BusinessError, emitter } from '@kit.BasicServicesKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
-import { AuthService } from '../service/AuthService';
-import { AutoBackupService } from '../service/AutoBackupService';
+import lazy { AuthService } from '../service/AuthService';
+import lazy { AutoBackupService } from '../service/AutoBackupService';
 import { AudioService } from '../service/AudioService';
-import { WidgetUpdater } from '../service/WidgetUpdater';
+import lazy { WidgetUpdater } from '../service/WidgetUpdater';
 import { DataService } from '../service/DataService';
 import { ChapterCacheService } from '../service/ChapterCacheService';
 import { DownloadService } from '../service/DownloadService';
 import { StatsService } from '../service/StatsService';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { configureArkWebSecurity } from '../service/builtin/ArkWebSecurityConfig';
-import { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
+import lazy { CONTINUATION_PAYLOAD_KEY, ContinuationService } from '../service/ContinuationService';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
 import { EVT_READER_TYPOGRAPHY_CHANGED } from '../model/TextReading';
@@ -59,6 +61,10 @@ export default class EntryAbility extends UIAbility {
   private isInForeground: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (PlatformCompat.wearable) {
+      WearableRuntime.instance.initialize(this.context);
+      return;
+    }
     // Must run before the first Web component initializes ArkWeb. Do not eagerly initialize the engine here.
     configureArkWebSecurity();
     try {
@@ -201,6 +207,7 @@ export default class EntryAbility extends UIAbility {
 
   /** 卡片或通知跳转 / 已存活时的拉起,统一在 onNewWant 处理 */
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (PlatformCompat.wearable) return;
     this.captureContinuation(want, launchParam);
     this.restoreContinuationIfNeeded().catch((err: Error) => {
       hilog.error(DOMAIN, TAG, 'Restore continuation from new want failed: %{public}s',
@@ -231,6 +238,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   async onContinue(wantParam: Record<string, Object>): Promise<AbilityConstant.OnContinueResult> {
+    if (PlatformCompat.wearable) return AbilityConstant.OnContinueResult.REJECT;
     try {
       await AudioService.getInstance().flushHistory();
       const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
@@ -443,6 +451,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   async onDestroy(): Promise<void> {
+    if (PlatformCompat.wearable) {
+      await WearableRuntime.instance.destroy();
+      return;
+    }
     AutoBackupService.instance.setForeground(this.context, false);
     TextToSpeechService.getInstance().stop();
     this.isInForeground = false;
@@ -480,6 +492,10 @@ export default class EntryAbility extends UIAbility {
   }
 
   private async loadMainWindow(windowStage: window.WindowStage): Promise<void> {
+    if (PlatformCompat.wearable) {
+      await windowStage.loadContent('pages/WearablePage');
+      return;
+    }
     try {
       await WindowUtils.setupImmersive(windowStage, this.context.config.colorMode);
     } catch (err) {
@@ -497,6 +513,7 @@ export default class EntryAbility extends UIAbility {
 
   /** 系统深浅色切换时,同步状态栏字色,避免深色模式下黑字看不见 */
   onConfigurationUpdate(newConfig: Configuration): void {
+    if (PlatformCompat.wearable) return;
     if (newConfig.colorMode !== undefined) {
       WindowUtils.updateColorMode(newConfig.colorMode);
     }
@@ -507,6 +524,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageDestroy(): void {
+    if (PlatformCompat.wearable) return;
+    WindowUtils.releaseWindow();
   }
 
   /**
@@ -514,6 +533,10 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    if (PlatformCompat.wearable) {
+      await WearableRuntime.instance.background();
+      return;
+    }
     AutoBackupService.instance.setForeground(this.context, false);
     emitter.emit('app.reader.background');
     AudioService.getInstance().setForeground(false);
@@ -554,6 +577,10 @@ export default class EntryAbility extends UIAbility {
    * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
+    if (PlatformCompat.wearable) {
+      await WearableRuntime.instance.foreground(this.context);
+      return;
+    }
     // 系统颜色可能在后台改变，阅读器独立跟随系统时也需要重新取值。
     if (this.context.config.colorMode !== undefined) WindowUtils.updateColorMode(this.context.config.colorMode);
     emitter.emit(EVT_READER_TYPOGRAPHY_CHANGED);

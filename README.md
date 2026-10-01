@@ -1,6 +1,6 @@
 # 简听
 
-简听是面向 HarmonyOS 6.0 及以上手机的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
+简听是面向 HarmonyOS 6.0 及以上手机（含折叠屏）、平板及鸿蒙电脑的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
 当前版本：`0.1.28`，最低 API 20 / 目标 API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
@@ -10,7 +10,7 @@
 
 [最新版本与更新说明](https://github.com/end-web/HarmonyOS-book/releases/latest) · [下载简听 v0.1.27 安装包](https://github.com/end-web/HarmonyOS-book/releases/download/v0.1.27/JianTing-v0.1.27.hap)
 
-安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件。当前采用 Release SDK 和 Release 模式构建；GitHub HAP 沿用开发签名，供获授权手机安装，AppGallery 使用单独的正式签名 APP。
+安装包以 GitHub Release 附件分发，附带 SHA-256 校验文件。当前采用 Release SDK 和 Release 模式构建；GitHub HAP 沿用开发签名，供获授权设备安装，AppGallery 使用单独的正式签名 APP。
 
 ```bash
 hdc install JianTing-v0.1.27.hap
@@ -25,6 +25,12 @@ hdc install JianTing-v0.1.27.hap
 | 关于简听 | 我的书架 | 导入音频 | 使用说明 |
 |---|---|---|---|
 | ![简听关于页面](docs/app-gallery/screenshots/01-about.png) | ![简听书架](docs/app-gallery/screenshots/02-library.png) | ![简听音频导入](docs/app-gallery/screenshots/03-import.png) | ![简听使用说明](docs/app-gallery/screenshots/04-guide.png) |
+
+## 标准手表适配（开发中）
+
+已增加 API 20+ 标准 `wearable` 的独立听书入口：导入有声书源、搜索收藏、章节播放和离线下载。手表启动时尝试恢复同一华为账号的系统授权；可从手机同账号云备份恢复书源和书架，音频需在手表下载。
+
+尚未完成手表实机验收；当前 HAP 不支持 `liteWearable` 或低于 API 20 的旧设备，不能按 WATCH / WATCH GT 系列名称认定兼容。具体边界和验证清单见 [手表交互说明](docs/APP_UI.md#标准手表独立听书)。
 
 ## 当前功能
 
@@ -85,7 +91,7 @@ hdc install JianTing-v0.1.27.hap
 
 | 部分 | 技术 / 目录 | 职责 |
 |---|---|---|
-| 手机 App | ArkTS、ArkUI V2、HarmonyOS 6.0+ / 最低 API 20；`entry/` | 本地规则执行、阅读、播放和设备数据 |
+| 鸿蒙多端 App | ArkTS、ArkUI V2、HarmonyOS 6.0+ / 最低 API 20；`entry/` | 本地规则执行、阅读、播放和设备数据 |
 | 规则运行时 | 受限 QuickJS HAR、原生 HTTP、DOM/JSON/正则提取 | 执行 Legado/Reader 兼容子集 |
 | 可选服务 | Node.js 22+、Express 5、TypeScript、SQLite；`server/src/` | 独立音频聚合 API、缓存、同步与检测 |
 | 运维后台 | Vue 3、TypeScript、Vite、Pinia、Vue Router；`server/admin/` | 来源管理、调试和操作日志 |

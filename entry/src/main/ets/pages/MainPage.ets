@@ -314,6 +314,8 @@ export struct MainPage {
   private floatingBarStyle(): HdsTabsFloatingStyle | undefined {
     if (!PlatformCompat.floatingTabs) return undefined;
     return {
+      // 宽窗口保留底部导航习惯，避免四个入口和迷你播放条横跨整块屏幕。
+      barSideMargin: Math.max(16, (this.viewportWidth - 720) / 2),
       barBottomMargin: Math.max(this.bottomSafeVp, FLOATING_MIN_SAFE_BOTTOM) + FLOATING_BOTTOM,
       gradientMask: { maskColor: $r('app.color.floating_bar_mask'), maskHeight: 92 },
       systemMaterialEffect: HdsCompat.adaptiveMaterial,
@@ -426,6 +428,7 @@ export struct MainPage {
         }
         .height(64)
         .width('92%')
+        .constraintSize({ maxWidth: 720 })
         .backgroundColor($r('sys.color.comp_background_primary'))
         .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .borderRadius(24)

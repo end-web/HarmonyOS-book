@@ -11,7 +11,8 @@ const root = path.resolve(__dirname, '../entry/src/main/ets');
 const values = new Map();
 const events = new EventEmitter();
 const mocks = {
-  '@kit.InputKit': { KeyCode: { KEYCODE_VOLUME_UP: 16, KEYCODE_VOLUME_DOWN: 17 } },
+  '@kit.InputKit': { KeyCode: { KEYCODE_VOLUME_UP: 16, KEYCODE_VOLUME_DOWN: 17,
+    KEYCODE_PAGE_UP: 2012, KEYCODE_PAGE_DOWN: 2013, KEYCODE_DPAD_LEFT: 2014, KEYCODE_DPAD_RIGHT: 2015 } },
   '@kit.BasicServicesKit': { emitter: events },
   '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },
   '@kit.ArkData': { preferences: { getPreferences: async () => ({
@@ -60,7 +61,9 @@ volumeKeys.setEnabled(true, () => {});
 assert.equal(subscriptions.size, 0, 'partial subscription failure rolls back the first key');
 rejectDown = false;
 mocks['../utils/ReaderTapPolicy'] = compile('utils/ReaderTapPolicy');
+mocks['../utils/AdaptiveLayout'] = compile('utils/AdaptiveLayout');
 mocks['./ReaderTheme'] = compile('model/ReaderTheme');
+mocks['../model/ReaderTheme'] = mocks['./ReaderTheme'];
 const model = compile('model/TextReading');
 mocks['../model/TextReading'] = model;
 mocks['../../model/TextReading'] = model;
@@ -134,6 +137,40 @@ for (const field of ['showSettingsSheet', 'showChapterSheet', 'showSpeechSheet',
 }
 keyReader.readerVisible = false;
 assert.equal(keyReader.canUseVolumeKeys(), false);
+// External keyboard does not depend on volume-key preference and must not steal modal input.
+Object.assign(keyReader, { readerVisible: true, readerBarVisible: false, volumeKeyPageTurn: false });
+let consumed = 0;
+const keyboardEvent = keyCode => ({ type: 0, keyCode, stopPropagation() { consumed++; } });
+keyReader.handleReaderKey(keyboardEvent(2013));
+assert.ok(keyReader.keyTurnRequest > 0);
+keyReader.handleReaderKey(keyboardEvent(2014));
+assert.ok(keyReader.keyTurnRequest < 0);
+assert.equal(consumed, 2);
+for (const field of ['readerBarVisible', 'showSettingsSheet', 'showChapterSheet', 'showSpeechSheet', 'showSourceSwitch']) {
+  const before = keyReader.keyTurnRequest;
+  keyReader[field] = true;
+  keyReader.handleReaderKey(keyboardEvent(2013));
+  assert.equal(keyReader.keyTurnRequest, before, `${field} retains keyboard control`);
+  keyReader[field] = false;
+}
+assert.equal(consumed, 2);
+// Real ReaderKit settings must follow the window, including density on an external display.
+const windowReader = Object.create(ReaderPage.prototype);
+Object.assign(windowReader, { readerViewportWidthVp: 1200, readerViewportHeightVp: 700,
+  marginLeft: 16, marginRight: 24, leftSafeVp: 0, rightSafeVp: 0, marginTop: 12,
+  fontSize: 20, lineHeight: 1.5, palette: { primary: '#000000', background: '#ffffff', isDark: false },
+  getUIContext: () => ({ vp2px: value => value * 2, fp2px: value => value * 2.4 }),
+  readerTopInsetVp: () => 30, readerTextBottomPaddingVp: () => 16, readerFooterHeight: () => 24 });
+let windowSettings = windowReader.createReaderSetting();
+assert.equal(windowSettings.viewPortWidth, 760 * 2, 'large-screen reading line width is bounded');
+assert.equal(windowSettings.viewPortHeight, (700 - 30 - 16 - 24) * 2);
+windowReader.readerViewportWidthVp = 360;
+windowReader.readerViewportHeightVp = 500;
+windowSettings = windowReader.createReaderSetting();
+assert.equal(windowSettings.viewPortWidth, (360 - 16 - 24) * 2, 'split window restores phone content width');
+assert.equal(windowSettings.viewPortHeight, (500 - 30 - 16 - 24) * 2);
+assert.equal(windowReader.marginLeft, 16, 'automatic gutter never overwrites user preferences');
+assert.equal(windowReader.marginRight, 24);
 const content = '文'.repeat(300);
 const pages = starts => starts.map((startOffset, index) => ({
   startOffset, endOffset: starts[index + 1] ?? content.length,

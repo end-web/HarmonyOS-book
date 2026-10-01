@@ -1,5 +1,5 @@
 import { fileIo, picker } from '@kit.CoreFileKit';
-import { scanBarcode, scanCore } from '@kit.ScanKit';
+import lazy { scanBarcode, scanCore } from '@kit.ScanKit';
 import { LocalRuleSource, LocalRuleSourceStatus, LocalRuleSourceType } from '../model/LocalRuleSource';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { BookSourceService } from '../service/BookSourceService';
@@ -763,6 +763,7 @@ export struct RuleSourcePage {
   }
 
   private async scanQRCode(): Promise<void> {
+    if (!canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) return;
     if (this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0) return;
     this.isImporting = true;
     try {
@@ -2029,6 +2030,7 @@ export struct RuleSourcePage {
       .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
       .opacity(this.isImporting || this.isBulkTesting || this.busySourceUrl.length > 0 ? 0.55 : 1)
       .onClick(() => this.scanQRCode())
+      .visibility(canIUse('SystemCapability.Multimedia.Scan.ScanBarcode') ? Visibility.Visible : Visibility.None)
 
       TextArea({
         placeholder: $r('app.string.rule_source_import_placeholder'),

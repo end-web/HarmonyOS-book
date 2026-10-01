@@ -1,4 +1,5 @@
 import { BookCoverPolicy } from '../utils/BookCoverPolicy';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { HdsCompat } from '../utils/HdsCompat';
 import { CompatibleGridInsets, PlatformCompat } from '../utils/PlatformCompat';
 import { ImmersiveTabComponent } from '../components/ImmersiveTabComponent';
@@ -76,6 +77,7 @@ struct SearchOptionItem {
 
 @ComponentV2
 export struct SearchPage {
+  @Local bookColumns: number = 3;
   @Param navStack: NavPathStack = new NavPathStack();
 
   @Local keyword: string = '';
@@ -962,7 +964,12 @@ export struct SearchPage {
         }
       }, (book: Book) => book.id)
     }
-    .columnsTemplate('1fr 1fr 1fr')
+    .columnsTemplate(`repeat(${this.bookColumns}, 1fr)`)
+    .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => {
+      if (typeof size.width === 'number' && size.width > 0) {
+        this.bookColumns = AdaptiveLayout.bookColumns(size.width);
+      }
+    })
     .onDidScroll(() => this.syncSearchCollapse())
     .columnsGap(AppSpace.Sm)
     .rowsGap(AppSpace.Md)

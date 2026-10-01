@@ -30,10 +30,10 @@ export class RankingService {
 
   static boards(): RankingBoard[] {
     return [
-      new RankingBoard('qd-month', 'qidian', $r('app.string.ranking_qidian'), $r('app.string.ranking_month'),
-        'https://m.qidian.com/rank/yuepiao/'),
       new RankingBoard('lr-hot', 'lrts', $r('app.string.ranking_lrts'), $r('app.string.ranking_hot'),
         'https://www.lrts.me/rank/hot/week'),
+      new RankingBoard('qd-month', 'qidian', $r('app.string.ranking_qidian'), $r('app.string.ranking_month'),
+        'https://m.qidian.com/rank/yuepiao/'),
       new RankingBoard('xm-free', 'ximalaya', $r('app.string.ranking_ximalaya'), $r('app.string.ranking_free'),
         'https://www.ximalaya.com/revision/rank/getRankList?rankType=freeAlbum&pageSize=50'),
       new RankingBoard('qd-finished', 'qidian', $r('app.string.ranking_qidian'), $r('app.string.ranking_finished'),
@@ -108,6 +108,27 @@ export class RankingService {
       }
     } catch (_error) { /* 损坏缓存回退网络。 */ }
     return board;
+  }
+
+  /** 首屏先读先显；缓存解析与联网均不等待其余全部榜单完成。 */
+  static async loadProgressively(context: common.Context, boards: RankingBoard[], force: boolean,
+    onUpdate: (board: RankingBoard) => void, isCurrent: () => boolean): Promise<void> {
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (isCurrent() && cursor < boards.length) {
+        let board = boards[cursor++];
+        if (board.books.length === 0) {
+          board = await RankingService.cached(context, board);
+          if (!isCurrent()) return;
+          if (board.books.length > 0) onUpdate(board);
+        }
+        if (!isCurrent()) return;
+        const loaded = await RankingService.load(context, board, force);
+        if (!isCurrent()) return;
+        if (loaded !== board || board.books.length === 0) onUpdate(loaded);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
   }
 
   static async load(context: common.Context, board: RankingBoard, force: boolean): Promise<RankingBoard> {

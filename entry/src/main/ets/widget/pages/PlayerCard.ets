@@ -5,6 +5,7 @@ let playerCardStorage = new LocalStorage();
 @Entry(playerCardStorage)
 @Component
 struct PlayerCard {
+  @LocalStorageProp('wearableLayout') wearableLayout: boolean = false;
   @LocalStorageProp('hasBook') hasBook: boolean = false;
   @LocalStorageProp('bookId') bookId: string = '';
   @LocalStorageProp('bookTitle') bookTitle: string = '没有正在播放';
@@ -41,6 +42,10 @@ struct PlayerCard {
   }
 
   build() {
+    Stack() {
+      if (this.wearableLayout) {
+        this.WearableLayout()
+      } else {
     Stack() {
       // 与播放页保持一致：当前封面铺满模糊，再叠加深色遮罩。
       // formImages 存在时只创建 memory 图片，避免网络图加载失败后的占位层干扰封面。
@@ -195,6 +200,40 @@ struct PlayerCard {
     .width('100%')
     .height('100%')
     .clip(true)
+      }
+    }.width('100%').height('100%')
+  }
+
+  /** 手表仅展示书名和播控，手机继续使用上面的原布局。 */
+  @Builder
+  private WearableLayout() {
+    Column({ space: 6 }) {
+      Text(this.hasBook && this.bookTitle.length > 0 ? this.bookTitle : $r('app.string.watch_title'))
+        .fontSize(16).minFontSize(12).maxFontSize(16)
+        .fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+        .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.Center).width('100%').layoutWeight(1)
+        .onClick((): void => { this.openPlayer(); })
+      Row() {
+        this.WearableControl($r('sys.symbol.backward_end_fill'), 'prev', false)
+        this.WearableControl(this.isPlaying ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'),
+          this.isPlaying ? 'pause' : 'play', true)
+        this.WearableControl($r('sys.symbol.forward_end_fill'), 'next', false)
+      }.width('100%').height(38).flexShrink(0)
+    }.width('100%').height('100%').padding({ top: 12, bottom: 12, left: 10, right: 10 })
+      .backgroundColor('#3B4650').clip(true)
+  }
+
+  @Builder
+  private WearableControl(icon: Resource, method: string, primary: boolean) {
+    Stack() {
+      SymbolGlyph(icon).fontSize(20).fontColor([primary ? '#1F1F1F' : '#FFFFFF'])
+        .width(34).height(34).borderRadius(17)
+        .backgroundColor(primary ? '#FFFFFF' : Color.Transparent)
+    }.layoutWeight(1).height('100%').onClick((): void => {
+      if (this.hasBook) this.postCall(method);
+      else this.openPlayer();
+    })
   }
 
   /** 左右按钮:无背景圆圈,纯图标 */

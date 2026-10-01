@@ -28,6 +28,8 @@ function rankingUpdateTime(timestamp: number): Resource {
 // 轮播、骨架、导航收起范围和正文占位共用同一高度。
 const RANKING_POSTER_HEIGHT: number = 232;
 const RANKING_DECK_HEIGHT: number = 208;
+// 折叠与展开共用封面尺寸，窗口增加的宽度分配给介绍，避免图片随窗口放大。
+const RANKING_COVER_WIDTH: number = 120;
 const RANKING_SEARCH_HEIGHT: number = 56;
 
 @ComponentV2
@@ -163,7 +165,7 @@ struct RankingPoster {
   @Local turning: boolean = false;
   @Local returningIndex: number = -1;
   @Local returnProgress: number = 0;
-  @Local deckWidth: number = 150;
+  @Local deckWidth: number = RANKING_COVER_WIDTH;
   private exitX: number = 0;
   private dragging: boolean = false;
   private touching: boolean = false;
@@ -355,7 +357,7 @@ struct RankingPoster {
             .hitTestBehavior(HitTestMode.None)
             .accessibilityLevel('no')
           }, (item: RankingPosterItem): string => item.book.id)
-        }.width('43%').constraintSize({ maxWidth: 160.5 }).height(RANKING_DECK_HEIGHT)
+        }.width(RANKING_COVER_WIDTH).height(RANKING_DECK_HEIGHT)
         .onAreaChange((_old: Area, area: Area): void => {
           this.deckWidth = Number(area.width);
           this.deckLeft = Number(area.globalPosition.x);
@@ -507,10 +509,6 @@ export struct RankingHomePage {
 
   private syncBoards(): void {
     const visible = this.boards.filter((board: RankingBoard): boolean => !this.platformId || board.platformId === this.platformId);
-    if (this.platformId.length === 0) {
-      const hotIndex = visible.findIndex((board: RankingBoard): boolean => board.id === 'lr-hot');
-      if (hotIndex > 0) visible.unshift(visible.splice(hotIndex, 1)[0]);
-    }
     this.boardData.setItems(visible);
     if (!this.boards.some((board: RankingBoard): boolean =>
       board.platformId === this.posterPlatformId && board.books.length > 0)) {
@@ -554,25 +552,19 @@ export struct RankingHomePage {
     this.loading = true;
     try {
       if (this.boards.length === 0) {
-        const cached = await Promise.all(RankingService.boards().map((board: RankingBoard): Promise<RankingBoard> =>
-          RankingService.cached(context, board)));
-        if (generation !== this.generation) return;
-        this.boards = cached;
+        this.boards = RankingService.boards();
         this.syncBoards();
       }
-      const snapshot = this.boards.slice();
-      // 榜单最多三个并发，逐板块显示，单平台失败不阻塞其他内容。
-      let cursor = 0;
-      const worker = async (): Promise<void> => {
-        while (generation === this.generation && cursor < snapshot.length) {
-          const board = snapshot[cursor++];
-          const loaded = await RankingService.load(context, board, force);
-          if (generation !== this.generation) return;
+      // 当前平台先刷新，精品推荐直接沿用展示顺序（懒人、起点、喜马拉雅）。
+      const snapshot = this.boards.filter((board: RankingBoard): boolean =>
+        !this.platformId || board.platformId === this.platformId).concat(
+        this.boards.filter((board: RankingBoard): boolean =>
+          this.platformId.length > 0 && board.platformId !== this.platformId));
+      await RankingService.loadProgressively(context, snapshot, force,
+        (loaded: RankingBoard): void => {
           this.boards = this.boards.map((entry: RankingBoard): RankingBoard => entry.id === loaded.id ? loaded : entry);
           this.syncBoards();
-        }
-      };
-      await Promise.all([worker(), worker(), worker()]);
+        }, (): boolean => generation === this.generation);
     } finally {
       if (generation === this.generation) { this.loading = false; this.refreshing = false; }
     }
@@ -735,14 +727,18 @@ export struct RankingHomePage {
         onVerticalFling: (velocity: number): void => this.flingFromPoster(velocity) })
       .onVisibleAreaChange([0, 0.5, 1], (visible: boolean, ratio: number): void => { this.posterVisible = visible && ratio >= 0.5; })
     } else if (this.loading) {
-      Row({ space: 24 }) {
+      Row({ space: 16 }) {
         Column({ space: 14 }) {
           Row().height(22).width('80%').backgroundColor(AppColor.Divider).borderRadius(6)
           Row().height(16).width('55%').backgroundColor(AppColor.Divider).borderRadius(5)
           LoadingProgress().width(24).height(24).color(AppColor.Brand)
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Row().width('43%').height(210).borderRadius(10).backgroundColor(AppColor.Divider)
-      }.height(RANKING_POSTER_HEIGHT).width('100%').padding(26)
+        Stack() {
+          Row().width(RANKING_COVER_WIDTH).height(RANKING_COVER_WIDTH / 0.75)
+            .borderRadius(10).backgroundColor(AppColor.Divider)
+        }.width(RANKING_COVER_WIDTH).height(RANKING_DECK_HEIGHT)
+      }.height(RANKING_POSTER_HEIGHT).width('100%')
+        .padding({ left: 24, right: 42, top: 8, bottom: 16 })
     }
   }
 
@@ -1032,7 +1028,7 @@ export struct RankingHomePage {
               RankingSection({ board: board, onChoose: (book: RankingBook): void => this.openMatch(book),
                 onMore: (item: RankingBoard): void => this.openBoard(item) })
             }
-          }, (board: RankingBoard): string => board.id)
+          }, (board: RankingBoard): string => `${board.id}:${board.fetchedAt}:${board.stale}:${board.unavailable}`)
         }
       }
       ListItem() {

@@ -28,11 +28,16 @@ const storage = { RankingStorage: {
   read: async (_context, key) => disk.get(key) || '',
   write: async (_context, key, content) => disk.set(key, content)
 } };
-let requests = 0, response = '', networkFail = false;
+let requests = 0, response = '', networkFail = false, requestOverride;
 const { RankingService } = load('service/ranking/RankingService.ets', {
   '../../model/Ranking': model, './RankingParser': parser, './RankingStorage': storage,
   '../builtin/JsonValue': json, '../http/HttpClient': { HttpClient: {
-    request: async () => { requests++; if (networkFail) throw Error('offline'); return { statusCode: 200, body: response }; }
+    request: async () => {
+      requests++;
+      if (requestOverride) return requestOverride();
+      if (networkFail) throw Error('offline');
+      return { statusCode: 200, body: response };
+    }
   } }
 });
 let sources = [], searchFn = async () => [], concurrency = 2;
@@ -111,20 +116,58 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   assert.equal(vip[0].author, '作者');
 
   response = qidian;
-  let board = RankingService.boards()[0];
+  assert.deepEqual(Array.from(RankingService.boards().slice(0, 2), item => item.id), ['lr-hot', 'qd-month']);
+  const monthBoard = () => RankingService.boards().find(item => item.id === 'qd-month');
+  let board = monthBoard();
   board = await RankingService.load({}, board, false);
   assert.equal(board.books.length, 1);
-  board = await RankingService.cached({}, RankingService.boards()[0]);
+  board = await RankingService.cached({}, monthBoard());
   await RankingService.load({}, board, false);
   assert.equal(requests, 1, 'fresh disk cache avoids repeated requests');
   networkFail = true;
   const stale = await RankingService.load({}, board, true);
   assert.equal(stale.books.length, 1, 'failed refresh preserves previous entries');
   assert.equal(stale.stale, true);
-  const absent = await RankingService.load({}, RankingService.boards()[1], true);
+  const absent = await RankingService.load({}, RankingService.boards().find(item => item.id === 'lr-hot'), true);
   assert.equal(absent.unavailable, true);
   disk.set('qd-month', 'corrupt json');
-  assert.equal((await RankingService.cached({}, RankingService.boards()[0])).books.length, 0);
+  assert.equal((await RankingService.cached({}, monthBoard())).books.length, 0);
+
+  // An unfinished tail cache must not prevent a front board from appearing.
+  networkFail = false;
+  const originalRead = storage.RankingStorage.read;
+  let releaseTail;
+  storage.RankingStorage.read = async (context, key) => key === 'xm-free'
+    ? new Promise(resolve => { releaseTail = resolve; }) : originalRead(context, key);
+  const progressiveUpdates = [];
+  const progressive = RankingService.loadProgressively({}, RankingService.boards().slice(0, 3), false,
+    item => progressiveUpdates.push(item), () => true);
+  while (!releaseTail || !progressiveUpdates.some(item => item.id === 'qd-month')) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.ok(progressiveUpdates.find(item => item.id === 'qd-month').books.length > 0);
+  releaseTail('');
+  await progressive;
+  storage.RankingStorage.read = originalRead;
+
+  // Exactly three requests can run; cancellation drops late results and stops scheduling.
+  disk.clear();
+  const completions = [];
+  requestOverride = () => new Promise(resolve => completions.push(() => resolve({ statusCode: 200, body: qidian })));
+  let current = true;
+  const cancelledUpdates = [];
+  const cancelled = RankingService.loadProgressively({}, RankingService.boards(), true,
+    item => { cancelledUpdates.push(item); current = false; }, () => current);
+  while (completions.length < 3) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completions.length, 3);
+  completions[1]();
+  while (current) await new Promise(resolve => setImmediate(resolve));
+  completions[0]();
+  completions[2]();
+  await cancelled;
+  assert.equal(completions.length, 3, 'cancelled generation cannot schedule remaining boards');
+  assert.equal(cancelledUpdates.length, 1, 'late results cannot update a cancelled page');
+  requestOverride = undefined;
 
   const service = new BookMatchService();
   let last;

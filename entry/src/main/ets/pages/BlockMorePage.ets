@@ -1,4 +1,5 @@
 import { HdsCompat } from '../utils/HdsCompat';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
@@ -28,6 +29,7 @@ export struct BlockMorePage {
   @Param keyword: string = '';
 
   @Local books: Book[] = [];
+  @Local bookColumns: number = 3;
   @Local loading: boolean = true;
   @Local loadingMore: boolean = false;
   @Local hasMore: boolean = true;
@@ -316,7 +318,7 @@ export struct BlockMorePage {
           .width('100%')
           .justifyContent(FlexAlign.Center)
         }
-        .columnStart(0).columnEnd(2)
+        .columnStart(0).columnEnd(this.bookColumns - 1)
       } else if (!this.hasMore && this.books.length > 0) {
         GridItem() {
           Text('— 没有更多了 —')
@@ -326,10 +328,15 @@ export struct BlockMorePage {
             .textAlign(TextAlign.Center)
             .width('100%')
         }
-        .columnStart(0).columnEnd(2)
+        .columnStart(0).columnEnd(this.bookColumns - 1)
       }
     }
-    .columnsTemplate('1fr 1fr 1fr')
+    .columnsTemplate(`repeat(${this.bookColumns}, 1fr)`)
+    .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => {
+      if (typeof size.width === 'number' && size.width > 0) {
+        this.bookColumns = AdaptiveLayout.bookColumns(size.width);
+      }
+    })
     .columnsGap(AppSpace.Sm)
     .rowsGap(AppSpace.Md)
     .cachedCount(6)

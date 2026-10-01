@@ -12,7 +12,12 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'hsda-import-test-'));
 const context = { filesDir: temp.replaceAll('\\', '/'), cacheDir: temp.replaceAll('\\', '/') + '/cache' };
 const strings = new Map(JSON.parse(fs.readFileSync(path.join(root, '../resources/base/element/string.json'), 'utf8'))
   .string.map(item => [item.name, item.value]));
-context.resourceManager = { getStringByNameSync: name => strings.get(name) };
+context.resourceManager = {
+  getStringByNameSync: name => strings.get(name),
+  getStringSync: id => strings.get(id.replace('app.string.', ''))
+};
+let parserAvailable = true;
+let parserLoads = 0;
 const handles = new Map();
 let free = 256 * 1024 ** 3;
 const fileIo = {
@@ -93,7 +98,8 @@ function load(relative) {
   const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
   }).outputText;
-  vm.runInNewContext(code, { exports, console, Error, ArrayBuffer, Uint8Array, setTimeout, require: name => {
+  vm.runInNewContext(code, { exports, console, Error, ArrayBuffer, Uint8Array, setTimeout,
+    canIUse: () => parserAvailable, $r: id => ({ id }), require: name => {
     if (name === '@kit.CoreFileKit') return { fileIo, statfs: { getFreeSize: async () => free } };
     if (name === '@kit.ImageKit') return { image };
     if (name === '@kit.ArkTS') return { util: { TextDecoder: { create(encoding, options) {
@@ -101,7 +107,10 @@ function load(relative) {
       return { decodeToString: (bytes, opts) => decoder.decode(bytes, opts) };
     } } } };
     if (name === '@kit.BasicServicesKit') return { zlib: { getOriginalSize: async () => 1024 } };
-    if (name === '@hms.core.readerservice.bookParser') return { bookParser: {
+    if (name === '@hms.core.readerservice.bookParser') {
+      parserLoads++;
+      assert.ok(parserAvailable, 'unsupported devices must never load the ReaderKit HSP');
+      return { bookParser: {
       getDefaultHandler: async () => ({
         getBookInfo: () => ({ bookTitle: 'EPUB 标题', bookCreator: '作者' }),
         getSpineList: () => [{ idRef: 'a' }, { idRef: 'b' }],
@@ -109,6 +118,7 @@ function load(relative) {
         getSpineItemContent: async index => `<body><p>章节 ${index + 1}</p><script>bad()</script></body>`
       })
     } };
+    }
     if (name.endsWith('/TextReadingProgressService')) return { TextReadingProgressService: {
       async getAll() { return [...readingIds].map(bookId => ({ bookId })); }
     } };
@@ -120,6 +130,11 @@ function load(relative) {
 }
 (async () => {
   const { LocalBookImportService: service } = load('service/LocalBookImportService');
+  assert.equal(parserLoads, 0, 'loading import service at startup must not load ReaderKit');
+  parserAvailable = false;
+  await assert.rejects(service.openEpub(context, '/unavailable.epub'), /当前设备不支持 EPUB 解析/);
+  assert.equal(parserLoads, 0, 'capability failure must be handled before resolving the HSP');
+  parserAvailable = true;
   const { DataService: data } = load('service/DataService');
   await fsp.mkdir(path.join(context.cacheDir, 'cached_toc'), { recursive: true });
   await fsp.mkdir(path.join(context.filesDir, 'cached_toc'), { recursive: true });

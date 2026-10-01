@@ -388,11 +388,12 @@ export struct SettingsPage {
 
       if (this.isLoaded) {
         Scroll() {
-          Column({ space: AdaptiveLayout.sectionSpacing(this.viewportWidth, this.viewportHeight) }) {
-            this.buildAppearanceGroup()
-            this.buildLaunchGroup()
-            this.buildPlaybackGroup()
-            this.buildSearchGroup()
+          GridRow({ columns: this.viewportWidth >= AdaptiveLayout.LARGE_WIDTH ? 2 : 1,
+            gutter: AdaptiveLayout.sectionSpacing(this.viewportWidth, this.viewportHeight) }) {
+            GridCol() { this.buildAppearanceGroup() }
+            GridCol() { this.buildLaunchGroup() }
+            GridCol() { this.buildPlaybackGroup() }
+            GridCol() { this.buildSearchGroup() }
           }
           .width('100%')
           .padding({

@@ -1,7 +1,27 @@
 /**
- * 手机窗口统一断点。自由多窗只改变窗口尺寸，页面无需感知具体窗口模式。
+ * 手机、折叠屏、平板和电脑共用容器断点，不用设备型号代替可用窗口尺寸。
  */
 export class AdaptiveLayout {
+  static readonly MEDIUM_WIDTH: number = 600;
+  static readonly LARGE_WIDTH: number = 840;
+
+  /** 保留手机三列基线，大窗口增加信息量而不是无限放大封面。 */
+  static bookColumns(width: number): number {
+    if (!Number.isFinite(width) || width <= 0) return 3;
+    if (width < 320) return 2;
+    if (width < AdaptiveLayout.MEDIUM_WIDTH) return 3;
+    return Math.max(4, Math.floor((width - 32) / 144));
+  }
+
+  static playerUsesColumns(width: number, height: number): boolean {
+    return width >= AdaptiveLayout.MEDIUM_WIDTH && height > 0;
+  }
+
+  /** 正文限宽，额外缩进不写入用户的阅读边距设置。 */
+  static readerGutter(width: number, leftInset: number, rightInset: number): number {
+    return Math.max(0, (width - leftInset - rightInset - 760) / 2);
+  }
+
   private static readonly COMPACT_WIDTH: number = 360;
   private static readonly COMPACT_HEIGHT: number = 760;
   /** 播放页除封面外的固定垂直占用：标题最多两行时的安全预算。 */

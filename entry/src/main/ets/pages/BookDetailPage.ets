@@ -36,6 +36,7 @@ export struct BookDetailPage {
   @Param bookId: string = '';
   @Param transitionCoverHidden: boolean = false;
   @Param deferEntry: boolean = false;
+  @Event onCoverReady: (url: string) => void = () => {};
   private entryStarted: boolean = false;
   @Local book: Book | null = null;
   @Local coverRatio: number = 1;
@@ -963,7 +964,8 @@ export struct BookDetailPage {
             decodeH: 400,
             highPriority: true,
             onImageSize: (url: string, width: number, height: number): void =>
-              this.rememberCoverSize(url, width, height)
+              this.rememberCoverSize(url, width, height),
+            onImageReady: (url: string): void => this.onCoverReady(url)
           })
         } else if (this.book!.cover && (this.book!.cover.startsWith('/') || this.book!.cover.startsWith('file://'))) {
           // 判断与 BookCard.isLocalFile 对齐:file:// 前缀不能掉进 $rawfile 分支
@@ -973,7 +975,10 @@ export struct BookDetailPage {
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Contain)
             .onComplete((event) => {
-              if (event?.loadingStatus === 0) this.rememberCoverSize(this.book?.cover ?? '', event.width, event.height);
+              if (event?.loadingStatus === 0) {
+                this.rememberCoverSize(this.book?.cover ?? '', event.width, event.height);
+                this.onCoverReady(this.book?.cover ?? '');
+              }
             })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else if (this.book!.cover) {
@@ -983,7 +988,10 @@ export struct BookDetailPage {
             .borderRadius(AppRadius.Sm)
             .objectFit(ImageFit.Contain)
             .onComplete((event) => {
-              if (event?.loadingStatus === 0) this.rememberCoverSize(this.book?.cover ?? '', event.width, event.height);
+              if (event?.loadingStatus === 0) {
+                this.rememberCoverSize(this.book?.cover ?? '', event.width, event.height);
+                this.onCoverReady(this.book?.cover ?? '');
+              }
             })
             .shadow({ radius: 8, color: '#33000000', offsetY: 2 })
         } else {

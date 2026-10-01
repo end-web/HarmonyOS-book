@@ -3,7 +3,7 @@
  * getHuaweiIDState 从 API 12 起可用，不依赖网络，用于恢复时核对系统账号。
  * AGC 应用级 Client ID、应用包名和实际签名公钥指纹需一致。
  */
-import { authentication } from '@kit.AccountKit';
+import lazy { authentication } from '@kit.AccountKit';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -104,7 +104,20 @@ export class AuthService {
     }
   }
 
-  async login(context: common.Context): Promise<HwAccount> {
+  /** 同一应用授权可由系统恢复时静默登录；不把手机传来的资料当作身份凭证。 */
+  async restoreSharedAccount(context: common.Context): Promise<boolean> {
+    if (!canIUse('SystemCapability.AuthenticationServices.HuaweiID.Auth')) return false;
+    await this.restore(context);
+    if (this.isLoggedIn) return true;
+    try {
+      await this.login(context, false);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async login(context: common.Context, forceAuthorization: boolean = true): Promise<HwAccount> {
     if (this.logging || this.dataOperation) throw new HwAuthError(HwAuthErrorCode.REQUEST_REFUSE);
     this.logging = true;
     try {
@@ -115,7 +128,7 @@ export class AuthService {
       const previous = await PreferenceService.getHwAccount();
       const request = new authentication.HuaweiIDProvider().createAuthorizationWithHuaweiIDRequest();
       request.scopes = ['profile'];
-      request.forceAuthorization = true;
+      request.forceAuthorization = forceAuthorization;
       request.state = util.generateRandomUUID();
       const controller = new authentication.AuthenticationController(context);
       const account = await controller.executeRequest(request)

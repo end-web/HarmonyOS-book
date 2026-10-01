@@ -38,6 +38,7 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { AppRadius } from '../theme/Theme';
 import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { WindowUtils } from '../utils/WindowUtils';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { LocalImportRouteParams } from '../utils/FileOpenRouting';
 import {
   BookOneShotPayload,
@@ -204,7 +205,7 @@ struct Index {
       return undefined;
     }
     const animatedTransition: NavigationAnimatedTransition = {
-      timeout: 1800,
+      timeout: 2400,
       onTransitionEnd: (success: boolean): void => {
         this.navigationEnabled = true;
         if (!success) console.warn('[Index] advanced one-shot transition did not finish successfully');
@@ -237,6 +238,10 @@ struct Index {
       .onShown((): void => { this.homeShownHandler?.(); })
       .onBackPressed((): boolean => {
         if (this.homeBackHandler?.()) return true;
+        if (PlatformCompat.desktopWindow) {
+          WindowUtils.minimize();
+          return true;
+        }
         // 根页返回:移到后台而不是 pop,保证退出应用
         try {
           const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -514,6 +519,10 @@ struct DetailPageWrapper {
   private running: boolean = false;
   private disposed: boolean = false;
   private watchdog: number = -1;
+  private coverWaitTimer: number = -1;
+  private coverReady: boolean = false;
+  private waitingForCover: boolean = false;
+  private coverHandoffProxy: NavigationTransitionProxy | undefined = undefined;
   private navigationRunner: NavigationOneShotRunner =
     (isPush: boolean, proxy: NavigationTransitionProxy): void => this.runTransition(isPush, proxy);
 
@@ -534,6 +543,8 @@ struct DetailPageWrapper {
     this.disposed = true;
     this.running = false;
     this.clearWatchdog();
+    this.clearCoverWaitTimer();
+    this.coverHandoffProxy = undefined;
     this.onTransitionFinished();
     this.restoreSource();
     OneShotTransitionCoordinator.getInstance().unregister(this.bookId);
@@ -544,6 +555,16 @@ struct DetailPageWrapper {
   private clearWatchdog(): void {
     if (this.watchdog >= 0) clearTimeout(this.watchdog);
     this.watchdog = -1;
+  }
+
+  private clearCoverWaitTimer(): void {
+    if (this.coverWaitTimer >= 0) clearTimeout(this.coverWaitTimer);
+    this.coverWaitTimer = -1;
+  }
+
+  private onDetailCoverReady(_url: string): void {
+    this.coverReady = true;
+    if (this.waitingForCover) this.beginCoverHandoff();
   }
 
   private restoreSource(): void {
@@ -582,6 +603,9 @@ struct DetailPageWrapper {
     if (!this.running) return;
     this.running = false;
     this.clearWatchdog();
+    this.clearCoverWaitTimer();
+    this.waitingForCover = false;
+    this.coverHandoffProxy = undefined;
     this.onTransitionFinished();
     this.restoreSource();
     this.coverHidden = false;
@@ -599,7 +623,7 @@ struct DetailPageWrapper {
     }
     this.running = true;
     // 早于 Navigation 的 timeout 清理，布局未就绪/旋转/离屏也不能留下透明页面。
-    this.watchdog = setTimeout((): void => this.finish(proxy, isPush), 1200);
+    this.watchdog = setTimeout((): void => this.finish(proxy, isPush), isPush ? 1800 : 1200);
     this.afterLayout((): void => this.prepareTransition(isPush, proxy));
   }
 
@@ -657,6 +681,21 @@ struct DetailPageWrapper {
   }
 
   private handoffCover(proxy: NavigationTransitionProxy): void {
+    this.coverHandoffProxy = proxy;
+    this.waitingForCover = true;
+    if (this.coverReady) {
+      this.beginCoverHandoff();
+      return;
+    }
+    this.coverWaitTimer = setTimeout((): void => this.beginCoverHandoff(), 700);
+  }
+
+  private beginCoverHandoff(): void {
+    if (!this.running || !this.waitingForCover) return;
+    this.waitingForCover = false;
+    this.clearCoverWaitTimer();
+    const proxy = this.coverHandoffProxy;
+    if (proxy === undefined) return;
     this.coverHidden = false;
     // 封面已经到达目标位置，再交接真实图片，两个位置不会同时可见。
     this.afterLayout((): void => {
@@ -682,7 +721,8 @@ struct DetailPageWrapper {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       BookDetailPage({ navStack: this.navStack, bookId: this.bookId,
-        transitionCoverHidden: this.coverHidden, deferEntry: !this.entryReady })
+        transitionCoverHidden: this.coverHidden, deferEntry: !this.entryReady,
+        onCoverReady: (url: string): void => this.onDetailCoverReady(url) })
         .width('100%')
         .height('100%')
         .renderGroup(!this.entryReady)

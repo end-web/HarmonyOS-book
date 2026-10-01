@@ -1,8 +1,39 @@
 import { ReaderTapPolicy, ReaderTouchTracker } from '../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { bookParser } from '@hms.core.readerservice.bookParser';
-import { ReadPageComponent, readerCore } from '@hms.core.readerservice.readerComponent';
+import lazy { bookParser } from '@hms.core.readerservice.bookParser';
+import lazy { ReadPageComponent, readerCore } from '@hms.core.readerservice.readerComponent';
+import { EpubReaderParams } from '../model/EpubReaderParams';
+
+export function createEpubReaderController(): readerCore.ReaderComponentController {
+  return new readerCore.ReaderComponentController();
+}
+
+export function createEpubReaderBuilder(): WrappedBuilder<[EpubReaderParams]> {
+  return wrapBuilder(buildEpubReader);
+}
+
+@Builder
+export function buildEpubReader(params: EpubReaderParams) {
+  if (params.controller !== null) {
+    EpubReaderComponent({
+      controller: params.controller,
+      handler: params.handler,
+      tapRegions: params.tapRegions,
+      tapLeftPercent: params.tapLeftPercent,
+      tapRightPercent: params.tapRightPercent,
+      tapTopPercent: params.tapTopPercent,
+      tapBottomPercent: params.tapBottomPercent,
+      startResourceIndex: params.startResourceIndex,
+      startDomPos: params.startDomPos,
+      pageConfig: params.pageConfig,
+      onReady: params.onReady,
+      onError: params.onError,
+      onReaderPageShow: params.onReaderPageShow,
+      onContentTap: params.onContentTap
+    })
+  }
+}
 
 @ComponentV2
 export struct EpubReaderComponent {

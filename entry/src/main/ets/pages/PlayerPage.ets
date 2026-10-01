@@ -289,7 +289,7 @@ export struct PlayerPage {
   }
 
   private isLandscapePlayer(): boolean {
-    return this.viewportHeight > 0 && this.viewportWidth > this.viewportHeight;
+    return AdaptiveLayout.playerUsesColumns(this.viewportWidth, this.viewportHeight);
   }
 
   private landscapeBodyHeight(): number {

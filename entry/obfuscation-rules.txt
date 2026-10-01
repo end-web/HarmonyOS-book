@@ -21,3 +21,17 @@
 -enable-toplevel-obfuscation
 -enable-filename-obfuscation
 -enable-export-obfuscation
+# Persisted shelf update report (listenbook_shelf_updates/report_v1).
+-keep-property-name
+bookId
+title
+cover
+oldCount
+newCount
+isText
+latestChapter
+checkedAt
+checkedCount
+updatedCount
+failedCount
+entries

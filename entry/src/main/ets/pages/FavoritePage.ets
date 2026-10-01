@@ -1,8 +1,9 @@
 import { BookCoverPolicy } from '../utils/BookCoverPolicy';
+import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
-import { common } from '@kit.AbilityKit';
+import { common, ApplicationStateChangeCallback } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
 import {
@@ -29,6 +30,9 @@ import { SearchCache } from '../utils/SearchCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 import { ShelfBatchActions } from '../components/ShelfBatchActions';
+import { CoverImage } from '../components/CoverImage';
+import { HomeRecommendationDataSource } from '../utils/HomeRecommendationDataSource';
+import { ShelfUpdateService, ShelfUpdateReport, BookUpdateInfo } from '../service/ShelfUpdateService';
 import { DownloadService } from '../service/DownloadService';
 import { TextReaderRouteParams, TextReadingPosition } from '../model/TextReading';
 import { TextReadingProgressService, EVT_TEXT_READING_PROGRESS_CHANGED } from '../service/text/TextReadingProgressService';
@@ -38,13 +42,6 @@ const MINI_TITLE_BAR_HEIGHT: number = 56;
 const SHELF_FILTER_TOP_OFFSET: number = MINI_TITLE_BAR_HEIGHT;
 const SHELF_FILTER_ROW_HEIGHT: number = 40;
 const SHELF_CONTENT_GAP: number = 18;
-
-interface BookUpdateInfo {
-  title: string;
-  oldCount: number;
-  newCount: number;
-  unit: string;
-}
 
 function cloneChapter(ch: Chapter): Chapter {
   return {
@@ -113,6 +110,7 @@ function chaptersChanged(oldChapters: Chapter[], newChapters: Chapter[]): boolea
 
 @ComponentV2
 export struct FavoritePage {
+  @Local bookColumns: number = 3;
   @Local favoriteBooks: Book[] = [];
   @Local historyMap: Record<string, PlayHistoryItem> = {};
   @Local chapterIdxMap: Record<string, number> = {};
@@ -120,6 +118,20 @@ export struct FavoritePage {
   @Local isRefreshing: boolean = false;
   @Local resolvingTocId: string = '';
   @Local refreshProgress: string = '';
+  @Local checkingUpdates: boolean = false;
+  @Local showUpdates: boolean = false;
+  @Local updateReport: ShelfUpdateReport = new ShelfUpdateReport();
+  private updateData: HomeRecommendationDataSource<BookUpdateInfo> = new HomeRecommendationDataSource<BookUpdateInfo>();
+  private alive: boolean = false;
+  private foreground: boolean = true;
+  private pendingUpdateBookId: string = '';
+  private applicationState: ApplicationStateChangeCallback = {
+    onApplicationForeground: (): void => {
+      this.foreground = true;
+      if (this.visible && !this.loading) this.refreshOnlineBooks(true);
+    },
+    onApplicationBackground: (): void => { this.foreground = false; }
+  };
   @Local missingFavoriteCount: number = 0;
   @Local viewMode: number = 0; // 0=网格，1=列表
   @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
@@ -220,9 +232,14 @@ export struct FavoritePage {
   }
 
   aboutToAppear(): void {
+    this.alive = true;
     WindowUtils.addSafeAreaListener(this.safeAreaChangedHandler);
     this.onBackHandlerChange((): boolean => this.handleManageBack());
     this.context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    try { this.context.getApplicationContext().on('applicationStateChange', this.applicationState); } catch (_error) {}
+    ShelfUpdateService.lastReport(this.context).then((report: ShelfUpdateReport): void => {
+      if (this.alive && this.updateReport.checkedAt < report.checkedAt) this.applyUpdateReport(report);
+    });
     this.loadFavorites();
     emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
     emitter.on(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
@@ -231,6 +248,8 @@ export struct FavoritePage {
   }
 
   aboutToDisappear(): void {
+    this.alive = false;
+    try { this.context?.getApplicationContext().off('applicationStateChange', this.applicationState); } catch (_error) {}
     WindowUtils.removeSafeAreaListener(this.safeAreaChangedHandler);
     this.onBackHandlerChange(undefined);
     this.favoritesLoadSerial++;
@@ -361,6 +380,7 @@ export struct FavoritePage {
     this.historyMap = map;
     this.chapterIdxMap = idxMap;
     this.loading = false;
+    if (this.visible && this.foreground && !this.checkingUpdates) this.refreshOnlineBooks(true);
   }
 
   /** 阅读器覆盖书架时 Tab 不变；由保存事件更新进度，避免重新加载书单。 */
@@ -478,28 +498,54 @@ export struct FavoritePage {
     return this.createFavoriteAliasBook(oldId, candidates[0]);
   }
 
-  /** 下拉刷新:从书源重新加载在线书籍的最新数据 */
-  private async refreshOnlineBooks(): Promise<void> {
-    if (!this.context) return;
-    // 所有在线收藏统一通过已导入规则源刷新详情与目录。
-    const onlineBooks = this.favoriteBooks.filter(b =>
-      !this.isMissingCachedBook(b) && !this.isFavoriteAliasBook(b) &&
-        !b.id.startsWith('import_') && b.bookUrl && b.sourceUrl);
+  /** 每日自动检查静默执行；手动下拉与自动检查共用任务，避免重复请求。 */
+  private async refreshOnlineBooks(silent: boolean = false): Promise<void> {
+    if (!this.context || !this.alive || this.checkingUpdates) return;
+    if (silent && (!this.visible || !this.foreground || this.isManaging || this.removingBook)) return;
+    const onlineBooks = this.favoriteBooks.filter((book: Book): boolean =>
+      !this.isMissingCachedBook(book) && !this.isFavoriteAliasBook(book) &&
+      !book.id.startsWith('import_') && !!book.bookUrl && !!book.sourceUrl);
     if (onlineBooks.length === 0) {
-      try {
-        const message = this.missingFavoriteCount > 0 ?
-          `有 ${this.missingFavoriteCount} 本收藏缓存缺失，请重新搜索加入` : '书架中没有在线书籍';
-        this.getUIContext().getPromptAction().showToast({ message });
-      } catch (_e) { /* ignore */ }
+      if (!silent) this.showUpdates = true;
       return;
     }
-    this.refreshProgress = `正在刷新 0/${onlineBooks.length}`;
+    this.checkingUpdates = true;
+    try {
+      const report = await ShelfUpdateService.run(this.context, silent,
+        (): Promise<ShelfUpdateReport> => this.checkOnlineBooks(onlineBooks));
+      if (report !== undefined && this.alive) {
+        this.applyUpdateReport(report);
+        await this.loadFavorites();
+        if (!silent && this.visible && this.foreground) this.showUpdates = true;
+      }
+    } catch (error) {
+      console.warn(`[FavoritePage] update failed: ${error}`);
+      if (!silent && this.alive) {
+        try {
+          this.getUIContext().getPromptAction().showToast({ message: $r('app.string.shelf_update_error') });
+        } catch (_error) {}
+      }
+    } finally {
+      if (this.alive) {
+        this.checkingUpdates = false;
+        this.isRefreshing = false;
+        this.refreshProgress = '';
+      }
+    }
+  }
+
+  private applyUpdateReport(report: ShelfUpdateReport): void {
+    this.updateReport = report;
+    this.updateData.setItems(report.entries);
+  }
+
+  private async checkOnlineBooks(onlineBooks: Book[]): Promise<ShelfUpdateReport> {
     const sources = await SourceDataService.getSources();
     let updated = 0;
     let failed = 0;
     const updatedBooks: BookUpdateInfo[] = [];
-    // 并行刷新所有在线书
-    const tasks = onlineBooks.map(async (book, idx) => {
+    let completed = 0;
+    const refreshBook = async (book: Book): Promise<void> => {
       try {
         const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
         if (!source) {
@@ -582,59 +628,45 @@ export struct FavoritePage {
         if (hasChange) {
           await DataService.upsertCachedBook(nextBook);
           SearchCache.put(nextBook);
-          this.syncFavoriteBook(nextBook);
+          if (this.alive) this.syncFavoriteBook(nextBook);
           updated++;
           if (chapterChanged) {
-            const updateInfo: BookUpdateInfo = {
-              title: nextBook.title,
-              oldCount,
-              newCount,
-              unit: nextBook.contentType === 'text' ? '章' : '集'
-            };
+            const updateInfo = new BookUpdateInfo();
+            updateInfo.bookId = nextBook.id;
+            updateInfo.title = nextBook.title;
+            updateInfo.cover = nextBook.cover;
+            updateInfo.oldCount = oldCount;
+            updateInfo.newCount = newCount;
+            updateInfo.isText = nextBook.contentType === 'text';
+            updateInfo.latestChapter = nextBook.latestChapterTitle || nextBook.chapters?.[newCount - 1]?.title || '';
             updatedBooks.push(updateInfo);
           }
         }
       } catch (_e) {
         failed++;
       } finally {
-        this.refreshProgress = `正在刷新 ${idx + 1}/${onlineBooks.length}`;
+        completed++;
+        if (this.alive && this.isRefreshing) {
+          try {
+            this.refreshProgress = this.getUIContext().getHostContext()?.resourceManager.getStringSync(
+              $r('app.string.shelf_update_progress').id, completed, onlineBooks.length) ?? '';
+          } catch (_error) {}
+        }
       }
-    });
-    await Promise.all(tasks);
-    // 刷新完成后重新加载
-    await this.loadFavorites();
-    this.refreshProgress = '';
-    this.showRefreshResult(updatedBooks, updated, failed);
-  }
-
-  /** 把刷新结果以对话框形式呈现:有新集的书逐本列出,无新集只 toast */
-  private showRefreshResult(updatedBooks: BookUpdateInfo[], updated: number, failed: number): void {
-    const prompt = this.getUIContext().getPromptAction();
-    if (updatedBooks.length > 0) {
-      // 按新增集数从多到少排,用户最关心更新最多的那本
-      updatedBooks.sort((a, b) => (b.newCount - b.oldCount) - (a.newCount - a.oldCount));
-      const lines = updatedBooks.map(u => {
-        const delta = u.newCount - u.oldCount;
-        return `《${u.title}》  ${u.oldCount} → ${u.newCount} ${u.unit}（+${delta}）`;
-      });
-      const tail = failed > 0 ? `\n\n${failed} 本刷新失败` : '';
-      prompt.showDialog({
-        title: `${updatedBooks.length} 本书有更新`,
-        message: lines.join('\n') + tail,
-        buttons: [{ text: '知道了', color: $r('app.color.text_primary') }]
-      }).catch(() => { /* ignore */ });
-      return;
-    }
-    let msg = '所有书籍已是最新';
-    if (updated > 0) {
-      // 元数据(封面/简介/作者)有改但集数没变
-      msg = `已更新 ${updated} 本书的资料${failed > 0 ? `，${failed} 本失败` : ''}`;
-    } else if (failed > 0) {
-      msg = `刷新完成，${failed} 本失败`;
-    }
-    try {
-      prompt.showToast({ message: msg });
-    } catch (_e) { /* ignore */ }
+    };
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < onlineBooks.length) await refreshBook(onlineBooks[cursor++]);
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    const report = new ShelfUpdateReport();
+    report.checkedAt = Date.now();
+    report.checkedCount = onlineBooks.length;
+    report.updatedCount = updated;
+    report.failedCount = failed;
+    report.entries = updatedBooks.sort((a: BookUpdateInfo, b: BookUpdateInfo): number =>
+      (b.newCount - b.oldCount) - (a.newCount - a.oldCount));
+    return report;
   }
 
   private getProgressText(book: Book): string {
@@ -1099,7 +1131,7 @@ export struct FavoritePage {
                 }
               }
             }
-            .lanes(3, AppSpace.Sm)
+            .lanes(this.bookColumns, AppSpace.Sm)
             .cachedCount(6)
             .width('100%')
             .height('100%')
@@ -1147,7 +1179,7 @@ export struct FavoritePage {
           this.refreshOnlineBooks().finally(() => { this.isRefreshing = false; });
         })
         .refreshOffset(64)
-        .pullToRefresh(!this.isManaging && !this.removingBook)
+        .pullToRefresh(!this.isManaging && !this.removingBook && !this.checkingUpdates)
         .width('100%')
         .layoutWeight(1)
         .backgroundColor(Color.Transparent)
@@ -1166,6 +1198,12 @@ export struct FavoritePage {
           },
           menu: {
             value: [{
+              content: {
+                icon: $r('sys.symbol.arrow_clockwise'),
+                label: $r('app.string.shelf_updates_title'),
+                action: (): void => { if (!this.isManaging && !this.removingBook) this.showUpdates = true; }
+              }
+            }, {
               content: {
                 icon: this.viewMode === 0
                   ? $r('sys.symbol.list_bullet')
@@ -1216,6 +1254,18 @@ export struct FavoritePage {
       .height('100%')
       .backgroundColor(Color.Transparent)
 
+      Column().width(0).height(0)
+        .bindSheet($$this.showUpdates, this.buildUpdatesSheet(), {
+          height: '72%', preferType: SheetType.BOTTOM, showClose: true, dragBar: true,
+          backgroundColor: AppMaterial.SheetBackground, blurStyle: AppMaterial.SheetBlur,
+          systemMaterial: AppMaterial.Sheet,
+          onDisappear: (): void => {
+            const id = this.pendingUpdateBookId;
+            this.pendingUpdateBookId = '';
+            if (id.length > 0 && this.alive) this.onBookTap(id);
+          }
+        })
+
       if (this.isManaging) {
         Stack({ alignContent: Alignment.Bottom }) {
           this.buildBatchActions()
@@ -1240,6 +1290,97 @@ export struct FavoritePage {
         if (!this.removingBook) action.dismiss();
       }
     })
+    .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => {
+      if (typeof size.width === 'number' && size.width > 0) {
+        this.bookColumns = AdaptiveLayout.bookColumns(size.width);
+      }
+    })
+  }
+
+  @Builder
+  buildUpdatesSheet() {
+    Column({ space: 0 }) {
+      Column({ space: 8 }) {
+        Text($r('app.string.shelf_updates_title'))
+          .fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
+        Text($r('app.string.shelf_update_daily_hint'))
+          .fontSize(13).fontColor($r('sys.color.font_secondary'))
+        if (this.updateReport.checkedAt > 0) {
+          Text($r('app.string.shelf_update_time', new Date(this.updateReport.checkedAt).toLocaleString()))
+            .fontSize(11).fontColor($r('sys.color.font_tertiary'))
+        }
+      }.width('100%').alignItems(HorizontalAlign.Start)
+      .padding({ left: 24, right: 52, top: 12, bottom: 22 })
+
+      Row({ space: 8 }) {
+        Text($r('app.string.shelf_update_book_count', this.updateReport.entries.length))
+          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(AppColor.Brand)
+        Blank()
+        Text($r('app.string.shelf_update_checked_count', this.updateReport.checkedCount))
+          .fontSize(12).fontColor($r('sys.color.font_secondary'))
+      }.width('100%').padding({ left: 24, right: 24, bottom: 12 })
+
+      if (this.updateReport.entries.length > 0) {
+        List({ space: 0 }) {
+          LazyForEach(this.updateData, (item: BookUpdateInfo) => {
+            ListItem() {
+              Row({ space: 14 }) {
+                CoverImage({ url: item.cover, imgWidth: 52, imgHeight: 70, useFixedHeight: true,
+                  radius: 8, decodeW: 156, decodeH: 210 })
+                Column({ space: 7 }) {
+                  Text(item.title).fontSize(16).fontWeight(FontWeight.Medium)
+                    .fontColor($r('sys.color.font_primary')).maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(item.latestChapter || $r('app.string.shelf_update_new_content'))
+                    .fontSize(12).fontColor($r('sys.color.font_secondary')).maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  Text(item.isText ? $r('app.string.shelf_update_text_total', item.oldCount, item.newCount) :
+                    $r('app.string.shelf_update_audio_total', item.oldCount, item.newCount))
+                    .fontSize(11).fontColor($r('sys.color.font_tertiary'))
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                Text(item.isText ? $r('app.string.shelf_update_text_delta', item.newCount - item.oldCount) :
+                  $r('app.string.shelf_update_audio_delta', item.newCount - item.oldCount))
+                  .fontSize(12).fontWeight(FontWeight.Medium).fontColor(AppColor.Brand)
+                  .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                  .backgroundColor(AppColor.BrandSoft).borderRadius(16)
+              }.width('100%').padding({ top: 16, bottom: 16 })
+              .onClick((): void => {
+                this.pendingUpdateBookId = item.bookId;
+                this.showUpdates = false;
+              })
+            }
+          }, (item: BookUpdateInfo): string => `${item.bookId}:${item.newCount}:${this.updateReport.checkedAt}`)
+        }.layoutWeight(1).width('100%').padding({ left: 24, right: 24 })
+        .divider({ strokeWidth: 0.5, color: AppColor.Divider, startMargin: 66 })
+        .scrollBar(BarState.Off).cachedCount(3).edgeEffect(EdgeEffect.Spring)
+      } else {
+        Column({ space: 14 }) {
+          if (this.checkingUpdates) {
+            LoadingProgress().width(36).height(36).color(AppColor.Brand)
+          } else {
+            SymbolGlyph($r('sys.symbol.book')).fontSize(36).fontColor([$r('sys.color.font_tertiary')])
+          }
+          Text(this.checkingUpdates ? $r('app.string.shelf_update_checking') :
+            this.updateReport.checkedAt > 0 ? $r('app.string.shelf_update_no_new') :
+              $r('app.string.shelf_update_no_record'))
+            .fontSize(16).fontColor($r('sys.color.font_secondary'))
+          Text($r('app.string.shelf_update_empty_hint'))
+            .fontSize(12).fontColor($r('sys.color.font_tertiary')).textAlign(TextAlign.Center)
+        }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center).padding(24)
+      }
+
+      Column({ space: 12 }) {
+        if (this.updateReport.failedCount > 0) {
+          Text($r('app.string.shelf_update_failed_count', this.updateReport.failedCount))
+            .fontSize(12).fontColor($r('sys.color.font_secondary')).width('100%')
+        }
+        Button(this.checkingUpdates ? $r('app.string.shelf_update_checking') : $r('app.string.shelf_update_check_now'),
+          { type: ButtonType.Capsule })
+          .height(46).width('100%').fontSize(15).fontWeight(FontWeight.Medium)
+          .fontColor(AppColor.OnBrand).backgroundColor(AppColor.Brand).enabled(!this.checkingUpdates)
+          .onClick((): void => { this.refreshOnlineBooks(false); })
+      }.width('100%').padding({ left: 24, right: 24, top: 16, bottom: 16 + WindowUtils.getBottomSafeVp() })
+    }.width('100%').height('100%').backgroundColor(Color.Transparent)
   }
 
   @Builder
@@ -1478,6 +1619,7 @@ export struct FavoritePage {
     }
     .draggable(false)
     .bindContextMenu(this.bookActions(book), ResponseType.LongPress, this.bookMenuOptions())
+    .bindContextMenu(this.bookActions(book), ResponseType.RightClick, this.bookMenuOptions())
     .onClick((): void => {
       if (!this.showBookActions && !this.resolvingTocId) this.handleBookTap(book);
     })
@@ -1600,6 +1742,7 @@ export struct FavoritePage {
     .borderRadius(AppRadius.Sm)
     .draggable(false)
     .bindContextMenu(this.bookActions(book), ResponseType.LongPress, this.bookMenuOptions())
+    .bindContextMenu(this.bookActions(book), ResponseType.RightClick, this.bookMenuOptions())
     .onClick((): void => {
       if (!this.showBookActions && !this.resolvingTocId) this.handleBookTap(book);
     })
