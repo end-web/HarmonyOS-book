@@ -23,7 +23,7 @@
 | 页面 / 流程 | 服务入口 | 数据 |
 |---|---|---|
 | 主题会员 / 主题图标 | `AppIconPage` → `AppIconService` → `bundleManager` | 默认图标免费，十一款可选图标需有效主题会员；选择由系统保存；API 26 起切换，API 20–25 仅预览 |
-| 我的 / 支持与联系 / 主题会员 | `MembershipPage` → `MembershipSubscriptionPage` → `MembershipService` → 华为 IAP Kit | 无自有服务器；`iconMonth` 月订阅、`iconYear` 年订阅；本机校验华为 JWS 后发放图标权益 |
+| 我的 / 支持与联系 / 主题会员 | `ProfilePage` → `MembershipPage`（所有用户可预览）→ `MembershipSubscriptionPage` → `MembershipService` → 华为 IAP Kit | 无自有服务器；`iconMonth` 月订阅、`iconYear` 年订阅；本机校验华为 JWS 后发放图标权益 |
 | 全网榜单、平台排行、版本匹配 | `RankingHomePage` → `RankingService` / `BookMatchService` → `BookSourceService` | 公开榜单元数据、独立本地缓存、已启用的导入书源 |
 | 首页推荐、分类、更多 | `HomePage` → `HomeSourceService` / `BlockMorePage` → `BookSourceService` | 已选择、启用且支持发现的小说或有声书源，选择保存在本地偏好中 |
 | 搜索和搜索推荐 | `SearchPage` → `SourceDataService` → `BookSourceService` | 已启用且具备搜索规则的导入源、`SearchCache`、本地搜索历史 |
@@ -35,7 +35,7 @@
 | 华为账号登录、退出 | `ProfilePage` → `AuthService` → Account Kit | `listenbook_prefs.hw_account_v1` 保存 UnionID、OpenID、登录时间；前台恢复核对系统账号 |
 | 书架、记录、未收藏历史 | `FavoritePage` / `ReadingStatsPage` / `UnfavoritedHistoryPage` → `PreferenceService`、`StatsService`、`TextReadingProgressService` | 收藏、阅听历史、累计收听统计和阅读/播放位置 |
 | 本地文件导入 | `ImportPage` → `LocalBookImportService` / `DataService` | 音频、TXT/EPUB/MOBI/HTML/HTM、ZIP，独立目录及沙箱正文 |
-| 我的 / 日志管理 | `LogManagementPage` → `DiagnosticLogService` | 本机 `diagnostic_log.json`，最多 200 条，导入阶段/错误码、启动异常及存储检测；可筛选、复制、清空，不上传 |
+| 我的 / 日志管理 | `LogManagementPage` → `DiagnosticLogService` | 本机 `diagnostic_log.json`，默认关闭、日志页可手动开启并保存本机选择；最多 200 条，导入阶段/错误码、启动异常及存储检测；关闭保留历史，可筛选、复制、清空，不上传 |
 | 系统备份、跨设备续播 | `AppBackupService`、`ContinuationService` | 白名单备份快照、最小播放迁移载荷 |
 
 章节顺序以 PreferenceService 的每书偏好为准，展示目录、播放/朗读上下章及自动续章、阅读跨章和后续章节下载统一跟随；保留原始章节索引和已保存进度。

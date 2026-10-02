@@ -39,7 +39,12 @@ export struct AppIconPage {
   }
 
   private async selectIcon(option: AppIconOption): Promise<void> {
-    if (this.loading || this.switching || this.loadFailed || !this.service.supported || this.current === option.name) return;
+    if (this.switching || !this.service.supported) return;
+    if (option.name !== '' && !this.memberState.active) {
+      this.onMembershipRequired();
+      return;
+    }
+    if (this.loading || this.loadFailed || this.membership.busy || this.current === option.name) return;
     this.switching = true;
     try {
       if (option.name !== '') {
@@ -130,7 +135,9 @@ export struct AppIconPage {
             .padding(0)
             .borderRadius(AppRadius.Lg)
             .backgroundColor($r('sys.color.comp_background_primary'))
-            .enabled(this.service.supported && !this.loading && !this.switching && !this.loadFailed && !this.membership.busy)
+            .enabled(this.service.supported && !this.switching &&
+              ((option.name !== '' && !this.memberState.active) ||
+                (!this.loading && !this.loadFailed && !this.membership.busy)))
             .accessibilityText(option.label)
             .onClick(() => this.selectIcon(option))
           }

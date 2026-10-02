@@ -25,6 +25,7 @@ export struct LogManagementPage {
   @Local count: number = 0;
   @Local errorCount: number = 0;
   @Local busy: boolean = false;
+  @Local loggingEnabled: boolean = false;
   @Local storageError: string = '';
   private entries: DiagnosticLogEntry[] = [];
   private source: LogDataSource = new LogDataSource();
@@ -32,6 +33,7 @@ export struct LogManagementPage {
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext();
     if (context) DiagnosticLogService.init(context);
+    this.loggingEnabled = DiagnosticLogService.isEnabled();
     this.refresh();
   }
 
@@ -49,10 +51,25 @@ export struct LogManagementPage {
   }
 
   private async check(): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || !this.loggingEnabled) return;
     this.busy = true;
     try { await DiagnosticLogService.check(); await this.refresh(); }
     finally { this.busy = false; }
+  }
+
+  private async setLoggingEnabled(enabled: boolean): Promise<void> {
+    if (this.busy || enabled === DiagnosticLogService.isEnabled()) return;
+    this.busy = true;
+    this.loggingEnabled = enabled;
+    try {
+      await DiagnosticLogService.setEnabled(enabled);
+      await this.refresh();
+    } catch (_error) {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.log_operation_failed') });
+    } finally {
+      this.loggingEnabled = DiagnosticLogService.isEnabled();
+      this.busy = false;
+    }
   }
 
   private async copy(): Promise<void> {
@@ -98,8 +115,18 @@ export struct LogManagementPage {
       Text($r('app.string.log_hint')).fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
         .width('100%')
       Row({ space: AppSpace.Sm }) {
+        Text($r('app.string.log_enabled')).fontSize(AppFont.Body)
+          .fontColor($r('sys.color.font_primary')).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.loggingEnabled })
+          .selectedColor(AppColor.Brand)
+          .enabled(!this.busy)
+          .accessibilityText($r('app.string.log_enabled'))
+          .onChange((value: boolean): void => { this.setLoggingEnabled(value); })
+      }
+      .width('100%')
+      Row({ space: AppSpace.Sm }) {
         Button($r('app.string.log_check')).backgroundColor(AppColor.Brand).fontColor(Color.Black)
-          .layoutWeight(1).enabled(!this.busy).onClick(() => this.check())
+          .layoutWeight(1).enabled(!this.busy && this.loggingEnabled).onClick(() => this.check())
         Button($r('app.string.log_copy')).backgroundColor($r('sys.color.comp_background_secondary'))
           .fontColor($r('sys.color.font_primary')).layoutWeight(1).enabled(this.count > 0).onClick(() => this.copy())
         Button($r('app.string.log_clear')).backgroundColor($r('sys.color.comp_background_secondary'))

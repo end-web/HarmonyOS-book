@@ -65,6 +65,9 @@ const fileIo = {
   fsync: fd => handles.get(fd).sync()
 };
 const values = new Map();
+const diagnosticSettings = new Map();
+let diagnosticFlushFails = false;
+let diagnosticOutputCount = 0;
 const favorites = new Set();
 const readingIds = new Set();
 const historyIds = new Set();
@@ -117,7 +120,14 @@ function load(relative) {
     canIUse: () => parserAvailable, $r: id => ({ id }), require: name => {
     if (name === '@kit.CoreFileKit') return { fileIo, statfs: { getFreeSize: async () => free } };
     if (name === '@kit.ImageKit') return { image };
-    if (name === '@kit.PerformanceAnalysisKit') return { hilog: { info() {}, error() {} } };
+    if (name === '@kit.PerformanceAnalysisKit') return { hilog: {
+      info() { diagnosticOutputCount++; }, error() { diagnosticOutputCount++; }
+    } };
+    if (name === '@kit.ArkData') return { preferences: { getPreferencesSync: () => ({
+      getSync: (key, fallback) => diagnosticSettings.has(key) ? diagnosticSettings.get(key) : fallback,
+      putSync: (key, value) => diagnosticSettings.set(key, value),
+      async flush() { if (diagnosticFlushFails) throw new Error('settings write failed'); }
+    }) } };
     if (name === '@kit.ArkTS') return { util: { TextDecoder: { create(encoding, options) {
       const decoder = new TextDecoder(encoding, options);
       return { decodeToString: (bytes, opts) => decoder.decode(bytes, opts) };
@@ -451,6 +461,19 @@ function load(relative) {
   const { DiagnosticLogService: logs } = load('service/DiagnosticLogService');
   await logs.list();
   logs.init(context);
+  assert.equal(logs.isEnabled(), false);
+  logs.info('disabled', 'must not record');
+  logs.failure('disabled', new Error('must not record'));
+  await logs.check();
+  assert.equal((await logs.list()).length, 0);
+  assert.equal(diagnosticOutputCount, 0);
+  assert.equal(fs.existsSync(path.join(temp, 'diagnostic_log.json')), false);
+  diagnosticFlushFails = true;
+  await assert.rejects(logs.setEnabled(true), /settings write failed/);
+  assert.equal(logs.isEnabled(), false);
+  assert.equal(diagnosticSettings.get('enabled'), false);
+  diagnosticFlushFails = false;
+  await logs.setEnabled(true);
   await logs.clear();
   for (let index = 0; index < 205; index++) logs.info('test', 'entry=' + index);
   let entries = await logs.list();
@@ -467,14 +490,28 @@ function load(relative) {
   modules.delete(path.join(root, 'service/DiagnosticLogService.ets'));
   const restoredLogs = load('service/DiagnosticLogService').DiagnosticLogService;
   restoredLogs.init(context);
+  assert.equal(restoredLogs.isEnabled(), true, 'manual choice survives restart');
   assert.ok((await restoredLogs.list()).some(entry => entry.stage === 'import.read'));
   await restoredLogs.clear();
   await restoredLogs.check();
   assert.ok((await restoredLogs.list()).some(entry => entry.level === 'ERROR' && entry.stage === 'check.storage'));
+  await restoredLogs.setEnabled(false);
+  const retained = JSON.stringify(await restoredLogs.list());
+  const outputBefore = diagnosticOutputCount;
+  restoredLogs.info('disabled', 'must not record');
+  restoredLogs.failure('disabled', new Error('must not record'));
+  await restoredLogs.check();
+  assert.equal(JSON.stringify(await restoredLogs.list()), retained, 'disabled logs remain readable without new entries');
+  assert.equal(diagnosticOutputCount, outputBefore);
+  modules.delete(path.join(root, 'service/DiagnosticLogService.ets'));
+  const disabledLogs = load('service/DiagnosticLogService').DiagnosticLogService;
+  disabledLogs.init(context);
+  assert.equal(disabledLogs.isEnabled(), false, 'disabled choice survives restart');
+  assert.equal(JSON.stringify(await disabledLogs.list()), retained);
   await restoredLogs.clear();
   assert.equal((await restoredLogs.list()).length, 0);
   assert.equal(handles.size, 0);
-  console.log('PASS diagnostics: bounded persistence, restart, error code, redaction, low-space check and clear');
+  console.log('PASS diagnostics: default off, toggle persistence/failure, disabled retention, bounded persistence, restart, redaction, check and clear');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   for (const handle of handles.values()) await handle.close();
   await fsp.rm(temp, { recursive: true, force: true });

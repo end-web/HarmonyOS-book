@@ -296,7 +296,7 @@
     {"name": "technical_support_title", "value": "技术支持"},
     {"name": "technical_support_names", "value": "QG\n浅度\n相思界\nXIAOBAO"},
     {"name": "sponsor_thanks_title", "value": "感谢赞助"},
-    {"name": "sponsor_thanks_names", "value": "WT\n子阳\ndefault\n干脆面不用泡\n苏小锋\n张\n李富贵\n最初未来\n潮生万象\n向钱看向厚看\nHAOYUN\n*.\n一飞冲天\nL.\n再见\n柏子\n爱你806"},
+    {"name": "sponsor_thanks_names", "value": "WT\n子阳\ndefault\n干脆面不用泡\n苏小锋\n张\n李富贵\n最初未来\n潮生万象\n向钱看向厚看\nHAOYUN\n*.\n一飞冲天\nL.\n再见\n柏子\n爱你806\n*城"},
     {"name": "sponsor_thanks_hendo", "value": "HenDo"},
     {"name": "about_compliance_title", "value": "合规说明"},
     {"name": "about_compliance_body", "value": "本项目不内置、托管或分发小说正文及音频资源。全网榜单首页展示各平台公开的榜单和封面元数据，阅读与收听由用户导入的书源提供；不提供书源订阅服务，不保证第三方内容持续可用。"},
@@ -1969,7 +1969,8 @@
     {"name": "shelf_update_failed_count", "value": "%d 本暂未检查成功，可稍后重试"},
     {"name": "shelf_update_check_now", "value": "立即检查"},
     {"name": "log_title", "value": "日志管理"},
-    {"name": "log_hint", "value": "记录导入、存储和启动异常，最近 200 条仅保存在本机。遇到问题可复现后复制日志；不会主动收集正文、账号或文件名。"},
+    {"name": "log_hint", "value": "日志默认关闭，手动开启后记录导入、存储和启动异常，并可运行检测。开关状态保存在本机，关闭后保留已有日志。遇到问题请先开启，再复现并复制日志；最近 200 条仅保存在本机，不会主动收集正文、账号或文件名。"},
+    {"name": "log_enabled", "value": "记录日志"},
     {"name": "log_refresh", "value": "刷新"},
     {"name": "log_check", "value": "运行检测"},
     {"name": "log_copy", "value": "复制日志"},
@@ -2015,6 +2016,7 @@
     {"name": "membership_retry_later", "value": "操作较频繁，请稍后重试"},
     {"name": "membership_network_error", "value": "暂时无法连接华为，请检查网络后恢复购买"},
     {"name": "membership_unsupported", "value": "当前设备或华为账号所在地区暂不支持订阅"},
+    {"name": "membership_syncing", "value": "正在同步会员信息，请稍候…"},
     {"name": "membership_verification_failed", "value": "会员状态未能核验，请稍后恢复购买；已扣款请勿重复购买"}
   ]
 }

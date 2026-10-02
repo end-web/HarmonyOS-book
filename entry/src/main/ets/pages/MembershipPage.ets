@@ -51,6 +51,13 @@ export struct MembershipPage {
         left: AppSpace.Sm, right: AppSpace.Md, bottom: AppSpace.Sm })
       Scroll() {
         Column({ space: AppSpace.Lg }) {
+          if (this.membership.busy) {
+            Row({ space: AppSpace.Sm }) {
+              LoadingProgress().width(24).height(24).color(AppColor.Brand)
+              Text($r('app.string.membership_syncing')).fontSize(AppFont.Body)
+                .fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+            }.width('100%')
+          }
           Row({ space: AppSpace.Sm }) {
             Button($r('app.string.membership_subscription_entry'))
               .layoutWeight(1).backgroundColor(AppColor.Brand).fontColor(AppColor.OnBrand)

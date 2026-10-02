@@ -410,16 +410,20 @@ export struct AccountPage {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
-      this.profileActionButton()
+      this.profileActionIndicator()
     }
     .width('100%')
     .padding(AppSpace.Md)
     .backgroundColor($r('sys.color.comp_background_primary'))
     .borderRadius(AppRadius.Lg)
+    .enabled(this.manualAvailable())
+    .accessibilityText(this.auth.isLoggedIn ? $r('app.string.account_profile_refresh') :
+      $r('app.string.hw_auth_login_title'))
+    .onClick(() => this.runManual((): Promise<void> => this.updateProfile()))
   }
 
   @Builder
-  profileActionButton() {
+  profileActionIndicator() {
     Stack() {
       if (this.auth.logging || this.auth.restoring) {
         LoadingProgress()
@@ -434,10 +438,6 @@ export struct AccountPage {
     }
     .width(40)
     .height(40)
-    .enabled(this.manualAvailable())
-    .accessibilityText(this.auth.isLoggedIn ? $r('app.string.account_profile_refresh') :
-      $r('app.string.hw_auth_login_title'))
-    .onClick(() => this.runManual((): Promise<void> => this.updateProfile()))
   }
 
   @Builder

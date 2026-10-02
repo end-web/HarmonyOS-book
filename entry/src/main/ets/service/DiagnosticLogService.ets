@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo, statfs } from '@kit.CoreFileKit';
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { preferences } from '@kit.ArkData';
 
 export class DiagnosticLogEntry {
   id: string = '';
@@ -18,18 +19,48 @@ export class DiagnosticLogService {
   private static chain: Promise<void> = Promise.resolve();
   private static sequence: number = 0;
   private static storageError: string = '';
+  private static enabled: boolean = false;
+  private static settings: preferences.Preferences | null = null;
   private static readonly MAX_ENTRIES: number = 200;
   private static readonly MAX_BYTES: number = 2 * 1024 * 1024;
 
   static init(context: common.Context): void {
     if (DiagnosticLogService.context !== null) return;
     DiagnosticLogService.context = context;
+    try {
+      DiagnosticLogService.settings = preferences.getPreferencesSync(context, { name: 'diagnostic_settings' });
+      DiagnosticLogService.enabled = DiagnosticLogService.settings.getSync('enabled', false) === true;
+    } catch (_error) {
+      DiagnosticLogService.enabled = false;
+    }
     DiagnosticLogService.chain = DiagnosticLogService.restore();
     DiagnosticLogService.info('app.start', `api=${deviceInfo.sdkApiVersion}; device=${deviceInfo.deviceType}`);
   }
 
   private static path(): string {
     return `${DiagnosticLogService.context?.filesDir}/diagnostic_log.json`;
+  }
+
+  static isEnabled(): boolean { return DiagnosticLogService.enabled; }
+
+  static async setEnabled(enabled: boolean): Promise<void> {
+    const context = DiagnosticLogService.context;
+    if (context === null) throw new Error('Diagnostic logging is not initialized');
+    const settings = DiagnosticLogService.settings ??
+      preferences.getPreferencesSync(context, { name: 'diagnostic_settings' });
+    DiagnosticLogService.settings = settings;
+    const previous = DiagnosticLogService.enabled;
+    if (!enabled) DiagnosticLogService.enabled = false;
+    try {
+      settings.putSync('enabled', enabled);
+      await settings.flush();
+      DiagnosticLogService.enabled = enabled;
+    } catch (error) {
+      settings.putSync('enabled', previous);
+      DiagnosticLogService.enabled = previous;
+      throw new Error(DiagnosticLogService.describe(error));
+    }
+    await DiagnosticLogService.chain;
   }
 
   private static async restore(): Promise<void> {
@@ -70,10 +101,12 @@ export class DiagnosticLogService {
   }
 
   static failure(stage: string, error: BusinessError, detail: string = ''): void {
+    if (!DiagnosticLogService.enabled) return;
     DiagnosticLogService.record('ERROR', stage, `${detail} ${DiagnosticLogService.describe(error)}`.trim());
   }
 
   private static record(level: string, stage: string, message: string): void {
+    if (!DiagnosticLogService.enabled) return;
     const entry = new DiagnosticLogEntry();
     entry.id = `${Date.now()}_${++DiagnosticLogService.sequence}`;
     entry.time = new Date().toISOString();
@@ -86,6 +119,7 @@ export class DiagnosticLogService {
       hilog.info(0x0000, 'AppDiagnostic', '%{public}s %{public}s', stage, entry.message);
     }
     DiagnosticLogService.chain = DiagnosticLogService.chain.then(async (): Promise<void> => {
+      if (!DiagnosticLogService.enabled) return;
       DiagnosticLogService.entries.push(entry);
       DiagnosticLogService.entries = DiagnosticLogService.entries.slice(-DiagnosticLogService.MAX_ENTRIES);
       await DiagnosticLogService.persist();
@@ -124,6 +158,7 @@ export class DiagnosticLogService {
   }
 
   static async check(): Promise<void> {
+    if (!DiagnosticLogService.enabled) return;
     const context = DiagnosticLogService.context;
     if (context === null) return;
     DiagnosticLogService.info('check.runtime', `api=${deviceInfo.sdkApiVersion}; device=${deviceInfo.deviceType}; ` +
