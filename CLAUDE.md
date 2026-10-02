@@ -22,7 +22,8 @@
 
 | 页面 / 流程 | 服务入口 | 数据 |
 |---|---|---|
-| 我的 / 支持与联系 / 图标主题 | `AppIconPage` → `AppIconService` → `bundleManager` | 默认及十一款 1024px 图标，选择由系统保存；API 26 起切换，API 20–25 仅预览 |
+| 主题会员 / 主题图标 | `AppIconPage` → `AppIconService` → `bundleManager` | 默认图标免费，十一款可选图标需有效主题会员；选择由系统保存；API 26 起切换，API 20–25 仅预览 |
+| 我的 / 支持与联系 / 主题会员 | `MembershipPage` → `MembershipSubscriptionPage` → `MembershipService` → 华为 IAP Kit | 无自有服务器；`iconMonth` 月订阅、`iconYear` 年订阅；本机校验华为 JWS 后发放图标权益 |
 | 全网榜单、平台排行、版本匹配 | `RankingHomePage` → `RankingService` / `BookMatchService` → `BookSourceService` | 公开榜单元数据、独立本地缓存、已启用的导入书源 |
 | 首页推荐、分类、更多 | `HomePage` → `HomeSourceService` / `BlockMorePage` → `BookSourceService` | 已选择、启用且支持发现的小说或有声书源，选择保存在本地偏好中 |
 | 搜索和搜索推荐 | `SearchPage` → `SourceDataService` → `BookSourceService` | 已启用且具备搜索规则的导入源、`SearchCache`、本地搜索历史 |
@@ -34,6 +35,7 @@
 | 华为账号登录、退出 | `ProfilePage` → `AuthService` → Account Kit | `listenbook_prefs.hw_account_v1` 保存 UnionID、OpenID、登录时间；前台恢复核对系统账号 |
 | 书架、记录、未收藏历史 | `FavoritePage` / `ReadingStatsPage` / `UnfavoritedHistoryPage` → `PreferenceService`、`StatsService`、`TextReadingProgressService` | 收藏、阅听历史、累计收听统计和阅读/播放位置 |
 | 本地文件导入 | `ImportPage` → `LocalBookImportService` / `DataService` | 音频、TXT/EPUB/MOBI/HTML/HTM、ZIP，独立目录及沙箱正文 |
+| 我的 / 日志管理 | `LogManagementPage` → `DiagnosticLogService` | 本机 `diagnostic_log.json`，最多 200 条，导入阶段/错误码、启动异常及存储检测；可筛选、复制、清空，不上传 |
 | 系统备份、跨设备续播 | `AppBackupService`、`ContinuationService` | 白名单备份快照、最小播放迁移载荷 |
 
 章节顺序以 PreferenceService 的每书偏好为准，展示目录、播放/朗读上下章及自动续章、阅读跨章和后续章节下载统一跟随；保留原始章节索引和已保存进度。
@@ -44,7 +46,16 @@
 
 主导航是 `Index` + `NavPathStack`，`MainPage` 承载“首页 / 书架 / 记录 / 我的”。搜索、详情、阅读、播放器、导入、下载和书源管理使用独立路由。
 
-## 应用更新
+## 主题会员订阅
+
+- 无自有服务器。会员仅解锁可选桌面图标；界面配色、材质和阅读器主题不纳入权益限制，月/年 VIP 标识使用用户提供的 circle 圆形素材，个人中心及主题会员页仅在已校验权益有效时按商品显示。图标切换需要 API 26，低版本不销售仅包含此权益的套餐；手表不接入 IAP。
+- 商品为 `iconMonth` / `iconYear`，必须同组，月/年周期和价格来自华为。`MembershipService` 串行处理查询/购买/补发货，确认发货失败保留已经核验的权益，后续刷新重试；当前订阅查询结果是权益依据，历史未完成订单不能重新授予撤销的权益。
+- `SubscriptionVerifier` 使用随包固定的 Huawei CBG Root CA G2、平台 PKIX 验证、IAP OID 和 ES256 验签，再由 `SubscriptionPolicy` 校验包名、应用信息、环境、商品、订单及有效期。公开根证书来自 https://pki.consumer.huawei.com/ca/cer/RootCaG2Ecdsa.cer ，SHA-256 为 `2885EB2E7AC235A6E0C06532940907831967686E07008343204980CCDDBA355C`。不接受 header 自带根证书作为信任锚，不记录订单凭据、token 或用户身份。
+- 权益仅存于进程内，不加入 Preferences、业务数据库或备份；每次进程启动/前台恢复按系统华为账号查询，付费图标切换前强制刷新。网络异常不重置已有桌面图标，但不能切换新会员图标。退款/续费以联网查询结果同步，不承诺 App 关闭时实时更新。
+- 联调准备：在华为后台开通 IAP，核对当前安装包的签名/Profile 与该应用匹配、配置沙盒账号，提交商品审核并确认可售范围。当前真机查询返回 `1001860002`（应用未获授权），尚未完成真实沙盒购买/自动续费闭环。后台商品描述应与当前仅图标权益一致。
+- 在线依据：[订阅购买](<https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/sdk/hmos-one-sdk-skill/hmos-sdk-basic-skill/IAP Kit(应用内支付服务)/hmos-iap-kit-integrate-subscription/SUB_SKILL.md>)、[验签](<https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/sdk/hmos-one-sdk-skill/hmos-sdk-basic-skill/IAP Kit(应用内支付服务)/hmos-iap-kit-subscription-delivery/references/iap-verifying-signature.md>)；参数以本机 API 26 Release SDK 声明核对。回归命令：`DEVECO_HOME` 指向 Release IDE 后运行 `node scripts/test-membership.cjs`。
+
+## 应用市场更新
 
 关于页“获取更新”通过 `UpdateService.openAppGallery()` 打开华为应用市场简听详情页（App ID `6917615941058168740`，跳转参数使用包名 `com.huan.listenbook`），失败时尝试官方 HTTPS 页面，全部失败提示手动搜索。版本判断、下载与安装由市场提供；不再启动 GitHub 检查或读取旧版本缓存。
 
@@ -250,6 +261,8 @@ scripts/                HAR 构建与图标工具
 
 产品或交互变化直接更新现行文档；已失效的一次性计划和修复说明删除，历史由 Git 保留。
 
+音频手动暂停、卡片暂停和定时结束后，已启用的当前章及配置窗口预缓存继续收尾，不再因 paused 事件清空队列；队列通过独立 preload owner 持有 dataTransfer，与手动下载互不释放，队列耗尽（含失败）后释放。播放缓冲、显式关闭预缓存、清理及退出仍按原规则取消；预缓存设为 0 的关闭语义保留，HLS/直播仍不保存为完整音频文件。
+
 ### 本地导入容量与格式
 
 系统文件管理器“使用简听打开”：JSON 自动进入书源导入；TXT/EPUB/MOBI/HTML/HTM 和 ZIP 自动进入本地导入页并带入文件、预览书名/作者/封面，点击“开始导入”入架，无需再次选文件。优先按文件后缀分流，无后缀 URI 使用 MIME/UTD 类型；冷启动和应用已运行时均支持，保留原始授权 URI，文件打开不触发启动自动播放。压缩包仅声明当前支持的 ZIP。
@@ -257,7 +270,7 @@ scripts/                HAR 构建与图标工具
 
 - 音频支持 MP3/M4A/FLAC/WAV/OGG/AAC，电子书支持 TXT/EPUB/MOBI/HTML/HTM；ZIP 中音频自然排序成书，电子书逐本入架。每次文件选择上限 500，可继续追加。
 - 单 ZIP 处理上限 32 GiB、解压内容 64 GiB，包内最多 100000 个文件/目录、50000 个可导入文件；单书最多 50000 章/集。导入前校验剩余空间并保留 256 MiB，多 ZIP 顺序解压并逐包清理。容量为代码上限，不代表已做同等体积设备压力验证。
-- TXT 最大 256 MiB，64 KiB 流式解码 UTF-8/UTF-16/GB18030，识别章节标题并限制正文片段长度；HTML/HTM 最大 32 MiB，EPUB 最大 512 MiB、解压内容最多 2 GiB，使用系统 BookParser 按 spine 提取文字。
+- TXT 最大 256 MiB，64 KiB 流式解码 UTF-8/UTF-16/GB18030，识别章节标题并限制正文片段长度；HTML/HTM 最大 32 MiB，EPUB 最大 512 MiB、解压内容最多 2 GiB，使用系统 BookParser 按 spine 提取文字。EPUB 优先读取原始 HTML，失败才调用排版接口；TXT/HTML/MOBI/EPUB 共用最多 4 路异步章节写入，进度按 150ms 节流。音频最多 4 路复制/时长探测，ZIP 临时音频直接移动；失败先等待在途任务再回滚目录。日志记录各阶段耗时及 EPUB 原文/排版命中数量。
 - MOBI 最大 128 MiB、解压正文最大 32 MiB；支持未加密 MOBI6 的未压缩/PalmDOC 记录和混合文件的 MOBI6 部分，UTF-8/Windows-1252 解码，提取书名/作者，按标题或分页标记分章，长章继续限制为 32000 字符；自动提取内嵌封面（原封面优先、缩略图回退），不保留正文图片和原排版。加密、HUFF/CDIC、纯 KF8/AZW3 或损坏文件明确报错并清理半成品。
 - 新导入目录存 filesDir/imported_toc，偏好索引只存书籍元数据；正文存 filesDir/ebooks。读取本地正文限定本书路径，不依赖网络书源；删书同时清理目录和正文。ZIP 音频直接移动入库，大于 500 集时不逐集探测时长，播放后补齐。
 

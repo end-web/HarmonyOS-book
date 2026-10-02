@@ -796,8 +796,8 @@ export struct ReaderPage {
       return cached;
     }
     // 缓存未命中，解析并缓存
-    const parserModule = await import('@hms.core.readerservice.bookParser');
-    const handler = await parserModule.bookParser.getDefaultHandler(epubPath);
+    const parserModule = await import('../service/text/EpubParserService');
+    const handler = await parserModule.EpubParserService.open(epubPath);
     // LRU 淘汰：缓存超限时移除最早的
     if (ReaderPage.epubHandlerCache.size >= ReaderPage.MAX_HANDLER_CACHE_SIZE) {
       const firstKey = ReaderPage.epubHandlerCache.keys().next().value as string;

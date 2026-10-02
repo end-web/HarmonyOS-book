@@ -11,6 +11,7 @@ import { BusinessError, emitter } from '@kit.BasicServicesKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PreferenceService } from '../service/PreferenceService';
 import lazy { AuthService } from '../service/AuthService';
+import lazy { MembershipService } from '../service/MembershipService';
 import lazy { AutoBackupService } from '../service/AutoBackupService';
 import { AudioService } from '../service/AudioService';
 import lazy { WidgetUpdater } from '../service/WidgetUpdater';
@@ -25,6 +26,7 @@ import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSource
 import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
 import { EVT_READER_TYPOGRAPHY_CHANGED } from '../model/TextReading';
 import { FileOpenRouting } from '../utils/FileOpenRouting';
+import { DiagnosticLogService } from '../service/DiagnosticLogService';
 
 const DOMAIN = 0x0000;
 const TAG = 'ListenBook';
@@ -61,6 +63,7 @@ export default class EntryAbility extends UIAbility {
   private isInForeground: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    DiagnosticLogService.init(this.context);
     if (PlatformCompat.wearable) {
       WearableRuntime.instance.initialize(this.context);
       return;
@@ -81,7 +84,8 @@ export default class EntryAbility extends UIAbility {
     this.captureContinuation(want, launchParam);
 
     // 关键修复:限时初始化,避免后台恢复时阻塞过久导致系统 watchdog 杀进程
-    this.initServicesWithTimeout().catch((err: Error) => {
+    this.initServicesWithTimeout().catch((err: BusinessError) => {
+      DiagnosticLogService.failure('app.init', err);
       hilog.error(DOMAIN, TAG, 'Service initialization failed: %{public}s', err?.message ?? JSON.stringify(err));
       // 即使失败也要 markReady,避免 callee 永久等待
       AudioService.getInstance().markReady();
@@ -541,6 +545,7 @@ export default class EntryAbility extends UIAbility {
     emitter.emit('app.reader.background');
     AudioService.getInstance().setForeground(false);
     TextToSpeechService.getInstance().setForeground(false);
+    MembershipService.instance.background();
     this.isInForeground = false;
     this.startupPlaybackPending = false;
     try {
@@ -589,6 +594,7 @@ export default class EntryAbility extends UIAbility {
     this.isInForeground = true;
     // 不阻塞前台恢复；已保存的账号需重新核对系统登录状态。
     AuthService.instance.restore(this.context);
+    MembershipService.instance.foreground(this.context);
     if (this.startupServicesReady) AutoBackupService.instance.setForeground(this.context, true);
     WindowUtils.refreshAvoidArea();
     try {

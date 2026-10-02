@@ -1,19 +1,29 @@
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
-import { WindowUtils } from '../utils/WindowUtils';
 import { AppIconOption, AppIconService } from '../service/AppIconService';
+import { sendableContextManager } from '@kit.AbilityKit';
+import { MembershipService } from '../service/MembershipService';
+import { MembershipState } from '../model/MembershipState';
 
+/** 主题会员页内的图标选择区，保留原文件名，不再注册独立路由。 */
 @ComponentV2
 export struct AppIconPage {
-  @Param navStack: NavPathStack = new NavPathStack();
+  @Event onMembershipRequired: () => void = () => {};
   @Local current: string = '';
   @Local loading: boolean = true;
   @Local switching: boolean = false;
   @Local loadFailed: boolean = false;
+  @Local membership: MembershipService = MembershipService.instance;
+  @Local memberState: MembershipState = MembershipState.current;
   private service: AppIconService = AppIconService.instance;
   private options: AppIconOption[] = this.service.getOptions();
 
   aboutToAppear(): void {
     this.loadCurrent();
+  }
+
+  @Monitor('membership.busy')
+  private onMembershipUpdated(): void {
+    if (!this.membership.busy && !this.switching) this.loadCurrent();
   }
 
   private async loadCurrent(): Promise<void> {
@@ -32,6 +42,16 @@ export struct AppIconPage {
     if (this.loading || this.switching || this.loadFailed || !this.service.supported || this.current === option.name) return;
     this.switching = true;
     try {
+      if (option.name !== '') {
+        const host = this.getUIContext().getHostContext();
+        if (!host) return;
+        const context = sendableContextManager.convertToUIAbilityContext(sendableContextManager.convertFromContext(host));
+        await this.membership.refresh(context, true);
+        if (!this.memberState.active) {
+          this.onMembershipRequired();
+          return;
+        }
+      }
       this.current = await this.service.select(option.name);
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.app_icon_changed') });
     } catch (_error) {
@@ -44,20 +64,10 @@ export struct AppIconPage {
   }
 
   build() {
-    Column() {
+    Column({ space: AppSpace.Md }) {
       Row({ space: AppSpace.Sm }) {
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(24)
-            .fontColor([$r('sys.color.font_primary')])
-        }
-        .width(40)
-        .height(40)
-        .backgroundColor(Color.Transparent)
-        .accessibilityText($r('app.string.app_icon_back'))
-        .onClick(() => this.navStack.pop())
         Text($r('app.string.app_icon_title'))
-          .fontSize(AppFont.Title)
+          .fontSize(AppFont.BodyL)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Blank()
@@ -66,85 +76,67 @@ export struct AppIconPage {
         }
       }
       .width('100%')
-      .padding({ top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
-        left: AppSpace.Sm, right: AppSpace.Md, bottom: AppSpace.Sm })
-
-      Scroll() {
-        Column({ space: AppSpace.Md }) {
-          Text(this.service.supported ? $r('app.string.app_icon_hint') : $r('app.string.app_icon_unsupported'))
-            .fontSize(AppFont.Body)
-            .fontColor($r('sys.color.font_secondary'))
-            .width('100%')
-          if (this.loadFailed) {
-            Button($r('app.string.app_icon_retry'))
-              .fontColor(AppColor.Brand)
-              .backgroundColor($r('sys.color.comp_background_primary'))
-              .enabled(!this.loading && !this.switching)
-              .onClick(() => this.loadCurrent())
-          }
-          GridRow({ columns: 3, gutter: { x: 12, y: 16 } }) {
-            ForEach(this.options, (option: AppIconOption) => {
-              GridCol() {
-                Button({ type: ButtonType.Normal }) {
-                  Column({ space: 8 }) {
-                    Stack({ alignContent: Alignment.BottomEnd }) {
-                      Image(option.preview)
-                        .width('100%')
-                        .aspectRatio(1)
-                        .objectFit(ImageFit.Contain)
-                        .borderRadius(20)
-                        .clip(true)
-                      if (this.service.supported && !this.loading && !this.loadFailed && this.current === option.name) {
-                        Stack({ alignContent: Alignment.Center }) {
-                          SymbolGlyph($r('sys.symbol.checkmark'))
-                            .fontSize(14)
-                            .fontWeight(FontWeight.Bold)
-                            .fontColor([Color.White])
-                        }
-                        .width(24)
-                        .height(24)
-                        .backgroundColor('#222222')
-                        .border({ width: 2, color: Color.White })
-                        .borderRadius(12)
-                        .margin({ right: 4, bottom: 4 })
-                        .hitTestBehavior(HitTestMode.None)
-                        .accessibilityText($r('app.string.app_icon_current'))
-                      }
-                    }
+      if (this.loadFailed) {
+        Button($r('app.string.app_icon_retry'))
+          .fontColor(AppColor.Brand)
+          .backgroundColor($r('sys.color.comp_background_primary'))
+          .enabled(!this.loading && !this.switching)
+          .onClick(() => this.loadCurrent())
+      }
+      GridRow({ columns: 3, gutter: { x: 12, y: 16 } }) {
+        ForEach(this.options, (option: AppIconOption) => {
+          GridCol() {
+            Button({ type: ButtonType.Normal }) {
+              Column({ space: 8 }) {
+                Stack({ alignContent: Alignment.BottomEnd }) {
+                  Image(option.preview)
                     .width('100%')
-                    Text(option.label)
-                      .fontSize(AppFont.Body)
-                      .fontColor($r('sys.color.font_primary'))
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .aspectRatio(1)
+                    .objectFit(ImageFit.Contain)
+                    .borderRadius(20)
+                    .clip(true)
+                  if (this.service.supported && !this.loading && !this.loadFailed && this.current === option.name) {
+                    Stack({ alignContent: Alignment.Center }) {
+                      SymbolGlyph($r('sys.symbol.checkmark'))
+                        .fontSize(14)
+                        .fontWeight(FontWeight.Bold)
+                        .fontColor([Color.White])
+                    }
+                    .width(24)
+                    .height(24)
+                    .backgroundColor('#222222')
+                    .border({ width: 2, color: Color.White })
+                    .borderRadius(12)
+                    .margin({ right: 4, bottom: 4 })
+                    .hitTestBehavior(HitTestMode.None)
+                    .accessibilityText($r('app.string.app_icon_current'))
                   }
-                  .width('100%')
-                  .padding({ left: 6, right: 6, top: 6, bottom: 10 })
                 }
                 .width('100%')
-                .padding(0)
-                .borderRadius(AppRadius.Lg)
-                .backgroundColor($r('sys.color.comp_background_primary'))
-                .enabled(this.service.supported && !this.loading && !this.switching && !this.loadFailed)
-                .accessibilityText(option.label)
-                .onClick(() => this.selectIcon(option))
+                Text(option.label)
+                  .fontSize(AppFont.Body)
+                  .fontColor($r('sys.color.font_primary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                if (option.name !== '') {
+                  Text($r('app.string.membership_icon_exclusive')).fontSize(AppFont.Caption)
+                    .fontColor($r('sys.color.font_secondary'))
+                }
               }
-            }, (option: AppIconOption) => option.name || 'default')
+              .width('100%')
+              .padding({ left: 6, right: 6, top: 6, bottom: 10 })
+            }
+            .width('100%')
+            .padding(0)
+            .borderRadius(AppRadius.Lg)
+            .backgroundColor($r('sys.color.comp_background_primary'))
+            .enabled(this.service.supported && !this.loading && !this.switching && !this.loadFailed && !this.membership.busy)
+            .accessibilityText(option.label)
+            .onClick(() => this.selectIcon(option))
           }
-        }
-        .width('100%')
-        .padding({ left: AppSpace.Md, right: AppSpace.Md, top: AppSpace.Sm,
-          bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+        }, (option: AppIconOption) => option.name || 'default')
       }
-      .width('100%')
-      .layoutWeight(1)
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
-    .height('100%')
-    .backgroundColor($r('sys.color.background_primary'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

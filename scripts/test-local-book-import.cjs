@@ -18,20 +18,35 @@ context.resourceManager = {
 };
 let parserAvailable = true;
 let parserLoads = 0;
+let epubCount = 2;
+let epubRaw = false;
+let layoutCalls = 0;
+let writeDelay = 0;
+let failingWrite = '';
+let activeWrites = 0;
+let maxWrites = 0;
+const handlePaths = new Map();
 const handles = new Map();
 let free = 256 * 1024 ** 3;
 const fileIo = {
   OpenMode: { READ_ONLY: 0, CREATE: 1, WRITE_ONLY: 2, TRUNC: 4, READ_WRITE: 8 },
   async open(filename, flags) {
     const handle = await fsp.open(filename, flags ? 'w+' : 'r');
-    handles.set(handle.fd, handle); return { fd: handle.fd };
+    handles.set(handle.fd, handle); handlePaths.set(handle.fd, filename); return { fd: handle.fd };
   },
-  async close(file) { const fd = typeof file === 'number' ? file : file.fd; await handles.get(fd).close(); handles.delete(fd); },
+  async close(file) { const fd = typeof file === 'number' ? file : file.fd; await handles.get(fd).close(); handles.delete(fd); handlePaths.delete(fd); },
   async stat(file) { return typeof file === 'number' ? handles.get(file).stat() : fsp.stat(file); },
-  async read(fd, buffer, options) {
+  async read(fd, buffer, options = { length: buffer.byteLength, offset: 0 }) {
     return (await handles.get(fd).read(Buffer.from(buffer), 0, options.length, options.offset)).bytesRead;
   },
-  async write(fd, text) { return (await handles.get(fd).write(typeof text === 'string' ? text : Buffer.from(text))).bytesWritten; },
+  async write(fd, text) {
+    activeWrites++; maxWrites = Math.max(maxWrites, activeWrites);
+    try {
+      if (writeDelay) await new Promise(resolve => setTimeout(resolve, writeDelay));
+      if (failingWrite && handlePaths.get(fd).endsWith(failingWrite)) throw new Error('injected write failure');
+      return (await handles.get(fd).write(typeof text === 'string' ? text : Buffer.from(text))).bytesWritten;
+    } finally { activeWrites--; }
+  },
   async copyFile(source, target) {
     if (typeof source === 'string') return fsp.copyFile(source, target);
     await handles.get(target).writeFile(await handles.get(source).readFile());
@@ -102,20 +117,29 @@ function load(relative) {
     canIUse: () => parserAvailable, $r: id => ({ id }), require: name => {
     if (name === '@kit.CoreFileKit') return { fileIo, statfs: { getFreeSize: async () => free } };
     if (name === '@kit.ImageKit') return { image };
+    if (name === '@kit.PerformanceAnalysisKit') return { hilog: { info() {}, error() {} } };
     if (name === '@kit.ArkTS') return { util: { TextDecoder: { create(encoding, options) {
       const decoder = new TextDecoder(encoding, options);
       return { decodeToString: (bytes, opts) => decoder.decode(bytes, opts) };
     } } } };
-    if (name === '@kit.BasicServicesKit') return { zlib: { getOriginalSize: async () => 1024 } };
+    if (name === '@kit.BasicServicesKit') return {
+      deviceInfo: { sdkApiVersion: 20, deviceType: 'phone' },
+      zlib: { getOriginalSize: async () => 1024 }
+    };
     if (name === '@hms.core.readerservice.bookParser') {
       parserLoads++;
       assert.ok(parserAvailable, 'unsupported devices must never load the ReaderKit HSP');
       return { bookParser: {
       getDefaultHandler: async () => ({
         getBookInfo: () => ({ bookTitle: 'EPUB 标题', bookCreator: '作者' }),
-        getSpineList: () => [{ idRef: 'a' }, { idRef: 'b' }],
-        getCatalogList: () => [{ idRef: 'a', catalogName: '第一章' }, { idRef: 'b', catalogName: '第二章' }],
-        getSpineItemContent: async index => `<body><p>章节 ${index + 1}</p><script>bad()</script></body>`
+        getSpineList: () => Array.from({ length: epubCount }, (_, index) => ({ idRef: String(index), href: `text/${index}.html` })),
+        getCatalogList: () => [{ idRef: '0', catalogName: '第一章' }, { idRef: '1', catalogName: '第二章' },
+          { idRef: '1', catalogName: '同章内的二级目录，不应覆盖' }],
+        getSpineItemContent: async index => { layoutCalls++; return `<body><p>章节 ${index + 1}</p><script>bad()</script></body>`; },
+        getResourceContent: index => {
+          if (!epubRaw) throw new Error('resource unavailable');
+          return Uint8Array.from(Buffer.from(`<body><p>章节 ${index + 1}</p><script>bad()</script></body>`)).buffer;
+        }
       })
     } };
     }
@@ -135,6 +159,19 @@ function load(relative) {
   await assert.rejects(service.openEpub(context, '/unavailable.epub'), /当前设备不支持 EPUB 解析/);
   assert.equal(parserLoads, 0, 'capability failure must be handled before resolving the HSP');
   parserAvailable = true;
+  const rawHtml = '<html><body>带空格路径的完整章节</body></html>';
+  const rawBytes = Uint8Array.from(Buffer.from(rawHtml)).buffer;
+  assert.equal(await service.epubSpineText({
+    getSpineItemContent: async () => { throw new Error('Invalid request.'); },
+    getResourceContent: (_index, name) => {
+      if (name !== '33 - 副本.html') throw new Error('Not found');
+      return rawBytes;
+    }
+  }, 29, 'text/33%20-%20副本.html'), rawHtml);
+  await assert.rejects(service.epubSpineText({
+    getSpineItemContent: async () => { throw new Error('Invalid request.'); },
+    getResourceContent: () => { throw new Error('Not found'); }
+  }, 29, 'missing.html'), /Invalid request/);
   const { DataService: data } = load('service/DataService');
   await fsp.mkdir(path.join(context.cacheDir, 'cached_toc'), { recursive: true });
   await fsp.mkdir(path.join(context.filesDir, 'cached_toc'), { recursive: true });
@@ -189,6 +226,63 @@ function load(relative) {
   assert.equal(epub.title, 'EPUB 标题');
   assert.equal(epub.chapters.map(ch => ch.title).join(','), '第一章,第二章');
   assert.equal(await fsp.readFile(epub.chapters[1].source.value, 'utf8'), '章节 2');
+
+  epubCount = 2200; epubRaw = true; layoutCalls = 0;
+  writeDelay = 2; maxWrites = 0;
+  const updates = [];
+  const largeEpub = await service.importBook(context, file, 'import_pipeline', '', '', '', value => updates.push(value));
+  assert.equal(largeEpub.chapters.length, 2200);
+  assert.equal(layoutCalls, 0, 'available raw HTML must bypass layout conversion');
+  assert.ok(maxWrites > 1 && maxWrites <= 4, `bounded writes: ${maxWrites}`);
+  assert.ok(updates.length < 220 && updates.at(-1).endsWith('2200/2200'), 'throttled progress still emits final update');
+  for (let index = 0; index < largeEpub.chapters.length; index++) {
+    const chapter = largeEpub.chapters[index];
+    assert.equal(chapter.index, index + 1);
+    assert.equal(await fsp.readFile(chapter.source.value, 'utf8'), `章节 ${index + 1}`);
+  }
+  failingWrite = '/2.txt'; epubCount = 8;
+  await assert.rejects(service.importBook(context, file, 'import_pipeline_fail', '', '', '', () => {}), /injected write failure/);
+  assert.equal(activeWrites, 0, 'pending writes must settle before rollback');
+  assert.equal(handles.size, 0);
+  assert.equal(fs.existsSync(path.join(temp, 'ebooks/import_pipeline_fail')), false);
+  failingWrite = ''; writeDelay = 0; epubCount = 2; epubRaw = false;
+  console.log('PASS 2200-chapter EPUB: raw fast path, order/content, bounded writes, final progress, failure rollback');
+
+  const audioInputs = [];
+  for (let index = 0; index < 9; index++) {
+    const uri = path.join(temp, `audio_${index}.mp3`);
+    await fsp.writeFile(uri, `audio ${index}`);
+    audioInputs.push({ uri, name: `track ${index}`, ext: '.mp3' });
+  }
+  const audioDir = path.join(temp, 'audio_test'); await fsp.mkdir(audioDir);
+  let activeProbes = 0, maxProbes = 0;
+  const audio = await service.importAudioChapters(context, 'import_audio', audioDir, audioInputs, '/not-an-extract-root', async path => {
+    activeProbes++; maxProbes = Math.max(maxProbes, activeProbes);
+    const n = Number(require('node:path').basename(path, '.mp3'));
+    await new Promise(resolve => setTimeout(resolve, (5 - n % 4) * 2));
+    activeProbes--; return n;
+  }, () => {});
+  assert.ok(maxProbes > 1 && maxProbes <= 4);
+  for (let index = 0; index < audio.length; index++) {
+    assert.equal(audio[index].index, index + 1);
+    assert.equal(audio[index].duration, index + 1);
+    assert.equal(await fsp.readFile(audio[index].source.value, 'utf8'), `audio ${index}`);
+    assert.ok(fs.existsSync(audioInputs[index].uri), 'picker source files are not moved/deleted');
+  }
+  const zipRoot = path.join(temp, 'extract_test').replaceAll('\\', '/'); await fsp.mkdir(zipRoot);
+  const zipAudio = `${zipRoot}/track.mp3`; await fsp.writeFile(zipAudio, 'zip audio');
+  const zipAudioDir = path.join(temp, 'zip_audio_test'); await fsp.mkdir(zipAudioDir);
+  await service.importAudioChapters(context, 'import_zip_audio', zipAudioDir,
+    [{ uri: zipAudio, name: 'track', ext: '.mp3' }], zipRoot, async () => 0, () => {});
+  assert.equal(fs.existsSync(zipAudio), false);
+  assert.equal(await fsp.readFile(path.join(zipAudioDir, '1.mp3'), 'utf8'), 'zip audio');
+  const reserveDir = path.join(temp, 'reserve_test'); await fsp.mkdir(reserveDir);
+  free = 256 * 1024 ** 2 + 10; // One source fits, but four together do not.
+  await assert.rejects(service.importAudioChapters(context, 'import_audio_full', reserveDir,
+    audioInputs, '/not-an-extract-root', async () => 0, () => {}), /空间不足/);
+  assert.equal((await fsp.readdir(reserveDir)).length, 0);
+  free = 256 * 1024 ** 3;
+  console.log('PASS audio: out-of-order completion retains chapter order, ZIP move, batch space reservation');
 
   assert.ok(service.TEXT_EXTS.includes('.mobi'), 'ZIP collection uses the same supported extensions');
   assert.ok(strings.get('import_file_filter').includes('.mobi'), 'Document picker exposes MOBI');
@@ -354,6 +448,33 @@ function load(relative) {
   assert.equal(fs.existsSync(path.join(temp, 'imported_toc', book.id + '.json')), false);
   assert.equal(handles.size, 0);
   console.log('PASS: streaming chapters, Unicode/GB18030, HTML, EPUB adapter, restart persistence, space failure, deletion');
+  const { DiagnosticLogService: logs } = load('service/DiagnosticLogService');
+  await logs.list();
+  logs.init(context);
+  await logs.clear();
+  for (let index = 0; index < 205; index++) logs.info('test', 'entry=' + index);
+  let entries = await logs.list();
+  assert.equal(entries.length, 200);
+  assert.equal(entries[0].message, 'entry=204');
+  const sensitive = new Error('open file:///storage/secret.txt token=abc https://example.com/?token=def');
+  sensitive.code = 13900012;
+  logs.failure('import.read', sensitive);
+  entries = await logs.list();
+  assert.match(entries[0].message, /code=13900012/);
+  assert.doesNotMatch(entries[0].message, /secret.txt|abc|example.com|def/);
+  const persisted = JSON.parse(await fsp.readFile(path.join(temp, 'diagnostic_log.json'), 'utf8'));
+  assert.equal(persisted.length, 200);
+  modules.delete(path.join(root, 'service/DiagnosticLogService.ets'));
+  const restoredLogs = load('service/DiagnosticLogService').DiagnosticLogService;
+  restoredLogs.init(context);
+  assert.ok((await restoredLogs.list()).some(entry => entry.stage === 'import.read'));
+  await restoredLogs.clear();
+  await restoredLogs.check();
+  assert.ok((await restoredLogs.list()).some(entry => entry.level === 'ERROR' && entry.stage === 'check.storage'));
+  await restoredLogs.clear();
+  assert.equal((await restoredLogs.list()).length, 0);
+  assert.equal(handles.size, 0);
+  console.log('PASS diagnostics: bounded persistence, restart, error code, redaction, low-space check and clear');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   for (const handle of handles.values()) await handle.close();
   await fsp.rm(temp, { recursive: true, force: true });

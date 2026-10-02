@@ -11,6 +11,8 @@ import { SourceDataService } from './SourceDataService';
 import { DownloadPolicy } from './DownloadPolicy';
 import { StorageMigrationService } from './StorageMigrationService';
 import { AudioDownloadTransport } from './AudioDownloadTransport';
+import { BackgroundTaskService } from './BackgroundTaskService';
+import { DiagnosticLogService } from './DiagnosticLogService';
 
 const DOMAIN = 0x0001;
 const TAG = 'ChapterCache';
@@ -65,7 +67,8 @@ export class ChapterCacheService {
   private preloadFailureAt: Map<string, number> = new Map();
   private runningCount: number = 0;
   private queue: Map<string, () => Promise<void>> = new Map();
-  private appContext: common.Context | null = null;
+  private appContext: common.UIAbilityContext | null = null;
+  private transferHeld: boolean = false;
   private storageMigration: Promise<void> = Promise.resolve();
   private storageReady: boolean = true;
   private clearGen: number = 0;
@@ -213,7 +216,7 @@ export class ChapterCacheService {
     }
   }
 
-  setContext(ctx: common.Context): void {
+  setContext(ctx: common.UIAbilityContext): void {
     this.appContext = ctx;
     this.storageReady = false;
     this.storageMigration = StorageMigrationService.migrateFilesWithPrefix(ctx.cacheDir, ctx.filesDir, 'chap_', true)
@@ -399,15 +402,36 @@ export class ChapterCacheService {
       this.pendingTasks.add(chapterId);
       this.runningTaskGenerations.set(chapterId, this.preloadGen);
       this.runningCount++;
-      task().catch((error: Error): void => {
+      this.runQueuedTask(chapterId, task, this.preloadGen).catch((error: Error): void => {
         hilog.warn(DOMAIN, TAG, 'preload task failed: %{public}s', error.message);
       }).finally((): void => {
         this.pendingTasks.delete(chapterId);
         this.runningTaskGenerations.delete(chapterId);
         this.runningCount--;
         this.drain();
+        this.stopBackgroundTransferIfIdle();
       });
     }
+  }
+
+  /** 预缓存与手动下载分别持有 dataTransfer，暂停音频不会中断已经安排的有限队列。 */
+  private async runQueuedTask(chapterId: string, task: () => Promise<void>, generation: number): Promise<void> {
+    const context = this.appContext;
+    if (context && !this.transferHeld) {
+      this.transferHeld = true;
+      await BackgroundTaskService.startDataTransfer(context, 'preload');
+    }
+    if (!this.isPreloadEnabled() ||
+      (generation !== this.preloadGen && chapterId !== this.priorityChapterId)) return;
+    await task();
+  }
+
+  private stopBackgroundTransferIfIdle(): void {
+    if (!this.transferHeld || this.runningCount > 0 || this.queue.size > 0 || !this.appContext) return;
+    this.transferHeld = false;
+    BackgroundTaskService.stopDataTransfer(this.appContext, 'preload').catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'release preload background task failed: %{public}s', error.message);
+    });
   }
 
   /* ───────────── 内部：解析 + 下载 ───────────── */
@@ -523,6 +547,7 @@ export class ChapterCacheService {
       });
       this.preloadFailureAt.delete(chapter.id);
       hilog.info(DOMAIN, TAG, 'file cached chapter=%{public}s bytes=%{public}d', chapter.id, bytes);
+      DiagnosticLogService.info('audio.cache', `complete; bytes=${bytes}`);
       emitter.emit(EVT_CHAPTER_CACHE_UPDATED, { data: { chapterId: chapter.id } });
       this.evictFileCache();
       await this.enforceDiskCacheLimit();
@@ -535,6 +560,7 @@ export class ChapterCacheService {
       }
       const message = err instanceof Error ? err.message : String(err);
       hilog.warn(DOMAIN, TAG, 'downloadFile failed: %{public}s', message);
+      DiagnosticLogService.info('audio.cache', `incomplete; ${message}`);
     } finally {
       if (activePath) this.activeFilePaths.delete(activePath);
       if (transport !== null && this.activeDownloads.get(chapter.id) === transport) this.activeDownloads.delete(chapter.id);

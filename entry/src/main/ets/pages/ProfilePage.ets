@@ -7,6 +7,8 @@ import { AuthService } from '../service/AuthService';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { CommunityGroupService } from '../service/CommunityGroupService';
 import { AccountAvatar } from '../components/AccountAvatar';
+import { MembershipBadge } from '../components/MembershipBadge';
+import { MembershipState } from '../model/MembershipState';
 
 class ProfileItem {
   icon: Resource;
@@ -28,7 +30,7 @@ class ProfileItem {
 const CONTENT_ITEMS: ProfileItem[] = [
   new ProfileItem($r('sys.symbol.star_fill'), $r('app.string.achievement_title'), 'achievements', '#E6A23C'),
   new ProfileItem($r('sys.symbol.arrow_down_circle'), '本地导入', 'import', '#34C759'),
-  new ProfileItem($r('sys.symbol.arrow_down_circle'), '下载管理', 'downloads', '#0A84FF')
+  new ProfileItem($r('sys.symbol.doc_text'), $r('app.string.log_title'), 'logs', '#0A84FF')
 ];
 
 const SYSTEM_ITEMS: ProfileItem[] = [
@@ -37,7 +39,7 @@ const SYSTEM_ITEMS: ProfileItem[] = [
 ];
 
 const SUPPORT_ITEMS: ProfileItem[] = [
-  new ProfileItem($r('sys.symbol.square_grid_2x2'), $r('app.string.app_icon_title'), 'appIcon', AppColor.Brand),
+  new ProfileItem($r('sys.symbol.star_fill'), $r('app.string.membership_title'), 'membership', AppColor.Brand),
   new ProfileItem($r('sys.symbol.qrcode'), $r('app.string.profile_wechat_title'), 'wechat',
     '#07C160', $r('app.string.profile_wechat_desc')),
   new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community',
@@ -52,6 +54,7 @@ export struct ProfilePage {
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   @Local medalService: MedalService = MedalService.instance;
   @Local auth: AuthService = AuthService.instance;
+  @Local membership: MembershipState = MembershipState.current;
 
   private scrollScroller: Scroller = new Scroller();
 
@@ -69,16 +72,16 @@ export struct ProfilePage {
   private onItemTap(id: string): void {
     if (id === 'import') {
       this.navStack.pushPathByName('import', '');
-    } else if (id === 'downloads') {
-      this.navStack.pushPathByName('downloads', '');
+    } else if (id === 'logs') {
+      this.navStack.pushPathByName('logs', '');
     } else if (id === 'achievements') {
       this.navStack.pushPathByName('achievements', '');
     } else if (id === 'account') {
       this.navStack.pushPathByName('account', '');
     } else if (id === 'settings') {
       this.navStack.pushPathByName('settings', '');
-    } else if (id === 'appIcon') {
-      this.navStack.pushPathByName('appIcon', '');
+    } else if (id === 'membership') {
+      this.navStack.pushPathByName('membership', '');
     } else if (id === 'ruleSources') {
       this.navStack.pushPathByName('ruleSources', '');
     } else if (id === 'about') {
@@ -220,6 +223,9 @@ export struct ProfilePage {
               .objectFit(ImageFit.Contain)
               .flexShrink(0)
               .accessibilityText(this.medalService.selected()?.name ?? $r('app.string.account_medal_list'))
+          }
+          if (this.membership.active) {
+            MembershipBadge({ productId: this.membership.productId, badgeWidth: 36 })
           }
         }
         .width('100%')

@@ -14,6 +14,34 @@
 # 这些属性来自外部 JSON（Legado 书源格式）或本地持久化，
 # 通过 JSON.parse / JSON.stringify 访问，混淆器无法静态追踪，必须显式保留。
 -keep-property-name
+  # Huawei IAP signed JSON payload fields (never obfuscate wire names).
+  alg
+  typ
+  x5c
+  crit
+  jwsSubscriptionStatus
+  environment
+  applicationId
+  packageName
+  subGroupId
+  lastSubscriptionStatus
+  status
+  expiresTime
+  lastPurchaseOrder
+  renewalInfo
+  autoRenewStatusCode
+  productId
+  productType
+  purchaseToken
+  purchaseOrderId
+  finishStatus
+  purchaseTime
+  # Bounded on-device diagnostic log, stable across release upgrades
+  id
+  time
+  level
+  stage
+  message
   # Medal preferences and backup JSON
   medals
   selectedMedalId

@@ -5,7 +5,8 @@ import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransi
 import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
-import { AppIconPage } from './AppIconPage';
+import { MembershipPage } from './MembershipPage';
+import { MembershipSubscriptionPage } from './MembershipSubscriptionPage';
 import { AboutPage } from './AboutPage';
 import { TechnicalSupportPage } from './TechnicalSupportPage';
 import { AccountPage } from './AccountPage';
@@ -19,6 +20,7 @@ import { CompliancePage } from './CompliancePage';
 import { OpenSourcePage } from './OpenSourcePage';
 import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
+import { LogManagementPage } from './LogManagementPage';
 import { ReaderPage } from './ReaderPage';
 // import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
 import { SearchPage } from './SearchPage';
@@ -382,9 +384,13 @@ struct Index {
       ProfileMenuDestination() {
         SettingsPage({ navStack: this.navStack })
       }
-    } else if (name === 'appIcon') {
+    } else if (name === 'membershipSubscription') {
       ProfileMenuDestination() {
-        AppIconPage({ navStack: this.navStack })
+        MembershipSubscriptionPage({ navStack: this.navStack })
+      }
+    } else if (name === 'membership') {
+      ProfileMenuDestination() {
+        MembershipPage({ navStack: this.navStack })
       }
     } else if (name === 'ruleSources') {
       // RuleSourcePage 自带 ProfileMenuDestination：页内多级视图需拦截侧滑返回
@@ -417,6 +423,10 @@ struct Index {
       })
     } else if (name === 'ruleSourceExplore' || name === 'ruleSourceLoginPanel') {
       RuleSourcePanelPage({ navStack: this.navStack, sourceUrl: String(param), login: name === 'ruleSourceLoginPanel' })
+    } else if (name === 'logs') {
+      ProfileMenuDestination() {
+        LogManagementPage({ navStack: this.navStack })
+      }
     } else if (name === 'downloads') {
       ProfileMenuDestination({ pageBackground: $r('sys.color.background_secondary') }) {
         DownloadManagerPage({ navStack: this.navStack })

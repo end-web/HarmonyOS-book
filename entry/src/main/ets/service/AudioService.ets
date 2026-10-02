@@ -458,7 +458,9 @@ export class AudioService {
         }
       } else if (newState === 'paused') {
         this.state.isPlaying = false;
-        ChapterCacheService.getInstance().suspendPreload();
+        if (this.state.currentBook && this.state.currentChapter) {
+          this.triggerPreload(this.state.currentBook, this.state.currentChapter, true);
+        }
         this.stopTick();
         // 立即落盘:暂停后 tick 停了,不存就会丢掉「上次 tick 到暂停」之间的进度,
         // 手动暂停 / 锁屏 / 电话打断后续播都会偏早。progressMs 此刻已是暂停位置,
@@ -573,7 +575,8 @@ export class AudioService {
         this.startTick();
       }
       if (!this.state?.isLive) {
-        if (type === media.BufferingInfoType.BUFFERING_START) {
+        if (type === media.BufferingInfoType.BUFFERING_START &&
+          !this.pauseRequested && !this.sleepPausePending && this.state?.isPlaying) {
           this.preloadBuffering = true;
           ChapterCacheService.getInstance().suspendPreload();
         } else if (type === media.BufferingInfoType.BUFFERING_END) {
@@ -1683,6 +1686,9 @@ export class AudioService {
   private async pauseForSleep(): Promise<void> {
     const p = this.player;
     if (this.state) this.state.isPlaying = false;
+    if (this.state?.currentBook && this.state.currentChapter) {
+      this.triggerPreload(this.state.currentBook, this.state.currentChapter, true);
+    }
     if (p?.state === 'playing') await p.pause();
     await this.persistHistory();
     PlaybackStore.getInstance().setPlaying(this.state?.isPlaying ?? false);
@@ -1923,10 +1929,14 @@ export class AudioService {
     }
   }
 
-  private triggerPreload(book: Book, chapter: Chapter): void {
+  private triggerPreload(book: Book, chapter: Chapter, afterPause: boolean = false): void {
     const generation = this.playGen;
-    setTimeout((): void => {
-      if (generation !== this.playGen || !this.state?.isPlaying || this.state.isLoading || this.preloadBuffering) return;
+    const preload = (): void => {
+      if (generation !== this.playGen || !this.state || this.state.isLoading ||
+        this.state.currentBook?.id !== book.id || this.state.currentChapter?.id !== chapter.id) return;
+      if (!afterPause && (!this.state.isPlaying || this.preloadBuffering)) return;
+      if (afterPause && (!this.player || (this.player.state !== 'playing' &&
+        this.player.state !== 'paused' && this.player.state !== 'prepared' && this.player.state !== 'completed'))) return;
       if (this.state.isLive) return;
       const cache = ChapterCacheService.getInstance();
       cache.resumePreload();
@@ -1936,7 +1946,15 @@ export class AudioService {
       }
       const idx = this.findChapterIndex(book, chapter);
       if (idx >= 0) cache.preloadAudioChapters(book, idx);
-    }, 0);
+    };
+    // 在释放 audioPlayback 之前登记下载任务；普通播放仍等首帧出声后启动。
+    if (afterPause) {
+      try { preload(); } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        hilog.warn(DOMAIN, TAG, 'continue paused preload failed: %{public}s', message);
+      }
+    }
+    else setTimeout(preload, 0);
   }
 
   private currentAudioHeaders: Record<string, string> = {};
@@ -1980,7 +1998,9 @@ export class AudioService {
 
   /** 系统播控、耳机和卡片共用的暂停入口，重复指令保持暂停。 */
   async pause(source: string = 'user'): Promise<void> {
-    ChapterCacheService.getInstance().suspendPreload();
+    if (this.state?.currentBook && this.state.currentChapter) {
+      this.triggerPreload(this.state.currentBook, this.state.currentChapter, true);
+    }
     this.cancelLiveRecovery();
     this.pauseSource = source;
     this.tracePlayback('pause-request');

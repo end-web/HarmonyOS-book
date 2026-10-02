@@ -8,6 +8,13 @@ import { KkBiqugeHtmlParser } from './text/KkBiqugeHtmlParser';
 import { EpubCoverService } from './text/EpubCoverService';
 import { MobiBookParser, MobiBookInfo } from './text/MobiBookParser';
 import { FileOpenRouting } from '../utils/FileOpenRouting';
+import { DiagnosticLogService } from './DiagnosticLogService';
+import { LocalImportTaskQueue } from './LocalImportTaskQueue';
+
+class EpubReadStats {
+  raw: number = 0;
+  layout: number = 0;
+}
 
 export class LocalImportFile {
   uri: string = '';
@@ -34,8 +41,8 @@ export class LocalBookImportService {
       throw new Error(context.resourceManager.getStringSync($r('app.string.epub_parser_unavailable').id));
     }
     // BookParser 同样依赖 ReaderKit HSP，不能在首页导入链中静态加载。
-    const parserModule = await import('@hms.core.readerservice.bookParser');
-    return parserModule.bookParser.getDefaultHandler(path);
+    const parserModule = await import('./text/EpubParserService');
+    return parserModule.EpubParserService.open(path);
   }
 
   /** 选文件后预解析，不写入书架；临时封面在正式导入时复制到书籍目录。 */
@@ -131,6 +138,31 @@ export class LocalBookImportService {
     } catch (_e) { return ''; }
   }
 
+  /** 纯文本导入优先读资源；无法读取/解码时才调用排版接口，同一 handler 保持串行。 */
+  private static async epubSpineText(handler: bookParser.BookParserHandler, index: number,
+    href: string, stats: EpubReadStats = new EpubReadStats()): Promise<string> {
+    const name = href.substring(href.lastIndexOf('/') + 1).split('#')[0];
+    const candidates: string[] = [name, href];
+    for (const path of [name, href]) {
+      try {
+        const decoded = decodeURIComponent(path);
+        if (decoded !== path && !candidates.includes(decoded)) candidates.push(decoded);
+      } catch (_decode) { /* 保留原始合法候选。 */ }
+    }
+    for (const candidate of candidates) {
+      try {
+        const bytes = handler.getResourceContent(index, candidate);
+        if (bytes.byteLength === 0 || bytes.byteLength > 32 * 1024 * 1024) continue;
+        const text = util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(new Uint8Array(bytes));
+        if (!/<(?:html|body)\b/i.test(text)) continue;
+        stats.raw++;
+        return text;
+      } catch (_resource) { /* 仅尝试同一 spine 资源，不跳过失败章节。 */ }
+    }
+    stats.layout++;
+    return handler.getSpineItemContent(index);
+  }
+
   static async requireSpace(context: common.Context, bytes: number): Promise<void> {
     const free = await statfs.getFreeSize(context.filesDir);
     if (!Number.isSafeInteger(bytes) || bytes < 0 || free < bytes + 256 * 1024 * 1024) {
@@ -162,8 +194,57 @@ export class LocalBookImportService {
     finally { await fileIo.close(file); }
   }
 
+  /** ZIP 中的音频直接移动；普通文件每批预留总空间，再执行最多四路复制。 */
+  static async importAudioChapters(context: common.Context, bookId: string, directory: string,
+    files: LocalImportFile[], extractRoot: string, probe: (path: string) => Promise<number>,
+    progress: (completed: number, total: number) => void): Promise<Chapter[]> {
+    const started = Date.now();
+    const queue = new LocalImportTaskQueue();
+    const chapters: Chapter[] = [];
+    let completed = 0;
+    let lastProgressAt = 0;
+    try {
+      for (let offset = 0; offset < files.length; offset += 4) {
+        const batch = files.slice(offset, offset + 4);
+        const sizes = await Promise.all(batch.map((file: LocalImportFile): Promise<number> =>
+          file.uri.startsWith(extractRoot + '/') ? Promise.resolve(0) : LocalBookImportService.fileSize(file.uri)));
+        const needed = sizes.reduce((sum: number, size: number): number => sum + size, 0);
+        if (needed > 0) await LocalBookImportService.requireSpace(context, needed);
+        for (let position = 0; position < batch.length; position++) {
+          const index = offset + position;
+          const file = batch[position];
+          const destination = `${directory}/${index + 1}${file.ext}`;
+          await queue.add(async (): Promise<void> => {
+            if (file.uri.startsWith(extractRoot + '/')) await fileIo.moveFile(file.uri, destination);
+            else await LocalBookImportService.copyFile(file.uri, destination);
+            const duration = files.length <= 500 ? await probe(destination) : 0;
+            const chapter: Chapter = {
+              id: `${bookId}-c${index + 1}`, index: index + 1, title: file.name, duration: duration,
+              source: { type: 'file', value: destination }
+            };
+            chapters[index] = chapter;
+            completed++;
+            const now = Date.now();
+            if (now - lastProgressAt >= 150 || completed === files.length) {
+              lastProgressAt = now;
+              progress(completed, files.length);
+            }
+          });
+        }
+        await queue.finish();
+      }
+      DiagnosticLogService.info('import.timing', `format=audio; chapters=${chapters.length}; ` +
+        `copyAndProbeMs=${queue.busyMs}; totalMs=${Date.now() - started}`);
+      return chapters;
+    } catch (error) {
+      await queue.settle();
+      throw new Error(DiagnosticLogService.describe(error));
+    }
+  }
+
   /** 有上限的单章节文件，正文读取不需要在线书源。 */
-  static async appendText(book: Book, directory: string, title: string, text: string): Promise<void> {
+  static async appendText(book: Book, directory: string, title: string, text: string,
+    writes?: LocalImportTaskQueue): Promise<void> {
     let offset = 0;
     while (offset < text.length) {
       let end = Math.min(text.length, offset + 32000);
@@ -178,7 +259,11 @@ export class LocalBookImportService {
         if (book.chapters.length >= LocalBookImportService.MAX_CHAPTERS) throw new Error('单书超过 50000 章');
         const index = book.chapters.length;
         const path = `${directory}/${index}.txt`;
-        await LocalBookImportService.writeText(path, content);
+        if (writes) {
+          await writes.add((): Promise<void> => LocalBookImportService.writeText(path, content));
+        } else {
+          await LocalBookImportService.writeText(path, content);
+        }
         const chapter: Chapter = {
           id: `${book.id}-c${index}`, index: index + 1,
           title: offset === 0 ? title : `${title}（续）`, duration: 0,
@@ -207,7 +292,7 @@ export class LocalBookImportService {
 
   /** 64 KiB 流式读取 TXT；章节标题分段，无标题的长文按 32000 字符分段。 */
   private static async importText(book: Book, directory: string, uri: string,
-    html: boolean, progress: (text: string) => void): Promise<void> {
+    html: boolean, progress: (text: string) => void, writes: LocalImportTaskQueue): Promise<void> {
     const file = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
     try {
       const size = (await fileIo.stat(file.fd)).size;
@@ -233,26 +318,26 @@ export class LocalBookImportService {
         for (const line of lines) {
           const trimmed = line.trim();
           if (/^(?:第[零〇一二三四五六七八九十百千万两\d]+[章节卷回部篇].{0,70}|chapter\s+\d+.{0,70}|序章|序言|楔子|尾声|后记)$/i.test(trimmed)) {
-            await LocalBookImportService.appendText(book, directory, title, section);
+            await LocalBookImportService.appendText(book, directory, title, section, writes);
             title = trimmed;
             section = '';
           }
           section += line + '\n';
           if (section.length >= 32000) {
-            await LocalBookImportService.appendText(book, directory, title, section);
+            await LocalBookImportService.appendText(book, directory, title, section, writes);
             section = '';
           }
         }
         if (pending.length >= 32000) {
           section += pending;
           pending = '';
-          await LocalBookImportService.appendText(book, directory, title, section);
+          await LocalBookImportService.appendText(book, directory, title, section, writes);
           section = '';
         }
         progress(`${book.title} ${Math.floor(offset * 100 / size)}%`);
       }
       await LocalBookImportService.appendText(book, directory, title,
-        html ? LocalBookImportService.htmlText(htmlContent) : section + pending);
+        html ? LocalBookImportService.htmlText(htmlContent) : section + pending, writes);
     } finally { await fileIo.close(file); }
   }
 
@@ -269,7 +354,8 @@ export class LocalBookImportService {
   }
 
   private static async importMobi(context: common.Context, book: Book, directory: string,
-    file: LocalImportFile, title: string, author: string, progress: (text: string) => void): Promise<void> {
+    file: LocalImportFile, title: string, author: string, progress: (text: string) => void,
+    writes: LocalImportTaskQueue): Promise<void> {
     const chunks: string[] = [];
     const info = await LocalBookImportService.readMobi(context, file.uri,
       async (text: string, metadata: MobiBookInfo, percent: number): Promise<void> => {
@@ -289,7 +375,7 @@ export class LocalBookImportService {
     let label = book.title;
     while (match !== null) {
       await LocalBookImportService.appendText(book, directory, label,
-        LocalBookImportService.htmlText(html.substring(start, match.index)));
+        LocalBookImportService.htmlText(html.substring(start, match.index)), writes);
       if (match[2] !== undefined) {
         label = LocalBookImportService.htmlText(match[2]).trim().substring(0, 200) || book.title;
         start = match.index; // Keep the visible heading in the chapter body.
@@ -300,11 +386,26 @@ export class LocalBookImportService {
       match = boundary.exec(html);
     }
     await LocalBookImportService.appendText(book, directory, label,
-      LocalBookImportService.htmlText(html.substring(start)));
+      LocalBookImportService.htmlText(html.substring(start)), writes);
   }
 
   static async importBook(context: common.Context, file: LocalImportFile, id: string,
     title: string, author: string, cover: string, progress: (text: string) => void): Promise<Book> {
+    const started = Date.now();
+    const writes = new LocalImportTaskQueue();
+    const epubStats = new EpubReadStats();
+    let lastProgressAt = 0;
+    let latestProgress = '';
+    let shownProgress = '';
+    const report = (text: string): void => {
+      latestProgress = text;
+      const now = Date.now();
+      if (now - lastProgressAt >= 150 && shownProgress !== text) {
+        lastProgressAt = now;
+        shownProgress = text;
+        progress(text);
+      }
+    };
     const directory = `${context.filesDir}/ebooks/${id}`;
     const book: Book = {
       id: id, contentType: 'text', title: title || file.name, author: author || '未知',
@@ -313,6 +414,9 @@ export class LocalBookImportService {
       bookUrl: `local-text://${id}`, sourceUrl: ''
     };
     await fileIo.mkdir(directory, true);
+    let stage = 'prepare';
+    let parseStarted = started;
+    let prepareMs = 0;
     try {
       if (cover.length > 0) {
         const localCover = `${directory}/cover${cover.toLowerCase().endsWith('.png') ? '.png' : '.jpg'}`;
@@ -320,9 +424,14 @@ export class LocalBookImportService {
         book.cover = localCover;
       }
       const size = await LocalBookImportService.fileSize(file.uri);
+      stage = 'space';
       await LocalBookImportService.requireSpace(context, size * 3);
+      DiagnosticLogService.info('import.file', `format=${file.ext}; bytes=${size}`);
+      stage = 'parse';
+      parseStarted = Date.now();
+      prepareMs = parseStarted - started;
       if (file.ext === '.mobi') {
-        await LocalBookImportService.importMobi(context, book, directory, file, title, author, progress);
+        await LocalBookImportService.importMobi(context, book, directory, file, title, author, report, writes);
       } else if (file.ext === '.epub') {
         if (size > 512 * 1024 * 1024) throw new Error('EPUB 超过 512 MiB');
         const archive = `${directory}/source.zip`;
@@ -339,21 +448,36 @@ export class LocalBookImportService {
         if (!author) book.author = info.bookCreator || await LocalBookImportService.epubCreator(handler) || book.author;
         const spine = handler.getSpineList();
         const catalog = handler.getCatalogList();
+        const titles = new Map<string, string>();
+        for (const item of catalog) {
+          if (item.idRef && !titles.has(item.idRef)) titles.set(item.idRef, item.catalogName);
+        }
         if (spine.length > LocalBookImportService.MAX_CHAPTERS) throw new Error('EPUB 超过 50000 节');
         for (let index = 0; index < spine.length; index++) {
-          progress(`${book.title} ${index + 1}/${spine.length}`);
-          const label = catalog.find((item: bookParser.CatalogItem): boolean => item.idRef === spine[index].idRef);
-          const html = await handler.getSpineItemContent(index);
-          await LocalBookImportService.appendText(book, directory, label?.catalogName || `${book.title} ${index + 1}`,
-            LocalBookImportService.htmlText(html));
+          report(`${book.title} ${index + 1}/${spine.length}`);
+          const label = titles.get(spine[index].idRef);
+          const html = await LocalBookImportService.epubSpineText(handler, index, spine[index].href, epubStats);
+          await LocalBookImportService.appendText(book, directory, label || `${book.title} ${index + 1}`,
+            LocalBookImportService.htmlText(html), writes);
         }
       } else {
-        await LocalBookImportService.importText(book, directory, file.uri, file.ext !== '.txt', progress);
+        await LocalBookImportService.importText(book, directory, file.uri, file.ext !== '.txt', report, writes);
       }
+      stage = 'write';
+      await writes.finish();
       if (book.chapters.length === 0) throw new Error('没有可读取的文字章节');
+      if (latestProgress && latestProgress !== shownProgress) progress(latestProgress);
       book.chapterCount = book.chapters.length;
+      DiagnosticLogService.info('import.parsed', `format=${file.ext}; chapters=${book.chapterCount}`);
+      // I/O 与解析重叠，writeBusyMs 不能与 parseReadMs 相加；writeWaitMs 为实际阻塞解析的时间。
+      DiagnosticLogService.info('import.timing', `format=${file.ext}; chapters=${book.chapterCount}; ` +
+        `prepareMs=${prepareMs}; parseReadMs=${Date.now() - parseStarted - writes.waitMs}; ` +
+        `writeWaitMs=${writes.waitMs}; writeBusyMs=${writes.busyMs}; totalMs=${Date.now() - started}; ` +
+        `epubRaw=${epubStats.raw}; epubLayout=${epubStats.layout}`);
       return book;
     } catch (error) {
+      await writes.settle();
+      DiagnosticLogService.failure(`import.${stage}`, error, `format=${file.ext}`);
       try { await fileIo.rmdir(directory); } catch (_cleanup) { /* 保留原始错误 */ }
       throw new Error(error instanceof Error ? error.message : String(error));
     }

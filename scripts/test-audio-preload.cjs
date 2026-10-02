@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, '../entry/src/main/ets');
 const sizes = new Map();
 const transfers = [];
 const events = [];
+const backgroundModes = [];
 class Transfer {
   cancelled = false;
   download(options) {
@@ -34,7 +35,14 @@ const stubs = {
     utimes() {}, listFile: async () => [], unlink: async filename => sizes.delete(filename),
     unlinkSync: filename => sizes.delete(filename)
   } },
-  '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {} } },
+  '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },
+  '@kit.BackgroundTasksKit': { backgroundTaskManager: { on() {},
+    startBackgroundRunning: async (_context, modes) => backgroundModes.push([...modes]),
+    updateBackgroundRunning: async (_context, modes) => backgroundModes.push([...modes]),
+    stopBackgroundRunning: async () => backgroundModes.push([]) } },
+  '@kit.AbilityKit': { wantAgent: { OperationType: { START_ABILITY: 0 },
+    WantAgentFlags: { UPDATE_PRESENT_FLAG: 0 }, getWantAgent: async () => ({}) } },
+  'service/DiagnosticLogService': { DiagnosticLogService: { info() {} } },
   '@kit.BasicServicesKit': { emitter: { emit: event => events.push(event) } },
   '@kit.MediaKit': { media: {} },
   'service/PreferenceService': { PreferenceService: { chapterStep: () => 1 } },
@@ -128,7 +136,8 @@ function load(name) {
       source: { type: 'url', value: `https://source.invalid/${id}/${i}` } })) });
   const freshCache = async () => {
     const instance = new ChapterCacheService();
-    instance.setContext({ cacheDir: '/cache', filesDir: '/files' });
+    instance.setContext({ cacheDir: '/cache', filesDir: '/files',
+      abilityInfo: { bundleName: 'test', name: 'EntryAbility' } });
     await instance.storageMigration;
     instance.setPreloadCount(3);
     return instance;
@@ -150,6 +159,7 @@ function load(name) {
   const replayStart = transfers.length;
   replay.ensureFileCached(replayBook, firstChapter, firstUrl, replay.getAudioHeaders(firstChapter.id));
   replay.preloadAudioChapters(replayBook, 0);
+  await settle();
   assert.equal(transfers.length, replayStart + 1);
   assert.equal(transfers.at(-1).options.url, firstUrl, 'Current chapter is saved before future prefetch');
   transfers.at(-1).finish(6000);
@@ -249,6 +259,47 @@ function load(name) {
   expiring.audioCache.set('fresh', { resolvedUrl: 'https://cdn.invalid/fresh', headers: {}, timestamp: Date.now() });
   assert.equal(expiring.getAudioUrl('fresh'), 'https://cdn.invalid/fresh');
   console.log('PASS URL expiration removes both stale URL and headers');
+
+  const background = load('service/BackgroundTaskService').BackgroundTaskService;
+  const pausedCache = await freshCache();
+  const pausedBook = makeBook('paused-completion');
+  const ctx = pausedCache.appContext;
+  await background.start(ctx);
+  await background.startDataTransfer(ctx);
+  pausedCache.ensureFileCached(pausedBook, pausedBook.chapters[0], 'https://cdn.invalid/current.mp3');
+  pausedCache.preloadAudioChapters(pausedBook, 0);
+  await settle();
+  await background.stop(ctx);
+  await background.stopDataTransfer(ctx);
+  assert.equal(background.hasMode('audioPlayback'), false);
+  assert.equal(background.hasMode('dataTransfer'), true, 'Preload outlives both audio pause and manual download completion');
+  const firstPausedTransfer = transfers.length - 1;
+  for (let index = 0; index < 4; index++) {
+    const transfer = transfers.at(-1);
+    assert.equal(transfer.cancelled, false);
+    transfer.finish(8192);
+    await settle();
+    if (index < 3) assert.equal(background.hasMode('dataTransfer'), true, 'Keep data transfer across queued chapters');
+  }
+  assert.equal(transfers.length - firstPausedTransfer, 4, 'Only current plus configured three chapters are downloaded');
+  assert.equal(pausedCache.runningCount, 0);
+  assert.equal(background.hasMode('dataTransfer'), false, 'Finite queue releases background mode when finished');
+  const reopened = await freshCache();
+  for (const chapter of pausedBook.chapters.slice(0, 4)) {
+    assert.ok(reopened.getAudioFilePath(pausedBook.id, chapter.id, chapter.source.value), 'Completed paused downloads survive cold start');
+  }
+  const failedCache = await freshCache();
+  const failedBook = makeBook('failed-completion');
+  await background.startDataTransfer(ctx);
+  failedCache.ensureFileCached(failedBook, failedBook.chapters[0], 'https://cdn.invalid/fail.mp3');
+  await settle();
+  transfers.at(-1).reject(new Error('network failure'));
+  await settle();
+  assert.equal(failedCache.transferHeld, false, 'Failure releases the preload owner');
+  assert.equal(background.hasMode('dataTransfer'), true, 'Preload failure must not stop manual download');
+  await background.stopDataTransfer(ctx);
+  assert.equal(background.hasMode('dataTransfer'), false);
+  console.log('PASS paused finite queue completes, cold cache survives, and background owners release independently on success/failure');
 
   sizes.clear();
   const migrationIo = stubs['@kit.CoreFileKit'].fileIo;

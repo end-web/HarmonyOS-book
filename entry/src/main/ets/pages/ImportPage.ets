@@ -2,15 +2,16 @@ import { LocalBookImportService, LocalImportFile, LocalBookPreview } from '../se
 import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
-import { zlib, emitter } from '@kit.BasicServicesKit';
+import { zlib, emitter, BusinessError } from '@kit.BasicServicesKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { media } from '@kit.MediaKit';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
-import { Book, Chapter, AudioSource } from '../model/Book';
+import { Book } from '../model/Book';
 import { DataService } from '../service/DataService';
 import { PreferenceService } from '../service/PreferenceService';
 import { WindowUtils } from '../utils/WindowUtils';
 import { FileOpenRouting } from '../utils/FileOpenRouting';
+import { DiagnosticLogService } from '../service/DiagnosticLogService';
 
 export const EVT_SWITCH_TAB = 'app.nav.switchTab';
 const TAB_INDEX_FAVORITE = 1;
@@ -63,7 +64,8 @@ export struct ImportPage {
     this.disposed = false;
     if (this.importFileUri.length > 0 && !this.externalImportConsumed) {
       this.externalImportConsumed = true;
-      this.addPickedUris([this.importFileUri], this.importFileType).catch((): void => {
+      this.addPickedUris([this.importFileUri], this.importFileType).catch((error: BusinessError): void => {
+        DiagnosticLogService.failure('import.external', error);
         if (!this.disposed && this.context !== null) {
           this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_external_failed').id);
         }
@@ -94,7 +96,10 @@ export struct ImportPage {
           if (this.disposed && file.preview.directory.length > 0) {
             await fileIo.rmdir(file.preview.directory).catch((): void => {});
           }
-        } catch (_e) { failures++; }
+        } catch (error) {
+          failures++;
+          DiagnosticLogService.failure('import.preview', error, `format=${file.ext}`);
+        }
       }
       if (this.disposed) return;
       if (files.length === 1 && files[0].preview !== null) {
@@ -122,10 +127,14 @@ export struct ImportPage {
       opt.fileSuffixFilters = [this.context!.resourceManager.getStringSync($r('app.string.import_file_filter').id)];
       const dp = new picker.DocumentViewPicker(this.context!);
       const uris = await dp.select(opt);
+      DiagnosticLogService.info('import.pick', `selected=${uris?.length || 0}`);
       if (!uris || uris.length === 0) return;
       await this.addPickedUris(uris);
     } catch (e) {
-      // user cancelled or error
+      DiagnosticLogService.failure('import.pick', e);
+      if (!this.disposed && this.context !== null) {
+        this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_pick_failed').id);
+      }
     }
   }
 
@@ -298,11 +307,20 @@ export struct ImportPage {
   }
 
   private async saveImported(book: Book): Promise<void> {
-    await DataService.addImportedBook(book);
+    try {
+      await DataService.addImportedBook(book);
+      DiagnosticLogService.info('import.save', `chapters=${book.chapters.length}; type=${book.contentType || 'audio'}`);
+    } catch (error) {
+      DiagnosticLogService.failure('import.save', error);
+      throw new Error(DiagnosticLogService.describe(error));
+    }
     this.importedCount++;
     try {
       if (!await PreferenceService.isFavorite(book.id)) await PreferenceService.toggleFavorite(book.id);
-    } catch (_error) { this.importFailures.push(`${book.title}: 已保存，加入书架失败`); }
+    } catch (error) {
+      DiagnosticLogService.failure('import.favorite', error);
+      this.importFailures.push(`${book.title}: 已保存，加入书架失败`);
+    }
   }
 
   private async importGroup(files: PickedFile[], title: string, batchId: string,
@@ -322,6 +340,7 @@ export struct ImportPage {
         imported++;
       } catch (error) {
         try { await fileIo.rmdir(directory); } catch (_cleanup) { /* 保留错误 */ }
+        DiagnosticLogService.failure('import.audio', error, `files=${audio.length}`);
         this.importFailures.push(error instanceof Error ? error.message : String(error));
       }
     }
@@ -336,6 +355,7 @@ export struct ImportPage {
         await this.saveImported(book);
         imported++;
       } catch (error) {
+        DiagnosticLogService.failure('import.ebook', error, `format=${file.ext}`);
         this.importFailures.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -348,6 +368,9 @@ export struct ImportPage {
     this.importedCount = 0;
     this.importFailures = [];
     const batchId = 'import_' + Date.now().toString();
+    DiagnosticLogService.info('import.start', `batch=${batchId}; files=${this.pickedFiles.length}; ` +
+      `formats=${this.pickedFiles.map((file: PickedFile): string => file.ext).filter((ext: string, index: number,
+        all: string[]): boolean => all.indexOf(ext) === index).join(',')}`);
     const extractRoot = `${this.context.cacheDir}/import_extract_${batchId}`;
     let imported = 0;
     const failures = this.importFailures;
@@ -355,7 +378,10 @@ export struct ImportPage {
       const direct = this.pickedFiles.filter((file: PickedFile): boolean => file.ext !== '.zip');
       if (direct.length > 0) {
         try { imported += await this.importGroup(direct, this.bookTitle, batchId, extractRoot); }
-        catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
+        catch (error) {
+          DiagnosticLogService.failure('import.group', error);
+          failures.push(error instanceof Error ? error.message : String(error));
+        }
       }
       const archives = this.pickedFiles.filter((file: PickedFile): boolean => file.ext === '.zip');
       for (let index = 0; index < archives.length; index++) {
@@ -367,12 +393,14 @@ export struct ImportPage {
             archives.length === 1 && direct.length === 0 ? this.bookTitle || archives[index].name : archives[index].name,
             `${batchId}_zip_${index}`, extractRoot);
         } catch (error) {
+          DiagnosticLogService.failure('import.zip', error);
           failures.push(`${archives[index].name}: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
           try { await fileIo.rmdir(extractRoot); } catch (_cleanup) { /* 无残留目录 */ }
         }
       }
       imported = this.importedCount;
+      DiagnosticLogService.info('import.finish', `batch=${batchId}; saved=${imported}; failures=${failures.length}`);
       this.importDone = imported > 0;
       if (failures.length > 0) {
         this.progressText = this.context.resourceManager.getStringSync($r('app.string.import_partial_result').id,
@@ -413,22 +441,9 @@ export struct ImportPage {
   }
 
   private async importAudioBook(bookId: string, sandboxDir: string, files: PickedFile[], extractRoot: string): Promise<Book> {
-    const chapters: Chapter[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const pf = files[i];
-      this.progressText = `导入音频 ${i + 1}/${files.length}`;
-      const destName = (i + 1) + pf.ext;
-      const destPath = sandboxDir + '/' + destName;
-      if (pf.uri.startsWith(extractRoot + '/')) {
-        await fileIo.moveFile(pf.uri, destPath);
-      } else {
-        await LocalBookImportService.requireSpace(this.context!, await LocalBookImportService.fileSize(pf.uri));
-        await LocalBookImportService.copyFile(pf.uri, destPath);
-      }
-      const durationSec = files.length <= 500 ? await this.probeAudioDuration(destPath) : 0;
-      const src: AudioSource = { type: 'file', value: destPath };
-      chapters.push({ id: bookId + '-c' + (i + 1), index: i + 1, title: pf.name, duration: durationSec, source: src });
-    }
+    const chapters = await LocalBookImportService.importAudioChapters(this.context!, bookId, sandboxDir,
+      files, extractRoot, (path: string): Promise<number> => this.probeAudioDuration(path),
+      (completed: number, total: number): void => { this.progressText = `导入音频 ${completed}/${total}`; });
     return {
       id: bookId, title: this.bookTitle, author: this.bookAuthor || '未知',
       narrator: '', cover: this.coverPath, category: 'import', intro: '本地导入',

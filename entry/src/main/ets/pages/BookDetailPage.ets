@@ -258,7 +258,8 @@ export struct BookDetailPage {
       await PreferenceService.applySkipConfig(b);
       if (!this.detailActive) return;
       // 先快速渲染基础信息
-      this.book = b;
+      // 本地目录恢复会修改缓存对象；V2 需要新引用才能刷新依赖 chapters 的分支。
+      this.book = this.copyBookForRender(b);
       AudioService.getInstance().prewarmBookSource(b);
       this.refreshDisplayedChapters(b.chapters);
       DownloadService.getInstance().hydrateBookDurations(b.id).catch((_e: Error): void => {});

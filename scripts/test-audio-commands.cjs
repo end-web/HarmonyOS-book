@@ -396,9 +396,29 @@ async function check(name, test) {
     await f.service.pause();
     f.player.emit('bufferingUpdate', 2, 0);
     await new Promise(resolve => setTimeout(resolve, 10));
-    assert.ok(f.cacheCalls.includes('suspend'));
-    assert.equal(f.cacheCalls.includes('resume'), false, 'Buffering end cannot restart prefetch while paused');
-    assert.equal(f.cacheCalls.includes('current'), false);
+    assert.equal(f.cacheCalls.includes('suspend'), false, 'Pausing preserves the cache queue');
+    assert.ok(f.cacheCalls.includes('current'), 'Current audio must finish caching after pause');
+    assert.ok(f.cacheCalls.includes('next'), 'Configured preload window must finish after pause');
+    const callsAfterPause = f.cacheCalls.length;
+    f.player.emit('bufferingUpdate', 1, 0);
+    f.player.emit('bufferingUpdate', 2, 0);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.cacheCalls.length, callsAfterPause, 'Late buffering events must not cancel or extend paused downloads');
+  });
+  await check('sleep stop preserves cache work and never resumes playback', async () => {
+    const f = await fixture('playing');
+    f.state.currentChapter.source = { type: 'url', value: 'https://cdn.invalid/sleep.mp3' };
+    f.state.currentBook.chapters = [f.state.currentChapter];
+    f.service.finishSleep(false);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.player.state, 'paused');
+    assert.equal(f.player.plays, 0);
+    assert.equal(f.state.progressMs, 42000);
+    assert.equal(f.cacheCalls.includes('suspend'), false);
+    assert.ok(f.cacheCalls.includes('current'));
+    assert.ok(f.cacheCalls.includes('next'));
+    await f.service.release();
+    assert.ok(f.cacheCalls.includes('suspend'), 'Explicit release still cancels background work');
   });
   await check('manual play recovers an errored player at the saved position', async () => {
     const f = await fixture('error');

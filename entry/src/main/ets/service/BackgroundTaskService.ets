@@ -45,6 +45,7 @@ export class BackgroundTaskService {
   };
 
   private static audioOwners: Set<string> = new Set();
+  private static transferOwners: Set<string> = new Set();
 
   static startSpeech(context: common.UIAbilityContext): Promise<void> {
     BackgroundTaskService.audioOwners.add('speech');
@@ -66,12 +67,14 @@ export class BackgroundTaskService {
     return BackgroundTaskService.setMode(context, AUDIO_MODE, BackgroundTaskService.audioOwners.size > 0);
   }
 
-  static startDataTransfer(context: common.UIAbilityContext): Promise<void> {
+  static startDataTransfer(context: common.UIAbilityContext, owner: string = 'download'): Promise<void> {
+    BackgroundTaskService.transferOwners.add(owner);
     return BackgroundTaskService.setMode(context, DATA_TRANSFER_MODE, true);
   }
 
-  static stopDataTransfer(context: common.UIAbilityContext): Promise<void> {
-    return BackgroundTaskService.setMode(context, DATA_TRANSFER_MODE, false);
+  static stopDataTransfer(context: common.UIAbilityContext, owner: string = 'download'): Promise<void> {
+    BackgroundTaskService.transferOwners.delete(owner);
+    return BackgroundTaskService.setMode(context, DATA_TRANSFER_MODE, BackgroundTaskService.transferOwners.size > 0);
   }
 
   /**
