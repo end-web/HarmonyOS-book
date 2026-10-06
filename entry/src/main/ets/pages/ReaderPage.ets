@@ -1,4 +1,5 @@
 import { ReaderVolumeKeyService } from '../service/text/ReaderVolumeKeyService';
+import { ReadingSessionService, SessionLocation } from '../service/ReadingSessionService';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { KeyCode } from '@kit.InputKit';
 import { ReaderTapPolicy } from '../utils/ReaderTapPolicy';
@@ -248,11 +249,19 @@ export struct ReaderPage {
     };
 
   private backgroundHandler = (): void => {
+    this.readingForeground = false;
     this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     this.saveProgress();
+    ReadingSessionService.end('reading');
   };
 
   private systemTypographyKey: string = '';
+  private sessionTimer: number = -1;
+  private readingForeground: boolean = true;
+  private foregroundHandler = (): void => {
+    this.readingForeground = true;
+    if (this.readerVisible) this.saveProgress();
+  };
 
   private currentSystemTypographyKey(): string {
     if (this.context === null) return '';
@@ -272,6 +281,10 @@ export struct ReaderPage {
 
   aboutToAppear(): void {
     emitter.on('app.reader.background', this.backgroundHandler);
+    emitter.on('app.reader.foreground', this.foregroundHandler);
+    this.sessionTimer = setInterval((): void => {
+      if (this.readingForeground && this.readerVisible && !this.leaving) this.saveProgress();
+    }, 15000);
     emitter.on(EVT_READER_TYPOGRAPHY_CHANGED, this.typographyChangeHandler);
     this.leaving = false;
     this.readerVisible = true;
@@ -298,6 +311,9 @@ export struct ReaderPage {
     this.volumeKeys.dispose();
     this.screenOn.dispose();
     emitter.off('app.reader.background', this.backgroundHandler);
+    emitter.off('app.reader.foreground', this.foregroundHandler);
+    if (this.sessionTimer >= 0) clearInterval(this.sessionTimer);
+    this.sessionTimer = -1;
     emitter.off(EVT_READER_TYPOGRAPHY_CHANGED, this.typographyChangeHandler);
     this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     this.leaving = true;
@@ -307,6 +323,7 @@ export struct ReaderPage {
     this.onlineTextLoadSerial++;
     this.cancelReaderSettingsRefresh();
     this.saveProgress();
+    ReadingSessionService.end('reading');
     this.saveReadingSettings();
     WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     WindowUtils.removeReaderColorListener(this.readerColorListener);
@@ -403,6 +420,7 @@ export struct ReaderPage {
       } else {
         await this.prepareReaderKitReader(value, startPosition);
       }
+      if (!this.leaving) this.saveProgress();
     } catch (e) {
       this.failReader(e instanceof Error ? e.message : String(e));
     }
@@ -838,6 +856,12 @@ export struct ReaderPage {
 
   private saveProgress(): void {
     if (!this.context || !this.currentPosition) return;
+    if (this.book && !this.loading && !TextToSpeechService.getInstance().state.playing) {
+      const location = SessionLocation.text(this.book, this.currentPosition);
+      location.total = this.onlineTextContent.length;
+      ReadingSessionService.checkpoint('reading', location,
+        this.readerVisible && this.readingForeground && !this.leaving);
+    }
     TextReadingProgressService.save(this.context, this.currentPosition).catch((_e: Error): void => {});
   }
 
@@ -1954,6 +1978,8 @@ export struct ReaderPage {
     .defaultFocus(true)
     .onVisibleAreaChange([0, 1], (visible: boolean): void => {
       this.readerVisible = visible;
+      if (visible) this.saveProgress();
+      else ReadingSessionService.end('reading');
       this.screenOn.setVisible(visible);
     })
     // 背景由 ReaderBackground 铺，根节点保持透明

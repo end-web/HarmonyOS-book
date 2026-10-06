@@ -21,6 +21,8 @@ function load(relative, dependencies = {}, globals = {}) {
   return module.exports;
 }
 const { SpeechTextSegmenter } = load('service/text/SpeechTextSegmenter.ets');
+const { SpeechPcmBuffer } = load('service/text/SpeechPcmBuffer.ets');
+const pcmFormat = { audioType: 'pcm', sampleRate: 16000, sampleBit: 16, audioChannel: 1 };
 const model = load('model/TextToSpeechState.ets');
 const { SpeechTextHighlighter } = load('service/text/SpeechTextHighlighter.ets');
 const { CustomTtsConfig } = load('model/CustomTtsConfig.ets');
@@ -37,7 +39,7 @@ const book = (id = 'book', texts = ['第一句。第二句！', '第三句。'])
   chapters: texts.map((text, index) => ({ id: String(index), title: `章节${index}`, source: { value: `${id}/${index}`, type: 'url' }, text })) });
 function harness(memory = new Map()) {
   let uptime = 0;
-  const engines = [], spoken = [], timers = new Map(), cached = new Map(), stats = [], httpSpoken = [], httpPrepared = [];
+  const engines = [], spoken = [], timers = new Map(), cached = new Map(), stats = [], httpSpoken = [], httpPrepared = [], systemSpoken = [];
   let id = 0, failContent = false, createDeferred = null, focusCallback = null, deviceCallback = null;
   const coordinator = load('service/PlaybackCoordinator.ets');
   const session = { callbacks: null, paused: false, setSpeechCallbacks(cbs) { this.callbacks = cbs; },
@@ -52,16 +54,33 @@ function harness(memory = new Map()) {
       const engine = { listener: null, closed: false, setListener(listener) { this.listener = listener; },
         stop() {}, shutdown() { this.closed = true; }, speak(text, params) {
           spoken.push({ engine, text, id: params.requestId, speed: params.extraParams.speed });
-          this.listener.onStart(params.requestId, {});
+          assert.equal(params.extraParams.playType, 0);
+          assert.equal(params.extraParams.soundChannel, 1);
+          this.listener.onStart(params.requestId, pcmFormat);
+          this.listener.onData(params.requestId, new ArrayBuffer(320), { sequence: 0, audioType: 'pcm' });
+          this.listener.onComplete(params.requestId, { type: 0 });
         } };
       engines.push(engine); return engine;
     } };
   const dependencies = {
+    './SpeechPcmBuffer': { SpeechPcmBuffer },
+    '../DiagnosticLogService': { DiagnosticLogService: { info() {} } },
+    '../ReadingSessionService': { ReadingSessionService: { checkpoint() {}, end() {} }, SessionLocation: { audio: () => ({}) } },
     '@kit.BasicServicesKit': { systemDateTime: { TimeType: { STARTUP: 0 }, getUptime: () => uptime } },
     '../../model/CustomTtsConfig': { CustomTtsConfig },
     './CustomTtsConfigParser': { CustomTtsConfigParser },
     './HttpTtsPlayer': { HttpTtsAudioOutput: class { async release() {} }, HttpTtsPlayer: class {
       ready = false;
+      async speakAudio(_ctx, buffer, speed, id, onStart) {
+        assert.equal(speed, 1);
+        assert.equal(new DataView(buffer).getUint32(0, false), 0x52494646);
+        if (this.cancelled) throw new Error('cancelled');
+        onStart();
+        await new Promise((resolve, reject) => {
+          this.reject = reject;
+          systemSpoken.push({ id, complete: resolve });
+        });
+      }
       prepare(config, text, speed) {
         if (!this.preparation) this.preparation = Promise.resolve().then(() => {
           if (this.cancelled) throw new Error('cancelled');
@@ -87,7 +106,7 @@ function harness(memory = new Map()) {
     '../../model/TextToSpeechState': model,
     '../AudioService': { AudioService: { getInstance: () => ({ suspendForSpeech: async () => {} }) } },
     '../AVSessionService': { AVSessionService: { getInstance: () => session } },
-    '../BackgroundTaskService': { BackgroundTaskService: { startSpeech: async () => {}, stopSpeech: async () => {} } },
+    '../BackgroundTaskService': { BackgroundTaskService: { startSpeech: async () => {}, stopSpeech: async () => {}, isRunning: () => true } },
     '../PlaybackCoordinator': coordinator,
     '../PreferenceService': { PreferenceService: { isFavorite: async () => false, toggleFavorite: async () => true,
       applyTocOrder: async () => {}, chapterStep: () => 1 } },
@@ -115,7 +134,12 @@ function harness(memory = new Map()) {
     failContent: value => { failContent = value; },
     deferEngine: value => { createDeferred = value; }, focus: (reason = 0) => focusCallback?.({ reason }),
     unplug: () => deviceCallback?.({ type: 1 }),
-    complete(type = 1, request = spoken.at(-1)) { request.engine.listener.onComplete(request.id, { type }); } };
+    async complete(type = 1, request = spoken.at(-1)) {
+      if (type === 0) { request.engine.listener.onComplete(request.id, { type }); return; }
+      await settle();
+      systemSpoken.find(item => item.id === request.id)?.complete();
+      await settle();
+    } };
 }
 let passed = 0;
 async function check(name, action) { await action(); console.log(`PASS ${name}`); passed++; }
@@ -211,18 +235,18 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
   });
   await check('合成完成不提前翻句，播放完成才跨句和跨章', async () => {
     const h = harness(); await h.init(); await h.service.start(book(), 0, 0);
-    h.complete(0); assert.equal(h.spoken.length, 1);
-    h.complete(); assert.equal(h.spoken[1].text, '第二句！');
-    h.complete(); await settle(); assert.equal(h.spoken[2].text, '第三句。');
+    await h.complete(0); assert.equal(h.spoken.length, 1);
+    await h.complete(); assert.equal(h.spoken[1].text, '第二句！');
+    await h.complete(); await settle(); assert.equal(h.spoken[2].text, '第三句。');
     assert.equal(h.service.state.chapterIndex, 1);
-    h.complete(); await settle(); assert.equal(h.service.state.playing, false); h.service.stop();
+    await h.complete(); await settle(); assert.equal(h.service.state.playing, false); h.service.stop();
   });
   await check('暂停恢复当前句，旧回调与重复完成不能推进新请求', async () => {
     const h = harness(); await h.init(); await h.service.start(book(), 0, 5);
     const old = h.spoken.at(-1); h.service.pause(); await h.service.resume();
     assert.equal(h.spoken.at(-1).text, old.text);
-    h.complete(1, old); assert.equal(h.service.state.chapterIndex, 0);
-    const current = h.spoken.at(-1); h.complete(1, current); h.complete(1, current); await settle();
+    await h.complete(1, old); assert.equal(h.service.state.chapterIndex, 0);
+    const current = h.spoken.at(-1); await h.complete(1, current); await h.complete(1, current); await settle();
     assert.equal(h.spoken.length, 3); h.service.stop();
   });
   await check('重启后按章节 URL 恢复，目录重排不串章', async () => {
@@ -239,7 +263,7 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
   });
   await check('读完本章停止，保留跨进程的章节末尾位置', async () => {
     const h = harness(); await h.init(); h.service.setSleep(0, true); await h.service.start(book(), 0, 0);
-    h.complete(); h.complete(); await settle();
+    await h.complete(); await h.complete(); await settle();
     assert.equal(h.service.state.chapterIndex, 0); assert.equal(h.service.state.playing, false);
     assert.equal(h.service.state.charOffset, '第一句。第二句！'.length); h.service.stop();
   });
@@ -289,13 +313,13 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
   await check('截止时间在下一句前检查，后台计时器延迟也不继续朗读', async () => {
     const h = harness(); await h.init(); await h.service.start(book(), 0, 0);
     h.service.setSleep(15); h.service.sleepDeadline = Date.now() - 1;
-    h.complete(); assert.equal(h.spoken.length, 1); assert.equal(h.service.state.playing, false);
+    await h.complete(); assert.equal(h.spoken.length, 1); assert.equal(h.service.state.playing, false);
     assert.equal(h.service.state.remainingSeconds, 0); h.service.stop();
   });
   await check('会话空闲超时不停止独立进程 TTS，真实抢占仍暂停', async () => {
     const h = harness(); await h.init(); await h.service.start(book(), 0, 0);
     h.focus(1); assert.equal(h.service.state.playing, true);
-    h.complete(); assert.equal(h.spoken.length, 2);
+    await h.complete(); assert.equal(h.spoken.length, 2);
     h.focus(0); assert.equal(h.service.state.playing, false); h.service.stop();
   });
   await check('自然段高亮映射缩进、跨页交集和表情，不波及相邻段落', async () => {
@@ -323,11 +347,11 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
     assert.equal(h.service.state.highlightOffset, 0);
     assert.equal(h.service.state.highlightEnd, content.indexOf('\n'));
     const firstEnd = h.service.state.highlightEnd;
-    h.complete();
+    await h.complete();
     assert.equal(h.service.state.highlightOffset, 0);
     assert.equal(h.service.state.highlightEnd, firstEnd);
     assert.equal(h.service.state.charOffset, content.indexOf('第二句'));
-    h.complete();
+    await h.complete();
     assert.equal(h.service.state.highlightOffset, content.lastIndexOf('\n') + 1);
     assert.equal(h.service.state.highlightEnd, content.length);
     assert.ok([...h.timers.values()].every(timer => timer.delay !== 80));
@@ -440,7 +464,7 @@ async function check(name, action) { await action(); console.log(`PASS ${name}`)
     await h.service.start(book(), 0, 0); await settle();
     h.advance(2500);
     const request = h.spoken.at(-1);
-    request.engine.listener.onStart(request.id, {});
+    request.engine.listener.onStart(request.id, pcmFormat);
     h.advance(1500);
     h.service.pause();
     assert.equal(h.stats.reduce((n, item) => n + item[0], 0), 4);

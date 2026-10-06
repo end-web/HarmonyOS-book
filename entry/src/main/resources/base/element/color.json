@@ -1,5 +1,8 @@
 {
   "color": [
+    {"name": "membership_name_month", "value": "#9E681C"},
+    {"name": "membership_name_year", "value": "#8254BA"},
+    {"name": "membership_name_lifetime", "value": "#536F8D"},
     { "name": "sponsor_black_gold", "value": "#8C6A24" },
     { "name": "sponsor_gold", "value": "#AD790A" },
     { "name": "sponsor_gold_surface", "value": "#FBF5E8" },

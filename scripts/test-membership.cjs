@@ -30,8 +30,14 @@ function load(relative, overrides = {}, globals = {}) {
   return exports;
 }
 const data = load('service/membership/SubscriptionData.ets');
+const lifetimeData = load('service/membership/LifetimeData.ets', { './SubscriptionData': data });
 const { SubscriptionPolicy: policy } = data;
 const clone = value => JSON.parse(JSON.stringify(value));
+function lifetime(changes = {}) {
+  return { applicationId: '6917615941058168740', environment: 'NORMAL', productId: 'lastVip',
+    productType: '1', purchaseToken: 'life-token', purchaseOrderId: 'life-order', finishStatus: '2',
+    purchaseTime: now - 50000, signedTime: now - 1000, price: 19800, currency: 'CNY', ...changes };
+}
 function payload(changes = {}) {
   return {
     environment: 'NORMAL', applicationId: 'app-1', packageName: 'com.huan.listenbook', subGroupId: 'icons',
@@ -125,21 +131,30 @@ async function main() {
   function session() {
     const stateModule = load('model/MembershipState.ets');
     const current = [], unfinished = [], finishes = [], icons = [];
+    const lifetimeCurrent = [], lifetimeUnfinished = [], purchases = [];
     let queryError = null, finishError = null, purchaseError = null, purchaseCount = 0;
     const iap = {
-      ProductType: { AUTORENEWABLE: 2 }, ProductStatus: { VALID: 0 }, PeriodUnit: { MONTH: 2, YEAR: 3, MINUTE: 4 },
+      ProductType: { AUTORENEWABLE: 2, NONCONSUMABLE: 1 }, ProductStatus: { VALID: 0 }, PeriodUnit: { MONTH: 2, YEAR: 3, MINUTE: 4 },
       PurchaseQueryType: { CURRENT_ENTITLEMENT: 2, UNFINISHED: 1 }, WindowScreenMode: { FULLSCREEN: 2 },
       IAPErrorCode: { USER_CANCELED: 1001860000, PURCHASE_FINISHED: 1001860053 },
       isSandboxActivated: async () => false, queryEnvironmentStatus: async () => {},
       queryPurchases: async (_, req) => {
         if (queryError) throw queryError;
+        if (req.productType === 1) return { purchaseDataList: (req.queryType === 2 ? lifetimeCurrent : lifetimeUnfinished).map(JSON.stringify) };
         return { purchaseDataList: (req.queryType === 2 ? current : unfinished).map(JSON.stringify) };
       },
       finishPurchase: async (_, order) => { finishes.push(order); if (finishError) throw finishError; },
-      createPurchase: async () => { purchaseCount++; if (purchaseError) throw purchaseError; return { purchaseData: '{}' }; },
+      createPurchase: async (_, req) => {
+        purchaseCount++; purchases.push(req); if (purchaseError) throw purchaseError;
+        if (req.productId === 'lastVip') {
+          const order = lifetime(); lifetimeCurrent.push(order); return { purchaseData: JSON.stringify(order) };
+        }
+        return { purchaseData: '{}' };
+      },
       showManagedSubscriptions: async () => {},
-      queryProducts: async () => ['iconMonth', 'iconYear'].map(id => ({ id, type: 2, price: '¥10.00',
-        subscriptionInfo: { periodUnit: id === 'iconMonth' ? 2 : 3, periodCount: 1, groupId: 'icons' } }))
+      queryProducts: async (_, req) => req.productType === 1 ? [{ id: 'lastVip', type: 1, localPrice: '¥198.00', price: '¥198.00' }] :
+        ['iconMonth', 'iconYear'].map(id => ({ id, type: 2, price: '¥10.00',
+          subscriptionInfo: { periodUnit: id === 'iconMonth' ? 2 : 3, periodCount: 1, groupId: 'icons' } }))
     };
     const { MembershipService } = load('service/MembershipService.ets', {
       '@kit.IAPKit': { iap }, '../model/MembershipState': stateModule,
@@ -147,10 +162,13 @@ async function main() {
       '../utils/PlatformCompat': { PlatformCompat: { wearable: false } },
       './AppIconService': { AppIconService: { instance: { supported: true, select: async name => icons.push(name) } } },
       './membership/SubscriptionData': data,
-      './membership/SubscriptionVerifier': { SubscriptionVerifier: { verify: async (_, p) => JSON.parse(p) } }
+      './membership/LifetimeData': lifetimeData,
+      './membership/SubscriptionVerifier': { SubscriptionVerifier: {
+        verify: async (_, p) => JSON.parse(p), verifyLifetime: async (_, p) => JSON.parse(p)
+      } }
     });
     return { service: MembershipService.instance, state: stateModule.MembershipState.current,
-      current, unfinished, finishes, icons, setQueryError: e => { queryError = e; },
+      current, unfinished, finishes, icons, lifetimeCurrent, lifetimeUnfinished, purchases, setQueryError: e => { queryError = e; },
       setFinishError: e => { finishError = e; }, setPurchaseError: e => { purchaseError = e; }, purchaseCount: () => purchaseCount };
   }
   await test('Restore grants once, finishes only after entitlement, and retries acknowledgement', async () => {
@@ -186,6 +204,66 @@ async function main() {
     await s.service.purchase(context, 'iconYear');
     assert.equal(s.purchaseCount(), 1); assert.equal(s.state.active, false); assert.equal(s.finishes.length, 0);
     assert.equal(s.service.message, 'app.string.membership_cancelled');
+  });
+  await test('Lifetime policy rejects wrong app/type, future, sandbox and revoked orders', () => {
+    const p = lifetimeData.LifetimePolicy;
+    assert.ok(p.validate(lifetime(), false, now));
+    for (const patch of [{ applicationId: 'other' }, { productType: '2' }, { purchaseToken: '' },
+      { purchaseTime: now + 120000 }, { signedTime: 0 }, { price: -1 }, { currency: '' }, { environment: 'SANDBOX' }]) {
+      assert.throws(() => p.validate(lifetime(patch), false, now));
+    }
+    assert.equal(p.validate(lifetime({ purchaseOrderRevocationReasonCode: '0' }), false, now), undefined);
+    assert.equal(p.validate(lifetime({ revocationTime: now }), false, now), undefined);
+    assert.equal(p.validate(lifetime({ productId: 'other' }), false, now), undefined);
+  });
+  await test('Lifetime JWS uses the same real signature verification and rejects tampering', async () => {
+    const jws = JSON.parse(signed(lifetime())).jwsSubscriptionStatus;
+    const order = await verifier.verifyLifetime(context, JSON.stringify({ jwsPurchaseOrder: jws }));
+    assert.equal(order.productId, 'lastVip');
+    const parts = jws.split('.');
+    parts[1] = Buffer.from(JSON.stringify(lifetime({ applicationId: 'tampered' }))).toString('base64url');
+    await assert.rejects(verifier.verifyLifetime(context, JSON.stringify({ jwsPurchaseOrder: parts.join('.') })));
+    await assert.rejects(verifier.verifyLifetime(context, signed(lifetime())));
+  });
+  await test('Lifetime restores, outranks subscription, acknowledges once and cannot resurrect from unfinished history', async () => {
+    const s = session(); s.current.push(payload()); s.lifetimeCurrent.push(lifetime());
+    s.lifetimeUnfinished.push(clone(s.lifetimeCurrent[0]));
+    s.setFinishError({ code: 1001860005 });
+    await s.service.refresh(context, true);
+    assert.equal(s.state.active, true); assert.equal(s.state.lifetime, true); assert.equal(s.state.expiresAt, 0);
+    assert.equal(s.service.confirmationPending, true);
+    assert.equal(s.state.nameColor, 'app.color.membership_name_lifetime');
+    s.setFinishError(null); s.finishes.length = 0;
+    await s.service.refresh(context, true);
+    assert.equal(s.finishes.filter(v => v.productType === 1).length, 1);
+    s.lifetimeCurrent.length = 0;
+    await s.service.refresh(context, true);
+    assert.equal(s.state.lifetime, false); assert.equal(s.state.active, true);
+    s.current.length = 0; await s.service.refresh(context, true);
+    assert.equal(s.state.active, false); assert.equal(s.state.nameColor, 'sys.color.font_primary');
+  });
+  await test('Monthly member can buy lifetime once; purchases and acknowledgements use NONCONSUMABLE', async () => {
+    const s = session(); s.current.push(payload()); await s.service.load(context);
+    assert.equal(s.service.plans.length, 3);
+    assert.equal(s.state.nameColor, 'app.color.membership_name_month');
+    await s.service.purchase(context, 'lastVip');
+    assert.equal(s.purchases[0].productType, 1); assert.equal(s.state.lifetime, true);
+    assert.equal(await s.service.hasCurrentEntitlement(), true);
+    await s.service.purchase(context, 'lastVip'); await s.service.purchase(context, 'iconYear');
+    assert.equal(s.purchaseCount(), 1);
+    s.lifetimeCurrent[0].purchaseOrderRevocationReasonCode = '0';
+    await s.service.refresh(context, true);
+    assert.equal(s.state.lifetime, false);
+  });
+  await test('Lifetime purchase cancellation grants nothing; yearly name color follows verified state', async () => {
+    const s = session(); await s.service.load(context); s.setPurchaseError({ code: 1001860000 });
+    await s.service.purchase(context, 'lastVip');
+    assert.equal(s.purchaseCount(), 1); assert.equal(s.state.active, false); assert.equal(s.finishes.length, 0);
+    const p = payload(); p.lastSubscriptionStatus.lastPurchaseOrder.productId = 'iconYear'; s.current.push(p);
+    await s.service.refresh(context, true);
+    assert.equal(s.state.nameColor, 'app.color.membership_name_year');
+    s.setQueryError({ code: 1001860005 }); await s.service.refresh(context, true);
+    assert.equal(s.state.nameColor, 'sys.color.font_primary');
   });
   console.log(`${count} membership regression groups passed`);
 }

@@ -32,6 +32,7 @@ function harness() {
   const context = { filesDir: path.join(base, 'files'), cacheDir: path.join(base, 'cache'), cloudFileDir: path.join(base, 'cloud') };
   for (const value of Object.values(context)) fs.mkdirSync(value);
   const control = {
+    member: true,
     auto: true, startError: 0, sourceError: false, restoreError: false,
     remoteOnly: false, uploadState: 4, identity: 'account-A', stopCount: 0, downloadStopCount: 0,
     cloudWrites: 0, localRestores: 0, confirmed: 0,
@@ -200,6 +201,12 @@ function harness() {
       setInterval: cb => { const id = ++timerId; intervals.set(id, cb); return id; },
       clearInterval: id => intervals.delete(id),
       require: name => {
+        if (name === './MembershipService') return { MembershipService: { instance: {
+          hasCurrentEntitlement: async () => control.member
+        } } };
+        if (name === '../model/MembershipState') return { MembershipState: { current: {
+          get active() { return control.member; }
+        } } };
         if (name === '@kit.ArkData') return { preferences };
         if (name === '@kit.AbilityKit') return { ConfigurationConstant: { ColorMode: { COLOR_MODE_NOT_SET: -1 } } };
         if (name === '../model/AppAppearance') return { AppAppearance: {

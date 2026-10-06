@@ -17,6 +17,7 @@ import {
 } from '../service/PreferenceService';
 import { Book } from '../model/Book';
 import { DataService } from '../service/DataService';
+import { DiagnosticLogService } from '../service/DiagnosticLogService';
 import { BookSourceService } from '../service/BookSourceService';
 import { SearchCache } from '../utils/SearchCache';
 import { OnlineTextContentCache } from '../service/text/OnlineTextContentCache';
@@ -124,6 +125,7 @@ export struct ReadingStatsPage {
   };
 
   aboutToAppear(): void {
+    DiagnosticLogService.info('records.open', `unfavorited=${this.onlyUnfavorited}`);
     this.recoveryActive = true;
     this.recoveryAttempted.clear();
     const cached = StatsService.getCachedStatsBundle(1);
@@ -191,12 +193,16 @@ export struct ReadingStatsPage {
       this.records = allRecords.filter((item: ListenRecordView): boolean =>
         this.shouldShowRecord(item, favoriteIds));
       this.recordDataSource.setRecords(this.records);
-      this.recoverReadingBooks(ctx, reading).catch(() => {});
+      this.recoverReadingBooks(ctx, reading).catch((error: Error): void => {
+        DiagnosticLogService.info('records.recovery.failed', `${error.message}; ${error.stack ?? ''}`);
+      });
       this.selectedIds = new Set(Array.from(this.selectedIds).filter((id) =>
         this.records.some((item) => item.bookId === id)));
       if (this.selectedIds.size === 0) this.selectMode = false;
     } catch (e) {
       if (!this.statsReady) this.statsError = true;
+      DiagnosticLogService.info('records.load.failed', `unfavorited=${this.onlyUnfavorited}; ` +
+        (e instanceof Error ? `${e.message}; ${e.stack ?? ''}` : String(e)));
       console.error(`[ReadingStatsPage] load stats failed: ${JSON.stringify(e)}`);
     } finally {
       this.loading = false;
@@ -259,7 +265,11 @@ export struct ReadingStatsPage {
           changed = true;
           // 每本成功就刷新，无需等待所有书源响应。
           if (this.recoveryActive) this.loadStats();
-        } catch (_e) { /* 缺源、离线或单本失效均保留原记录 */ }
+        } catch (error) {
+          // 缺源、离线或单本失效均保留原记录；记录错误，不将缺源直接判为崩溃原因。
+          DiagnosticLogService.info('records.book_recovery.failed',
+            error instanceof Error ? error.message : String(error));
+        }
       }
     } finally {
       this.recoveryRunning = false;
@@ -306,6 +316,7 @@ export struct ReadingStatsPage {
 
     const candidates: ListeningRecordCandidate[] = [];
     const books = new Map<string, Book>();
+    let missingBooks: number = 0;
     for (const bookId of bookIds) {
       const candidate = new ListeningRecordCandidate(bookId);
       candidate.readingPosition = readingMap.get(bookId) ?? null;
@@ -330,11 +341,17 @@ export struct ReadingStatsPage {
         books.set(bookId, book);
         candidate.setBook(book.sourceUrl, book.bookUrl, book.title, book.author || book.narrator, book.cover);
         candidate.isText = candidate.isText || book.contentType === 'text';
+      } else {
+        missingBooks++;
       }
       candidates.push(candidate);
     }
 
     const merged = ListeningHistoryPolicy.merge(candidates);
+    if (missingBooks > 0) {
+      DiagnosticLogService.info('records.books_missing',
+        `unfavorited=${this.onlyUnfavorited}; missing=${missingBooks}; candidates=${candidates.length}; merged=${merged.length}`);
+    }
     const views: ListenRecordView[] = [];
     for (const item of merged) {
       views.push(this.createRecordView(item, books.get(item.bookId) ?? null));
@@ -969,6 +986,9 @@ export struct ReadingStatsPage {
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
+          if (!this.selectMode) {
+            this.buildRecordActions(item)
+          }
         }
         .width('100%')
         .alignItems(VerticalAlign.Top)
@@ -986,6 +1006,7 @@ export struct ReadingStatsPage {
           .alignItems(VerticalAlign.Center)
 
           Text(item.isText ? (item.chapterTitle || $r('app.string.record_read_started')) : this.formatDurationText(item))
+            .layoutWeight(1)
             .fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_tertiary'))
             .maxLines(1)
@@ -1014,21 +1035,7 @@ export struct ReadingStatsPage {
       .alignItems(HorizontalAlign.Start)
       .justifyContent(FlexAlign.Center)
 
-      if (!this.selectMode) {
-        Stack() {
-          SymbolGlyph(item.isText ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
-            .fontSize(16)
-            .fontColor([$r('sys.color.font_primary')])
-        }
-        .width(36)
-        .height(36)
-        .borderRadius(18)
-        .backgroundColor(HomeTheme.CardSurface)
-        .border({ width: 1, color: AppColor.Divider })
-        .shadow({ radius: 8, color: HomeTheme.CardShadow, offsetY: 2 })
-        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.95 })
-        .onClick(() => this.resumeRecord(item))
-      }
+
     }
     .width('100%')
     .height(88)
@@ -1048,6 +1055,39 @@ export struct ReadingStatsPage {
           this.toggleSelect(item.bookId);
         })
     )
+  }
+
+  @Builder
+  buildRecordActions(item: ListenRecordView) {
+    Row({ space: 6 }) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.clock'))
+            .fontSize(18)
+            .fontColor([$r('sys.color.font_primary')])
+        }
+          .width(36)
+          .height(36)
+          .accessibilityText($r('app.string.session_history'))
+          .backgroundColor(HomeTheme.CardSurface)
+          .border({ width: 1, color: AppColor.Divider })
+          .onClick((): void => {
+            const params: Record<string, Object> = { 'bookIds': JSON.stringify([item.bookId, ...item.aliasBookIds]) };
+            this.navStack.pushPathByName('sessionHistory', params);
+          })
+        Stack() {
+          SymbolGlyph(item.isText ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
+            .fontSize(16)
+            .fontColor([$r('sys.color.font_primary')])
+        }
+        .width(36)
+        .height(36)
+        .borderRadius(18)
+        .backgroundColor(HomeTheme.CardSurface)
+        .border({ width: 1, color: AppColor.Divider })
+        .shadow({ radius: 8, color: HomeTheme.CardShadow, offsetY: 2 })
+        .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.95 })
+        .onClick(() => this.resumeRecord(item))
+    }.margin({ left: 8 })
   }
 
   @Builder

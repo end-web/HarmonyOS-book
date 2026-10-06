@@ -92,16 +92,22 @@ export class HttpTtsPlayer {
 
   async speak(context: common.Context, config: CustomTtsConfig, text: string, speed: number,
     requestId: string, onStart: () => void, output: HttpTtsAudioOutput): Promise<void> {
+    await this.prepare(config, text, speed);
+    const buffer = this.preparedAudio;
+    if (buffer === null) throw new Error('TTS audio unavailable');
+    await this.speakAudio(context, buffer, CustomTtsConfigParser.usesSpeed(config) ? 1 : speed,
+      requestId, onStart, output);
+  }
+
+  async speakAudio(context: common.Context, buffer: ArrayBuffer, speed: number,
+    requestId: string, onStart: () => void, output: HttpTtsAudioOutput): Promise<void> {
     const path = `${context.cacheDir}/custom_${requestId}.audio`;
     let file: fileIo.File | null = null;
     let player: media.AVPlayer | null = null;
     let createdFile = false;
     let completed = false;
     try {
-      await this.prepare(config, text, speed);
       this.check();
-      const buffer = this.preparedAudio;
-      if (buffer === null) throw new Error('TTS audio unavailable');
       file = await fileIo.open(path, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
       createdFile = true;
       this.check();
@@ -111,7 +117,7 @@ export class HttpTtsPlayer {
       this.check();
       player = await output.acquire();
       this.check();
-      await this.play(player, file.fd, written, CustomTtsConfigParser.usesSpeed(config) ? 1 : speed, onStart);
+      await this.play(player, file.fd, written, speed, onStart);
       completed = true;
     } finally {
       this.rejectPlayback = null;

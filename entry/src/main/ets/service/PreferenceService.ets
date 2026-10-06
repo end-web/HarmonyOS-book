@@ -1,4 +1,5 @@
 import { preferences } from '@kit.ArkData';
+import { ReadingSessionService } from './ReadingSessionService';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { Book, Chapter } from '../model/Book';
@@ -198,6 +199,7 @@ export class PreferenceService {
       return;
     }
     if (!PreferenceService.initPromise) {
+      ReadingSessionService.init(context);
       const options: preferences.Options = { name: STORE_NAME };
       PreferenceService.initPromise = preferences.getPreferences(context, options).then(async (s) => {
         PreferenceService.store = s;
@@ -973,9 +975,16 @@ export class PreferenceService {
   }
 
   static async setPreloadChapters(count: number): Promise<void> {
+    if (!Number.isInteger(count) || count < 0 || count > 50) throw new Error('Invalid preload count');
     const s = await PreferenceService.ensureStore();
-    await s.put(KEY_PRELOAD_CHAPTERS, Number.isFinite(count) ? Math.max(0, Math.min(50, Math.round(count))) : 1);
-    await s.flush();
+    const previous = await PreferenceService.getPreloadChapters();
+    await s.put(KEY_PRELOAD_CHAPTERS, count);
+    try {
+      await s.flush();
+    } catch (error) {
+      await s.put(KEY_PRELOAD_CHAPTERS, previous);
+      throw new Error(String(error));
+    }
   }
 
   static async getSearchConcurrency(): Promise<number> {

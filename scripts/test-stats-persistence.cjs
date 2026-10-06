@@ -103,6 +103,7 @@ function statsPage(service, preference) {
     module, exports: module.exports, Date: TestDate, Scroller: class {}, NavPathStack: class {},
     console: { error() {} }, setTimeout: () => 1, clearTimeout() {},
     require: name => name === '../service/StatsService' ? { StatsService: service } :
+      name === '../service/DiagnosticLogService' ? { DiagnosticLogService: { info() {} } } :
       name === '../service/PreferenceService' ? { PreferenceService: preference } : {}
   }, { filename: file });
   const page = new module.exports.ReadingStatsPage();
@@ -178,16 +179,32 @@ function statsPage(service, preference) {
     await service.addListenSeconds(10, book);
     assert.equal((await service.getSummary()).totalSeconds, 190);
   });
-  await check('explicit deletion and clearing do not resurrect snapshot data', async () => {
+  await check('删书和清记录只隐藏明细，累计与每日时长重启后仍保留', async () => {
+    const before = await service.getSummary();
     await service.removeBookStats([book.bookId]);
     service = newProcess();
     await service.init(context);
-    assert.equal((await service.getSummary()).totalSeconds, 0);
+    assert.deepEqual({ ...await service.getSummary() }, { ...before });
+    assert.equal((await service.getStatsBundle(7)).records.length, 0);
     await service.addListenSeconds(10, book);
+    assert.equal((await service.getStatsBundle(7)).records.length, 1);
     await service.clearBookStats();
     service = newProcess();
     await service.init(context);
+    assert.equal((await service.getSummary()).totalSeconds, before.totalSeconds + 10);
+    assert.equal((await service.getStatsBundle(7)).records.length, 0);
+    await service.restoreBackupStats([]);
+    assert.equal((await service.getSummary()).totalSeconds, before.totalSeconds + 10);
+    await service.restoreBackupStats([{ bookId: book.bookId, title: book.title, listenSeconds: 1,
+      updatedAt: now, days: [] }]);
+    assert.equal((await service.getSummary()).totalSeconds, before.totalSeconds + 10);
+  });
+  await check('仅专门清除时长操作清零，重启不恢复旧快照', async () => {
+    await service.resetListeningTime();
+    service = newProcess();
+    await service.init(context);
     assert.equal((await service.getBookStats()).length, 0);
+    assert.equal((await service.getSummary()).totalSeconds, 0);
   });
   await check('initialization retries after an error', async () => {
     service = newProcess();
@@ -225,6 +242,7 @@ function statsPage(service, preference) {
     assert.equal((await service.getSummary()).totalSeconds, 28800);
   });
   await check('本月按自然月计算，旧累计不随再次播放被转入或移出本月', async () => {
+    await service.resetListeningTime();
     now = new Date(2026, 8, 2, 12).getTime();
     await service.restoreBackupStats([
       { bookId: 'legacy', title: 'Legacy', listenSeconds: 28800, updatedAt: now, days: [] },
@@ -245,7 +263,7 @@ function statsPage(service, preference) {
     assert.equal((await service.getStatsBundle(2)).summary.monthSeconds, 1805);
   });
   await check('跨月播放按真实区间分摊，零点整结算归属前一天', async () => {
-    await service.clearBookStats();
+    await service.resetListeningTime();
     now = new Date(2026, 9, 1, 0, 0, 5).getTime();
     const pending = service.addListenSeconds(15, book, now);
     now += 60000; // 排队等待不改变归属日期。

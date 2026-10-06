@@ -14,6 +14,7 @@ import { AchievementPage } from './AchievementPage';
 import { GuidePage } from './GuidePage';
 import { ImportPage } from './ImportPage';
 import { ReadingStatsPage } from './ReadingStatsPage';
+import { SessionHistoryPage } from './SessionHistoryPage';
 import { UnfavoritedHistoryPage } from './UnfavoritedHistoryPage';
 import { PrivacyPage } from './PrivacyPage';
 import { CompliancePage } from './CompliancePage';
@@ -458,6 +459,12 @@ struct Index {
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
+    } else if (name === 'sessionHistory') {
+      NavDestination() {
+        SessionHistoryPage({ navStack: this.navStack, bookIds: this.resolveParam(param, 'bookIds') })
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('sys.color.background_primary'))
     } else if (name === 'unfavoriteHistory') {
       NavDestination() {
         UnfavoritedHistoryPage({ navStack: this.navStack })

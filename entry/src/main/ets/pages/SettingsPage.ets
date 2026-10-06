@@ -10,6 +10,7 @@ import { ChapterCacheService } from '../service/ChapterCacheService';
 import { DataService } from '../service/DataService';
 import { DownloadService } from '../service/DownloadService';
 import { StatsService } from '../service/StatsService';
+import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { SearchCache } from '../utils/SearchCache';
 import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -84,6 +85,8 @@ export struct SettingsPage {
   @Local searchConcurrencyDraft: string = '6';
   @Local searchConcurrencyCustom: boolean = false;
   @Local isSavingSearchConcurrency: boolean = false;
+  @Local isSavingPreload: boolean = false;
+  @Local isClearingListeningTime: boolean = false;
   @Local isLoaded: boolean = false;
   @Local coverSuperResolution: boolean = false;
   @Local isSavingCoverSuperResolution: boolean = false;
@@ -203,15 +206,27 @@ export struct SettingsPage {
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_preload_range') });
       return;
     }
-    this.preloadCustom = true;
-    this.setPreloadCount(count);
+    this.setPreloadCount(count, true);
   }
 
-  private async setPreloadCount(count: number): Promise<void> {
-    this.preloadCount = count;
-    this.preloadDraft = count.toString();
-    await PreferenceService.setPreloadChapters(count);
-    ChapterCacheService.getInstance().setPreloadCount(count);
+  private async setPreloadCount(count: number, custom: boolean = false): Promise<void> {
+    if (this.isSavingPreload) return;
+    this.isSavingPreload = true;
+    try {
+      await PreferenceService.setPreloadChapters(count);
+      ChapterCacheService.getInstance().setPreloadCount(count);
+      AudioService.getInstance().refreshPreload();
+      this.preloadCount = count;
+      this.preloadDraft = count.toString();
+      this.preloadCustom = custom;
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_preload_saved', count) });
+    } catch (error) {
+      this.preloadDraft = this.preloadCount.toString();
+      hilog.warn(0xFF00, 'SettingsPage', 'Save preload failed: %{public}s', String(error));
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_save_failed') });
+    } finally {
+      this.isSavingPreload = false;
+    }
   }
 
   private submitSearchConcurrency(): void {
@@ -234,6 +249,7 @@ export struct SettingsPage {
       this.searchConcurrency = count;
       this.searchConcurrencyDraft = count.toString();
       this.searchConcurrencyCustom = custom;
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_search_concurrency_saved', count) });
     } catch (error) {
       this.searchConcurrencyDraft = previous.toString();
       this.searchConcurrencyCustom = previousCustom;
@@ -291,6 +307,34 @@ export struct SettingsPage {
     }).then((result) => {
       if (result.index === 1) this.doClearBookshelf();
     }).catch(() => { /* ignore */ });
+  }
+
+  private confirmResetListeningTime(): void {
+    if (this.isClearingListeningTime) return;
+    this.getUIContext().getPromptAction().showDialog({
+      title: $r('app.string.settings_reset_listening_title'),
+      message: $r('app.string.settings_reset_listening_confirm'),
+      buttons: [
+        { text: $r('app.string.settings_reset_listening_cancel'), color: '#8F8F8F' },
+        { text: $r('app.string.settings_reset_listening_action'), color: '#FF4444' }
+      ]
+    }).then((result): void => {
+      if (result.index === 1) this.resetListeningTime();
+    }).catch((): void => {});
+  }
+
+  private async resetListeningTime(): Promise<void> {
+    if (this.isClearingListeningTime) return;
+    this.isClearingListeningTime = true;
+    try {
+      TextToSpeechService.getInstance().pause();
+      await AudioService.getInstance().pause();
+      await StatsService.resetListeningTime();
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_reset_listening_done') });
+    } catch (error) {
+      hilog.warn(0xFF00, 'SettingsPage', 'Reset listening time failed: %{public}s', String(error));
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_reset_listening_failed') });
+    } finally { this.isClearingListeningTime = false; }
   }
 
   private async doClearBookshelf(): Promise<void> {
@@ -571,8 +615,8 @@ export struct SettingsPage {
             fillWidth: true,
             selected: this.preloadCustom ? 4 : PRELOAD_OPTIONS.findIndex((opt: PreloadOption): boolean => opt.count === this.preloadCount),
             onSelect: (index: number): void => {
-              this.preloadCustom = index === 4;
-              if (!this.preloadCustom) this.setPreloadCount(PRELOAD_OPTIONS[index].count);
+              if (index === 4) this.preloadCustom = true;
+              else this.setPreloadCount(PRELOAD_OPTIONS[index].count);
             }
           }).layoutWeight(1.5)
             TextInput({ text: this.preloadDraft, placeholder: $r('app.string.settings_preload_input_hint') })
@@ -581,6 +625,7 @@ export struct SettingsPage {
               .onSubmit((): void => this.submitPreload())
             ImmersiveActionButton({ onPress: (): void => this.submitPreload() }).layoutWeight(0.8)
           }.width('100%').alignItems(VerticalAlign.Center)
+          .enabled(!this.isSavingPreload)
         }.width('100%').padding(ROW_INDENT)
 
         this.buildDivider()
@@ -613,6 +658,10 @@ export struct SettingsPage {
         this.buildDivider()
 
         this.buildActionItem('清空在线收藏与播放记录', '清除在线收藏 / 缓存书 / 播放记录，保留导入和下载', () => this.confirmClearBookshelf(), this.isClearingBookshelf)
+        this.buildDivider()
+        this.buildActionItem($r('app.string.settings_reset_listening_title'),
+          $r('app.string.settings_reset_listening_subtitle'),
+          (): void => this.confirmResetListeningTime(), this.isClearingListeningTime)
       }
       .width('100%')
       .backgroundColor($r('sys.color.comp_background_primary'))

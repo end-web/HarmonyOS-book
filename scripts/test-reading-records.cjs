@@ -32,6 +32,8 @@ const ts = require(path.join(process.env.DEVECO_HOME,
     PreferenceService: { getProgress: async () => null, removeHistory: async id => removedHistory.push(id),
       removeProgress: async id => removedAudio.push(id) },
     DataService: { getBookById: async (_ctx, id) => books.get(id) },
+    SearchCache: { get: () => undefined },
+    DiagnosticLogService: { info() {} },
     Curve: { FastOutSlowIn: 0 }
   });
   const page = new exported.RecordPage();
@@ -73,6 +75,15 @@ const ts = require(path.join(process.env.DEVECO_HOME,
   assert.deepEqual(removedStats, ['novel']);
   assert.deepEqual(removedHistory, ['novel']);
   assert.deepEqual(removedAudio, ['novel']);
+  const missing = await page.buildRecordViews(h.context, [], [
+    { bookId: 'deleted-source-book', chapterId: 'chapter-1', chapterTitle: 'Retained chapter',
+      progressMs: 250, durationMs: 1000, updatedAt: 100, sourceUrl: 'deleted-source', bookUrl: 'old-book' }
+  ], []);
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].chapterTitle, 'Retained chapter');
+  assert.equal(missing[0].progressPercent, 25);
+  assert.equal(page.shouldShowRecord(missing[0], new Set()), true);
+  console.log('PASS: missing book/source cache retains unfavorited history and progress without throwing');
   console.log('PASS: mixed reading/audio history, ordering, favorite filters, reading/player routes, progress and deletion');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   for (const dir of fixtures) fs.rmSync(dir, { recursive: true, force: true });

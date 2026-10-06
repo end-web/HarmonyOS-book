@@ -11,9 +11,17 @@ export class MembershipState {
   @Trace autoRenew: boolean = false;
   @Trace verifiedAt: number = 0;
 
+  get lifetime(): boolean { return this.productId === 'lastVip'; }
+
+  get nameColor(): Resource {
+    if (!this.active) return $r('sys.color.font_primary');
+    if (this.lifetime) return $r('app.color.membership_name_lifetime');
+    return this.productId === 'iconMonth' ? $r('app.color.membership_name_month') : $r('app.color.membership_name_year');
+  }
+
   get active(): boolean {
     const now = Date.now();
-    return this.productId.length > 0 && now >= this.verifiedAt && now < this.expiresAt &&
+    return this.productId.length > 0 && now >= this.verifiedAt && (this.lifetime || now < this.expiresAt) &&
       now - this.verifiedAt < 5 * 60 * 1000;
   }
 

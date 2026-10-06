@@ -27,7 +27,7 @@ export struct MembershipSubscriptionPage {
   }
 
   private purchase(plan: MembershipPlan): void {
-    if (!this.agreed || !AppIconService.instance.supported) return;
+    if (!this.agreed || !this.membership.supported) return;
     const context = this.abilityContext();
     if (context) this.membership.purchase(context, plan.id);
   }
@@ -50,23 +50,36 @@ export struct MembershipSubscriptionPage {
     return this.findPlan(productId)?.price || $r('app.string.membership_plan_unavailable');
   }
 
+  private planAction(productId: string): Resource {
+    if (this.state.active && this.state.lifetime) return $r('app.string.membership_lifetime_owned');
+    if (this.state.active && productId !== 'lastVip') return $r('app.string.membership_manage');
+    return productId === 'lastVip' ? $r('app.string.membership_buy_lifetime') : $r('app.string.membership_subscribe');
+  }
+
+  private canSelectPlan(productId: string): boolean {
+    if (this.membership.busy || !this.membership.supported || (this.state.active && this.state.lifetime)) return false;
+    if (this.state.active && productId !== 'lastVip') return true;
+    return this.agreed && this.findPlan(productId) !== undefined;
+  }
+
   @Builder
   planCard(productId: string) {
     Row({ space: AppSpace.Md }) {
       MembershipBadge({ productId: productId, badgeWidth: 52 })
       Column({ space: AppSpace.Xs }) {
-        Text(productId === 'iconMonth' ? $r('app.string.membership_month') : $r('app.string.membership_year'))
+        Text(productId === 'lastVip' ? $r('app.string.membership_lifetime') :
+          productId === 'iconMonth' ? $r('app.string.membership_month') : $r('app.string.membership_year'))
           .fontSize(AppFont.BodyL).fontWeight(FontWeight.Medium).fontColor($r('sys.color.font_primary'))
-        Text(productId === 'iconMonth' ? $r('app.string.membership_month_period') : $r('app.string.membership_year_period'))
+        Text(productId === 'lastVip' ? $r('app.string.membership_lifetime_period') :
+          productId === 'iconMonth' ? $r('app.string.membership_month_period') : $r('app.string.membership_year_period'))
           .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
         Text(this.planPrice(productId)).fontSize(AppFont.Title).fontWeight(FontWeight.Bold).fontColor(AppColor.Brand)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Button(this.state.active ? $r('app.string.membership_manage') : $r('app.string.membership_subscribe'))
+      Button(this.planAction(productId))
         .backgroundColor(AppColor.Brand).fontColor(AppColor.OnBrand)
-        .enabled(!this.membership.busy && (this.state.active ||
-          (this.agreed && AppIconService.instance.supported && this.findPlan(productId) !== undefined)))
+        .enabled(this.canSelectPlan(productId))
         .onClick((): void => {
-          if (this.state.active) this.manage();
+          if (this.state.active && productId !== 'lastVip') this.manage();
           else {
             const plan = this.findPlan(productId);
             if (plan) this.purchase(plan);
@@ -97,10 +110,13 @@ export struct MembershipSubscriptionPage {
             Text(this.membership.message).fontSize(AppFont.BodyL).fontWeight(FontWeight.Medium)
               .fontColor($r('sys.color.font_primary')).width('100%')
             if (this.state.active) {
-              Text($r('app.string.membership_expires', new Date(this.state.expiresAt).toLocaleString()))
+              Text(this.state.lifetime ? $r('app.string.membership_lifetime_valid') :
+                $r('app.string.membership_expires', new Date(this.state.expiresAt).toLocaleString()))
                 .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).width('100%')
-              Text(this.state.autoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
-                .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).width('100%')
+              if (!this.state.lifetime) {
+                Text(this.state.autoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
+                  .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).width('100%')
+              }
             }
             Text($r('app.string.membership_benefit')).fontSize(AppFont.Body)
               .fontColor($r('sys.color.font_secondary')).width('100%')
@@ -116,11 +132,14 @@ export struct MembershipSubscriptionPage {
           .backgroundColor($r('sys.color.comp_background_primary'))
           this.planCard('iconMonth')
           this.planCard('iconYear')
+          this.planCard('lastVip')
+          Text($r('app.string.membership_lifetime_renewal_notice')).fontSize(AppFont.Caption)
+            .fontColor($r('sys.color.font_secondary')).width('100%')
           Text(this.membership.productsMessage).fontSize(AppFont.Caption)
             .fontColor($r('sys.color.font_secondary')).width('100%')
           Text($r('app.string.membership_terms')).fontSize(AppFont.Body)
             .fontColor($r('sys.color.font_secondary')).width('100%')
-          if (!this.state.active) {
+          if (!this.state.active || !this.state.lifetime) {
             Row({ space: AppSpace.Sm }) {
               Checkbox({ name: 'subscriptionConsent' }).select(this.agreed).selectedColor(AppColor.Brand)
                 .onChange((value: boolean): void => { this.agreed = value; })

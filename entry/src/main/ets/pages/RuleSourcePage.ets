@@ -12,7 +12,7 @@ import {
   LocalRuleSourceBulkTestProgress,
   LocalRuleSourceBulkTestReport
 } from '../service/rulesource/LocalRuleSourceBulkTester';
-import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
+import { LocalRuleSourceRepository, SourceLimitError } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleSourceCodec } from '../service/rulesource/LocalRuleSourceCodec';
 import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
 import { LocalRuleHttpClient } from '../service/rulesource/LocalRuleHttpClient';
@@ -867,7 +867,17 @@ export struct RuleSourcePage {
       this.showToast(report.message.length > 0 ? report.message : $r('app.string.rule_source_import_invalid'));
       return false;
     }
-    const importedCount = await LocalRuleSourceImportService.importSources(report.sources);
+    let importedCount = 0;
+    try {
+      importedCount = await LocalRuleSourceImportService.importSources(report.sources);
+    } catch (error) {
+      if (error instanceof SourceLimitError) {
+        this.showToast($r('app.string.rule_source_membership_limit'));
+        return false;
+      }
+      if (error instanceof Error) throw error;
+      throw new Error(String(error));
+    }
     if (importedCount > 0) this.sortMode = 0;
     SourceDataService.invalidateLocalSources();
     await this.loadSources(false);
@@ -1950,6 +1960,8 @@ export struct RuleSourcePage {
           .fontSize(AppFont.Caption)
           .fontColor($r('sys.color.font_tertiary'))
           .maxLines(2)
+        Text($r('app.string.rule_source_membership_hint'))
+          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -1985,6 +1997,10 @@ export struct RuleSourcePage {
       }
       if (this.hasFileImportResult && !this.isImporting) {
         Column({ space: 4 }) {
+          if (this.fileImportResult.membershipLimitReached) {
+            Text($r('app.string.rule_source_membership_limit'))
+              .fontSize(AppFont.Caption).fontColor(AppColor.Brand)
+          }
           Text($r('app.string.rule_source_import_files_result', this.fileImportResult.imported,
             this.fileImportResult.skippedSources, this.fileImportResult.skippedFiles))
             .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))

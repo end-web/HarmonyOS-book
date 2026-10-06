@@ -17,6 +17,22 @@ async function finish(h) {
 }
 
 (async () => {
+  const free = setup();
+  free.control.member = false;
+  await assert.rejects(free.automatic.configure(free.context, true, 3), /MEMBERSHIP_REQUIRED/);
+  await assert.rejects(free.automatic.configure(free.context, false, 7), /MEMBERSHIP_REQUIRED/);
+  assert.equal(free.automatic.settings.enabled, false);
+  // Previously enabled settings cannot bypass an expired/refunded/unverified entitlement.
+  free.automatic.settings.enabled = true;
+  free.automatic.settings.nextCheckAt = 0;
+  await free.automatic.check(free.context);
+  assert.equal(free.control.cloudWrites, 0);
+  await free.automatic.pauseForManual();
+  const manual = await free.service.backup(free.context);
+  free.automatic.resumeAfterManual();
+  assert.equal(manual.uploaded, true, 'manual cloud backup stays free');
+  await finish(free);
+
   const h = setup();
   await h.automatic.check(h.context);
   assert.equal(h.control.cloudWrites, 0, 'default off must not upload');

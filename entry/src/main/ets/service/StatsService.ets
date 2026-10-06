@@ -25,6 +25,7 @@ export interface BookUsageDay {
 }
 
 export interface BookUsageStats {
+  archived?: boolean;
   bookId: string;
   title: string;
   author: string;
@@ -180,6 +181,7 @@ export class StatsService {
       records.push(rec);
     }
     rec.title = book.title || rec.title;
+    rec.archived = false;
     rec.author = book.author || rec.author;
     rec.cover = book.cover || rec.cover;
     rec.updatedAt = recordedAt;
@@ -285,7 +287,8 @@ export class StatsService {
         bookId: item.bookId, title: item.title || '未知书籍', author: item.author || '', cover: item.cover || '',
         listenSeconds: Math.max(StatsService.safeSeconds(item.listenSeconds), lifetime),
         updatedAt: item.updatedAt || 0, days: StatsService.trimDays(days),
-        sourceUrl: item.sourceUrl || '', bookUrl: item.bookUrl || ''
+        sourceUrl: item.sourceUrl || '', bookUrl: item.bookUrl || '',
+        archived: item.archived === true
       };
     }).sort((left: BookUsageStats, right: BookUsageStats): number => right.updatedAt - left.updatedAt);
   }
@@ -351,13 +354,27 @@ export class StatsService {
     const deleted = new Set(bookIds);
     await StatsService.enqueue(async (): Promise<void> => {
       await StatsService.ensureReady();
-      await StatsService.commitRecords(StatsService.records.filter((item: BookUsageStats): boolean =>
-        !deleted.has(item.bookId)));
+      const records = StatsService.normalizeRecords(StatsService.records);
+      for (const item of records) {
+        if (deleted.has(item.bookId)) item.archived = true;
+      }
+      await StatsService.commitRecords(records);
       emitter.emit(EVT_USAGE_STATS_UPDATED);
     });
   }
 
   static async clearBookStats(): Promise<void> {
+    await StatsService.enqueue(async (): Promise<void> => {
+      await StatsService.ensureReady();
+      const records = StatsService.normalizeRecords(StatsService.records);
+      for (const item of records) item.archived = true;
+      await StatsService.commitRecords(records);
+      emitter.emit(EVT_USAGE_STATS_UPDATED);
+    });
+  }
+
+  /** 仅设置页“清除累计收听时长”的明确确认可以调用。 */
+  static async resetListeningTime(): Promise<void> {
     await StatsService.enqueue(async (): Promise<void> => {
       await StatsService.ensureReady();
       await StatsService.commitRecords([]);
@@ -370,8 +387,24 @@ export class StatsService {
       !!item && !!item.bookId && !item.bookId.startsWith('import_')));
     await StatsService.enqueue(async (): Promise<void> => {
       await StatsService.ensureReady();
-      const importedRecords = StatsService.records.filter((item: BookUsageStats): boolean => item.bookId.startsWith('import_'));
-      await StatsService.commitRecords(importedRecords.concat(safeRecords));
+      // 恢复旧备份也不能降低本机已经累计的时长；同书同日取较大值，重复恢复不叠加。
+      const merged = StatsService.normalizeRecords(StatsService.records);
+      for (const incoming of safeRecords) {
+        const current = merged.find((item: BookUsageStats): boolean => item.bookId === incoming.bookId);
+        if (!current) {
+          merged.push(incoming);
+          continue;
+        }
+        for (const day of incoming.days) {
+          const saved = current.days.find((item: BookUsageDay): boolean => item.day === day.day);
+          if (saved) saved.listenSeconds = Math.max(saved.listenSeconds, day.listenSeconds);
+          else current.days.push(day);
+        }
+        current.listenSeconds = Math.max(current.listenSeconds, incoming.listenSeconds,
+          current.days.reduce((total: number, day: BookUsageDay): number => total + day.listenSeconds, 0));
+        current.updatedAt = Math.max(current.updatedAt, incoming.updatedAt);
+      }
+      await StatsService.commitRecords(StatsService.normalizeRecords(merged));
       emitter.emit(EVT_USAGE_STATS_UPDATED, { data: { historical: true } });
     });
   }
@@ -472,7 +505,7 @@ export class StatsService {
     const daily = StatsService.aggregateDaily(records);
     const map = StatsService.toMap(daily);
     return {
-      records,
+      records: records.filter((item: BookUsageStats): boolean => !item.archived),
       summary: StatsService.computeSummary(map,
         records.reduce((total: number, record: BookUsageStats): number => total + record.listenSeconds, 0)),
       streak: StatsService.computeStreak(map),

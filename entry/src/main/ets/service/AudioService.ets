@@ -16,6 +16,7 @@ import { AudioRequestInfo, BookSourceService } from './BookSourceService';
 import { DataService } from './DataService';
 import { AVSessionService, AVSessionCallbacks } from './AVSessionService';
 import { BackgroundTaskService } from './BackgroundTaskService';
+import { ReadingSessionService, SessionLocation } from './ReadingSessionService';
 import { ChapterCacheService } from './ChapterCacheService';
 import { DownloadPolicy } from './DownloadPolicy';
 import { LiveAudioService } from './LiveAudioService';
@@ -448,6 +449,7 @@ export class AudioService {
         // 真正开始出声,清掉 loading 标记
         this.state.isLoading = false;
         this.startTick();
+        this.recordSession();
         if (this.state.currentBook && this.state.currentChapter) {
           this.triggerPreload(this.state.currentBook, this.state.currentChapter);
         }
@@ -476,6 +478,7 @@ export class AudioService {
         }
       } else if (newState === 'completed') {
         this.state.isPlaying = false;
+        this.recordSession();
         this.recordPause();
         this.stopTick();
         this.syncPlaybackState();
@@ -537,6 +540,7 @@ export class AudioService {
         && !!ch.originSourceValue && ch.source.value !== ch.originSourceValue;
       this.state.isLoading = false;
       this.state.isPlaying = false;
+      this.recordSession();
       // 解析后的临时音频 URL 可能已过期（如 aikeu 的签名链接），把这个章节的缓存清掉，
       // 之后用 originSourceValue 重新解析一份新的音频 URL。
       if (ch && ch.originSourceValue) {
@@ -767,9 +771,16 @@ export class AudioService {
     });
   }
 
+  private recordSession(): void {
+    if (!this.state || this.state.isLive || !this.state.currentBook || !this.state.currentChapter) return;
+    ReadingSessionService.checkpoint('audio', SessionLocation.audio(this.state.currentBook,
+      this.state.currentChapter, this.state.progressMs, this.state.durationMs), this.state.isPlaying);
+  }
+
   private async persistHistory(): Promise<void> {
     if (this.frozenPersistGen >= 0) return;
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
+    this.recordSession();
     const book = this.state.currentBook;
     const chapter = this.state.currentChapter;
     const chapterId = chapter.id;
@@ -968,6 +979,7 @@ export class AudioService {
     if (curBookId && curChapterId && chapterChanged) {
       // 切书或切集:先把当前章节的进度落盘
       try { await this.persistHistory(); } catch (_e) { /* ignore */ }
+      if (bookChanged) ReadingSessionService.end('audio');
     }
     // 切书(含冷启动首播)时恢复该书上次的倍速;同书切章保持当前倍速不变。
     // 必须 await getProgress 走持久化 store:冷启动后 progressMemo 为空,
@@ -1926,6 +1938,12 @@ export class AudioService {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'seekAndPlaySameChapter failed: %{public}s',
         e?.message ?? JSON.stringify(err));
+    }
+  }
+
+  refreshPreload(): void {
+    if (this.state?.currentBook && this.state.currentChapter) {
+      this.triggerPreload(this.state.currentBook, this.state.currentChapter, !this.state.isPlaying);
     }
   }
 

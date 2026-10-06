@@ -9,7 +9,7 @@ const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-l
 const root = path.resolve(__dirname, '../entry/src/main/ets');
 function compile(text, globals = {}) {
   const context = { exports: {}, Map, Set, console, ...globals };
-  const code = ts.transpileModule(text.replace(/@ObservedV2\s*/g, '').replace(/@Trace\s*/g, ''), {
+  const code = ts.transpileModule(text.replace(/import lazy /g, 'import ').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s*/g, ''), {
     compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS }
   }).outputText;
   vm.runInNewContext(code, context);
@@ -51,9 +51,14 @@ function testRows() {
   assert.equal(notifications, 5);
 }
 const repositoryText = fs.readFileSync(path.join(root, 'service/rulesource/LocalRuleSourceRepository.ets'), 'utf8');
+let member = true;
 const { LocalRuleSourceRepository: repo } = compile(repositoryText, {
-  require: name => name === '@kit.ArkData'
-    ? { relationalStore: { ConflictResolution: { ON_CONFLICT_REPLACE: 1 } } } : {}
+  require: name => {
+    if (name === '@kit.ArkData') return { relationalStore: { ConflictResolution: { ON_CONFLICT_REPLACE: 1 } } };
+    if (name === '../MembershipService') return { MembershipService: { instance: { hasCurrentEntitlement: async () => member } } };
+    if (name === '../../model/MembershipState') return { MembershipState: { current: { get active() { return member; } } } };
+    return {};
+  }
 });
 async function testImportOrder() {
   let rows = new Map([
@@ -72,7 +77,7 @@ async function testImportOrder() {
       querySql: async (sql, args) => {
         if (sql.includes('MAX(custom_order)')) {
           const orders = [...pending.values()].map(row => row.customOrder);
-          return result(orders.length ? [Math.max(...orders), Math.min(...orders)] : [0, 0]);
+          return result(orders.length ? [Math.max(...orders), Math.min(...orders), pending.size] : [0, 0, 0]);
         }
         const existing = pending.get(args[0]);
         return result(existing ? [1] : [], existing);
@@ -114,6 +119,27 @@ async function testImportOrder() {
   failUrl = '';
   await repo.upsertImportedBatch([source('first'), source('second')]);
   assert.deepEqual(sorted(), ['first', 'second']);
+  member = false;
+  await repo.upsertImportedBatch(Array.from({ length: 6 }, (_, i) => source('free-' + i)));
+  assert.equal(rows.size, 8);
+  await repo.upsertImportedBatch([source('first'), source('first')]);
+  await assert.rejects(repo.insert(source('ninth')), /SOURCE_LIMIT_REACHED/);
+  const previousName = rows.get('first').bookSourceName;
+  await assert.rejects(repo.upsertImportedBatch([source('first', { bookSourceName: 'Rollback' }), source('ninth')]), /SOURCE_LIMIT_REACHED/);
+  assert.equal(rows.get('first').bookSourceName, previousName, 'whole batch rolls back');
+  member = true;
+  await repo.upsertImportedBatch(Array.from({ length: 20 }, (_, i) => source('paid-' + i)));
+  assert.equal(rows.size, 28, 'member has no total-count cap');
+  member = false;
+  await repo.update(source('first', { bookSourceName: 'Still editable' }));
+  assert.equal(rows.get('first').bookSourceName, 'Still editable');
+  await assert.rejects(repo.upsertImportedBatch([source('extra')]), /SOURCE_LIMIT_REACHED/);
+  assert.equal(rows.size, 28, 'expiry preserves existing sources');
+  rows.delete('first');
+  rows.delete('second');
+  for (const key of [...rows.keys()]) if (rows.size > 7) rows.delete(key);
+  await repo.upsertImportedBatch([source('available-again'), source('available-again')]);
+  assert.equal(rows.size, 8, 'duplicates consume one slot and deletion releases capacity');
 }
 (async () => {
   testRows();

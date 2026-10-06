@@ -3,6 +3,7 @@ import { cert } from '@kit.DeviceCertificateKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { SubscriptionEnvelope, SubscriptionPayload } from './SubscriptionData';
+import { LifetimeEnvelope, LifetimeOrder } from './LifetimeData';
 
 class JwsHeader {
   alg: string = '';
@@ -53,7 +54,20 @@ export class SubscriptionVerifier {
     if (typeof purchaseData !== 'string' || purchaseData.length > 262144) throw new Error('Oversized purchase');
     const envelope: SubscriptionEnvelope = JSON.parse(purchaseData);
     if (!envelope || typeof envelope.jwsSubscriptionStatus !== 'string') throw new Error('Missing subscription JWS');
-    const parts = envelope.jwsSubscriptionStatus.split('.');
+    const payload: SubscriptionPayload = JSON.parse(await SubscriptionVerifier.verifyJws(context, envelope.jwsSubscriptionStatus));
+    return payload;
+  }
+
+  static async verifyLifetime(context: common.Context, purchaseData: string): Promise<LifetimeOrder> {
+    if (typeof purchaseData !== 'string' || purchaseData.length > 262144) throw new Error('Oversized purchase');
+    const envelope: LifetimeEnvelope = JSON.parse(purchaseData);
+    if (!envelope || typeof envelope.jwsPurchaseOrder !== 'string') throw new Error('Missing purchase JWS');
+    const order: LifetimeOrder = JSON.parse(await SubscriptionVerifier.verifyJws(context, envelope.jwsPurchaseOrder));
+    return order;
+  }
+
+  private static async verifyJws(context: common.Context, jws: string): Promise<string> {
+    const parts = jws.split('.');
     if (parts.length !== 3) throw new Error('Invalid JWS');
     const decoder = util.TextDecoder.create('utf-8', { fatal: true });
     const header: JwsHeader = JSON.parse(decoder.decodeToString(SubscriptionVerifier.decodeBase64(parts[0], true)));
@@ -88,7 +102,6 @@ export class SubscriptionVerifier {
     const valid = await verifier.verify({ data: new util.TextEncoder().encodeInto(parts[0] + '.' + parts[1]) },
       { data: SubscriptionVerifier.signatureDer(SubscriptionVerifier.decodeBase64(parts[2], true)) });
     if (!valid) throw new Error('Invalid subscription signature');
-    const payload: SubscriptionPayload = JSON.parse(decoder.decodeToString(SubscriptionVerifier.decodeBase64(parts[1], true)));
-    return payload;
+    return decoder.decodeToString(SubscriptionVerifier.decodeBase64(parts[1], true));
   }
 }

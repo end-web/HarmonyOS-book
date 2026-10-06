@@ -4,6 +4,8 @@ import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { AuthService, HwAuthErrorCode } from '../service/AuthService';
 import { AppBackupSnapshot } from '../service/AppBackupService';
 import { AutoBackupService } from '../service/AutoBackupService';
+import { MembershipState } from '../model/MembershipState';
+import { MembershipService } from '../service/MembershipService';
 import {
   LocalBackupError, LocalBackupErrorCode, LocalBackupPhase, LocalBackupService
 } from '../service/LocalBackupService';
@@ -20,6 +22,7 @@ export struct AccountPage {
   @Local cloud: CloudBackupService = CloudBackupService.instance;
   @Local local: LocalBackupService = LocalBackupService.instance;
   @Local automatic: AutoBackupService = AutoBackupService.instance;
+  @Local membership: MembershipState = MembershipState.current;
   @Local manualPending: boolean = false;
   @Local autoReady: boolean = false;
   @Local message: ResourceStr = '';
@@ -34,6 +37,7 @@ export struct AccountPage {
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext();
     if (context) {
+      MembershipService.instance.hasCurrentEntitlement();
       this.auth.restore(context).then(async (): Promise<void> => {
         await this.automatic.refresh(context);
         this.autoReady = true;
@@ -77,12 +81,14 @@ export struct AccountPage {
   }
 
   private async setAutomatic(enabled: boolean, days: number): Promise<void> {
+    if (!this.membership.active) return;
     const context = this.getUIContext().getHostContext();
     if (!context || !this.auth.isLoggedIn || !this.manualAvailable()) return;
     try {
       await this.automatic.configure(context, enabled, days);
     } catch (_error) {
-      this.toast($r('app.string.auto_backup_save_failed'));
+      this.toast(this.membership.active ? $r('app.string.auto_backup_save_failed') :
+        $r('app.string.auto_backup_membership_required'));
     }
   }
 
@@ -93,6 +99,7 @@ export struct AccountPage {
   }
 
   private chooseFrequency(): void {
+    if (!this.membership.active) return;
     this.getUIContext().getPromptAction().showActionMenu({
       title: $r('app.string.auto_backup_frequency'),
       buttons: [
@@ -106,6 +113,7 @@ export struct AccountPage {
   }
 
   private autoStatus(): ResourceStr {
+    if (!this.membership.active) return $r('app.string.auto_backup_membership_required');
     if (!this.auth.isLoggedIn) return $r('app.string.auto_backup_login_required');
     if (this.automatic.storageFailed) return $r('app.string.auto_backup_save_failed');
     if (this.automatic.accountId !== this.auth.openID || !this.automatic.settings.enabled) {
@@ -400,7 +408,7 @@ export struct AccountPage {
           $r('app.string.hw_auth_login_title'))
           .fontSize(AppFont.Title)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('sys.color.font_primary'))
+          .fontColor(this.auth.isLoggedIn ? this.membership.nameColor : $r('sys.color.font_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text(this.auth.isLoggedIn ? $r('app.string.account_huawei_connected') : $r('app.string.account_local_available'))
@@ -505,16 +513,16 @@ export struct AccountPage {
           .fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary'))
           .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.auth.isLoggedIn &&
+        Toggle({ type: ToggleType.Switch, isOn: this.membership.active && this.auth.isLoggedIn &&
           this.automatic.accountId === this.auth.openID && this.automatic.settings.enabled })
           .selectedColor(AppColor.Brand)
-          .enabled(this.autoReady && this.auth.isLoggedIn && this.manualAvailable())
+          .enabled(this.membership.active && this.autoReady && this.auth.isLoggedIn && this.manualAvailable())
           .accessibilityText($r('app.string.auto_backup_title'))
           .onChange((enabled: boolean): void => { this.setAutomatic(enabled, this.automatic.settings.intervalDays); })
       }
       .width('100%')
       .constraintSize({ minHeight: 44 })
-      if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID && this.automatic.settings.enabled) {
+      if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID) {
         Row({ space: AppSpace.Sm }) {
           Text($r('app.string.auto_backup_frequency'))
             .fontSize(AppFont.Body)
@@ -525,11 +533,16 @@ export struct AccountPage {
         }
         .width('100%')
         .constraintSize({ minHeight: 44 })
-        .enabled(this.manualAvailable())
+        .enabled(this.membership.active && this.automatic.settings.enabled && this.manualAvailable())
         .onClick(() => this.chooseFrequency())
       }
       Text(this.autoStatus()).fontSize(AppFont.Caption).lineHeight(19)
         .fontColor($r('sys.color.font_secondary'))
+      if (!this.membership.active) {
+        Button($r('app.string.membership_subscription_entry'))
+          .fontColor(AppColor.Brand).backgroundColor(Color.Transparent)
+          .onClick(() => this.navStack.pushPathByName('membershipSubscription', ''))
+      }
       if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID &&
         this.automatic.settings.enabled && this.automatic.settings.errorCode !== 0 &&
         !this.automatic.settings.needsDecision) {

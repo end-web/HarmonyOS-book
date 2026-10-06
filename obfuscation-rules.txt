@@ -20,6 +20,12 @@
   x5c
   crit
   jwsSubscriptionStatus
+  jwsPurchaseOrder
+  signedTime
+  purchaseOrderRevocationReasonCode
+  revocationTime
+  price
+  currency
   environment
   applicationId
   packageName
@@ -85,6 +91,14 @@
   audioAutoResume
   homeGridColumns
   preloadChapters
+  # Reading-session JSON must survive release builds and upgrades
+  sessionId
+  archived
+  startedAt
+  endedAt
+  start
+  end
+  position
   # Reading backup and persisted reading/speech positions
   reading
   positions

@@ -468,6 +468,8 @@ export struct SearchPage {
       this.searchSourceTotal = selectedSources.length;
       const concurrency = await PreferenceService.getSearchConcurrency();
       if (gen !== this.searchGen) return;
+      hilog.info(DOMAIN, TAG, 'search schedule concurrency=%{public}d sources=%{public}d generation=%{public}d',
+        concurrency, selectedSources.length, gen);
       const seen = new Set<string>();
       await this.searchSources(selectedSources, keyword, gen, seen, concurrency);
       if (gen !== this.searchGen) return;

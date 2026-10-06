@@ -1,22 +1,21 @@
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { common, wantAgent } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { DiagnosticLogService } from './DiagnosticLogService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_BgTask';
 const AUDIO_MODE = 'audioPlayback';
 const DATA_TRANSFER_MODE = 'dataTransfer';
-/** 系统取消/挂起后最短重申间隔，避免 tight loop */
-const REASSERT_MIN_INTERVAL_MS = 1500;
 
 export class BackgroundTaskService {
   private static running: boolean = false;
+  private static appliedModes: string = '';
   private static requestedModes: Set<string> = new Set();
   private static syncPromise: Promise<void> = Promise.resolve();
   private static context: common.UIAbilityContext | null = null;
   private static listenersBound: boolean = false;
-  private static lastReassertAt: number = 0;
-  private static reassertTimer: number = -1;
+  private static systemBlocked: boolean = false;
 
   private static readonly onCancel = (info: backgroundTaskManager.ContinuousTaskCancelInfo): void => {
     const reason = info?.reason ?? -1;
@@ -24,16 +23,19 @@ export class BackgroundTaskService {
       info?.id ?? -1, reason, BackgroundTaskService.modeSnapshot());
     // 系统已取消长时任务，本地必须立刻认为未在跑，否则后续只会走 update 失败路径
     BackgroundTaskService.running = false;
-    BackgroundTaskService.scheduleReassert('cancel');
+    BackgroundTaskService.appliedModes = '';
+    DiagnosticLogService.info('background.cancel', `reason=${reason}; modes=${BackgroundTaskService.modeSnapshot()}; owners=${Array.from(BackgroundTaskService.audioOwners).join(',')}`);
+    BackgroundTaskService.systemBlocked = true;
   };
 
   private static readonly onSuspend = (info: backgroundTaskManager.ContinuousTaskSuspendInfo): void => {
     const reason = info?.suspendReason ?? -1;
     hilog.warn(DOMAIN, TAG, 'continuousTaskSuspend id=%{public}d reason=%{public}d modes=%{public}s',
       info?.continuousTaskId ?? -1, reason, BackgroundTaskService.modeSnapshot());
-    // 挂起后进程可能被冻结；标记未运行并尝试重申，尤其 dataTransfer 低速场景
+    // 尊重系统挂起，等待 active 回调或用户重新发起任务。
     BackgroundTaskService.running = false;
-    BackgroundTaskService.scheduleReassert('suspend');
+    DiagnosticLogService.info('background.suspend', `reason=${reason}; modes=${BackgroundTaskService.modeSnapshot()}`);
+    BackgroundTaskService.systemBlocked = true;
   };
 
   private static readonly onActive = (info: backgroundTaskManager.ContinuousTaskActiveInfo): void => {
@@ -41,6 +43,7 @@ export class BackgroundTaskService {
       info?.id ?? -1, BackgroundTaskService.modeSnapshot());
     if (BackgroundTaskService.requestedModes.size > 0) {
       BackgroundTaskService.running = true;
+      BackgroundTaskService.systemBlocked = false;
     }
   };
 
@@ -84,7 +87,7 @@ export class BackgroundTaskService {
   static ensure(context?: common.UIAbilityContext | null): Promise<void> {
     if (context) BackgroundTaskService.context = context;
     const ctx = BackgroundTaskService.context;
-    if (!ctx || BackgroundTaskService.requestedModes.size === 0) return Promise.resolve();
+    if (!ctx || BackgroundTaskService.systemBlocked || BackgroundTaskService.requestedModes.size === 0) return Promise.resolve();
     if (BackgroundTaskService.running) return Promise.resolve();
     return BackgroundTaskService.queueSync(ctx);
   }
@@ -103,6 +106,7 @@ export class BackgroundTaskService {
     BackgroundTaskService.context = context;
     BackgroundTaskService.bindListeners();
     if (enabled) {
+      if (!BackgroundTaskService.requestedModes.has(mode)) BackgroundTaskService.systemBlocked = false;
       BackgroundTaskService.requestedModes.add(mode);
     } else {
       BackgroundTaskService.requestedModes.delete(mode);
@@ -146,33 +150,13 @@ export class BackgroundTaskService {
     }
   }
 
-  private static scheduleReassert(from: string): void {
-    if (BackgroundTaskService.requestedModes.size === 0) return;
-    const ctx = BackgroundTaskService.context;
-    if (!ctx) return;
-    const now = Date.now();
-    const wait = Math.max(0, REASSERT_MIN_INTERVAL_MS - (now - BackgroundTaskService.lastReassertAt));
-    if (BackgroundTaskService.reassertTimer >= 0) {
-      clearTimeout(BackgroundTaskService.reassertTimer);
-      BackgroundTaskService.reassertTimer = -1;
-    }
-    BackgroundTaskService.reassertTimer = setTimeout((): void => {
-      BackgroundTaskService.reassertTimer = -1;
-      BackgroundTaskService.lastReassertAt = Date.now();
-      hilog.info(DOMAIN, TAG, 'reassert continuous task from %{public}s modes=%{public}s',
-        from, BackgroundTaskService.modeSnapshot());
-      BackgroundTaskService.queueSync(ctx).catch((err: Error): void => {
-        hilog.warn(DOMAIN, TAG, 'reassert failed: %{public}s', err?.message ?? JSON.stringify(err));
-      });
-    }, wait) as number;
-  }
-
   private static modeSnapshot(): string {
     return Array.from(BackgroundTaskService.requestedModes).join(',');
   }
 
   private static async sync(context: common.UIAbilityContext): Promise<void> {
     const modes: string[] = Array.from(BackgroundTaskService.requestedModes);
+    if (modes.length > 0 && BackgroundTaskService.systemBlocked) return;
     try {
       if (modes.length === 0) {
         if (!BackgroundTaskService.running) return;
@@ -189,8 +173,10 @@ export class BackgroundTaskService {
       }
 
       if (BackgroundTaskService.running) {
+        if (BackgroundTaskService.appliedModes === modes.join(',')) return;
         try {
           await backgroundTaskManager.updateBackgroundRunning(context, modes);
+          BackgroundTaskService.appliedModes = modes.join(',');
           hilog.info(DOMAIN, TAG, 'updateBackgroundRunning ok modes=%{public}s', modes.join(','));
           return;
         } catch (err) {
@@ -227,6 +213,7 @@ export class BackgroundTaskService {
     const agent = await wantAgent.getWantAgent(wantAgentInfo);
     await backgroundTaskManager.startBackgroundRunning(context, modes, agent);
     BackgroundTaskService.running = true;
+    BackgroundTaskService.appliedModes = modes.join(',');
     hilog.info(DOMAIN, TAG, 'startBackgroundRunning ok modes=%{public}s', modes.join(','));
   }
 }

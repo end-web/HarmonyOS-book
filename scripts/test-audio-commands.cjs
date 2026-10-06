@@ -98,6 +98,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
     delete: async key => preferenceValues.delete(key), flush: async () => {}
   });
   const modules = {
+    './ReadingSessionService': { ReadingSessionService: { checkpoint() {} }, SessionLocation: { audio: () => ({}) } },
     './LiveAudioService': { LiveAudioService: { isLive: async () => false } },
     './ChapterCacheService': { ChapterCacheService: { getInstance: () => cache } },
     './PlaybackCoordinator': coordinatorModule.exports,

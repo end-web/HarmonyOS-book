@@ -114,6 +114,7 @@ export class ChapterCacheService {
   }
 
   setPreloadCount(forward: number, backward: number = 0): void {
+    this.suspendPreload();
     PRE_DOWNLOAD_FORWARD = Number.isFinite(forward) ? Math.max(0, Math.min(50, Math.round(forward))) : 1;
     PRE_DOWNLOAD_BACKWARD = Number.isFinite(backward) ? Math.max(0, Math.min(50, Math.round(backward))) : 0;
     this.queue.clear();
@@ -125,6 +126,9 @@ export class ChapterCacheService {
       for (const download of this.activeDownloads.values()) download.cancel();
       this.activeDownloads.clear();
     }
+    hilog.info(DOMAIN, TAG, 'preload settings forward=%{public}d backward=%{public}d',
+      PRE_DOWNLOAD_FORWARD, PRE_DOWNLOAD_BACKWARD);
+    this.resumePreload();
   }
 
   getPreloadForward(): number {
@@ -259,20 +263,9 @@ export class ChapterCacheService {
     await this.storageMigration;
     const cached = this.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue || chapter.source.value);
     if (cached !== null) return cached;
-    const task = this.fileTasks.get(chapter.id);
-    if (task !== undefined) {
-      let timer = -1;
-      try {
-        await Promise.race([task, new Promise<void>((resolve: () => void) => {
-          timer = setTimeout(resolve, 1200);
-        })]);
-      } finally {
-        clearTimeout(timer);
-      }
-    }
     const completed = this.getAudioFilePath(book.id, chapter.id, chapter.originSourceValue || chapter.source.value);
     if (completed === null) {
-      // 等待预算耗尽后交给播放器拉流，停止同一章节的独立下载。
+      // 不等待整章文件：直接交给 AVPlayer 拉流，释放重复下载占用的带宽。
       this.activeDownloads.get(chapter.id)?.cancel();
       this.activeDownloads.delete(chapter.id);
       this.priorityChapterId = '';
@@ -307,6 +300,8 @@ export class ChapterCacheService {
 
   preloadAudioChapters(book: Book, currentIndex: number): void {
     if (!book.sourceUrl || !this.isPreloadEnabled() || this.preloadSuspended) return;
+    hilog.info(DOMAIN, TAG, 'preload trigger index=%{public}d count=%{public}d generation=%{public}d',
+      currentIndex, PRE_DOWNLOAD_FORWARD, this.preloadGen);
     const step = PreferenceService.chapterStep(book) < 0 ? -1 : 1;
     // 正序与倒序都先下一章；反向回看窗口排在后面。
     for (let distance = 1; distance <= PRE_DOWNLOAD_FORWARD + PRE_DOWNLOAD_BACKWARD; distance++) {

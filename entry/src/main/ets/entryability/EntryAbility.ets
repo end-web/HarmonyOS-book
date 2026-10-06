@@ -590,6 +590,7 @@ export default class EntryAbility extends UIAbility {
     if (this.context.config.colorMode !== undefined) WindowUtils.updateColorMode(this.context.config.colorMode);
     emitter.emit(EVT_READER_TYPOGRAPHY_CHANGED);
     AudioService.getInstance().setForeground(true);
+    emitter.emit('app.reader.foreground');
     TextToSpeechService.getInstance().setForeground(true);
     this.isInForeground = true;
     // 不阻塞前台恢复；已保存的账号需重新核对系统登录状态。
