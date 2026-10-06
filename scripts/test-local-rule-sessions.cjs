@@ -127,6 +127,26 @@ async function run() {
 
   const { LocalRuleBrowserRuntime } = load(prefix + 'LocalRuleBrowserRuntime');
   const browser = LocalRuleBrowserRuntime.instance;
+  // DOM 已稳定，但媒体请求随后才发出；必须保留网页任务而不是提前返回空资源。
+  let probes = 0;
+  let resolvedSniff;
+  const sniffTask = { documentServed: true, deadline: Date.now() + 10000, variables: {},
+    initial: { statusCode: 200, headers: {} }, urls: new Set(), audioPattern: '/\\.mp3(?:\\?|$)/i',
+    lastHtml: '<p>stable</p>', stable: 8, resolve: value => { resolvedSniff = value; }, reject: error => { throw error; } };
+  browser.attach({});
+  browser.active = sniffTask;
+  browser.schedule = () => { probes++; };
+  browser.snapshot = async () => ({ html: '<p>stable</p>', url: source.bookSourceUrl,
+    ready: 'complete', state: '{}', media: [] });
+  await browser.inspect(sniffTask);
+  assert.equal(resolvedSniff, undefined, 'Stable DOM must not end audio sniffing');
+  assert.equal(probes, 1);
+  sniffTask.urls.add('https://media.example/delayed.mp3?token=x');
+  await browser.inspect(sniffTask);
+  assert.ok(resolvedSniff.resourceUrls.includes('https://media.example/delayed.mp3?token=x'));
+  assert.equal(sniffTask.ready, true);
+  browser.active = undefined;
+  console.log('PASS: delayed media requests survive stable DOM and satisfy sourceRegex');
   browser.attach({ clearSslCache() {}, setCustomUserAgent() {}, loadUrl() {}, stop() {} });
   browser.schedule = task => task.resolve(task.initial);
   browser.snapshot = async () => ({ html: '<p>rendered after action</p>', url: source.bookSourceUrl, state: '{}', media: [] });

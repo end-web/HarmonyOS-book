@@ -17,13 +17,12 @@ import {
 import { LocalRuleStageExtractor } from './LocalRuleStageExtractor';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
 import { LocalRuleChapterRequest } from './LocalRuleChapterRequest';
-import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
+import { LocalRuleAudioResolver } from './LocalRuleAudioResolver';
 import { CoverPrefetcher } from '../CoverPrefetcher';
 import { LocalRuleExploreResult } from '../../model/LocalRulePanel';
 import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
-import { buffer } from '@kit.ArkTS';
 import { TalebookSourceIdentity } from './talebook/TalebookSourceIdentity';
 import { TalebookSourceAdapter } from './talebook/TalebookSourceAdapter';
 
@@ -336,7 +335,7 @@ export class LocalRuleDispatcher {
       return await LocalRuleDispatcher.resolveContentStrict(source, chapterUrl, variables);
     } catch (error) {
       LocalRuleDispatcher.logFailure(source, 'resolveContent', error as Object);
-      if (variables['__traceId']) throw new Error(error instanceof Error ? error.message : String(error));
+      if (variables['__traceId'] || LocalRuleDispatcher.isAudioContent(source, variables)) throw new Error(error instanceof Error ? error.message : String(error));
       return safe;
     }
   }
@@ -362,12 +361,16 @@ export class LocalRuleDispatcher {
       const plan: LocalRuleRequestPlan = LocalRuleHttpClient.prepareRequest(source, chapterUrl, variables);
       if (plan.method !== 'GET' || plan.body !== undefined || plan.webView ||
         !new RegExp('^https?://', 'i').test(plan.url)) return undefined;
-      const hasContentRule = source.ruleContent.content.trim().length > 0 ||
+      const hasContentRule = (source.ruleContent.content.trim().length > 0 &&
+        !LocalRuleAudioResolver.isBaseUrlRule(source.ruleContent.content)) ||
         source.ruleContent.audioUrl.trim().length > 0 || source.ruleContent.sourceRegex.trim().length > 0;
       if (hasContentRule && !LocalRuleDispatcher.looksLikeDirectAudioPath(plan.url)) return undefined;
       const result = new LocalRuleContentResult();
       result.audioUrl = plan.url;
-      result.requestHeaders = plan.headers;
+      const scoped = LocalRuleDispatcher.copyVariables(variables);
+      scoped['__header'] = JSON.stringify(LocalRuleDispatcher.getAudioHeaders(source, plan.url, variables));
+      scoped['__sourceLoginHeader'] = '';
+      result.requestHeaders = LocalRuleHttpClient.prepareRequest(source, chapterUrl, scoped).headers;
       return result;
     } catch (_error) {
       return undefined;
@@ -388,7 +391,11 @@ export class LocalRuleDispatcher {
         if (lower === 'cookie' || lower === 'authorization' || lower === 'proxy-authorization') continue;
         safeHeaders[key] = headers[key] ?? '';
       }
-      return safeHeaders;
+      const scoped: Record<string, string> = JSON.parse(JSON.stringify(variables));
+      scoped['__header'] = JSON.stringify(safeHeaders);
+      scoped['__sourceLoginHeader'] = '';
+      // 去掉源站凭据后，只补回属于音频目标 origin 的 Cookie。
+      return LocalRuleHttpClient.getSessionHeaders(source, _audioUrl, scoped);
     } catch (_error) {
       return {};
     }
@@ -480,7 +487,8 @@ export class LocalRuleDispatcher {
       pageCount++;
       const fetch = webAudioScript
         ? await LocalRuleHttpClient.fetchWebAudio(source, currentUrl, webAudioScript, variables)
-        : await LocalRuleHttpClient.fetch(source, currentUrl, variables);
+        : await LocalRuleHttpClient.fetch(source, currentUrl, variables, '', 1, '',
+          LocalRuleDispatcher.isAudioContent(source, variables));
       LocalRuleDispatcher.assertFetch(fetch, '正文');
       if (responseCharacters + fetch.body.length > LocalRuleExecutionLimits.MAX_STAGE_RESPONSE_CHARS) break;
       responseCharacters += fetch.body.length;
@@ -497,12 +505,20 @@ export class LocalRuleDispatcher {
         result.audioUrl = fetch.body.trim();
         break;
       }
+      if (!result.audioUrl && LocalRuleDispatcher.isAudioContent(source, variables) && source.ruleContent.sourceRegex.trim()) {
+        for (const candidate of fetch.resourceUrls) {
+          if (LocalRuleAudioResolver.match(candidate, source.ruleContent.sourceRegex)) {
+            result.audioUrl = LocalRuleAudioResolver.candidate(candidate, fetch.requestUrl);
+            if (result.audioUrl) break;
+          }
+        }
+      }
       if (!result.audioUrl) {
         result.audioUrl = LocalRuleDispatcher.firstResolvedUrl(await LocalRuleStageExtractor.extract(document,
           source.ruleContent.audioUrl, source, variables), fetch.requestUrl);
       }
       const extractedContent = await LocalRuleStageExtractor.extract(document,
-        source.ruleContent.content, source, variables);
+        result.audioUrl && LocalRuleDispatcher.isAudioContent(source, variables) ? '' : source.ruleContent.content, source, variables);
       if (LocalRuleDispatcher.isAudioContent(source, variables)) {
         if (!result.audioUrl) {
           result.audioUrl = LocalRuleDispatcher.firstResolvedUrl(extractedContent, fetch.requestUrl);
@@ -529,7 +545,7 @@ export class LocalRuleDispatcher {
           let matched = '';
           try {
             const matches = source.ruleContent.sourceRegex.trim()
-              ? new RegExp(source.ruleContent.sourceRegex, 'i').test(candidate)
+              ? LocalRuleAudioResolver.match(candidate, source.ruleContent.sourceRegex)
               : LocalRuleDispatcher.looksLikeDirectAudioPath(candidate);
             if (matches) matched = candidate;
           } catch (_error) { /* Invalid source regex is reported by the empty content result. */ }
@@ -581,54 +597,15 @@ export class LocalRuleDispatcher {
   }
 
   private static matchAudioUrl(body: string, pattern: string, baseUrl: string): string {
-    if (!pattern.trim()) return '';
-    try {
-      const match = new RegExp(pattern, 'i').exec(body);
-      if (match === null) return '';
-      const value = match.length > 1 ? match[1] : match[0];
-      return LocalRuleDispatcher.resolveAudioCandidate(baseUrl, value ?? '');
-    } catch (_error) {
-      return '';
-    }
+    return LocalRuleAudioResolver.fromBody(body, pattern, baseUrl);
   }
 
   private static firstResolvedUrl(value: string, baseUrl: string): string {
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-    try {
-      const parsed = JSON.parse(trimmed) as Object;
-      if (typeof parsed === 'string') {
-        const resolved = LocalRuleDispatcher.resolveAudioCandidate(baseUrl, parsed);
-        if (resolved) return resolved;
-      } else if (Array.isArray(parsed)) {
-        const values = parsed as Object[];
-        for (const item of values) {
-          if (item === undefined || item === null || typeof item === 'object') continue;
-          const resolved = LocalRuleDispatcher.resolveAudioCandidate(baseUrl, String(item));
-          if (resolved) return resolved;
-        }
-      }
-    } catch (_error) {
-      // 普通字符串继续按行尝试。
-    }
-    const lines = trimmed.split(new RegExp('\\r?\\n', 'g'));
-    for (const line of lines) {
-      const resolved = LocalRuleDispatcher.resolveAudioCandidate(baseUrl, line.trim());
-      if (resolved) return resolved;
-    }
-    return '';
+    return LocalRuleAudioResolver.extract(value, baseUrl);
   }
 
   private static resolveAudioCandidate(baseUrl: string, value: string): string {
-    let clean = value.trim();
-    if (clean.length > LocalRuleExecutionLimits.MAX_FIELD_CHARS) return '';
-    if (new RegExp('^[A-Za-z0-9+/]{24,}={0,2}$').test(clean)) {
-      const decoded = buffer.from(clean, 'base64').toString('utf-8');
-      if (new RegExp('^https?://', 'i').test(decoded)) clean = decoded;
-    }
-    if (!new RegExp('^(https?://|//|/|\\./|\\.\\./)', 'i').test(clean) &&
-      !new RegExp('^[^\\s<>]+\\.(mp3|m4a|aac|ogg|opus|wav|flac|m3u8)([?,#]|$)', 'i').test(clean)) return '';
-    return LocalRuleUrlAnalyzer.resolveUrl(baseUrl, clean);
+    return LocalRuleAudioResolver.candidate(value, baseUrl);
   }
 
   private static looksLikeDirectAudioPath(url: string): boolean {

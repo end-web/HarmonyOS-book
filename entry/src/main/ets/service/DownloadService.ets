@@ -482,7 +482,7 @@ export class DownloadService {
       const requestInfo = await BookSourceService.resolveAudioRequest(
         source, pageUrl, item.book.variables, item.chapter.variables);
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
-      if (!this.isValidAudioUrl(pageUrl, requestInfo.url)) {
+      if (!DownloadPolicy.isResolvedAudioUrl(pageUrl, requestInfo.url, requestInfo.resolved)) {
         await this.markFailed(item, '音频地址解析失败');
         await this.recordResolveFailure(item);
         return;
@@ -679,10 +679,6 @@ export class DownloadService {
     };
     await DataService.upsertCachedBook(refreshed);
     return refreshed;
-  }
-
-  private isValidAudioUrl(pageUrl: string, audioUrl: string): boolean {
-    return DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl);
   }
 
   private async restoreInterruptedDownloads(): Promise<void> {

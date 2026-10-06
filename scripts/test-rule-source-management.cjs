@@ -123,23 +123,15 @@ async function testImportOrder() {
   await repo.upsertImportedBatch(Array.from({ length: 6 }, (_, i) => source('free-' + i)));
   assert.equal(rows.size, 8);
   await repo.upsertImportedBatch([source('first'), source('first')]);
-  await assert.rejects(repo.insert(source('ninth')), /SOURCE_LIMIT_REACHED/);
-  const previousName = rows.get('first').bookSourceName;
-  await assert.rejects(repo.upsertImportedBatch([source('first', { bookSourceName: 'Rollback' }), source('ninth')]), /SOURCE_LIMIT_REACHED/);
-  assert.equal(rows.get('first').bookSourceName, previousName, 'whole batch rolls back');
-  member = true;
-  await repo.upsertImportedBatch(Array.from({ length: 20 }, (_, i) => source('paid-' + i)));
-  assert.equal(rows.size, 28, 'member has no total-count cap');
-  member = false;
+  await repo.insert(source('ninth'));
+  assert.equal(rows.size, 9, 'ninth source is available without membership');
+  await repo.upsertImportedBatch(Array.from({ length: 20 }, (_, i) => source('free-batch-' + i)));
+  assert.equal(rows.size, 29, 'free bulk import has no membership count cap');
   await repo.update(source('first', { bookSourceName: 'Still editable' }));
   assert.equal(rows.get('first').bookSourceName, 'Still editable');
-  await assert.rejects(repo.upsertImportedBatch([source('extra')]), /SOURCE_LIMIT_REACHED/);
-  assert.equal(rows.size, 28, 'expiry preserves existing sources');
-  rows.delete('first');
-  rows.delete('second');
-  for (const key of [...rows.keys()]) if (rows.size > 7) rows.delete(key);
-  await repo.upsertImportedBatch([source('available-again'), source('available-again')]);
-  assert.equal(rows.size, 8, 'duplicates consume one slot and deletion releases capacity');
+  await repo.upsertImportedBatch([source('extra'), source('extra')]);
+  assert.equal(rows.size, 30, 'duplicate addresses still merge');
+
 }
 (async () => {
   testRows();

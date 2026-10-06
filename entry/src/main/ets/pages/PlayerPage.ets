@@ -9,6 +9,7 @@ import { vibrator } from '@kit.SensorServiceKit';
 import { AppColor, AppSpace, AppFont, AppMotion, AppRadius, AppMaterial } from '../theme/Theme';
 import { Book, Chapter } from '../model/Book';
 import { TocItem } from '../model/BookSource';
+import { LocalRuleSource } from '../model/LocalRuleSource';
 import { PlayerState, PLAYER_STATE_KEY, PlayMode, SleepMode } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
 import { DataService } from '../service/DataService';
@@ -109,6 +110,10 @@ export struct PlayerPage {
   @Local showSourceSwitch: boolean = false;
   @Local reloadingChapter: boolean = false;
   @Local sourceName: ResourceStr = '';
+  @Local sourceVoiceAvailable: boolean = false;
+  @Local showSourceVoice: boolean = false;
+  @Local sourceVoiceDraft: string = '';
+  @Local savingSourceVoice: boolean = false;
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
   @Local chapterGridVisible: boolean = false;
@@ -337,6 +342,10 @@ export struct PlayerPage {
    * 实际同时只会有一个抽屉打开,逐个判断即可。
    */
   private handleBack(): boolean {
+    if (this.showSourceVoice) {
+      this.showSourceVoice = false;
+      return true;
+    }
     if (this.showSourceSwitch) {
       this.showSourceSwitch = false;
       return true;
@@ -448,6 +457,7 @@ export struct PlayerPage {
   }
 
   private async loadSourceName(book: Book): Promise<void> {
+    this.sourceVoiceAvailable = false;
     if (!book.sourceUrl) {
       this.sourceName = $r('app.string.player_source_local');
       return;
@@ -456,6 +466,60 @@ export struct PlayerPage {
     const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
     if (this.isLeaving || this.book?.sourceUrl !== book.sourceUrl) return;
     this.sourceName = source?.bookSourceName || $r('app.string.player_source_unknown');
+    if (source instanceof LocalRuleSource) {
+      this.sourceVoiceAvailable = new RegExp('\\bcustom\\b').test(
+        source.rawSourceJson + source.jsLib + source.ruleContent.content + source.ruleToc.chapterUrl);
+    }
+  }
+
+  private async saveSourceVoice(): Promise<void> {
+    const book = this.book;
+    if (book === null || this.savingSourceVoice) return;
+    const voice = this.sourceVoiceDraft.trim();
+    const variables: Record<string, string> = JSON.parse(JSON.stringify(book.variables ?? {}));
+    if (voice === (variables['__audioSourceVoice'] ?? variables['custom'] ?? '')) {
+      this.showSourceVoice = false;
+      return;
+    }
+    variables['custom'] = voice;
+    variables['__audioSourceVoice'] = voice;
+    const updated = this.cloneBookWithChapters(book, book.chapters, book.intro, variables);
+    this.savingSourceVoice = true;
+    try {
+      await DataService.upsertCachedBook(updated);
+      const cache = ChapterCacheService.getInstance();
+      cache.clearBook(book.id, book.chapters);
+      book.variables = variables;
+      SearchCache.put(updated);
+      if (this.playerState.currentBook?.id === book.id) this.playerState.currentBook.variables = variables;
+      if (!this.isLeaving && this.book?.id === book.id) {
+        this.book = updated;
+        this.showSourceVoice = false;
+        // 切换规则参数时按当前进度重新解析，旧音频缓存不再参与本次播放。
+        await this.reloadCurrentChapter();
+      }
+    } catch (_error) {
+      if (!this.isLeaving) this.showToast($r('app.string.settings_save_failed'));
+    } finally {
+      this.savingSourceVoice = false;
+    }
+  }
+
+  @Builder
+  private buildSourceVoiceSheet(): void {
+    Column({ space: AppSpace.Md }) {
+      Text($r('app.string.player_source_voice_title'))
+        .fontSize(AppFont.Title).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
+      Text($r('app.string.player_source_voice_hint'))
+        .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary'))
+      TextInput({ text: this.sourceVoiceDraft, placeholder: $r('app.string.player_source_voice_default') })
+        .maxLength(128).onChange((value: string): void => { this.sourceVoiceDraft = value; })
+        .enabled(!this.savingSourceVoice)
+      Button($r('app.string.player_source_voice_apply'))
+        .backgroundColor(AppColor.Brand).fontColor(Color.White).width('100%')
+        .enabled(!this.savingSourceVoice).onClick((): void => { this.saveSourceVoice(); })
+    }
+    .width('100%').padding(AppSpace.Lg)
   }
 
   private needsChapterHydration(book: Book): boolean {
@@ -1137,7 +1201,7 @@ export struct PlayerPage {
     if (!source) throw new Error(this.context!.resourceManager.getStringSync($r('app.string.source_switch_unavailable').id));
     const chapterUrl = chapter.originSourceValue ?? chapter.source.value;
     const resolved = await BookSourceService.resolveAudioRequest(source, chapterUrl, book.variables, chapter.variables);
-    if (!DownloadPolicy.isResolvedAudioUrl(chapterUrl, resolved.url)) {
+    if (!DownloadPolicy.isResolvedAudioUrl(chapterUrl, resolved.url, resolved.resolved)) {
       throw new Error(this.context!.resourceManager.getStringSync($r('app.string.source_switch_unavailable').id));
     }
     if (this.isLeaving || !this.showSourceSwitch) return;
@@ -1190,6 +1254,20 @@ export struct PlayerPage {
         .onClick((): void => { this.reloadCurrentChapter(); })
         .margin({ right: 8 })
         .enabled(!this.reloadingChapter && !this.playerState.isLoading && this.book !== null)
+      if (this.sourceVoiceAvailable && !this.isLiveBook()) {
+        Button($r('app.string.player_source_voice_label'))
+          .height(40).fontSize(AppFont.Caption).fontColor(Color.White).backgroundColor(Color.Transparent)
+          .enabled(!this.reloadingChapter && !this.playerState.isLoading && !this.savingSourceVoice)
+          .onClick((): void => {
+            this.sourceVoiceDraft = this.book?.variables?.['__audioSourceVoice'] ?? this.book?.variables?.['custom'] ?? '';
+            this.showSourceVoice = true;
+          })
+          .bindSheet($$this.showSourceVoice, this.buildSourceVoiceSheet(), {
+            height: SheetSize.FIT_CONTENT, preferType: SheetType.BOTTOM, showClose: true,
+            backgroundColor: AppMaterial.SheetBackground,
+            blurStyle: AppMaterial.PlayerSheetBlur, systemMaterial: AppMaterial.PlayerSheet
+          })
+      }
       if (this.book?.sourceUrl) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.arrow_left_arrow_right')).fontSize(24).fontColor(['#FFFFFF'])

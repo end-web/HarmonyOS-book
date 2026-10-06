@@ -145,6 +145,7 @@ function load(name) {
   const sourceService = stubs['service/BookSourceService'].BookSourceService;
   stubs['service/SourceDataService'].SourceDataService.getSourceByUrl = async () => source;
   sourceService.prepareAudioChapter = async () => {};
+  sourceService.getAudioResolveTimeoutMs = (_source, fallback) => fallback;
   const resolved = [];
   sourceService.resolveAudioRequest = async (_source, url) => {
     resolved.push(url);
@@ -157,15 +158,14 @@ function load(name) {
   const firstUrl = 'https://cdn.invalid/replay-first.mp3';
   replay.rememberAudioRequest(firstChapter.id, firstUrl, { Referer: 'https://source.invalid' });
   const replayStart = transfers.length;
-  replay.ensureFileCached(replayBook, firstChapter, firstUrl, replay.getAudioHeaders(firstChapter.id));
-  replay.preloadAudioChapters(replayBook, 0);
+  replay.preloadAudioChapters(replayBook, 0, firstUrl, replay.getAudioHeaders(firstChapter.id));
   await settle();
   assert.equal(transfers.length, replayStart + 1);
-  assert.equal(transfers.at(-1).options.url, firstUrl, 'Current chapter is saved before future prefetch');
+  assert.equal(transfers.at(-1).options.url, replayBook.chapters[1].source.value + '.mp3', 'Next chapter starts before saving the current chapter');
   transfers.at(-1).finish(6000);
   await settle();
   assert.equal(transfers.length, replayStart + 2);
-  replay.suspendPreload(replayBook.chapters[1].id);
+  assert.equal(transfers.at(-1).options.url, firstUrl, 'Current chapter follows the nearest next chapter');
   transfers.at(-1).finish(6000);
   assert.ok(await replay.waitForAudioFile(replayBook, replayBook.chapters[1]));
   await settle();
@@ -173,7 +173,7 @@ function load(name) {
   assert.ok(await replay.waitForAudioFile(replayBook, firstChapter), '1 -> 2 -> 1 reuses the complete first file');
   assert.equal(transfers.length, replayStart + 2, 'Returning to chapter 1 starts no new download');
   assert.equal(replay.getAudioUrl(firstChapter.id), firstUrl, 'Foreground URL remains available for fast replay');
-  console.log('PASS current chapter priority and chapter 1 -> 2 -> 1 complete-file reuse');
+  console.log('PASS next chapter priority and chapter 1 -> 2 -> 1 complete-file reuse');
 
   for (const direction of [1, -1]) {
     stubs['service/PreferenceService'].PreferenceService.chapterStep = () => direction;
@@ -238,6 +238,95 @@ function load(name) {
   await settle();
   console.log('PASS buffer cancellation followed by immediate resume preserves nearest-chapter priority');
 
+  // Take over an in-flight resolver without restarting it or waiting for a full file.
+  const takeover = await freshCache();
+  const takeoverBook = makeBook('takeover');
+  const takeoverChapter = takeoverBook.chapters[1];
+  let completeResolve;
+  let calls = 0;
+  sourceService.resolveAudioRequest = () => {
+    calls++;
+    return new Promise(resolve => { completeResolve = resolve; });
+  };
+  takeover.preloadAudioChapters(takeoverBook, 0);
+  await settle();
+  const pending = takeover.getPendingAudioResolve(takeoverBook, takeoverChapter);
+  assert.ok(pending);
+  assert.equal(takeover.getPendingAudioResolve({ ...takeoverBook, sourceUrl: 'other' }, takeoverChapter), undefined);
+  assert.equal(takeover.getPendingAudioResolve(takeoverBook,
+    { ...takeoverChapter, source: { type: 'url', value: 'https://changed.invalid' } }), undefined);
+  takeover.suspendPreload(takeoverChapter.id);
+  assert.equal(await takeover.waitForAudioFile(takeoverBook, takeoverChapter), null);
+  assert.equal(takeover.getPendingAudioResolve(takeoverBook, takeoverChapter), pending);
+  const beforeTakeover = transfers.length;
+  completeResolve({ url: 'https://cdn.invalid/takeover.mp3', headers: { Referer: 'https://source.invalid' } });
+  await pending;
+  await settle();
+  assert.equal(calls, 1);
+  assert.equal(takeover.getAudioUrl(takeoverChapter.id), 'https://cdn.invalid/takeover.mp3');
+  assert.equal(takeover.getAudioHeaders(takeoverChapter.id).Referer, 'https://source.invalid');
+  assert.equal(transfers.length, beforeTakeover, 'Foreground takeover starts no competing full download');
+  console.log('PASS in-flight resolve takeover preserves URL/headers and avoids duplicate work');
+
+  for (const action of ['clear', 'switch', 'disable']) {
+    const invalid = await freshCache();
+    const invalidBook = makeBook('invalid-' + action);
+    invalid.preloadAudioChapters(invalidBook, 0);
+    await settle();
+    if (action === 'clear') invalid.clearChapter(invalidBook.chapters[1].id);
+    if (action === 'switch') invalid.suspendPreload(invalidBook.chapters[2].id);
+    if (action === 'disable') invalid.setPreloadCount(0);
+    assert.equal(invalid.getPendingAudioResolve(invalidBook, invalidBook.chapters[1]), undefined);
+    completeResolve({ url: 'https://cdn.invalid/stale.mp3', headers: {} });
+    await settle();
+    assert.equal(invalid.getAudioUrl(invalidBook.chapters[1].id), null);
+    invalid.setPreloadCount(0);
+    // The clear case may already have moved on to the next queued resolver.
+    completeResolve({ url: 'https://cdn.invalid/stale.mp3', headers: {} });
+    await settle();
+  }
+  console.log('PASS clear, unrelated chapter switch and disable invalidate in-flight results');
+
+  // A stuck resolver must not prevent the current file or subsequent episodes from caching.
+  for (const phase of ['prepare', 'resolve']) {
+    const timeoutCache = await freshCache();
+    const timeoutBook = makeBook('timeout-' + phase);
+    timeoutCache.setPreloadCount(2);
+    let releaseStuck;
+    const originalPrepare = sourceService.prepareAudioChapter;
+    sourceService.getAudioResolveTimeoutMs = () => 20;
+    sourceService.prepareAudioChapter = async (_source, _book, chapter) => {
+      if (phase === 'prepare' && chapter.id === timeoutBook.chapters[1].id) {
+        await new Promise(resolve => { releaseStuck = resolve; });
+      }
+    };
+    sourceService.resolveAudioRequest = async (_source, url) => {
+      if (phase === 'resolve' && url === timeoutBook.chapters[1].source.value) {
+        return new Promise(resolve => { releaseStuck = resolve; });
+      }
+      return { url: url + '.mp3', headers: {} };
+    };
+    const beforeTimeout = transfers.length;
+    timeoutCache.preloadAudioChapters(timeoutBook, 0, 'https://cdn.invalid/current-after-timeout.mp3');
+    await new Promise(resolve => setTimeout(resolve, 45));
+    await settle();
+    assert.equal(transfers.length, beforeTimeout + 1);
+    assert.equal(transfers.at(-1).options.url, 'https://cdn.invalid/current-after-timeout.mp3');
+    assert.equal(timeoutCache.preloadFailureAt.has(timeoutBook.chapters[1].id), true);
+    releaseStuck({ url: 'https://cdn.invalid/late.mp3', headers: {} });
+    await settle();
+    assert.equal(timeoutCache.getAudioUrl(timeoutBook.chapters[1].id), null);
+    transfers.at(-1).finish(6000);
+    await settle();
+    assert.equal(transfers.at(-1).options.url, timeoutBook.chapters[2].source.value + '.mp3');
+    transfers.at(-1).finish(6000);
+    await settle();
+    sourceService.prepareAudioChapter = originalPrepare;
+    sourceService.getAudioResolveTimeoutMs = (_source, fallback) => fallback;
+  }
+  console.log('PASS prepare/resolve timeout releases queue and ignores late results');
+  sourceService.resolveAudioRequest = async (_source, url) => ({ url: url + '.mp3', headers: {} });
+
   const timed = await freshCache();
   const timedBook = makeBook('timed');
   const target = timedBook.chapters[1];
@@ -247,9 +336,9 @@ function load(name) {
   timed.suspendPreload(target.id);
   assert.equal(await timed.waitForAudioFile(timedBook, target), null);
   await timedTask;
-  assert.equal(slowTransfer.cancelled, true, 'Timed-out target transfer must yield to online playback');
+  assert.equal(slowTransfer.cancelled, true, 'Incomplete target transfer immediately yields to online playback');
   assert.equal(timed.preloadFailureAt.size, 0);
-  console.log('PASS selected transfer timeout cancels duplicate traffic without failure cooldown');
+  console.log('PASS incomplete transfer yields immediately without failure cooldown');
 
   const expiring = await freshCache();
   expiring.audioCache.set('expired', { resolvedUrl: 'https://cdn.invalid/old',
@@ -266,8 +355,7 @@ function load(name) {
   const ctx = pausedCache.appContext;
   await background.start(ctx);
   await background.startDataTransfer(ctx);
-  pausedCache.ensureFileCached(pausedBook, pausedBook.chapters[0], 'https://cdn.invalid/current.mp3');
-  pausedCache.preloadAudioChapters(pausedBook, 0);
+  pausedCache.preloadAudioChapters(pausedBook, 0, 'https://cdn.invalid/current.mp3');
   await settle();
   await background.stop(ctx);
   await background.stopDataTransfer(ctx);

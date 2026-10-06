@@ -74,7 +74,15 @@ async function fixture(initialState = 'paused', realUsage = false) {
     resumePreload() { cacheCalls.push('resume'); },
     ensureFileCached() { cacheCalls.push('current'); },
     rememberAudioRequest() { cacheCalls.push('remember'); },
-    preloadAudioChapters() { cacheCalls.push('next'); },
+    preloadAudioChapters(_book, _index, currentUrl) {
+      cacheCalls.push('next');
+      if (currentUrl) cacheCalls.push('current');
+    },
+    isPreloadEnabled() { return true; },
+    getPendingAudioResolve() { return undefined; },
+    waitForAudioFile: async () => null,
+    getAudioUrl: () => null,
+    getAudioHeaders: () => ({}),
     setPlayingFile() {}
   };
   const coordinatorModule = { exports: {} };
@@ -101,6 +109,10 @@ async function fixture(initialState = 'paused', realUsage = false) {
     './ReadingSessionService': { ReadingSessionService: { checkpoint() {} }, SessionLocation: { audio: () => ({}) } },
     './LiveAudioService': { LiveAudioService: { isLive: async () => false } },
     './ChapterCacheService': { ChapterCacheService: { getInstance: () => cache } },
+    './SourceDataService': { SourceDataService: { getSourceByUrl: async () => ({}) } },
+    './BookSourceService': { BookSourceService: { prepareAudioChapter: async () => {} } },
+    './builtin/WebViewAudioExtractor': { getWebViewAudioExtractor: () => ({ cancelPending() { cacheCalls.push('cancel-extractor'); } }) },
+    './DownloadService': { DownloadService: { getInstance: () => ({ getDownloadedFilePath: () => null }) } },
     './PlaybackCoordinator': coordinatorModule.exports,
     '@kit.MediaKit': { media: { createAVPlayer: async () => player, SeekMode: { SEEK_PREV_SYNC: 0 },
       BufferingInfoType: { BUFFERING_START: 1, BUFFERING_END: 2 },
@@ -161,7 +173,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   service.initAVSession();
   await service.ensurePlayer();
   return { service, player, state, session, savedPositions, events, preference, cacheCalls,
-    mediaSources, platformCompat, usage, usageTimers, advance: ms => { uptime += ms; } };
+    cache, mediaSources, platformCompat, usage, usageTimers, advance: ms => { uptime += ms; } };
 }
 
 let passed = 0;
@@ -381,7 +393,58 @@ async function check(name, test) {
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.deepEqual(f.cacheCalls, []);
   });
-  await check('online playback caches the current chapter before future chapters and buffering gates transfers', async () => {
+  await check('foreground reuses pending resolution with headers and falls back after failure', async () => {
+    for (const success of [true, false]) {
+      const f = await fixture('paused');
+      const chapter = { id: 'pending', source: { type: 'url', value: 'https://source.test/chapter' } };
+      const book = { id: 'book', sourceUrl: 'https://source.test', chapters: [chapter] };
+      let complete;
+      let resolvedUrl = null;
+      let foregroundCalls = 0;
+      f.cache.getPendingAudioResolve = () => new Promise(resolve => { complete = () => {
+        resolvedUrl = success ? 'https://cdn.test/shared.mp3' : null;
+        resolve();
+      }; });
+      f.cache.getAudioUrl = () => resolvedUrl;
+      f.cache.getAudioHeaders = () => ({ Referer: 'https://source.test' });
+      f.service.resolveAudioRequestWithTimeout = async () => {
+        foregroundCalls++;
+        return { url: 'https://cdn.test/fallback.mp3', headers: {} };
+      };
+      let loadedHeaders;
+      f.service.isFastSwitchPath = () => false;
+      f.service.resetPlayerForSwitch = async () => {};
+      f.service.syncCastMediaSource = () => {};
+      f.service.applySource = async (_player, _source, headers) => { loadedHeaders = headers; return true; };
+      const resultTask = f.service.doPlayChapter(book, chapter, 0);
+      await flush();
+      complete();
+      await resultTask;
+      assert.notEqual(loadedHeaders, undefined);
+      assert.equal(f.cacheCalls.includes('cancel-extractor'), false, 'Keep the selected preparse sniffer alive');
+      assert.equal(foregroundCalls, success ? 0 : 1);
+      assert.equal(chapter.source.value, success ? 'https://cdn.test/shared.mp3' : 'https://cdn.test/fallback.mp3');
+      if (success) assert.equal(loadedHeaders.Referer, 'https://source.test');
+    }
+  });
+
+  await check('rapid chapter changes discard a pending foreground takeover', async () => {
+    const f = await fixture('paused');
+    const chapter = { id: 'obsolete', source: { type: 'url', value: 'https://source.test/old' } };
+    const book = { id: 'book', sourceUrl: 'https://source.test', chapters: [chapter] };
+    let complete;
+    f.cache.getPendingAudioResolve = () => new Promise(resolve => { complete = resolve; });
+    f.service.resolveAudioRequestWithTimeout = async () => { throw new Error('Obsolete chapter must not restart parsing'); };
+    const pending = f.service.resolveAudioUrl(book, chapter);
+    await flush();
+    f.service.playGen++;
+    complete();
+    const result = await pending;
+    assert.equal(result.success, false);
+    assert.equal(chapter.source.value, 'https://source.test/old');
+  });
+
+  await check('online playback schedules next/current together and buffering gates transfers', async () => {
     const f = await fixture('playing');
     f.state.currentChapter.source = { type: 'url', value: 'https://cdn.invalid/current.mp3' };
     f.state.currentBook.chapters = [f.state.currentChapter];
@@ -392,7 +455,7 @@ async function check(name, test) {
     f.cacheCalls.length = 0;
     f.player.emit('bufferingUpdate', 2, 0);
     await new Promise(resolve => setTimeout(resolve, 10));
-    assert.deepEqual(f.cacheCalls, ['resume', 'current', 'next']);
+    assert.deepEqual(f.cacheCalls, ['resume', 'next', 'current']);
     f.cacheCalls.length = 0;
     await f.service.pause();
     f.player.emit('bufferingUpdate', 2, 0);

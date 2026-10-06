@@ -34,6 +34,7 @@ export class LocalRuleRequestPlan {
   inlineBody: string | undefined = undefined;
   webView: boolean = false;
   webJs: string = '';
+  audioSniff: boolean = false;
   bodyJs: string = '';
   session: Record<string, Object> = {};
 }

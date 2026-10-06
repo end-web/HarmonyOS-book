@@ -74,6 +74,7 @@ const stubs = {
   '@kit.ArkTS': { buffer: { from: Buffer.from }, util: {} },
   'service/WebEngineGate': { WebEngineGate: { instance: {} } },
   'service/CoverPrefetcher': { CoverPrefetcher: {} },
+  'service/ranking/RankingService': { RankingService: {} },
   'service/rulesource/LocalRuleScriptRuntime': { LocalRuleScriptRuntime: {
     hasScript: rule => /^(?:@?js:)|<\/?js>/i.test(rule.trim()),
     standaloneCode: rule => /^(?:@?js:)/i.test(rule.trim()) ? rule.trim().replace(/^@?js:/i, '') : '',
@@ -427,6 +428,7 @@ async function testDetailCache() {
   let reads = 0;
   let diskFailure = false;
   vm.runInNewContext(compiled, { exports, SearchCache: { get: () => cached },
+    BookCoverPolicy: load('utils/BookCoverPolicy').BookCoverPolicy,
     BookSourceService: { pendingAudioBook: () => undefined },
     DataService: { getBookById: async () => {
       reads++;

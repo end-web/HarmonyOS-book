@@ -91,6 +91,53 @@ async function run() {
   directAudio.ruleContent.content = '';
   assert.equal(dispatcher.resolveDirectAudioRequest(directAudio, signedStream + ',{"webView":true}'), undefined,
     'Explicit browser requests must not be bypassed by direct audio');
+  for (const rule of ['@js:baseUrl', '<js>String(baseUrl);</js>', 'baseUrl']) {
+    directAudio.ruleContent.content = rule;
+    assert.equal(dispatcher.resolveDirectAudioRequest(directAudio, signedStream).audioUrl, signedStream,
+      'Identity rules must not download extensionless audio as text');
+  }
+  const { LocalRuleAudioResolver: audioResolver } = load(prefix + 'LocalRuleAudioResolver');
+  const { DownloadPolicy: downloadPolicy } = load('service/DownloadPolicy');
+  assert.equal(downloadPolicy.isResolvedAudioUrl(signedStream, signedStream), false);
+  assert.equal(downloadPolicy.isResolvedAudioUrl(signedStream, signedStream, true), true,
+    'An explicitly resolved extensionless stream must pass playback, preload and download validation');
+  assert.equal(downloadPolicy.isResolvedAudioUrl(signedStream, 'javascript:bad', true), false);
+  const originalSessionHeaders = http.getSessionHeaders;
+  http.getSessionHeaders = (_source, _url, vars = {}) => {
+    const headers = JSON.parse(vars.__header ?? '{"Cookie":"source=secret","Authorization":"source-token","Referer":"https://rules.example.com/"}');
+    if (!headers.Cookie) headers.Cookie = 'media=own';
+    return headers;
+  };
+  const mediaHeaders = dispatcher.getAudioHeaders(directAudio, 'https://cdn.example/episode.mp3');
+  assert.equal(mediaHeaders.Cookie, 'media=own');
+  assert.equal(mediaHeaders.Authorization, undefined);
+  assert.equal(mediaHeaders.Referer, origin + '/');
+  http.getSessionHeaders = originalSessionHeaders;
+  for (const [value, expected] of [
+    [JSON.stringify({ data: { playInfo: [{ main_url: signedStream }] } }), signedStream],
+    [JSON.stringify({ audio: { src: '../stream?token=x&part=1' } }), origin + '/stream?token=x&part=1'],
+    [JSON.stringify([null, { play_url: '//cdn.example/audio.m4a?token=x' }]), 'https://cdn.example/audio.m4a?token=x'],
+    [String.raw`https:\/\/cdn.example\/audio.mp3?a=1&amp;b=2`, 'https://cdn.example/audio.mp3?a=1&b=2'],
+    ["<audio src='/media/episode.mp3'></audio>", origin + '/media/episode.mp3'],
+    ['stream/play?token=x', origin + '/book/stream/play?token=x'],
+    [JSON.stringify({ message: '登录后播放', loginUrl: 'https://login.example/' }), ''],
+    ['https://media.example/ bad response', ''], ['blob:temporary', ''], ['javascript:alert(1)', '']
+  ]) assert.equal(audioResolver.extract(value, bookUrl), expected, `Audio result: ${value}`);
+  assert.equal(audioResolver.fromBody('https://cdn.example/a.mp3', 'https://[^ ]+\\.(mp3|m4a)', origin),
+    'https://cdn.example/a.mp3', 'Extension capture groups must not replace the full URL');
+  assert.equal(audioResolver.match('https://cdn.example/a.MP3', '/\\.mp3$/i'), true);
+  assert.equal(audioResolver.match('https://cdn.example/a.MP3', '(?i)\\.mp3$'), true);
+  const nestedAudio = LocalRuleSource.descriptor(origin, 'Nested audio payload');
+  nestedAudio.bookSourceType = 1;
+  nestedAudio.ruleContent.content = '$.data';
+  responses.set(origin + '/nested', { data: { playInfo: { main_url: signedStream } } });
+  assert.equal((await dispatcher.resolveContent(nestedAudio, origin + '/nested')).audioUrl, signedStream);
+  const oldFetch = http.fetch;
+  http.fetch = async () => ({ ok: false, statusCode: 403, errorMessage: '需要登录', body: '' });
+  await assert.rejects(dispatcher.resolveContent(nestedAudio, origin + '/denied'), /需要登录/,
+    'Audio resolution errors must reach the player instead of silently returning the chapter page');
+  http.fetch = oldFetch;
+  console.log('PASS: audio identity rules, nested/escaped/relative media URLs, sniff regex and actionable errors');
   const source = LocalRuleSource.descriptor(origin, 'Template compatibility');
   const compatDocument = extractor.createDocument('', bookUrl);
   assert.equal(await extractor.extract(compatDocument, `<js>

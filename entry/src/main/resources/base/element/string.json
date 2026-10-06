@@ -1,5 +1,10 @@
 {
   "string": [
+    {"name": "player_source_voice_label", "value": "音色"},
+    {"name": "player_source_voice_title", "value": "书源音色"},
+    {"name": "player_source_voice_hint", "value": "填写书源提供的音色代码，留空恢复默认。仅影响在线取音频，已下载音频保留原音色。"},
+    {"name": "player_source_voice_default", "value": "使用书源默认音色"},
+    {"name": "player_source_voice_apply", "value": "保存并重新加载"},
     {"name": "settings_reset_listening_title", "value": "清除累计收听时长"},
     {"name": "settings_reset_listening_subtitle", "value": "仅此操作清零收听统计；删书、清缓存和清记录均保留累计时长"},
     {"name": "settings_reset_listening_confirm", "value": "将暂停当前播放，并清零累计、本月、每日收听时长及连续收听统计。书籍、章节进度和会话历史保留。此操作无法撤销，确定清除？"},
@@ -2004,7 +2009,7 @@
     {"name": "log_operation_failed", "value": "操作失败，请稍后重试"},
     {"name": "log_storage_failed", "value": "日志文件读写异常，当前记录可能尚未完整保存"},
     {"name": "import_pick_failed", "value": "未能选择文件，请重试；详情可在“我的—日志管理”查看"},
-    {"name": "membership_title", "value": "主题会员"},
+    {"name": "membership_title", "value": "主题"},
     {"name": "membership_subscription_title", "value": "会员套餐"},
     {"name": "membership_subscription_entry", "value": "开通主题会员"},
     {"name": "membership_plan_unavailable", "value": "暂不可购买"},
@@ -2022,7 +2027,7 @@
     {"name": "membership_year_period", "value": "每 1 年自动续费"},
     {"name": "membership_subscribe", "value": "立即订阅"},
     {"name": "membership_restore", "value": "恢复购买 / 刷新"},
-    {"name": "membership_manage", "value": "管理订阅"},
+    {"name": "membership_manage", "value": "管理已有订阅"},
     {"name": "membership_price_hint", "value": "价格来自华为，优惠及实际扣费金额以华为收银台为准。"},
     {"name": "membership_products_loading", "value": "正在获取套餐…"},
     {"name": "membership_products_unavailable", "value": "套餐暂不可购买，请稍后刷新。已购用户仍可恢复购买或管理订阅。"},

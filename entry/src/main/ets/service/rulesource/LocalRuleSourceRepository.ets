@@ -1,6 +1,4 @@
 import { common } from '@kit.AbilityKit';
-import lazy { MembershipService } from '../MembershipService';
-import { MembershipState } from '../../model/MembershipState';
 import { buffer } from '@kit.ArkTS';
 import { relationalStore } from '@kit.ArkData';
 import {
@@ -82,10 +80,6 @@ class PreparedRuleSource {
     this.source = source;
     this.sourceJson = sourceJson;
   }
-}
-
-export class SourceLimitError extends Error {
-  constructor() { super('SOURCE_LIMIT_REACHED'); }
 }
 
 /** 本地规则书源持久化；错误交由上层提示，不删除或重建损坏数据库。 */
@@ -400,8 +394,6 @@ export class LocalRuleSourceRepository {
   private static async writeBatch(sources: LocalRuleSource[], importing: boolean): Promise<number> {
     if (sources.length === 0) return 0;
 
-    const unlimitedSources = await MembershipService.instance.hasCurrentEntitlement();
-
     const prepared: PreparedRuleSource[] = [];
     for (const source of sources) {
       prepared.push(LocalRuleSourceRepository.prepare(source));
@@ -412,14 +404,12 @@ export class LocalRuleSourceRepository {
     const now = Date.now();
     let writtenCount = 0;
     try {
-      const orderRows = await transaction.querySql(`SELECT MAX(custom_order), MIN(custom_order), COUNT(*) FROM ${TABLE_NAME}`);
+      const orderRows = await transaction.querySql(`SELECT MAX(custom_order), MIN(custom_order) FROM ${TABLE_NAME}`);
       let nextOrder = 0;
-      let sourceCount = 0;
       let importOrder = -prepared.length;
       try {
         if (orderRows.goToFirstRow()) {
           nextOrder = orderRows.getLong(0) + 1;
-          sourceCount = orderRows.getLong(2);
           importOrder = orderRows.getLong(1) - prepared.length;
         }
       } finally {
@@ -449,10 +439,6 @@ export class LocalRuleSourceRepository {
           item.source.isPinned = previous.isPinned;
           item.source.customOrder = previous.customOrder;
         } else {
-          if ((!unlimitedSources || !MembershipState.current.active) && sourceCount >= 8) {
-            throw new SourceLimitError();
-          }
-          sourceCount++;
           if (item.source.customOrder === 0) item.source.customOrder = nextOrder++;
         }
         if (importing && !item.source.isPinned) {

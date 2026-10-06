@@ -9,6 +9,7 @@ import { WebEngineGate } from '../WebEngineGate';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
 import { LocalRuleBrowserActions } from './LocalRuleBrowserActions';
 import { LocalRuleTlsTrustStore } from './LocalRuleTlsTrustStore';
+import { LocalRuleAudioResolver } from './LocalRuleAudioResolver';
 
 class LocalRuleBrowserTask {
   initial: LocalRuleFetchResult = new LocalRuleFetchResult();
@@ -21,6 +22,7 @@ class LocalRuleBrowserTask {
   stable: number = 0;
   documentServed: boolean = false;
   ready: boolean = false;
+  audioPattern: string = '';
   variables: Record<string, string> = {};
   origins: Set<string> = new Set<string>();
   urls: Set<string> = new Set<string>();
@@ -79,13 +81,15 @@ export class LocalRuleBrowserRuntime {
       task.initial = initial;
       task.deadline = deadline;
       task.variables = variables;
+      task.audioPattern = plan.audioSniff ? source.ruleContent.sourceRegex : '';
       const current = task;
       const result = await new Promise<LocalRuleFetchResult>((resolve, reject) => {
         current.resolve = resolve;
         current.reject = reject;
         this.active = current;
         current.origins.add(LocalRuleHttpClient.requestOrigin(initial.requestUrl));
-        current.timer = setTimeout(() => this.fail(new Error('网页渲染超时')), Math.max(1, deadline - Date.now()));
+        current.timer = setTimeout(() => this.fail(new Error(current.audioPattern
+          ? '网页未捕获到符合书源规则的音频地址' : '网页渲染超时')), Math.max(1, deadline - Date.now()));
         // The native request has already applied method, headers, cookies and redirects.
         controller.loadUrl(initial.requestUrl);
         this.schedule(current);
@@ -224,9 +228,21 @@ export class LocalRuleBrowserRuntime {
       const html = String(snapshot['html'] ?? '');
       const currentUrl = String(snapshot['url'] ?? '');
       if (!new RegExp('^https?://', 'i').test(currentUrl)) { this.schedule(task); return; }
+      const media: string[] = JSON.parse(JSON.stringify(snapshot['media'] ?? []));
+      const resources = Array.from(task.urls);
+      resources.push(...media);
+      if (task.audioPattern) {
+        const embedded = LocalRuleAudioResolver.fromBody(html, task.audioPattern, currentUrl);
+        if (embedded) resources.push(embedded);
+        // 网页 DOM 稳定并不代表异步播放器已拿到地址；保持租约直到匹配或超时。
+        if (!resources.some((address: string): boolean => LocalRuleAudioResolver.match(address, task.audioPattern))) {
+          this.schedule(task);
+          return;
+        }
+      }
       task.stable = html === task.lastHtml ? task.stable + 1 : 0;
       task.lastHtml = html;
-      if (String(snapshot['ready']) !== 'complete' || task.stable < 2) { this.schedule(task); return; }
+      if (!task.audioPattern && (String(snapshot['ready']) !== 'complete' || task.stable < 2)) { this.schedule(task); return; }
       const response = new LocalRuleFetchResult();
       response.ok = true;
       response.statusCode = task.initial.statusCode;
@@ -235,9 +251,7 @@ export class LocalRuleBrowserRuntime {
       response.renderedHtml = html;
       response.requestUrl = currentUrl;
       response.browserState = String(snapshot['state'] ?? '{}');
-      response.resourceUrls = Array.from(task.urls);
-      const media: string[] = JSON.parse(JSON.stringify(snapshot['media'] ?? []));
-      response.resourceUrls.push(...media);
+      response.resourceUrls = resources;
       task.ready = true;
       clearTimeout(task.probe);
       task.resolve(response);
@@ -263,7 +277,9 @@ export class LocalRuleBrowserRuntime {
           if(k==='window'||k==='document'||k==='localStorage'||k==='sessionStorage'||k.indexOf('__localRuleDom_')===0)return;
           var d=Object.getOwnPropertyDescriptor(window,k);if(d&&'value' in d){var v=copy(d.value,0);if(v!==undefined)state[k]=v;}
         });
-        var media=[];document.querySelectorAll('audio,video,source').forEach(function(n){var u=n.currentSrc||n.src;if(u)media.push(String(u));});
+        var media=[];var add=function(u){if(u&&media.length<512){try{media.push(new URL(String(u),location.href).href);}catch(e){}}};
+        document.querySelectorAll('audio,video,source').forEach(function(n){add(n.currentSrc||n.src||n.getAttribute('data-src')||n.getAttribute('data-url'));});
+        try{performance.getEntriesByType('resource').slice(-512).forEach(function(e){add(e.name);});}catch(e){}
         return JSON.stringify({html:html,url:String(location.href),ready:document.readyState,state:JSON.stringify(state),media:media});
       })()`, deadline);
       let parsed: Object = JSON.parse(raw);

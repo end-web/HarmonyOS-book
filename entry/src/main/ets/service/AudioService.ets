@@ -1045,8 +1045,9 @@ export class AudioService {
     ChapterCacheService.getInstance().suspendPreload(forceReload ? '' : chapter.id);
     this.currentAudioHeaders = {};
     this.tracePlayback('chapter-load');
-    // ★ 缓存命中→快路径,UI 不显示 loading 圈;否则常规路径,显示加载状态
-    const fastPath = this.isFastSwitchPath(book, chapter);
+    // 目标已有缓存或正在解析时保留嗅探，切章接手同一请求。
+    const fastPath = !forceReload && (this.isFastSwitchPath(book, chapter) ||
+      ChapterCacheService.getInstance().getPendingAudioResolve(book, chapter) !== undefined);
     // 快路径不需要 WebView 嗅探，不调 cancelPending——避免把预加载正在跑的嗅探取消掉，
     // 导致后续慢路径章节的 URL 解析也被波及（WebView extractor 串行，cancel 会丢队列中的任务）。
     if (!fastPath) {
@@ -1181,6 +1182,7 @@ export class AudioService {
   }
 
   private async resolveAudioUrl(book: Book, chapter: Chapter, forceReload: boolean = false): Promise<AudioResolveResult> {
+    const generation = this.playGen;
     const cache = ChapterCacheService.getInstance();
     if (chapter.source.type !== 'url') {
       if (chapter.source.type === 'rawfile') {
@@ -1229,7 +1231,16 @@ export class AudioService {
         const r: AudioResolveResult = { headers: {}, success: true };
         return r;
       }
-      const cachedUrl = cache.getAudioUrl(chapter.id);
+      const pendingResolve = cache.getPendingAudioResolve(book, chapter);
+      if (pendingResolve !== undefined) {
+        await pendingResolve;
+        if (generation !== this.playGen) {
+          const cancelled: AudioResolveResult = { headers: {}, success: false };
+          return cancelled;
+        }
+        hilog.info(DOMAIN, TAG, 'preload resolve reused chapter=%{public}s', chapter.id);
+      }
+      const cachedUrl = cache.isPreloadEnabled() ? cache.getAudioUrl(chapter.id) : null;
       if (cachedUrl) {
         chapter.source = { type: 'url', value: cachedUrl };
         const cachedHeaders = cache.getAudioHeaders(chapter.id);
@@ -1252,7 +1263,7 @@ export class AudioService {
       // 解析失败时书源层会原样回传章节页 URL（如 tingyou://play/...），
       // 必须校验后才算成功，否则假地址会被装进 AVPlayer 并报“音频源不可用”，
       // 还会跳过 doPlayChapter 的解析重试。
-      if (DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl)) {
+      if (DownloadPolicy.isResolvedAudioUrl(pageUrl, audioUrl, requestInfo.resolved)) {
         // 前台首次解析也进入共享缓存，快速回听无需再次请求书源。
         if (!this.state?.isLive) cache.rememberAudioRequest(chapter.id, audioUrl, requestInfo.headers);
         chapter.source = { type: 'url', value: audioUrl };
@@ -1958,12 +1969,11 @@ export class AudioService {
       if (this.state.isLive) return;
       const cache = ChapterCacheService.getInstance();
       cache.resumePreload();
-      // 当前章先落盘，保证回听；与后续章节共用单个后台下载队列。
-      if (chapter.source.type === 'url') {
-        cache.ensureFileCached(book, chapter, chapter.source.value, this.currentAudioHeaders);
-      }
       const idx = this.findChapterIndex(book, chapter);
-      if (idx >= 0) cache.preloadAudioChapters(book, idx);
+      if (idx >= 0) {
+        cache.preloadAudioChapters(book, idx,
+          chapter.source.type === 'url' ? chapter.source.value : '', this.currentAudioHeaders);
+      }
     };
     // 在释放 audioPlayback 之前登记下载任务；普通播放仍等首帧出声后启动。
     if (afterPause) {

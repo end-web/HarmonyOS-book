@@ -4,7 +4,6 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MembershipState } from '../model/MembershipState';
 import { PlatformCompat } from '../utils/PlatformCompat';
-import { AppIconService } from './AppIconService';
 import { SubscriptionOrder, SubscriptionPayload, SubscriptionPolicy, SubscriptionStatus } from './membership/SubscriptionData';
 import { SubscriptionVerifier } from './membership/SubscriptionVerifier';
 import { LifetimeOrder, LifetimePolicy } from './membership/LifetimeData';
@@ -233,7 +232,6 @@ export class MembershipService {
     this.refreshedAt = now;
     this.message = state.active ? $r('app.string.membership_active') : $r('app.string.membership_inactive');
     this.scheduleRefresh(context);
-    if (!state.active) await this.resetIcon();
     this.confirmationPending = false;
     const finished = new Set<string>();
     for (const order of orders) await this.finish(context, order, finished);
@@ -334,15 +332,9 @@ export class MembershipService {
       this.expiryTimer = -1;
       if (!state.lifetime && Date.now() >= state.expiresAt) {
         state.clear();
-        this.resetIcon();
       }
       this.refresh(context, true);
     }, state.lifetime ? 240000 : Math.max(1000, Math.min(240000, state.expiresAt - Date.now())));
-  }
-
-  private async resetIcon(): Promise<void> {
-    if (!AppIconService.instance.supported) return;
-    try { await AppIconService.instance.select(''); } catch (_error) { /* 下次前台刷新重试系统图标。 */ }
   }
 
   private errorMessage(error: BusinessError): Resource {

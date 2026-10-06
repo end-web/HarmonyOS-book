@@ -6,7 +6,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { MembershipBadge } from '../components/MembershipBadge';
 import { AppIconPage } from './AppIconPage';
 
-/** 一级只展示主题及订阅入口，权益、套餐和规则集中在订阅详情页。 */
+/** 免费主题及历史订阅管理。 */
 @ComponentV2
 export struct MembershipPage {
   @Param navStack: NavPathStack = new NavPathStack();
@@ -19,10 +19,6 @@ export struct MembershipPage {
     try {
       return sendableContextManager.convertToUIAbilityContext(sendableContextManager.convertFromContext(host));
     } catch (_error) { return undefined; }
-  }
-
-  private openSubscription(): void {
-    this.navStack.pushPathByName('membershipSubscription', '');
   }
 
   private async manage(): Promise<void> {
@@ -59,14 +55,11 @@ export struct MembershipPage {
             }.width('100%')
           }
           Row({ space: AppSpace.Sm }) {
-            Button($r('app.string.membership_subscription_entry'))
-              .layoutWeight(1).backgroundColor(AppColor.Brand).fontColor(AppColor.OnBrand)
-              .onClick(() => this.openSubscription())
             Button($r('app.string.membership_manage'))
               .layoutWeight(1).backgroundColor($r('sys.color.comp_background_primary')).fontColor(AppColor.Brand)
               .enabled(!this.membership.busy && this.membership.supported).onClick(() => this.manage())
           }.width('100%')
-          AppIconPage({ onMembershipRequired: (): void => this.openSubscription() })
+          AppIconPage()
         }.width('100%').constraintSize({ maxWidth: 680 }).padding({ left: AppSpace.Md, right: AppSpace.Md,
           top: AppSpace.Sm, bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)

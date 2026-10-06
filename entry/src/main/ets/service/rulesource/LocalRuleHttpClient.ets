@@ -23,7 +23,7 @@ export class LocalRuleHttpClient {
 
   static async fetch(source: LocalRuleSource, rawAddress: string,
     variables: Record<string, string> = {}, keyword: string = '', page: number = 1,
-    webAudioScript: string = ''): Promise<LocalRuleFetchResult> {
+    webAudioScript: string = '', audioContent: boolean = false): Promise<LocalRuleFetchResult> {
     let plan: LocalRuleRequestPlan;
     try {
       LocalRuleDiagnostics.check(variables);
@@ -39,6 +39,7 @@ export class LocalRuleHttpClient {
         plan.webView = true;
         plan.webJs = webAudioScript;
       }
+      plan.audioSniff = audioContent && plan.webView && !plan.webJs && source.ruleContent.sourceRegex.trim().length > 0;
     } catch (error) {
       LocalRuleDiagnostics.record(variables, 'error', '请求准备失败', LocalRuleHttpClient.errorMessage(error));
       return LocalRuleFetchResult.failed('', LocalRuleHttpClient.errorMessage(error));

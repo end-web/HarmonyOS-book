@@ -38,6 +38,8 @@ export interface ExploreFetchResult {
 export interface AudioRequestInfo {
   url: string;
   headers: Record<string, string>;
+  /** 由导入源明确解析出的地址，允许与无后缀章节直链相同。 */
+  resolved?: boolean;
 }
 
 const HEALTH_MAX_BOOK_CANDIDATES: number = 3;
@@ -589,7 +591,7 @@ export class BookSourceService {
         if (contentType === 'audio') {
           const request = await BookSourceService.resolveAudioRequest(
             source, chapter.url, variables, chapter.variables);
-          if (!BookSourceService.isResolvedHttpAudio(chapter.url, request.url)) {
+          if (!DownloadPolicy.isResolvedAudioUrl(chapter.url, request.url, request.resolved)) {
             throw new Error('未解析出可播放的 HTTP 音频地址');
           }
         } else {
@@ -643,14 +645,6 @@ export class BookSourceService {
   private static appendUnique(values: string[], value: string): void {
     const clean = value.trim();
     if (clean.length > 0 && !values.includes(clean)) values.push(clean);
-  }
-
-  private static isResolvedHttpAudio(chapterUrl: string, audioUrl: string): boolean {
-    const cleanAudioUrl = audioUrl.trim();
-    if (DownloadPolicy.isResolvedAudioUrl(chapterUrl, cleanAudioUrl)) return true;
-    if (cleanAudioUrl !== chapterUrl || !DownloadPolicy.isHttpUrl(cleanAudioUrl)) return false;
-    const path = cleanAudioUrl.toLowerCase().split('?')[0].split('#')[0];
-    return path.endsWith('.m3u8');
   }
 
   static async getBookInfo(source: BookSource, bookUrl: string,
@@ -711,7 +705,8 @@ export class BookSourceService {
         source.bookSourceUrl, chapterUrl);
       const info: AudioRequestInfo = {
         url: resolved.audioUrl,
-        headers: resolved.requestHeaders
+        headers: resolved.requestHeaders,
+        resolved: DownloadPolicy.isHttpUrl(resolved.audioUrl)
       };
       return info;
     }
@@ -719,15 +714,18 @@ export class BookSourceService {
     if (localSource !== undefined) {
       const scopedVariables = BookSourceService.mergeVariables(
         BookSourceService.copyVariables(variables), chapterVariables);
+      if (variables !== undefined && variables['__audioSourceVoice'] !== undefined) {
+        scopedVariables['custom'] = variables['__audioSourceVoice'];
+      }
       const result: LocalRuleContentResult = await LocalRuleDispatcher.resolveContent(
         localSource, chapterUrl, scopedVariables);
-      const localUrl = result.audioUrl || chapterUrl;
+      const localUrl = result.audioUrl;
+      if (!DownloadPolicy.isHttpUrl(localUrl)) throw new Error('书源未返回可播放的音频地址');
       const localHeaders = Object.keys(result.requestHeaders).length > 0
         ? result.requestHeaders : LocalRuleDispatcher.getAudioHeaders(localSource, localUrl);
-      return { url: localUrl, headers: localHeaders };
+      return { url: localUrl, headers: localHeaders, resolved: true };
     }
-    const emptyHeaders: Record<string, string> = {};
-    return { url: chapterUrl, headers: emptyHeaders };
+    throw new Error('该内容来源已不可用，请重新导入后重试');
   }
 
   static async loadTextBook(book: Book, onMetadata?: (book: Book) => void,

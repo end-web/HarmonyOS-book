@@ -187,12 +187,12 @@ async function main() {
   await test('Empty/refunded authoritative query revokes; stale unfinished order cannot resurrect', async () => {
     const s = session(); s.unfinished.push(payload());
     await s.service.refresh(context, true);
-    assert.equal(s.state.active, false); assert.equal(s.finishes.length, 0); assert.equal(s.icons.at(-1), '');
+    assert.equal(s.state.active, false); assert.equal(s.finishes.length, 0); assert.equal(s.icons.length, 0);
     s.current.push(payload()); await s.service.refresh(context, true); assert.equal(s.state.active, true);
     s.current[0].lastSubscriptionStatus.status = '5'; await s.service.refresh(context, true);
     assert.equal(s.state.active, false);
   });
-  await test('Offline blocks new switches and purchase without resetting the existing icon', async () => {
+  await test('Offline blocks unverified purchase without resetting the existing icon', async () => {
     const s = session(); s.current.push(payload()); await s.service.load(context);
     assert.equal(s.state.active, true); const resets = s.icons.length;
     s.setQueryError({ code: 1001860005 }); await s.service.refresh(context, true);

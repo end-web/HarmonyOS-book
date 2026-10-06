@@ -87,9 +87,9 @@ export class DownloadPolicy {
    * 解析失败时上游会原样回传章节页 URL（如 tingyou://play/...），
    * 这类值不能当作解析成功，否则会被装进播放器/下载器产生误导性报错。
    */
-  static isResolvedAudioUrl(pageUrl: string, audioUrl: string): boolean {
+  static isResolvedAudioUrl(pageUrl: string, audioUrl: string, resolved: boolean = false): boolean {
     if (!audioUrl || !DownloadPolicy.isHttpUrl(audioUrl)) return false;
-    if (audioUrl !== pageUrl) return true;
+    if (resolved || audioUrl !== pageUrl) return true;
     return DownloadPolicy.looksLikeDirectAudioUrl(audioUrl);
   }
 

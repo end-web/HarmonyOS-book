@@ -3,8 +3,6 @@ import { preferences } from '@kit.ArkData';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { AuthService } from './AuthService';
-import { MembershipService } from './MembershipService';
-import { MembershipState } from '../model/MembershipState';
 import { CloudBackupService, CloudBackupOptions, CloudBackupResult, CloudBackupError,
   CloudBackupErrorCode } from './CloudBackupService';
 
@@ -174,10 +172,6 @@ export class AutoBackupService {
     try {
       await this.load(context);
       const next = this.copySettings();
-      if ((enabled || intervalDays !== next.intervalDays) &&
-        !await MembershipService.instance.hasCurrentEntitlement()) {
-        throw new Error('MEMBERSHIP_REQUIRED');
-      }
       const wasEnabled = next.enabled;
       next.enabled = enabled;
       next.intervalDays = intervalDays === 3 || intervalDays === 7 ? intervalDays : 1;
@@ -214,8 +208,7 @@ export class AutoBackupService {
       Date.now() < this.settings.nextCheckAt || this.manualHolds > 0 || !this.foreground) return;
     if (auth.dataOperation || auth.logging || auth.restoring) return;
     const accountId = this.accountId;
-    if (!await MembershipService.instance.hasCurrentEntitlement()) return;
-    if (!MembershipState.current.active || !this.currentAccount() || accountId !== this.accountId ||
+    if (!this.currentAccount() || accountId !== this.accountId ||
       this.manualHolds > 0 || !this.foreground || auth.dataOperation || auth.logging || auth.restoring) return;
     const options = new CloudBackupOptions();
     options.previousDigest = this.settings.digest;
