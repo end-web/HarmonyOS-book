@@ -4,6 +4,7 @@ import { cloudSync, fileIo, fileUri } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { AuthService } from './AuthService';
+import { DiagnosticLogService } from './DiagnosticLogService';
 import { AppBackupService, AppBackupSnapshot } from './AppBackupService';
 
 export enum CloudBackupErrorCode {
@@ -22,7 +23,8 @@ export enum CloudBackupErrorCode {
   LOCAL_FAILURE,
   RESTORE_FAILED,
   CLOUD_FILE_FAILURE,
-  EXISTING_BACKUP
+  EXISTING_BACKUP,
+  NOT_READY
 }
 
 export class CloudBackupError extends Error {
@@ -379,12 +381,15 @@ export class CloudBackupService {
         let timeout: number = -1;
         let accountCheck: number = -1;
         let uploadCheck: number = -1;
+        let retryTimer: number = -1;
+        let startRetries: number = 0;
         const finish = (error: CloudBackupError | null): void => {
           if (done) return;
           done = true;
           clearTimeout(timeout);
           clearInterval(accountCheck);
           clearInterval(uploadCheck);
+          clearTimeout(retryTimer);
           try { task.off('progress', onProgress); } catch (_error) { }
           this.cancelTransfer = null;
           if (error) reject(error);
@@ -405,6 +410,7 @@ export class CloudBackupService {
           }
         };
         const onProgress = (progress: cloudSync.SyncProgress): void => {
+          if (done) return;
           if (!started) {
             pendingProgress = progress;
             return;
@@ -428,12 +434,32 @@ export class CloudBackupService {
           this.assertAccount(context, accountId).catch((error: CloudBackupError) => finish(error));
         }, 5000);
         if (uploadPath) uploadCheck = setInterval(checkUpload, 1000);
-        try {
-          task.on('progress', onProgress);
-          task.start().then(() => {
+        const startTask = (): void => {
+          if (done) return;
+          this.assertAccount(context, accountId).then((): Promise<void> => {
+            if (done) return Promise.resolve();
+            return task.start();
+          }).then((): void => {
+            if (done) return;
             started = true;
             if (pendingProgress !== null) onProgress(pendingProgress);
-          }).catch((error: BusinessError) => finish(this.normalizeError(error)));
+          }).catch((error: BusinessError | CloudBackupError): void => {
+            if (done) return;
+            // 登录/网络切换后的云服务初始化可能短暂未就绪；只重试这一种启动错误。
+            if (!(error instanceof CloudBackupError) && error.code === 22400001 && startRetries < 2) {
+              startRetries++;
+              pendingProgress = null;
+              console.warn(`[CloudBackupService] stage=sync_start_retry attempt=${startRetries} systemCode=22400001`);
+              DiagnosticLogService.info('cloud.sync.retry', `attempt=${startRetries}; systemCode=22400001`);
+              retryTimer = setTimeout(startTask, startRetries === 1 ? 1000 : 3000);
+              return;
+            }
+            finish(this.normalizeError(error));
+          });
+        };
+        try {
+          task.on('progress', onProgress);
+          startTask();
         } catch (error) {
           finish(this.normalizeError(error));
         }
@@ -513,7 +539,8 @@ export class CloudBackupService {
     fallback: CloudBackupErrorCode = CloudBackupErrorCode.SERVER): CloudBackupError {
     if (error instanceof CloudBackupError) return error;
     const code = typeof error.code === 'number' ? error.code : 0;
-    if (code === 22400001 || code === 201 || code === 801 || code === 13900012 || code === 13600001) {
+    if (code === 22400001) return new CloudBackupError(CloudBackupErrorCode.NOT_READY, code);
+    if (code === 201 || code === 801 || code === 13900012 || code === 13600001) {
       return new CloudBackupError(CloudBackupErrorCode.UNAVAILABLE, code);
     }
     if (code === 22400002 || code === 13900044) return new CloudBackupError(CloudBackupErrorCode.NETWORK, code);
@@ -527,6 +554,8 @@ export class CloudBackupService {
   private logFailure(operation: string, stage: string, error: CloudBackupError): void {
     // 不记录云文件路径、账号标识或备份内容，保留定位所需的阶段与系统错误码。
     console.error(`[CloudBackupService] operation=${operation} stage=${stage} category=${error.code} systemCode=${error.systemCode}`);
+    DiagnosticLogService.info('cloud.operation.failed',
+      `operation=${operation}; stage=${stage}; category=${error.code}; systemCode=${error.systemCode}`);
   }
 
   /** 云目录使用普通读写，避免快捷复制所需的文件系统扩展操作；同时处理短读、短写。 */

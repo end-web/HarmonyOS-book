@@ -112,6 +112,7 @@ function chaptersChanged(oldChapters: Chapter[], newChapters: Chapter[]): boolea
 export struct FavoritePage {
   @Local bookColumns: number = 3;
   @Local favoriteBooks: Book[] = [];
+  @Local sourceNames: Map<string, string> = new Map();
   @Local historyMap: Record<string, PlayHistoryItem> = {};
   @Local chapterIdxMap: Record<string, number> = {};
   @Local loading: boolean = true;
@@ -286,8 +287,12 @@ export struct FavoritePage {
   async loadFavorites(): Promise<void> {
     if (!this.context) return;
     const serial = ++this.favoritesLoadSerial;
-    // 刷新已导入规则源索引，来源库不可用时在线收藏不会被误判为可用。
-    await SourceDataService.getSources();
+    // 来源索引只用于标签和在线操作，不决定收藏是否保留或显示。
+    const sources = await SourceDataService.getSources();
+    const sourceNames = new Map<string, string>();
+    for (const source of sources) {
+      sourceNames.set(source.bookSourceUrl, source.bookSourceName);
+    }
     const ids = await PreferenceService.getShelfFavorites();
     const pinnedIds = new Set(await PreferenceService.getPinnedFavorites());
     const allBooks = await DataService.getBooks(this.context);
@@ -313,10 +318,8 @@ export struct FavoritePage {
     for (const id of ids) {
       const book = byId.get(id);
       if (book) {
-        if (this.isSupportedBook(book)) {
-          if (!aliases.has(book.id)) books.push(book);
-          aliases.set(book.id, (aliases.get(book.id) ?? []).concat(id));
-        }
+        if (!aliases.has(book.id)) books.push(book);
+        aliases.set(book.id, (aliases.get(book.id) ?? []).concat(id));
         continue;
       }
       const progress = await PreferenceService.getProgress(id);
@@ -326,7 +329,7 @@ export struct FavoritePage {
         (lastPlayed?.bookId === id ? lastPlayed.chapterId : '');
       const chapterIndex = progress?.chapterIndex ?? this.parseLegacyChapterIndex(chapterId);
       const alias = this.findFavoriteAlias(id, chapterTitle, chapterIndex, allBooks);
-      if (alias && this.isSupportedBook(alias)) {
+      if (alias) {
         if (!aliases.has(alias.id)) books.push(alias);
         aliases.set(alias.id, (aliases.get(alias.id) ?? []).concat(id));
         continue;
@@ -371,6 +374,7 @@ export struct FavoritePage {
       (aliases.get(book.id) ?? [book.id]).some((id: string): boolean => pinnedIds.has(id)))
       .map((book: Book): string => book.id));
     this.favoriteIdsByBookId = aliases;
+    this.sourceNames = sourceNames;
     this.favoriteBooks = books;
     await this.refreshTextProgress();
     if (serial !== this.favoritesLoadSerial) return;
@@ -448,12 +452,6 @@ export struct FavoritePage {
     return book.tags ? book.tags.includes('cache_alias') : false;
   }
 
-  /** 仅展示本地文件和仍然安装的用户规则源。 */
-  private isSupportedBook(book: Book): boolean {
-    if (!book.sourceUrl) return true;
-    return SourceDataService.isLocalRuleSource(book.sourceUrl);
-  }
-
   private legacyBookNameFromChapterTitle(title: string): string {
     const t = title.trim();
     if (!t || t.startsWith('第') || /^[0-9０-９]/.test(t)) return '';
@@ -489,7 +487,6 @@ export struct FavoritePage {
     if (!name) return null;
     const candidates: Book[] = [];
     for (const book of books) {
-      if (!this.isSupportedBook(book)) continue;
       if (this.normalizeRecoverName(book.title) !== name) continue;
       if (chapterIndex >= 0 && book.chapters && chapterIndex >= book.chapters.length) continue;
       candidates.push(book);
@@ -719,17 +716,22 @@ export struct FavoritePage {
       this.toggleBookSelection(book.id);
       return;
     }
+    const onPop = (): void => { this.loadFavorites(); };
     if (this.isMissingCachedBook(book)) {
       try {
         this.getUIContext().getPromptAction().showToast({ message: '这本书的缓存快照缺失，请重新搜索后加入书架' });
       } catch (_e) { /* ignore */ }
       return;
     }
-    const onPop = (): void => { this.loadFavorites(); };
     SearchCache.put(book);
     if (book.contentType === 'text') {
       const params = TextReaderRouteParams.of(book.id);
       this.navStack.pushPathByName('reader', params, onPop);
+      return;
+    }
+    if (book.sourceUrl && !this.sourceNames.has(book.sourceUrl)) {
+      // 旧来源已删除时仍能进入播放器，通过现有换源入口继续收听。
+      this.navStack.pushPathByName('player', book.id, onPop);
       return;
     }
     // 当前正在播这本书:不重新解析 URL,不带 chapter 参数,直接进 player 复用 live state。
@@ -808,7 +810,7 @@ export struct FavoritePage {
       } catch (_e) { /* ignore */ }
       const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) {
-        this.getUIContext().getPromptAction().showToast({ message: '该内容来源已不可用，请重新搜索后加入书架' });
+        this.navStack.pushPathByName('player', book.id, onPop);
         return;
       }
       let tocUrl = book.bookUrl;
@@ -1586,6 +1588,7 @@ export struct FavoritePage {
             .objectFit(ImageFit.Cover)
         }
         this.buildTypeBadge(false, book.contentType === 'text')
+        this.buildSourceBadge(book)
         this.buildPinnedBadge(book)
         if (this.isManaging) {
           Row() {
@@ -1595,6 +1598,7 @@ export struct FavoritePage {
         }
       }
       .width('100%')
+      .aspectRatio(BOOKSHELF_COVER_RATIO)
       .borderRadius(AppRadius.Md)
       .clip(true)
       .border({ width: this.isManaging && this.selectedBookIds.has(book.id) ? 2 : 0,
@@ -1623,6 +1627,26 @@ export struct FavoritePage {
     .onClick((): void => {
       if (!this.showBookActions && !this.resolvingTocId) this.handleBookTap(book);
     })
+  }
+
+  @Builder
+  buildSourceBadge(book: Book) {
+    if (book.sourceUrl) {
+      Column() {
+        Blank()
+        Text(this.sourceNames.get(book.sourceUrl) || book.sourceUrl)
+          .fontSize(10)
+          .fontColor(Color.White)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .padding({ left: 6, right: 6, top: 3, bottom: 3 })
+          .width('100%')
+          .backgroundColor('#99000000')
+      }
+      .width('100%')
+      .height('100%')
+      .hitTestBehavior(HitTestMode.None)
+    }
   }
 
   @Builder
@@ -1702,7 +1726,12 @@ export struct FavoritePage {
           .clip(true)
         }
         this.buildTypeBadge(true, book.contentType === 'text')
+        this.buildSourceBadge(book)
       }
+      .width(72)
+      .height(100)
+      .borderRadius(AppRadius.Sm)
+      .clip(true)
       .hitTestBehavior(HitTestMode.None)
 
       Column({ space: 4 }) {

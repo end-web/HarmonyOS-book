@@ -81,12 +81,17 @@ export struct AccountPage {
   }
 
   private async setAutomatic(enabled: boolean, days: number): Promise<void> {
+    if (!this.membership.hasAccess) {
+      this.navStack.pushPathByName('membershipSubscription', '');
+      return;
+    }
     const context = this.getUIContext().getHostContext();
     if (!context || !this.auth.isLoggedIn || !this.manualAvailable()) return;
     try {
       await this.automatic.configure(context, enabled, days);
     } catch (_error) {
-      this.toast($r('app.string.auto_backup_save_failed'));
+      this.toast(this.membership.hasAccess ? $r('app.string.auto_backup_save_failed') :
+        $r('app.string.auto_backup_membership_required'));
     }
   }
 
@@ -97,6 +102,10 @@ export struct AccountPage {
   }
 
   private chooseFrequency(): void {
+    if (!this.membership.hasAccess) {
+      this.navStack.pushPathByName('membershipSubscription', '');
+      return;
+    }
     this.getUIContext().getPromptAction().showActionMenu({
       title: $r('app.string.auto_backup_frequency'),
       buttons: [
@@ -110,6 +119,7 @@ export struct AccountPage {
   }
 
   private autoStatus(): ResourceStr {
+    if (!this.membership.hasAccess) return $r('app.string.auto_backup_membership_required');
     if (!this.auth.isLoggedIn) return $r('app.string.auto_backup_login_required');
     if (this.automatic.storageFailed) return $r('app.string.auto_backup_save_failed');
     if (this.automatic.accountId !== this.auth.openID || !this.automatic.settings.enabled) {
@@ -306,6 +316,7 @@ export struct AccountPage {
   private cloudErrorText(code: CloudBackupErrorCode): ResourceStr {
     switch (code) {
       case CloudBackupErrorCode.UNAVAILABLE: return $r('app.string.cloud_error_unavailable');
+      case CloudBackupErrorCode.NOT_READY: return $r('app.string.cloud_error_not_ready');
       case CloudBackupErrorCode.NETWORK: return $r('app.string.cloud_error_network');
       case CloudBackupErrorCode.BATTERY: return $r('app.string.cloud_error_battery');
       case CloudBackupErrorCode.CLOUD_FULL: return $r('app.string.cloud_error_cloud_full');
@@ -509,12 +520,22 @@ export struct AccountPage {
           .fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary'))
           .layoutWeight(1)
-        Toggle({ type: ToggleType.Switch, isOn: this.auth.isLoggedIn &&
+        Stack() {
+        Toggle({ type: ToggleType.Switch, isOn: this.membership.hasAccess && this.auth.isLoggedIn &&
           this.automatic.accountId === this.auth.openID && this.automatic.settings.enabled })
           .selectedColor(AppColor.Brand)
-          .enabled(this.autoReady && this.auth.isLoggedIn && this.manualAvailable())
+          .enabled(this.membership.hasAccess && this.autoReady && this.auth.isLoggedIn && this.manualAvailable())
           .accessibilityText($r('app.string.auto_backup_title'))
           .onChange((enabled: boolean): void => { this.setAutomatic(enabled, this.automatic.settings.intervalDays); })
+          if (!this.membership.hasAccess) {
+            Button({ type: ButtonType.Normal }) {
+              Row().width(52).height(32)
+            }
+            .backgroundColor(Color.Transparent)
+            .accessibilityText($r('app.string.auto_backup_membership_required'))
+            .onClick(() => this.navStack.pushPathByName('membershipSubscription', ''))
+          }
+        }
       }
       .width('100%')
       .constraintSize({ minHeight: 44 })
@@ -529,11 +550,16 @@ export struct AccountPage {
         }
         .width('100%')
         .constraintSize({ minHeight: 44 })
-        .enabled(this.automatic.settings.enabled && this.manualAvailable())
+        .enabled((!this.membership.hasAccess || this.automatic.settings.enabled) && this.manualAvailable())
         .onClick(() => this.chooseFrequency())
       }
       Text(this.autoStatus()).fontSize(AppFont.Caption).lineHeight(19)
         .fontColor($r('sys.color.font_secondary'))
+      if (!this.membership.hasAccess) {
+        Button($r('app.string.membership_subscription_entry'))
+          .fontColor(AppColor.Brand).backgroundColor(Color.Transparent)
+          .onClick(() => this.navStack.pushPathByName('membershipSubscription', ''))
+      }
       if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID &&
         this.automatic.settings.enabled && this.automatic.settings.errorCode !== 0 &&
         !this.automatic.settings.needsDecision) {

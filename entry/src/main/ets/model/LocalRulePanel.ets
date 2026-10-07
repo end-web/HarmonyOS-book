@@ -20,6 +20,7 @@ export class LocalRulePanel {
 }
 
 export class LocalRulePanelAction {
+  panel: LocalRulePanel | undefined = undefined;
   message: string = '';
   searchKeyword: string = '';
   refresh: boolean = false;

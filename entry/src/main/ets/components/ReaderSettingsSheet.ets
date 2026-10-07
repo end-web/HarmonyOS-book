@@ -13,7 +13,7 @@ import { ImmersiveOptionTabs } from './ImmersiveOptionTabs';
  * 本组件只负责呈现与回调，不落盘；持久化由 ReaderPage 统一做。
  */
 import { AppColor, AppFont, AppRadius, AppSpace, AppMotion, AppCurve } from '../theme/Theme';
-import { TextReadingSettings, PageTurnMode } from '../model/TextReading';
+import { TextReadingSettings, PageTurnMode, ReaderCornerLayout, ReaderCornerContent } from '../model/TextReading';
 import {
   ReaderPalette,
   ReaderPattern,
@@ -320,6 +320,8 @@ export struct ReaderSettingsSheet {
   @Param tapTopPercent: number = 33;
   @Param tapBottomPercent: number = 33;
   @Param showHeader: boolean = true;
+  @Param cornerLayout: string = ReaderCornerLayout.DEFAULT;
+  @Event onCornerChange: (corner: number, content: number) => void = () => {};
   @Param showFooter: boolean = true;
   @Param showChapterTitle: boolean = true;
   @Param showPageNumber: boolean = true;
@@ -365,13 +367,13 @@ export struct ReaderSettingsSheet {
         Row() {
           Text('第十二章 归客')
             .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
+            .fontColor(this.palette.primary)
             .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text('3/24')
             .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
+            .fontColor(this.palette.primary)
         }
         .width('100%')
 
@@ -831,11 +833,69 @@ export struct ReaderSettingsSheet {
       Column({ space: 8 }) {
         this.chromeToggle($r('app.string.reader_show_header'), 'showHeader', this.showHeader)
         if (this.showHeader) {
-          this.chromeToggle($r('app.string.reader_show_chapter_title'), 'showChapterTitle', this.showChapterTitle)
-          this.chromeToggle($r('app.string.reader_show_page_number'), 'showPageNumber', this.showPageNumber)
+          this.cornerSelector(0)
+          this.cornerSelector(1)
         }
       }.width('100%')
     }
+  }
+
+  private cornerLabel(corner: number): Resource {
+    if (corner === 0) return $r('app.string.reader_corner_top_left');
+    if (corner === 1) return $r('app.string.reader_corner_top_right');
+    if (corner === 2) return $r('app.string.reader_corner_bottom_left');
+    return $r('app.string.reader_corner_bottom_right');
+  }
+
+  private cornerValue(corner: number): Resource {
+    switch (ReaderCornerLayout.content(this.cornerLayout, corner)) {
+      case ReaderCornerContent.ChapterTitle: return $r('app.string.reader_show_chapter_title');
+      case ReaderCornerContent.PageNumber: return $r('app.string.reader_show_page_number');
+      case ReaderCornerContent.ChapterNumber: return $r('app.string.reader_show_chapter_number');
+      default: return $r('app.string.reader_show_book_name');
+    }
+  }
+
+  private cornerEnabled(corner: number): boolean {
+    switch (ReaderCornerLayout.content(this.cornerLayout, corner)) {
+      case ReaderCornerContent.ChapterTitle: return this.showChapterTitle;
+      case ReaderCornerContent.PageNumber: return this.showPageNumber;
+      case ReaderCornerContent.ChapterNumber: return this.showChapterNumber;
+      default: return this.showBookName;
+    }
+  }
+
+  private setCornerEnabled(corner: number, enabled: boolean): void {
+    switch (ReaderCornerLayout.content(this.cornerLayout, corner)) {
+      case ReaderCornerContent.ChapterTitle: this.onChromeChange('showChapterTitle', enabled); break;
+      case ReaderCornerContent.PageNumber: this.onChromeChange('showPageNumber', enabled); break;
+      case ReaderCornerContent.ChapterNumber: this.onChromeChange('showChapterNumber', enabled); break;
+      case ReaderCornerContent.BookName: this.onChromeChange('showBookName', enabled); break;
+    }
+  }
+
+  @Builder
+  cornerSelector(corner: number) {
+    Row({ space: AppSpace.Sm }) {
+      Text(this.cornerLabel(corner))
+        .fontSize(AppFont.Body).fontColor($r('sys.color.font_primary'))
+      Select([
+        { value: $r('app.string.reader_show_chapter_title') },
+        { value: $r('app.string.reader_show_page_number') },
+        { value: $r('app.string.reader_show_chapter_number') },
+        { value: $r('app.string.reader_show_book_name') }
+      ])
+        .selected(ReaderCornerLayout.content(this.cornerLayout, corner))
+        .value(this.cornerValue(corner))
+        .font({ size: AppFont.Caption })
+        .layoutWeight(1)
+        .accessibilityText(this.cornerLabel(corner))
+        .onSelect((content: number): void => this.onCornerChange(corner, content))
+      Toggle({ type: ToggleType.Switch, isOn: this.cornerEnabled(corner) })
+        .selectedColor(AppColor.Brand)
+        .accessibilityText(this.cornerLabel(corner))
+        .onChange((enabled: boolean): void => this.setCornerEnabled(corner, enabled))
+    }.width('100%')
   }
 
   @Builder
@@ -885,8 +945,8 @@ export struct ReaderSettingsSheet {
       Column({ space: 8 }) {
       this.chromeToggle($r('app.string.reader_show_footer'), 'showFooter', this.showFooter)
       if (this.showFooter) {
-      this.chromeToggle($r('app.string.reader_show_chapter_number'), 'showChapterNumber', this.showChapterNumber)
-      this.chromeToggle($r('app.string.reader_show_book_name'), 'showBookName', this.showBookName)
+      this.cornerSelector(2)
+      this.cornerSelector(3)
       Row({ space: AppSpace.Sm }) {
         Text($r('app.string.reader_show_battery_time'))
           .fontSize(AppFont.Body)

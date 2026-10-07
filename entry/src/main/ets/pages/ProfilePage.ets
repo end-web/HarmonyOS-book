@@ -7,6 +7,7 @@ import { AuthService } from '../service/AuthService';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { CommunityGroupService } from '../service/CommunityGroupService';
 import { AccountAvatar } from '../components/AccountAvatar';
+import { MembershipSubscriptionPage } from './MembershipSubscriptionPage';
 import { MembershipBadge } from '../components/MembershipBadge';
 import { MembershipState } from '../model/MembershipState';
 
@@ -55,6 +56,8 @@ export struct ProfilePage {
   @Local medalService: MedalService = MedalService.instance;
   @Local auth: AuthService = AuthService.instance;
   @Local membership: MembershipState = MembershipState.current;
+
+  @Local showMembership: boolean = false;
 
   private scrollScroller: Scroller = new Scroller();
 
@@ -204,67 +207,85 @@ export struct ProfilePage {
 
   @Builder
   buildAccountCard() {
-    Row({ space: 14 }) {
-      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 56 })
-      Column({ space: 4 }) {
-        Row({ space: 6 }) {
-          Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
-            $r('app.string.hw_auth_login_title'))
-            .fontSize(20)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.auth.isLoggedIn ? this.membership.nameColor : $r('sys.color.font_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .flexShrink(1)
-          if (this.auth.isLoggedIn && this.medalService.ready && this.medalService.selectedMedalId !== '') {
-            Image(this.medalService.selected()?.badge)
-              .width(20)
-              .height(20)
-              .objectFit(ImageFit.Contain)
-              .flexShrink(0)
-              .accessibilityText(this.medalService.selected()?.name ?? $r('app.string.account_medal_list'))
+    Column() {
+      Row({ space: 14 }) {
+        AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 56 })
+        Column({ space: 4 }) {
+          Row({ space: 6 }) {
+            Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
+              $r('app.string.hw_auth_login_title'))
+              .fontSize(20)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.auth.isLoggedIn ? this.membership.nameColor : $r('sys.color.font_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .flexShrink(1)
+            if (this.auth.isLoggedIn && this.medalService.ready && this.medalService.selectedMedalId !== '') {
+              Image(this.medalService.selected()?.badge)
+                .width(20)
+                .height(20)
+                .objectFit(ImageFit.Contain)
+                .flexShrink(0)
+                .accessibilityText(this.medalService.selected()?.name ?? $r('app.string.account_medal_list'))
+            }
+            if (this.membership.active) {
+              MembershipBadge({ productId: this.membership.productId, badgeWidth: 36 })
+            }
           }
-          if (this.membership.active) {
-            MembershipBadge({ productId: this.membership.productId, badgeWidth: 36 })
+          .width('100%')
+          .alignItems(VerticalAlign.Center)
+          .justifyContent(FlexAlign.Start)
+          if (!this.auth.isLoggedIn) {
+            Text($r('app.string.hw_auth_login_desc'))
+              .fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_tertiary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
         }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
-        .justifyContent(FlexAlign.Start)
-        if (!this.auth.isLoggedIn) {
-          Text($r('app.string.hw_auth_login_desc'))
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
 
-      if (this.auth.logging || this.auth.restoring) {
-        LoadingProgress()
-          .width(24)
-          .height(24)
-          .color(AppColor.Brand)
-          .accessibilityText($r('app.string.hw_auth_processing'))
-      } else {
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(24)
-          .width(24)
-          .height(24)
-          .fontColor([$r('sys.color.font_tertiary')])
+        if (this.auth.logging || this.auth.restoring) {
+          LoadingProgress()
+            .width(24)
+            .height(24)
+            .color(AppColor.Brand)
+            .accessibilityText($r('app.string.hw_auth_processing'))
+        } else {
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(24)
+            .width(24)
+            .height(24)
+            .fontColor([$r('sys.color.font_tertiary')])
+        }
       }
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-    .padding({ left: AppSpace.Sm, right: ROW_INDENT, top: 20, bottom: 20 })
-    .backgroundColor($r('sys.color.comp_background_primary'))
-    .borderRadius(AppRadius.Lg)
-    .enabled(!this.auth.logging && !this.auth.restoring)
-    .onClick(() => {
-      this.navStack.pushPathByName('account', '');
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: AppSpace.Sm, right: ROW_INDENT, top: 20, bottom: 20 })
+      .enabled(!this.auth.logging && !this.auth.restoring)
+      .onClick(() => {
+        this.navStack.pushPathByName('account', '');
+      })
+      Divider().strokeWidth(0.5).color($r('sys.color.comp_divider')).margin({ left: 20, right: 20 })
+      Row({ space: 12 }) {
+        Text($r('app.string.membership_entry_desc')).fontSize(12)
+          .fontColor($r('sys.color.font_secondary')).layoutWeight(1).maxLines(2)
+        Button($r('app.string.membership_subscription_title'))
+          .height(28).fontSize(12).padding({ left: 10, right: 10 }).backgroundColor('#D5B887').fontColor('#55432C')
+          .fontWeight(FontWeight.Medium).onClick((): void => { this.showMembership = true; })
+      }.width('100%').padding({ left: 20, right: 20, top: 8, bottom: 8 })
+    }.width('100%').backgroundColor($r('sys.color.comp_background_primary')).borderRadius(AppRadius.Lg)
+    .bindSheet($$this.showMembership, this.membershipSheet(), {
+      height: '90%', preferType: SheetType.BOTTOM, showClose: false, dragBar: false,
+      backgroundColor: '#EFEDE7'
     })
+  }
+
+  @Builder
+  membershipSheet() {
+    MembershipSubscriptionPage({ navStack: this.navStack, inSheet: true,
+      onClose: (): void => { this.showMembership = false; } })
   }
 
   @Builder

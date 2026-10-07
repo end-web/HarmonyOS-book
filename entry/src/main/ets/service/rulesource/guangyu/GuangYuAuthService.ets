@@ -3,6 +3,7 @@ import { LocalRuleSourceSession } from '../../../model/LocalRuleSource';
 import { JsonObj } from '../../builtin/JsonValue';
 import { HttpClient, HttpRequestOptions, HttpResponse } from '../../http/HttpClient';
 import { LocalRuleSourceRepository } from '../LocalRuleSourceRepository';
+import { LocalRuleHttpClient } from '../LocalRuleHttpClient';
 import { GuangYuApiClient } from './GuangYuApiClient';
 import { GUANG_YU_SOURCE_URL } from './GuangYuSourceIdentity';
 
@@ -59,6 +60,7 @@ export class GuangYuAuthService {
 
     GuangYuAuthService.loginInProgress = true;
     try {
+      await GuangYuApiClient.prepareSettings();
       const host = GuangYuApiClient.preferredHost();
       const deviceId = await GuangYuApiClient.getOrCreateDeviceId();
       const body = new GuangYuLoginRequestBody();
@@ -90,14 +92,32 @@ export class GuangYuAuthService {
     const deviceId = await GuangYuApiClient.getOrCreateDeviceId();
     const anonymousSession = LocalRuleSourceSession.of(GUANG_YU_SOURCE_URL, '', deviceId, '');
     await LocalRuleSourceRepository.saveSession(anonymousSession);
+    for (const host of GuangYuApiClient.hosts()) {
+      await LocalRuleHttpClient.clearCookies(GUANG_YU_SOURCE_URL, host);
+    }
+    await LocalRuleSourceRepository.setLoginStatus(GUANG_YU_SOURCE_URL, 'signedOut');
+  }
+
+  /** 原生登录和导入源脚本共用加密 Cookie 仓库。 */
+  static async syncScriptSession(): Promise<void> {
+    const session = await LocalRuleSourceRepository.getSession(GUANG_YU_SOURCE_URL);
+    if (session === undefined || !GuangYuAuthService.isValidToken(session.token)) return;
+    if (await LocalRuleSourceRepository.getLoginStatus(GUANG_YU_SOURCE_URL) === 'expired') return;
+    for (const host of GuangYuApiClient.hosts()) {
+      const existing = await LocalRuleHttpClient.getStoredCookieHeader(GUANG_YU_SOURCE_URL, host);
+      const cookies = existing.split(';').map((item: string): string => item.trim()).filter((item: string): boolean =>
+        item.length > 0 && !item.toLowerCase().startsWith('qttoken=') && !item.toLowerCase().startsWith('deviceid='));
+      cookies.push(`qttoken=${session.token}`, `deviceId=${session.deviceId}`);
+      await LocalRuleHttpClient.saveWebCookies(GUANG_YU_SOURCE_URL, host, cookies.join('; '));
+    }
   }
 
   static registrationUrl(): string {
-    return 'https://v1.gyks.cf/register';
+    return GuangYuApiClient.preferredHost() + '/register';
   }
 
   static webLoginUrl(): string {
-    return 'https://v1.gyks.cf/login';
+    return GuangYuApiClient.preferredHost() + '/login';
   }
 
   static webLoginUrls(): string[] {
@@ -157,6 +177,7 @@ export class GuangYuAuthService {
       GUANG_YU_SOURCE_URL, tokenValue, deviceId, accountLabel);
     try {
       await LocalRuleSourceRepository.saveSession(session);
+      await GuangYuAuthService.syncScriptSession();
     } catch (_error) {
       return GuangYuAuthService.failed('登录成功，但会话保存失败');
     }

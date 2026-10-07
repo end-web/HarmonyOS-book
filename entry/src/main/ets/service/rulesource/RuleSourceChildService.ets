@@ -4,10 +4,7 @@ import {
   RuleSourceChildLoadResult,
   RuleSourceChildStatus
 } from '../../model/RuleSourceChild';
-import {
-  GuangYuApiClient,
-  GuangYuSearchResponseDto
-} from './guangyu/GuangYuApiClient';
+import { GuangYuApiClient } from './guangyu/GuangYuApiClient';
 import {
   GUANG_YU_SOURCE_URL,
   GuangYuSourceIdentity
@@ -22,8 +19,6 @@ import {
 } from './shushan/ShuShanApiClient';
 
 const CHILD_DISCOVERY_KEYWORD: string = '斗破苍穹';
-const GUANG_YU_NOVEL_TAB: string = '小说';
-const GUANG_YU_AUDIO_TAB: string = '听书';
 const FAN_QIE_WEB_LOGIN: string = 'https://fanqienovel.com/';
 const QI_MAO_WEB_LOGIN: string = 'https://www.qimao.com/';
 const TA_DU_WEB_LOGIN: string = 'https://www.tadu.com/';
@@ -90,15 +85,17 @@ export class RuleSourceChildService {
     const catalog = RuleSourceChildService.catalog(sourceUrl);
     result.items = catalog;
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
-      const tasks: Promise<RuleSourceChildDiscoveryGroup>[] = [
-        RuleSourceChildService.discoverGuangYuTab(
-          GUANG_YU_NOVEL_TAB, RuleSourceChildKind.TEXT),
-        RuleSourceChildService.discoverGuangYuTab(
-          GUANG_YU_AUDIO_TAB, RuleSourceChildKind.AUDIO)
-      ];
-      const groups: RuleSourceChildDiscoveryGroup[] =
-        await Promise.all<RuleSourceChildDiscoveryGroup>(tasks);
-      return RuleSourceChildService.finishLoad(catalog, groups);
+      try {
+        const providers = await GuangYuApiClient.providerCatalog();
+        const available: RuleSourceChild[] = [];
+        RuleSourceChildService.appendCatalog(available, sourceUrl, providers.text, RuleSourceChildKind.TEXT);
+        RuleSourceChildService.appendCatalog(available, sourceUrl, providers.audio, RuleSourceChildKind.AUDIO);
+        result.items = RuleSourceChildService.sorted(available);
+        result.networkUpdated = true;
+      } catch (_error) {
+        // 获取平台目录不运行搜索，避免耗费主账号搜索额度或触发限流。
+      }
+      return result;
     }
     if (ShuShanSourceIdentity.isSourceUrl(sourceUrl)) {
       const tasks: Promise<RuleSourceChildDiscoveryGroup>[] = [
@@ -118,8 +115,12 @@ export class RuleSourceChildService {
 
   private static appendCatalog(output: RuleSourceChild[], parentSourceUrl: string,
     names: string[], kind: number): void {
+    const seen = new Set<string>();
     for (const name of names) {
-      output.push(RuleSourceChildService.createChild(parentSourceUrl, name, kind));
+      const clean = name.trim();
+      if (!clean || seen.has(clean)) continue;
+      seen.add(clean);
+      output.push(RuleSourceChildService.createChild(parentSourceUrl, clean, kind));
     }
   }
 
@@ -149,45 +150,6 @@ export class RuleSourceChildService {
     if (provider === '喜马拉雅') return XI_MA_LA_YA_WEB_LOGIN;
     if (provider === '百度') return BAIDU_WEB_LOGIN;
     return '';
-  }
-
-  private static async discoverGuangYuTab(tab: string,
-    kind: number): Promise<RuleSourceChildDiscoveryGroup> {
-    const group = new RuleSourceChildDiscoveryGroup();
-    try {
-      const response: GuangYuSearchResponseDto = await GuangYuApiClient.search(
-        tab, CHILD_DISCOVERY_KEYWORD, 1);
-      const children = new Map<string, RuleSourceChild>();
-      for (const item of response.items) {
-        const name = item.source.trim();
-        if (name.length === 0) continue;
-        const child = RuleSourceChildService.getOrCreateChild(
-          children, GUANG_YU_SOURCE_URL, name, kind);
-        child.status = RuleSourceChildStatus.ACTIVE;
-        child.resultCount += 1;
-      }
-      for (const timing of response.sourceTimings) {
-        const name = timing.source.trim();
-        if (name.length === 0) continue;
-        const child = RuleSourceChildService.getOrCreateChild(
-          children, GUANG_YU_SOURCE_URL, name, kind);
-        child.status = RuleSourceChildStatus.ACTIVE;
-        child.resultCount = Math.max(child.resultCount, Math.max(0, Math.trunc(timing.resultCount)));
-        child.responseTimeMs = Math.max(0, Math.round(timing.timeCost));
-      }
-      for (const nameValue of response.disabledSources) {
-        const name = nameValue.trim();
-        if (name.length === 0) continue;
-        const child = RuleSourceChildService.getOrCreateChild(
-          children, GUANG_YU_SOURCE_URL, name, kind);
-        child.status = RuleSourceChildStatus.DISABLED;
-      }
-      RuleSourceChildService.appendMapValues(group.items, children);
-      group.succeeded = true;
-    } catch (_error) {
-      group.succeeded = false;
-    }
-    return group;
   }
 
   private static async discoverShuShanMode(mode: string,

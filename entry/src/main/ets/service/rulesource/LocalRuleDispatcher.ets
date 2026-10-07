@@ -25,6 +25,8 @@ import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
 import { TalebookSourceIdentity } from './talebook/TalebookSourceIdentity';
 import { TalebookSourceAdapter } from './talebook/TalebookSourceAdapter';
+import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
+import { GuangYuSourceAdapter } from './guangyu/GuangYuSourceAdapter';
 
 class LocalRuleSearchResult implements SearchResult {
   contentType: 'audio' | 'text' = 'text';
@@ -74,6 +76,9 @@ export class LocalRuleDispatcher {
     variables: Record<string, string> = {},
     resultLimit: number = LocalRuleExecutionLimits.MAX_SEARCH_RESULTS): Promise<LocalRuleExploreResult> {
     if (!source.enabledExplore || !source.canExecute()) throw new Error('书源未启用发现');
+    if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
+      return GuangYuSourceAdapter.explore(source, address, page, variables, resultLimit);
+    }
     if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
       return TalebookSourceAdapter.list(source, '', page);
     }

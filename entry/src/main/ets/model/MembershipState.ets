@@ -6,6 +6,11 @@ export class MembershipState {
     if (!MembershipState.singleton) MembershipState.singleton = new MembershipState();
     return MembershipState.singleton;
   }
+  @Trace developerAccess: boolean = false;
+  @Trace confirmedInactive: boolean = false;
+
+  get hasAccess(): boolean { return this.developerAccess || this.active; }
+
   @Trace expiresAt: number = 0;
   @Trace productId: string = '';
   @Trace autoRenew: boolean = false;

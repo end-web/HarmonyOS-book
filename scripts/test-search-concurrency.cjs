@@ -41,7 +41,7 @@ async function preferencesTest() {
   const h = harness();
   const { PreferenceService: prefs } = h.load('service/PreferenceService');
   await prefs.init(h.context);
-  assert.equal(await prefs.getSearchConcurrency(), 6);
+  assert.equal(await prefs.getSearchConcurrency(), 3);
   for (const count of [1, 3, 6, 9, 12, 7]) {
     await prefs.setSearchConcurrency(count);
     await prefs.invalidateCache(h.context);
@@ -55,7 +55,7 @@ async function preferencesTest() {
   const values = h.stored('listenbook_prefs');
   for (const value of [0, 13, 2.5, '12', NaN]) {
     values.set('search_concurrency', value);
-    assert.equal(await prefs.getSearchConcurrency(), 6, 'corrupt stored values use the default');
+    assert.equal(await prefs.getSearchConcurrency(), 3, 'corrupt stored values use the default');
   }
   await prefs.setSearchConcurrency(12);
   const exported = await prefs.exportBackupSnapshot();
@@ -65,13 +65,24 @@ async function preferencesTest() {
   assert.equal(await prefs.getSearchConcurrency(), 12);
   delete exported.searchConcurrency;
   await prefs.restoreBackupSnapshot(exported);
-  assert.equal(await prefs.getSearchConcurrency(), 6, 'legacy backups restore the default');
+  assert.equal(await prefs.getSearchConcurrency(), 3, 'legacy backups restore the default');
   const store = prefs.store;
   const flush = store.flush;
   store.flush = async () => { throw new Error('disk full'); };
   await assert.rejects(prefs.setSearchConcurrency(12), /disk full/);
   store.flush = flush;
-  assert.equal(await prefs.getSearchConcurrency(), 6, 'failed save restores the old in-memory value');
+  assert.equal(await prefs.getSearchConcurrency(), 3, 'failed save restores the old in-memory value');
+
+  await prefs.setSearchConcurrency(12);
+  h.control.member = false;
+  assert.equal(await prefs.getSearchConcurrency(), 3, 'expired member uses default');
+  assert.equal(values.get('search_concurrency'), 3, 'old custom value is reset durably');
+  await assert.rejects(prefs.setSearchConcurrency(9), /MEMBERSHIP_REQUIRED/);
+  exported.searchConcurrency = 12;
+  await prefs.restoreBackupSnapshot(exported);
+  assert.equal(values.get('search_concurrency'), 3, 'backup restore cannot bypass membership');
+  h.control.member = true;
+  assert.equal(await prefs.getSearchConcurrency(), 3, 'rejoining does not resurrect old custom value');
 
   const { AppBackupService: backup } = h.load('service/AppBackupService');
   const data = snapshot();
@@ -85,7 +96,7 @@ async function preferencesTest() {
 }
 
 async function queueTest() {
-  for (const limit of [1, 6, 12]) {
+  for (const limit of [1, 3, 6, 12]) {
     const h = searchHarness();
     const sources = Array.from({ length: 25 }, (_, id) => ({ id }));
     const work = h.queue.searchSources(sources, 'book', 1, new Set(), limit);

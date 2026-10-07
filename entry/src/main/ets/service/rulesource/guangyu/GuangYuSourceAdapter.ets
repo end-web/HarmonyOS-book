@@ -1,6 +1,11 @@
 import { BookInfo, BookSource, SearchResult, TocItem } from '../../../model/BookSource';
 import { LocalRuleContentResult } from '../LocalRuleRuntimeTypes';
 import { LocalRuleStageExtractor } from '../LocalRuleStageExtractor';
+import { LocalRuleSource } from '../../../model/LocalRuleSource';
+import { LocalRuleExploreResult } from '../../../model/LocalRulePanel';
+import { LocalRuleHttpClient } from '../LocalRuleHttpClient';
+import { GuangYuAuthService } from './GuangYuAuthService';
+import { GuangYuSettings } from './GuangYuSettings';
 import {
   GuangYuApiClient,
   GuangYuCatalogItemDto,
@@ -79,9 +84,25 @@ export class GuangYuSourceAdapter {
     const cleanKeyword = keyword.trim();
     if (cleanKeyword.length === 0) return [];
 
+    const settings = await GuangYuSettings.load();
+    let tab = settings.mode === AUDIO_TAB ? AUDIO_TAB : NOVEL_TAB;
+    let title = cleanKeyword;
+    let provider = '';
+    const shortcut = cleanKeyword.match(new RegExp('^([xt]):(.+)$', 'i'));
+    if (shortcut !== null) {
+      tab = shortcut[1].toLowerCase() === 't' ? AUDIO_TAB : NOVEL_TAB;
+      title = shortcut[2];
+    }
+    const separator = title.lastIndexOf('@');
+    if (separator > 0 && separator < title.length - 1) {
+      provider = title.substring(separator + 1).trim();
+      title = title.substring(0, separator).trim();
+    }
     const tasks: Promise<GuangYuSearchTabResult>[] = [];
-    tasks.push(GuangYuSourceAdapter.searchTab(NOVEL_TAB, cleanKeyword, page));
-    tasks.push(GuangYuSourceAdapter.searchTab(AUDIO_TAB, cleanKeyword, page));
+    tasks.push(GuangYuSourceAdapter.searchTab(tab, title, page, provider));
+    if (strict && shortcut === null && separator < 0) {
+      tasks.push(GuangYuSourceAdapter.searchTab(tab === NOVEL_TAB ? AUDIO_TAB : NOVEL_TAB, title, page));
+    }
     const groups: GuangYuSearchTabResult[] = await Promise.all<GuangYuSearchTabResult>(tasks);
     const output: SearchResult[] = [];
     const errors: string[] = [];
@@ -103,6 +124,27 @@ export class GuangYuSourceAdapter {
     return output;
   }
 
+  static async explore(source: LocalRuleSource, address: string, page: number,
+    variables: Record<string, string>, resultLimit: number): Promise<LocalRuleExploreResult> {
+    await GuangYuAuthService.syncScriptSession();
+    // 服务端发现列表仍会返回 HTTP 地址；仅将光遇自己的线路升级为 HTTPS。
+    const secureAddress = address.replace(new RegExp('^http://(v[1-7]\\.qingtian618\\.com)(?=/|$)', 'i'), 'https://$1');
+    const response = await LocalRuleHttpClient.fetch(source, secureAddress, variables, '', page);
+    if (!response.ok) throw new Error(response.errorMessage || '光遇发现请求失败');
+    const data = GuangYuApiClient.parseSearchResponse(response.body);
+    const result = new LocalRuleExploreResult();
+    const seen = new Set<string>();
+    for (const item of data.items) {
+      const mapped = GuangYuSourceAdapter.mapSearchItem(source, item);
+      if (mapped === undefined || seen.has(mapped.bookUrl)) continue;
+      seen.add(mapped.bookUrl);
+      result.books.push(mapped);
+      if (result.books.length >= resultLimit) break;
+    }
+    if (data.items.length > 0 && address.includes('{{page')) result.nextUrl = address;
+    return result;
+  }
+
   static async getBookInfo(bookUrl: string): Promise<BookInfo | null> {
     const route = GuangYuRoute.parse(bookUrl);
     if (route.kind !== GuangYuRouteKind.BOOK) return null;
@@ -121,7 +163,8 @@ export class GuangYuSourceAdapter {
     info.completed = GuangYuSourceAdapter.isCompleted(detail.status);
     info.wordCount = detail.wordNumber;
     info.lastChapter = GuangYuSourceAdapter.prefixedLastChapter(provider, detail.lastChapterTitle);
-    info.tocUrl = GuangYuRoute.catalog(tab, provider, bookId, toneId);
+    info.tocUrl = GuangYuRoute.catalog(tab, provider, bookId, toneId,
+      detail.catalogUrl || detail.tocUrl || route.upstreamUrl);
     info.variables = GuangYuSourceAdapter.routeVariables(tab, provider, bookId, '', toneId);
     return info;
   }
@@ -130,22 +173,25 @@ export class GuangYuSourceAdapter {
     const route = GuangYuRoute.parse(tocUrl);
     if (route.kind !== GuangYuRouteKind.CATALOG) return [];
     const response = await GuangYuApiClient.catalog(route);
+    const settings = await GuangYuSettings.load();
     const output: TocItem[] = [];
     const seen = new Set<string>();
     for (const item of response.items) {
       const mapped = GuangYuSourceAdapter.mapCatalogItem(route, item);
       if (mapped === undefined || seen.has(mapped.url)) continue;
+      if (settings.showSource) mapped.name = `[${item.source || route.provider}] ${mapped.name}`;
       seen.add(mapped.url);
       output.push(mapped);
     }
     return output;
   }
 
-  static async resolveContent(chapterUrl: string): Promise<LocalRuleContentResult> {
+  static async resolveContent(chapterUrl: string, toneId: string = ''): Promise<LocalRuleContentResult> {
     const route = GuangYuRoute.parse(chapterUrl);
     if (route.kind !== GuangYuRouteKind.CHAPTER) {
       throw new Error('光遇聚合章节路由无效');
     }
+    if (toneId.trim().length > 0) route.toneId = toneId.trim().substring(0, 128);
     const response = await GuangYuApiClient.content(route);
     return GuangYuSourceAdapter.mapContent(route, response);
   }
@@ -156,8 +202,8 @@ export class GuangYuSourceAdapter {
     return result.content;
   }
 
-  static async getAudioUrl(chapterUrl: string): Promise<string> {
-    const result = await GuangYuSourceAdapter.resolveContent(chapterUrl);
+  static async getAudioUrl(chapterUrl: string, toneId: string = ''): Promise<string> {
+    const result = await GuangYuSourceAdapter.resolveContent(chapterUrl, toneId);
     if (result.audioUrl.length === 0) throw new Error('光遇聚合音频地址为空');
     return result.audioUrl;
   }
@@ -167,10 +213,10 @@ export class GuangYuSourceAdapter {
   }
 
   private static async searchTab(tab: string, keyword: string,
-    page: number): Promise<GuangYuSearchTabResult> {
+    page: number, provider: string = ''): Promise<GuangYuSearchTabResult> {
     const result = new GuangYuSearchTabResult();
     try {
-      const response: GuangYuSearchResponseDto = await GuangYuApiClient.search(tab, keyword, page);
+      const response: GuangYuSearchResponseDto = await GuangYuApiClient.search(tab, keyword, page, provider);
       result.items = response.items;
     } catch (error) {
       result.errorMessage = `${tab}搜索失败：${GuangYuSourceAdapter.errorMessage(error as Object)}`;
@@ -191,7 +237,7 @@ export class GuangYuSourceAdapter {
     result.name = item.bookName;
     result.author = item.author;
     result.coverUrl = item.thumbUrl;
-    result.bookUrl = GuangYuRoute.book(tab, provider, bookId);
+    result.bookUrl = GuangYuRoute.book(tab, provider, bookId, item.tocUrl || item.detailUrl || item.bookUrl);
     result.intro = item.abstract;
     result.kind = GuangYuSourceAdapter.searchKind(item);
     result.contentType = GuangYuSourceIdentity.contentType(tab);
@@ -212,7 +258,7 @@ export class GuangYuSourceAdapter {
     const provider = item.source.trim() || route.provider;
     const mapped = new GuangYuMappedTocItem();
     mapped.name = item.title.trim() || `第 ${itemId} 章`;
-    mapped.url = GuangYuRoute.chapter(tab, provider, route.bookId, itemId, route.toneId);
+    mapped.url = GuangYuRoute.chapter(tab, provider, route.bookId, itemId, route.toneId, item.contentUrl || item.url);
     mapped.isPay = item.isPay;
     mapped.isVip = item.isPay || GuangYuSourceAdapter.isVipProvider(provider);
     mapped.isVolume = item.isVolume;

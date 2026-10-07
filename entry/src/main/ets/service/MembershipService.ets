@@ -1,9 +1,13 @@
+import lazy { PreferenceService } from './PreferenceService';
+import lazy { AutoBackupService } from './AutoBackupService';
+import { DeveloperMembership } from './membership/DeveloperMembership';
 import lazy { iap } from '@kit.IAPKit';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MembershipState } from '../model/MembershipState';
 import { PlatformCompat } from '../utils/PlatformCompat';
+import { AppIconService } from './AppIconService';
 import { SubscriptionOrder, SubscriptionPayload, SubscriptionPolicy, SubscriptionStatus } from './membership/SubscriptionData';
 import { SubscriptionVerifier } from './membership/SubscriptionVerifier';
 import { LifetimeOrder, LifetimePolicy } from './membership/LifetimeData';
@@ -48,10 +52,11 @@ export class MembershipService {
 
   /** 共用已验签权益；到期、换号或核验失败时不放行新的会员操作。 */
   async hasCurrentEntitlement(): Promise<boolean> {
+    if (MembershipState.current.developerAccess) return true;
     const context = this.abilityContext;
     if (!context || !this.supported) return false;
     await this.refresh(context);
-    return MembershipState.current.active;
+    return MembershipState.current.hasAccess;
   }
 
   get supported(): boolean {
@@ -69,10 +74,12 @@ export class MembershipService {
   /** 前台恢复时必须重新核对系统华为账号下的订阅，不使用 App 头像登录状态代替购买凭据。 */
   foreground(context: common.UIAbilityContext): void {
     this.abilityContext = context;
+    MembershipState.current.developerAccess = DeveloperMembership.allowed(context.applicationInfo.debug);
     this.inForeground = true;
-    if (!this.supported || this.busy) return;
+    if (this.busy) return;
     this.sandboxChecked = false;
     MembershipState.current.clear();
+    MembershipState.current.confirmedInactive = false;
     this.refresh(context, true).catch((): void => {});
   }
 
@@ -129,7 +136,16 @@ export class MembershipService {
 
   async refresh(context: common.UIAbilityContext, force: boolean = false): Promise<void> {
     this.abilityContext = context;
+    MembershipState.current.developerAccess = DeveloperMembership.allowed(context.applicationInfo.debug);
+    if (MembershipState.current.developerAccess) {
+      MembershipState.current.confirmedInactive = false;
+      this.message = $r('app.string.membership_developer_active');
+      return;
+    }
     if (!this.supported) {
+      MembershipState.current.clear();
+      MembershipState.current.confirmedInactive = true;
+      await this.resetDefaults(context);
       this.message = $r('app.string.membership_unsupported');
       return;
     }
@@ -138,9 +154,11 @@ export class MembershipService {
     if (!force && this.refreshedAt > 0 && Date.now() - this.refreshedAt < 5000) return;
     this.busy = true;
     this.message = $r('app.string.membership_checking');
-    this.refreshTask = this.refreshInner(context).catch((error: BusinessError): void => {
-      // 未能查询不等于已过期：禁止新的付费图标切换，但不擅自重置桌面上现有图标。
+    this.refreshTask = this.refreshInner(context).catch(async (error: BusinessError): Promise<void> => {
+      // 无有效会员凭据时恢复受限设置；不改变真实购买记录。
       MembershipState.current.clear();
+      MembershipState.current.confirmedInactive = true;
+      await this.resetDefaults(context);
       this.refreshedAt = 0;
       if (this.expiryTimer !== -1) clearTimeout(this.expiryTimer);
       this.expiryTimer = -1;
@@ -229,9 +247,11 @@ export class MembershipService {
       state.autoRenew = latest.renewalInfo?.autoRenewStatusCode === '1';
       state.verifiedAt = now;
     }
+    state.confirmedInactive = !state.active;
     this.refreshedAt = now;
     this.message = state.active ? $r('app.string.membership_active') : $r('app.string.membership_inactive');
     this.scheduleRefresh(context);
+    if (state.confirmedInactive) await this.resetDefaults(context);
     this.confirmationPending = false;
     const finished = new Set<string>();
     for (const order of orders) await this.finish(context, order, finished);
@@ -332,9 +352,20 @@ export class MembershipService {
       this.expiryTimer = -1;
       if (!state.lifetime && Date.now() >= state.expiresAt) {
         state.clear();
+        state.confirmedInactive = true;
+        this.resetDefaults(context);
       }
       this.refresh(context, true);
     }, state.lifetime ? 240000 : Math.max(1000, Math.min(240000, state.expiresAt - Date.now())));
+  }
+
+  private async resetDefaults(context: common.UIAbilityContext): Promise<void> {
+    if (MembershipState.current.hasAccess) return;
+    // 不等待备份任务：该任务可能正在等待本次会员查询，避免互相等待。
+    AutoBackupService.instance.resetMembershipDefaults(context).catch((): void => {});
+    try { await PreferenceService.setSearchConcurrency(3); } catch (_error) { /* 后续读取仍按默认并发执行。 */ }
+    if (!AppIconService.instance.supported) return;
+    try { await AppIconService.instance.select(''); } catch (_error) { /* 下次前台刷新重试系统图标。 */ }
   }
 
   private errorMessage(error: BusinessError): Resource {

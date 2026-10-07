@@ -35,12 +35,24 @@ function load(relative) {
   return exports;
 }
 (async () => {
-  const { TextReadingSettings, PageTurnMode } = load('model/TextReading');
+  const { TextReadingSettings, PageTurnMode, ReaderCornerLayout } = load('model/TextReading');
   assert.equal(new TextReadingSettings().textAlignment, 'justify');
   assert.equal(TextReadingSettings.normalizeTextAlignment('invalid'), 'justify');
   const { TextReadingSettingsService: service } = load('service/text/TextReadingSettingsService');
   values.set('font_size', 22); // Existing installations have no new preference keys.
   const migrated = await service.get({});
+  assert.equal(migrated.cornerLayout, '0123', 'legacy settings keep their original four corners');
+  for (let corner = 0; corner < 4; corner++) {
+    for (let content = 0; content < 4; content++) {
+      const swapped = ReaderCornerLayout.swap('0123', corner, content);
+      assert.equal(ReaderCornerLayout.content(swapped, corner), content);
+      assert.equal(ReaderCornerLayout.content(swapped, content), corner);
+      assert.equal(new Set(swapped).size, 4, 'swapping never drops or duplicates a content item');
+    }
+  }
+  assert.equal(ReaderCornerLayout.swap('0123', -1, 3), '0123');
+  assert.equal(ReaderCornerLayout.normalize('0012'), '0123');
+  migrated.cornerLayout = ReaderCornerLayout.swap('0123', 0, 3);
   assert.equal(migrated.fontSize, 22);
   assert.equal(migrated.paragraphSpacing, 0, 'old settings keep existing paragraph layout');
   assert.equal(TextReadingSettings.normalizeParagraphSpacing(NaN), 0);
@@ -63,6 +75,7 @@ function load(relative) {
   migrated.marginBottom = 0;
   await service.save({}, migrated);
   const restored = await service.get({});
+  assert.equal(restored.cornerLayout, '3120', 'corner order survives a preferences reload');
   assert.equal(restored.pageTurnMode, 'vertical');
   assert.equal(restored.paragraphSpacing, 1.2, 'paragraph spacing survives reload');
   assert.equal(restored.volumeKeyPageTurn, true);
@@ -70,6 +83,7 @@ function load(relative) {
   assert.equal(restored.alwaysShowStatusBar, false, 'toolbar-following mode survives a preferences reload');
   assert.deepEqual([restored.marginLeft, restored.marginRight, restored.marginTop, restored.marginBottom], [8, 26, 32, 0]);
   values.set('marginLeft', -20);
+  values.set('corner_layout', 'invalid');
   values.set('marginRight', 1000);
   values.set('marginTop', 'bad');
   values.set('marginBottom', NaN);
@@ -77,12 +91,14 @@ function load(relative) {
   values.set('page_turn_mode', 'bad');
   values.set('always_show_status_bar', 'bad');
   const sanitized = await service.get({});
+  assert.equal(sanitized.cornerLayout, '0123', 'invalid corner layouts return to the original order');
   assert.deepEqual([sanitized.marginLeft, sanitized.marginRight, sanitized.marginTop, sanitized.marginBottom], [0, 64, 12, 12]);
   assert.equal(sanitized.pageTurnMode, PageTurnMode.Cover);
   assert.equal(sanitized.volumeKeyPageTurn, false);
   assert.equal(sanitized.alwaysShowStatusBar, true, 'invalid status-bar preference falls back to visible');
   await service.save({}, new TextReadingSettings());
   const reset = await service.get({});
+  assert.equal(reset.cornerLayout, '0123');
   assert.equal(reset.followSystemTheme, false);
   assert.equal(reset.volumeKeyPageTurn, false);
   assert.equal(reset.alwaysShowStatusBar, true);

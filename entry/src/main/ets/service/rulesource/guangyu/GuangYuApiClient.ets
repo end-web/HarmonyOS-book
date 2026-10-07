@@ -4,13 +4,13 @@ import { LocalRuleSourceSession } from '../../../model/LocalRuleSource';
 import { HttpClient, HttpRequestOptions, HttpResponse } from '../../http/HttpClient';
 import { LocalRuleHttpClient } from '../LocalRuleHttpClient';
 import { LocalRuleSourceRepository } from '../LocalRuleSourceRepository';
+import { GuangYuSettings } from './GuangYuSettings';
 import {
   GUANG_YU_SOURCE_URL,
   GUANG_YU_SOURCE_VERSION,
   GuangYuRoute
 } from './GuangYuSourceIdentity';
 
-const REQUEST_TIMEOUT_MS: number = 8000;
 const MAX_RESPONSE_BYTES: number = 8 * 1024 * 1024;
 const GUANG_YU_USER_AGENT: string =
   'Mozilla/5.0 (Linux; Android 14; HarmonyOS) AppleWebKit/537.36 ' +
@@ -158,6 +158,11 @@ export class GuangYuContentRequestPlan {
   body: GuangYuContentRequestBody = new GuangYuContentRequestBody();
 }
 
+export class GuangYuProviderCatalog {
+  text: string[] = [];
+  audio: string[] = [];
+}
+
 export class GuangYuSourceTimingDto {
   source: string = '';
   cacheData: boolean = false;
@@ -270,16 +275,17 @@ export class GuangYuContentResponseDto {
 /** 光遇聚合服务器模式客户端。只访问内置的七条 HTTPS 线路。 */
 export class GuangYuApiClient {
   private static readonly HOSTS: string[] = [
-    'https://v1.gyks.cf',
-    'https://v2.gyks.cf',
-    'https://v3.gyks.cf',
-    'https://v4.gyks.cf',
-    'https://v5.gyks.cf',
-    'https://v6.gyks.cf',
-    'https://v7.gyks.cf'
+    'https://v1.qingtian618.com',
+    'https://v2.qingtian618.com',
+    'https://v3.qingtian618.com',
+    'https://v4.qingtian618.com',
+    'https://v5.qingtian618.com',
+    'https://v6.qingtian618.com',
+    'https://v7.qingtian618.com'
   ];
   private static preferredHostIndex: number = 0;
   private static runtimeDeviceId: string = '';
+  private static configuredHost: string = '';
 
   static hosts(): string[] {
     return GuangYuApiClient.HOSTS.slice();
@@ -287,6 +293,33 @@ export class GuangYuApiClient {
 
   static preferredHost(): string {
     return GuangYuApiClient.HOSTS[GuangYuApiClient.preferredHostIndex];
+  }
+
+  static async prepareSettings(): Promise<GuangYuSettings> {
+    const settings = await GuangYuSettings.load();
+    if (settings.host !== GuangYuApiClient.configuredHost) {
+      const index = GuangYuApiClient.HOSTS.indexOf(settings.host);
+      if (index >= 0) GuangYuApiClient.preferredHostIndex = index;
+      GuangYuApiClient.configuredHost = settings.host;
+    }
+    return settings;
+  }
+
+  static async providerCatalog(): Promise<GuangYuProviderCatalog> {
+    const settings = await GuangYuApiClient.prepareSettings();
+    const response = await HttpClient.request(GuangYuApiClient.preferredHost() + '/static/source_config/config.json',
+      { method: 'GET', timeout: settings.timeoutMs, retry: 0 });
+    if (response.statusCode !== 200 || buffer.byteLength(response.body, 'utf-8') > 256 * 1024) {
+      throw new Error('光遇平台配置不可用');
+    }
+    const root = GuangYuJsonObject.parse(response.body);
+    const result = new GuangYuProviderCatalog();
+    result.text = root.getStringArray('搜索小说');
+    if (result.text.length === 0) result.text = root.getStringArray('小说');
+    result.audio = root.getStringArray('搜索听书');
+    if (result.audio.length === 0) result.audio = root.getStringArray('听书');
+    if (result.text.length === 0 && result.audio.length === 0) throw new Error('光遇平台配置为空');
+    return result;
   }
 
   static async getOrCreateDeviceId(): Promise<string> {
@@ -327,11 +360,14 @@ export class GuangYuApiClient {
     return generated;
   }
 
-  static async search(tab: string, keyword: string, page: number = 1): Promise<GuangYuSearchResponseDto> {
+  static async search(tab: string, keyword: string, page: number = 1,
+    provider: string = '', forceSearch: boolean = false): Promise<GuangYuSearchResponseDto> {
+    const settings = await GuangYuSettings.load();
+    const sources = provider || (tab === '听书' ? settings.audioSources : settings.novelSources);
     const safePage = Math.max(1, Math.min(1000, Math.trunc(page)));
     const path = `/search?title=${encodeURIComponent(keyword.trim())}` +
-      `&tab=${encodeURIComponent(tab)}&source=${encodeURIComponent('全部')}` +
-      `&page=${safePage}&disabled_sources=0`;
+      `&tab=${encodeURIComponent(tab)}&source=${encodeURIComponent(sources)}` +
+      `&page=${safePage}&disabled_sources=${forceSearch || settings.forceSearch ? '1' : '0'}`;
     const root = await GuangYuApiClient.requestJson(path, 'GET', undefined, GuangYuResponseKind.SEARCH);
     const response = GuangYuApiClient.parseSearchRoot(root);
     for (const item of response.items) {
@@ -346,6 +382,7 @@ export class GuangYuApiClient {
       `&source=${encodeURIComponent(route.provider)}&tab=${encodeURIComponent(route.tab)}` +
       `&variable=${encodeURIComponent(variable)}`;
     const body = new GuangYuHtmlRequestBody();
+    body.html = await GuangYuApiClient.upstreamHtml(route);
     const root = await GuangYuApiClient.requestJson(path, 'POST', body, GuangYuResponseKind.DETAIL);
     return GuangYuApiClient.parseDetailRoot(root);
   }
@@ -356,15 +393,29 @@ export class GuangYuApiClient {
       `&source=${encodeURIComponent(route.provider)}&tab=${encodeURIComponent(route.tab)}` +
       `&variable=${encodeURIComponent(variable)}`;
     const body = new GuangYuHtmlRequestBody();
+    body.html = await GuangYuApiClient.upstreamHtml(route);
     const root = await GuangYuApiClient.requestJson(path, 'POST', body, GuangYuResponseKind.CATALOG);
     return GuangYuApiClient.parseCatalogRoot(root);
   }
 
   static async content(route: GuangYuRoute): Promise<GuangYuContentResponseDto> {
     const request = GuangYuApiClient.createContentRequest(route);
+    const settings = await GuangYuSettings.load();
+    request.body.html = await GuangYuApiClient.upstreamHtml(route);
+    if (!settings.reviews) request.path = '/content';
+    if (!settings.godReviews) request.body.god = false;
     const root = await GuangYuApiClient.requestJson(
       request.path, 'POST', request.body, GuangYuResponseKind.CONTENT);
     return GuangYuApiClient.parseContentRoot(root);
+  }
+
+  private static async upstreamHtml(route: GuangYuRoute): Promise<string> {
+    if (!route.upstreamUrl || !(await GuangYuSettings.load()).localNetwork) return '';
+    const source = await LocalRuleSourceRepository.get(GUANG_YU_SOURCE_URL);
+    if (source === undefined) throw new Error('光遇聚合书源已删除');
+    const response = await LocalRuleHttpClient.fetch(source, route.upstreamUrl);
+    if (!response.ok) throw new Error(response.errorMessage || '本地网络模式请求失败');
+    return response.body;
   }
 
   static createContentRequest(route: GuangYuRoute): GuangYuContentRequestPlan {
@@ -435,10 +486,11 @@ export class GuangYuApiClient {
 
   private static async requestJson(path: string, method: string, body: Object | undefined,
     responseKind: number): Promise<GuangYuJsonObject> {
+    const settings = await GuangYuApiClient.prepareSettings();
     let lastFailure = '无可用线路';
     const hostCount = GuangYuApiClient.HOSTS.length;
     const initialHostIndex = GuangYuApiClient.preferredHostIndex;
-    for (let offset = 0; offset < hostCount; offset++) {
+    for (let offset = 0; offset < (settings.autoSwitch ? hostCount : 1); offset++) {
       const hostIndex = (initialHostIndex + offset) % hostCount;
       const host = GuangYuApiClient.HOSTS[hostIndex];
       const headers = await GuangYuApiClient.createHeaders(host);
@@ -446,7 +498,7 @@ export class GuangYuApiClient {
         method: method,
         headers: headers,
         body: body,
-        timeout: REQUEST_TIMEOUT_MS,
+        timeout: settings.timeoutMs,
         charset: 'utf-8',
         retry: 0
       };

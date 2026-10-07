@@ -1,7 +1,7 @@
 import { ReaderTapPolicy } from '../../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
-import { TextReadingSettings } from '../../model/TextReading';
+import { TextReadingSettings, ReaderCornerLayout } from '../../model/TextReading';
 import { ReaderPattern, ReaderThemeId, ReaderCustomTheme, normalizeHex, resolvePalette } from '../../model/ReaderTheme';
 
 const STORE_NAME: string = 'text_reading_settings';
@@ -77,6 +77,8 @@ export class TextReadingSettingsService {
     const tapBottomPercent = store.getSync('tapBottomPercent', 33);
     result.tapBottomPercent = ReaderTapPolicy.percent(typeof tapBottomPercent === 'number' ? tapBottomPercent : 33, result.tapTopPercent);
     result.showHeader = store.getSync('showHeader', true) !== false;
+    const cornerLayout = store.getSync('corner_layout', ReaderCornerLayout.DEFAULT);
+    result.cornerLayout = ReaderCornerLayout.normalize(typeof cornerLayout === 'string' ? cornerLayout : '');
     result.showFooter = store.getSync('showFooter', true) !== false;
     result.showChapterTitle = store.getSync('showChapterTitle', true) !== false;
     result.showPageNumber = store.getSync('showPageNumber', true) !== false;
@@ -151,6 +153,7 @@ export class TextReadingSettingsService {
     store.putSync('tapTopPercent', settings.tapTopPercent);
     store.putSync('tapBottomPercent', settings.tapBottomPercent);
     store.putSync('showHeader', settings.showHeader);
+    store.putSync('corner_layout', ReaderCornerLayout.normalize(settings.cornerLayout));
     store.putSync('showFooter', settings.showFooter);
     store.putSync('showChapterTitle', settings.showChapterTitle);
     store.putSync('showPageNumber', settings.showPageNumber);

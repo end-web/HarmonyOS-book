@@ -19,16 +19,41 @@ async function finish(h) {
 (async () => {
   const free = setup();
   free.control.member = false;
-  await free.automatic.configure(free.context, true, 3);
-  await free.automatic.check(free.context);
-  assert.equal(free.automatic.settings.enabled, true);
-  assert.equal(free.automatic.settings.intervalDays, 3);
-  assert.ok(free.control.cloudWrites > 0, 'automatic backup is available without membership');
-  await free.automatic.configure(free.context, true, 7);
-  assert.equal(free.automatic.settings.intervalDays, 7);
-  await free.automatic.configure(free.context, false, 1);
+  await assert.rejects(free.automatic.configure(free.context, true, 3), /MEMBERSHIP_REQUIRED/);
+  await assert.rejects(free.automatic.configure(free.context, false, 7), /MEMBERSHIP_REQUIRED/);
   assert.equal(free.automatic.settings.enabled, false);
+  // Previously enabled settings cannot bypass an expired/refunded/unverified entitlement.
+  free.automatic.settings.enabled = true;
+  free.automatic.settings.intervalDays = 7;
+  free.automatic.settings.nextCheckAt = 0;
+  await free.automatic.check(free.context);
+  assert.equal(free.control.cloudWrites, 0);
+  assert.equal(free.automatic.settings.enabled, false);
+  assert.equal(free.automatic.settings.intervalDays, 1);
+  const { AutoBackupService: ResetBackup } = free.load('service/AutoBackupService');
+  const resetBackup = new ResetBackup();
+  await resetBackup.refresh(free.context);
+  assert.equal(resetBackup.settings.enabled, false);
+  assert.equal(resetBackup.settings.intervalDays, 1, 'default persisted across restart');
+  await free.automatic.pauseForManual();
+  const manual = await free.service.backup(free.context);
+  free.automatic.resumeAfterManual();
+  assert.equal(manual.uploaded, true, 'manual cloud backup stays free');
   await finish(free);
+
+  const expired = setup();
+  await expired.automatic.configure(expired.context, true, 7);
+  await expired.automatic.check(expired.context);
+  expired.control.member = false;
+  expired.control.autoSettingsFlushError = true;
+  await expired.automatic.resetMembershipDefaults(expired.context);
+  assert.equal(expired.automatic.settings.enabled, false);
+  assert.equal(expired.automatic.settings.intervalDays, 1);
+  assert.equal(expired.automatic.storageFailed, true);
+  expired.control.autoSettingsFlushError = false;
+  await expired.automatic.resetMembershipDefaults(expired.context);
+  assert.equal(expired.automatic.storageFailed, false, 'retry must persist defaults after disk failure');
+  await finish(expired);
 
   const h = setup();
   await h.automatic.check(h.context);

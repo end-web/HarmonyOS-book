@@ -128,7 +128,10 @@ async function main() {
     badOid = true; await assert.rejects(verifier.verify(context, signed(payload()))); badOid = false;
   });
 
-  function session() {
+  function session(developerEnabled = false) {
+    const developer = load('service/membership/DeveloperMembership.ets');
+    developer.DeveloperMembership.ENABLED = developerEnabled;
+    let defaultsReset = 0;
     const stateModule = load('model/MembershipState.ets');
     const current = [], unfinished = [], finishes = [], icons = [];
     const lifetimeCurrent = [], lifetimeUnfinished = [], purchases = [];
@@ -157,6 +160,9 @@ async function main() {
           subscriptionInfo: { periodUnit: id === 'iconMonth' ? 2 : 3, periodCount: 1, groupId: 'icons' } }))
     };
     const { MembershipService } = load('service/MembershipService.ets', {
+      './PreferenceService': { PreferenceService: { setSearchConcurrency: async count => { assert.equal(count, 3); } } },
+      './membership/DeveloperMembership': developer,
+      './AutoBackupService': { AutoBackupService: { instance: { resetMembershipDefaults: async () => { defaultsReset++; } } } },
       '@kit.IAPKit': { iap }, '../model/MembershipState': stateModule,
       '@kit.PerformanceAnalysisKit': { hilog: { warn() {} } },
       '../utils/PlatformCompat': { PlatformCompat: { wearable: false } },
@@ -167,7 +173,7 @@ async function main() {
         verify: async (_, p) => JSON.parse(p), verifyLifetime: async (_, p) => JSON.parse(p)
       } }
     });
-    return { service: MembershipService.instance, state: stateModule.MembershipState.current,
+    return { defaultsReset: () => defaultsReset, service: MembershipService.instance, state: stateModule.MembershipState.current,
       current, unfinished, finishes, icons, lifetimeCurrent, lifetimeUnfinished, purchases, setQueryError: e => { queryError = e; },
       setFinishError: e => { finishError = e; }, setPurchaseError: e => { purchaseError = e; }, purchaseCount: () => purchaseCount };
   }
@@ -187,16 +193,16 @@ async function main() {
   await test('Empty/refunded authoritative query revokes; stale unfinished order cannot resurrect', async () => {
     const s = session(); s.unfinished.push(payload());
     await s.service.refresh(context, true);
-    assert.equal(s.state.active, false); assert.equal(s.finishes.length, 0); assert.equal(s.icons.length, 0);
+    assert.equal(s.state.active, false); assert.equal(s.finishes.length, 0); assert.equal(s.icons.at(-1), '');
     s.current.push(payload()); await s.service.refresh(context, true); assert.equal(s.state.active, true);
     s.current[0].lastSubscriptionStatus.status = '5'; await s.service.refresh(context, true);
     assert.equal(s.state.active, false);
   });
-  await test('Offline blocks unverified purchase without resetting the existing icon', async () => {
+  await test('Offline resets restricted settings and blocks unverified purchase', async () => {
     const s = session(); s.current.push(payload()); await s.service.load(context);
     assert.equal(s.state.active, true); const resets = s.icons.length;
     s.setQueryError({ code: 1001860005 }); await s.service.refresh(context, true);
-    assert.equal(s.state.active, false); assert.equal(s.icons.length, resets);
+    assert.equal(s.state.active, false); assert.equal(s.icons.length, resets + 1);
     await s.service.purchase(context, 'iconMonth'); assert.equal(s.purchaseCount(), 0);
   });
   await test('Cancellation does not grant or confirm a purchase', async () => {
@@ -264,6 +270,33 @@ async function main() {
     assert.equal(s.state.nameColor, 'app.color.membership_name_year');
     s.setQueryError({ code: 1001860005 }); await s.service.refresh(context, true);
     assert.equal(s.state.nameColor, 'sys.color.font_primary');
+  });
+  await test('Missing or unavailable membership resets defaults', async () => {
+    const s = session();
+    await s.service.refresh(context, true);
+    assert.equal(s.state.confirmedInactive, true);
+    assert.equal(s.defaultsReset(), 1);
+    assert.equal(s.icons.at(-1), '');
+    s.setQueryError({ code: 1001860005 });
+    await s.service.refresh(context, true);
+    assert.equal(s.state.confirmedInactive, true);
+    assert.equal(s.defaultsReset(), 2);
+  });
+  await test('Developer exemption requires explicit opt-in AND a debug application', async () => {
+    const production = session(true);
+    await production.service.refresh(context, true);
+    assert.equal(production.state.hasAccess, false);
+    assert.equal(production.state.developerAccess, false);
+    const debugContext = { ...context, applicationInfo: { debug: true } };
+    const regularDebug = session(false);
+    await regularDebug.service.refresh(debugContext, true);
+    assert.equal(regularDebug.state.hasAccess, false);
+    const developer = session(true);
+    await developer.service.refresh(debugContext, true);
+    assert.equal(await developer.service.hasCurrentEntitlement(), true);
+    assert.equal(developer.state.active, false, 'do not fabricate purchased membership');
+    assert.equal(developer.defaultsReset(), 0);
+    assert.equal(developer.icons.length, 0);
   });
   console.log(`${count} membership regression groups passed`);
 }

@@ -1,33 +1,21 @@
-import { common, sendableContextManager } from '@kit.AbilityKit';
-import { MembershipState } from '../model/MembershipState';
+import { MembershipSubscriptionPage } from './MembershipSubscriptionPage';
 import { MembershipService } from '../service/MembershipService';
 import { AppColor, AppFont, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
-import { MembershipBadge } from '../components/MembershipBadge';
 import { AppIconPage } from './AppIconPage';
 
-/** 免费主题及历史订阅管理。 */
+/** 主题选择独立展示，受限图标按需打开会员中心。 */
 @ComponentV2
 export struct MembershipPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Local membership: MembershipService = MembershipService.instance;
-  @Local state: MembershipState = MembershipState.current;
 
-  private abilityContext(): common.UIAbilityContext | undefined {
-    const host = this.getUIContext().getHostContext();
-    if (!host) return undefined;
-    try {
-      return sendableContextManager.convertToUIAbilityContext(sendableContextManager.convertFromContext(host));
-    } catch (_error) { return undefined; }
-  }
+  @Local showMembership: boolean = false;
 
-  private async manage(): Promise<void> {
-    const context = this.abilityContext();
-    if (!context) return;
-    const opened = await this.membership.manage(context);
-    if (!opened) {
-      this.getUIContext().getPromptAction().showToast({ message: this.membership.message });
-    }
+  @Builder
+  membershipSheet() {
+    MembershipSubscriptionPage({ navStack: this.navStack, inSheet: true,
+      onClose: (): void => { this.showMembership = false; } })
   }
 
   build() {
@@ -39,9 +27,6 @@ export struct MembershipPage {
         .accessibilityText($r('app.string.app_icon_back')).onClick(() => this.navStack.pop())
         Text($r('app.string.membership_title')).fontSize(AppFont.Title).fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
-        if (this.state.active) {
-          MembershipBadge({ productId: this.state.productId })
-        }
         Blank()
       }.width('100%').padding({ top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
         left: AppSpace.Sm, right: AppSpace.Md, bottom: AppSpace.Sm })
@@ -54,16 +39,14 @@ export struct MembershipPage {
                 .fontColor($r('sys.color.font_secondary')).layoutWeight(1)
             }.width('100%')
           }
-          Row({ space: AppSpace.Sm }) {
-            Button($r('app.string.membership_manage'))
-              .layoutWeight(1).backgroundColor($r('sys.color.comp_background_primary')).fontColor(AppColor.Brand)
-              .enabled(!this.membership.busy && this.membership.supported).onClick(() => this.manage())
-          }.width('100%')
-          AppIconPage()
+          AppIconPage({ onMembershipRequired: (): void => { this.showMembership = true; } })
         }.width('100%').constraintSize({ maxWidth: 680 }).padding({ left: AppSpace.Md, right: AppSpace.Md,
           top: AppSpace.Sm, bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
     }.width('100%').height('100%').backgroundColor($r('sys.color.background_primary'))
+    .bindSheet($$this.showMembership, this.membershipSheet(), {
+      height: '90%', preferType: SheetType.BOTTOM, showClose: false, dragBar: false, backgroundColor: '#EFEDE7'
+    })
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

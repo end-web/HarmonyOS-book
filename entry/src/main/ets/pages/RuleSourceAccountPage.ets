@@ -7,6 +7,7 @@ import {
 } from '../service/rulesource/RuleSourceAccountService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
+import { GuangYuSourceIdentity } from '../service/rulesource/guangyu/GuangYuSourceIdentity';
 
 const ACCOUNT_SUCCESS: string = '#168A5B';
 const ACCOUNT_DANGER: string = '#D03050';
@@ -172,6 +173,11 @@ export struct RuleSourceAccountPage {
               this.buildWebLoginAction()
             } else {
               this.buildLoginForm()
+            }
+            if (GuangYuSourceIdentity.isSourceUrl(this.sourceUrl)) {
+              Button($r('app.string.rule_source_login_panel'))
+                .width('100%').height(48).backgroundColor(AppColor.BrandSoft).fontColor(AppColor.Brand)
+                .onClick(() => this.navStack.pushPathByName('ruleSourceLoginPanel', this.sourceUrl))
             }
           }
           .width('100%')

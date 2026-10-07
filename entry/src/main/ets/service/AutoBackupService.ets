@@ -3,6 +3,8 @@ import { preferences } from '@kit.ArkData';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { util } from '@kit.ArkTS';
 import { AuthService } from './AuthService';
+import { MembershipService } from './MembershipService';
+import { MembershipState } from '../model/MembershipState';
 import { CloudBackupService, CloudBackupOptions, CloudBackupResult, CloudBackupError,
   CloudBackupErrorCode } from './CloudBackupService';
 
@@ -96,6 +98,8 @@ export class AutoBackupService {
     if (this.running || this.configuring) return;
     try {
       await this.load(context);
+      await MembershipService.instance.hasCurrentEntitlement();
+      await this.resetMembershipDefaults(context);
     } catch (_error) {
       this.storageFailed = true;
     }
@@ -165,6 +169,36 @@ export class AutoBackupService {
     this.manualHolds = Math.max(0, this.manualHolds - 1);
   }
 
+  /** 已确认无会员时，清除旧的付费设置；保留云端覆盖保护和备份历史。 */
+  async resetMembershipDefaults(context: common.Context): Promise<void> {
+    const state = MembershipState.current;
+    if (!state.confirmedInactive || state.hasAccess) return;
+    await this.pauseForManual();
+    try {
+      await this.load(context);
+      if (!state.confirmedInactive || state.hasAccess || !this.currentAccount()) return;
+      await this.saveMembershipDefaults();
+    } catch (_error) {
+      this.storageFailed = true;
+    } finally {
+      this.resumeAfterManual();
+    }
+  }
+
+  private async saveMembershipDefaults(): Promise<void> {
+    if (!this.storageFailed && !this.settings.enabled && this.settings.intervalDays === 1 &&
+      this.settings.nextCheckAt === 0) return;
+    const next = this.copySettings();
+    next.enabled = false;
+    next.intervalDays = 1;
+    next.nextCheckAt = 0;
+    next.failures = 0;
+    next.errorCode = 0;
+    next.systemCode = 0;
+    this.settings = next;
+    await this.save(next);
+  }
+
   async configure(context: common.Context, enabled: boolean, intervalDays: number): Promise<void> {
     if (this.configuring) return;
     this.configuring = true;
@@ -172,6 +206,11 @@ export class AutoBackupService {
     try {
       await this.load(context);
       const next = this.copySettings();
+      if ((enabled || intervalDays !== next.intervalDays) &&
+        !await MembershipService.instance.hasCurrentEntitlement()) {
+        if (MembershipState.current.confirmedInactive) await this.saveMembershipDefaults();
+        throw new Error('MEMBERSHIP_REQUIRED');
+      }
       const wasEnabled = next.enabled;
       next.enabled = enabled;
       next.intervalDays = intervalDays === 3 || intervalDays === 7 ? intervalDays : 1;
@@ -204,11 +243,16 @@ export class AutoBackupService {
     const auth = AuthService.instance;
     if (auth.dataOperation || auth.logging || auth.restoring) return;
     await this.load(context);
+    const entitled = await MembershipService.instance.hasCurrentEntitlement();
+    if (!entitled) {
+      if (MembershipState.current.confirmedInactive && this.currentAccount()) await this.saveMembershipDefaults();
+      return;
+    }
     if (this.storageFailed || !this.currentAccount() || !this.settings.enabled || this.settings.needsDecision ||
       Date.now() < this.settings.nextCheckAt || this.manualHolds > 0 || !this.foreground) return;
     if (auth.dataOperation || auth.logging || auth.restoring) return;
     const accountId = this.accountId;
-    if (!this.currentAccount() || accountId !== this.accountId ||
+    if (!MembershipState.current.hasAccess || !this.currentAccount() || accountId !== this.accountId ||
       this.manualHolds > 0 || !this.foreground || auth.dataOperation || auth.logging || auth.restoring) return;
     const options = new CloudBackupOptions();
     options.previousDigest = this.settings.digest;

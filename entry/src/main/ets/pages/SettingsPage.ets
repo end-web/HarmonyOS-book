@@ -1,3 +1,4 @@
+import { MembershipState } from '../model/MembershipState';
 import { ImmersiveActionButton } from '../components/ImmersiveActionButton';
 import { ImmersiveOptionTabs } from '../components/ImmersiveOptionTabs';
 import { ConfigurationConstant } from '@kit.AbilityKit';
@@ -81,8 +82,9 @@ export struct SettingsPage {
   @Local preloadCount: number = 1;
   @Local preloadDraft: string = '1';
   @Local preloadCustom: boolean = false;
-  @Local searchConcurrency: number = 6;
-  @Local searchConcurrencyDraft: string = '6';
+  @Local membership: MembershipState = MembershipState.current;
+  @Local searchConcurrency: number = 3;
+  @Local searchConcurrencyDraft: string = '3';
   @Local searchConcurrencyCustom: boolean = false;
   @Local isSavingSearchConcurrency: boolean = false;
   @Local isSavingPreload: boolean = false;
@@ -229,7 +231,26 @@ export struct SettingsPage {
     }
   }
 
+  private requireSearchMembership(): boolean {
+    if (this.membership.hasAccess) return true;
+    this.searchConcurrency = 3;
+    this.searchConcurrencyDraft = '3';
+    this.searchConcurrencyCustom = false;
+    this.navStack.pushPathByName('membershipSubscription', '');
+    return false;
+  }
+
+  @Monitor('membership.confirmedInactive')
+  private onSearchMembershipChanged(): void {
+    if (!this.membership.hasAccess) {
+      this.searchConcurrency = 3;
+      this.searchConcurrencyDraft = '3';
+      this.searchConcurrencyCustom = false;
+    }
+  }
+
   private submitSearchConcurrency(): void {
+    if (!this.requireSearchMembership()) return;
     const count = Number(this.searchConcurrencyDraft);
     if (!new RegExp('^[0-9]+$').test(this.searchConcurrencyDraft) ||
       !Number.isInteger(count) || count < 1 || count > 12) {
@@ -240,7 +261,7 @@ export struct SettingsPage {
   }
 
   private async setSearchConcurrency(count: number, custom: boolean): Promise<void> {
-    if (this.isSavingSearchConcurrency) return;
+    if (this.isSavingSearchConcurrency || !this.requireSearchMembership()) return;
     const previous = this.searchConcurrency;
     const previousCustom = this.searchConcurrencyCustom;
     this.isSavingSearchConcurrency = true;
@@ -251,6 +272,10 @@ export struct SettingsPage {
       this.searchConcurrencyCustom = custom;
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_search_concurrency_saved', count) });
     } catch (error) {
+      if (!this.membership.hasAccess) {
+        this.requireSearchMembership();
+        return;
+      }
       this.searchConcurrencyDraft = previous.toString();
       this.searchConcurrencyCustom = previousCustom;
       hilog.warn(0xFF00, 'SettingsPage', 'Save search concurrency failed: %{public}s', String(error));
@@ -687,6 +712,7 @@ export struct SettingsPage {
             fillWidth: true,
             selected: this.searchConcurrencyCustom ? 4 : SEARCH_CONCURRENCY_OPTIONS.indexOf(this.searchConcurrency),
             onSelect: (index: number): void => {
+              if (!this.requireSearchMembership()) return;
               if (index === 4) {
                 this.searchConcurrencyCustom = true;
               } else {
@@ -695,6 +721,7 @@ export struct SettingsPage {
             }
           }).layoutWeight(1.5)
           TextInput({ text: this.searchConcurrencyDraft, placeholder: $r('app.string.settings_search_concurrency_hint') })
+            .enabled(this.membership.hasAccess)
             .type(InputType.Number).maxLength(2).layoutWeight(1).height(40)
             .onChange((value: string): void => { this.searchConcurrencyDraft = value; })
             .onSubmit((): void => this.submitSearchConcurrency())

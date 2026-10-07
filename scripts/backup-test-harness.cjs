@@ -33,13 +33,13 @@ function harness() {
   for (const value of Object.values(context)) fs.mkdirSync(value);
   const control = {
     member: true,
-    auto: true, startError: 0, sourceError: false, restoreError: false,
+    auto: true, startError: 0, startErrors: [], sourceError: false, restoreError: false,
     remoteOnly: false, uploadState: 4, identity: 'account-A', stopCount: 0, downloadStopCount: 0,
     cloudWrites: 0, localRestores: 0, confirmed: 0,
     sources: [], restoredSources: [], selectUris: [], saveUris: [], pickerError: false,
     maxRead: Infinity, maxWrite: Infinity, fileWriteError: false, flushError: false, snapshotShortWrite: false,
     pickerCalls: 0, restoreCount: 0, selectedData: null, backupPreferences: snapshot().preferences,
-    backupStats: [], speechReloads: 0,
+    backupStats: [], backupBooks: [], restoredBooks: [], speechReloads: 0,
     cloudCopyUnsupported: false, cloudWriteError: 0, cloudStateError: 0, onCloudWrite: null,
     initialCompleted: false, fileStates: new Map(), autoSettingsFlushError: false
   };
@@ -82,6 +82,8 @@ function harness() {
     off(_event, listener) { assert.equal(this.listener, listener); this.listener = null; }
     async start() {
       syncTasks.push(this);
+      const nextError = control.startErrors.shift();
+      if (nextError) throw { code: nextError };
       if (control.startError) throw { code: control.startError };
       if (control.auto) queueMicrotask(() => this.emit(4, 0));
     }
@@ -205,8 +207,11 @@ function harness() {
           hasCurrentEntitlement: async () => control.member
         } } };
         if (name === '../model/MembershipState') return { MembershipState: { current: {
-          get active() { return control.member; }
+          get active() { return control.member; },
+            get hasAccess() { return control.member; },
+            get confirmedInactive() { return !control.member; }
         } } };
+        if (name === '@kit.PerformanceAnalysisKit') return { hilog: { info() {}, warn() {}, error() {}, debug() {} } };
         if (name === '@kit.ArkData') return { preferences };
         if (name === '@kit.AbilityKit') return { ConfigurationConstant: { ColorMode: { COLOR_MODE_NOT_SET: -1 } } };
         if (name === '../model/AppAppearance') return { AppAppearance: {
@@ -221,6 +226,7 @@ function harness() {
           const hash = createHash('sha256'); return { update: async blob => hash.update(blob.data), digest: async () => ({ data: hash.digest() }) };
         } } };
         if (name === './AuthService') return { AuthService: { instance: auth } };
+        if (name === './DiagnosticLogService') return { DiagnosticLogService: { info() {} } };
         if (name === './AppBackupService') return load('service/AppBackupService');
         if (name === './PreferenceService') return {
           PreferenceBackupSnapshot: class { constructor() { Object.assign(this, snapshot().preferences); } },
@@ -238,8 +244,10 @@ function harness() {
             control.backupStats = records; control.localRestores++; }
         } };
         if (name === './DataService') return { DataService: {
-          setContext: () => {}, exportBackupBookShells: async () => [],
-          restoreBackupBookShells: async (_books, strict) => { assert.equal(strict, true); control.localRestores++; }
+          setContext: () => {}, exportBackupBookShells: async () => control.backupBooks,
+          restoreBackupBookShells: async (books, strict) => {
+            assert.equal(strict, true); control.restoredBooks = books; control.localRestores++;
+          }
         } };
         if (name === './SourceDataService') return { SourceDataService: { invalidateLocalSources() {} } };
         if (name === './rulesource/LocalRuleSourceImportService') return { LocalRuleSourceImportService: {

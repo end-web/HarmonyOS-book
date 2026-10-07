@@ -32,6 +32,8 @@ import {
   TextReadingPosition,
   PageTurnMode,
   TextReadingSettings,
+  ReaderCornerLayout,
+  ReaderCornerContent,
   EVT_READER_JUMP_CHAPTER,
   EVT_READER_TYPOGRAPHY_CHANGED,
   ReaderJumpChapterEvent
@@ -134,6 +136,7 @@ export struct ReaderPage {
   @Local tapTopPercent: number = 33;
   @Local tapBottomPercent: number = 33;
   @Local showHeader: boolean = true;
+  @Local cornerLayout: string = ReaderCornerLayout.DEFAULT;
   @Local showFooter: boolean = true;
   @Local showChapterTitle: boolean = true;
   @Local showPageNumber: boolean = true;
@@ -627,7 +630,7 @@ export struct ReaderPage {
         onPress: (): void => { this.openBookDetail(); }
       })
     }.width('100%').justifyContent(FlexAlign.End)
-      .padding({ right: this.rightSafeVp + Math.max(16, this.marginRight) + (this.showHeader && this.showPageNumber ? Math.max(28, this.pageLabelWidthVp) + 8 : 0) })
+      .padding({ right: this.rightSafeVp + Math.max(16, this.marginRight) + (this.showHeader && this.cornerVisible(1) ? Math.max(28, this.pageLabelWidthVp) + 8 : 0) })
       .hitTestBehavior(HitTestMode.Transparent)
       .position({ x: 0, y: this.topSafeVp + 4 })
   }
@@ -911,6 +914,7 @@ export struct ReaderPage {
       this.tapTopPercent = settings.tapTopPercent;
       this.tapBottomPercent = settings.tapBottomPercent;
       this.showHeader = settings.showHeader;
+      this.cornerLayout = settings.cornerLayout;
       this.showFooter = settings.showFooter;
       this.showChapterTitle = settings.showChapterTitle;
       this.showPageNumber = settings.showPageNumber;
@@ -965,6 +969,7 @@ export struct ReaderPage {
     this.tapTopPercent = 33;
     this.tapBottomPercent = 33;
     this.showHeader = true;
+    this.cornerLayout = ReaderCornerLayout.DEFAULT;
     this.showFooter = true;
     this.showChapterTitle = true;
     this.showPageNumber = true;
@@ -1018,6 +1023,7 @@ export struct ReaderPage {
     settings.tapTopPercent = this.tapTopPercent;
     settings.tapBottomPercent = this.tapBottomPercent;
     settings.showHeader = this.showHeader;
+    settings.cornerLayout = this.cornerLayout;
     settings.showFooter = this.showFooter;
     settings.showChapterTitle = this.showChapterTitle;
     settings.showPageNumber = this.showPageNumber;
@@ -1262,6 +1268,7 @@ export struct ReaderPage {
     settings.tapTopPercent = this.tapTopPercent;
     settings.tapBottomPercent = this.tapBottomPercent;
     settings.showHeader = this.showHeader;
+    settings.cornerLayout = this.cornerLayout;
     settings.showFooter = this.showFooter;
     settings.showChapterTitle = this.showChapterTitle;
     settings.showPageNumber = this.showPageNumber;
@@ -1522,6 +1529,7 @@ export struct ReaderPage {
 
   private onlineTextTurnRevision(): string {
     return `${this.currentResourceIndex}:${this.onlineTextPageIndex}:${this.fontSize}:${this.lineHeight}:${this.paragraphSpacing}:` +
+      `${this.cornerLayout}:${this.showChapterTitle}:${this.showPageNumber}:${this.showChapterNumber}:${this.showBookName}:${this.showReadingStatus}:` +
       `${this.textAlignment}:${this.fontFamily}:${this.systemTypographyRevision}:${this.fontWeight}:${this.fontColor}:${this.themeId}:${this.customBackground}:${this.backgroundPattern}:${this.bgImagePath}:${this.backgroundImageMode}:${this.overlayAlpha}:` +
       `${this.readerHeaderHeight()}:${this.readerFooterHeight()}:${this.readerTopInsetVp()}:${this.leftSafeVp}:${this.rightSafeVp}:${this.topSafeVp}:${this.readerBottomInsetVp()}:${this.marginLeft}:${this.marginRight}:${this.marginTop}:${this.marginBottom}:${this.palette.background}:${this.palette.primary}`;
   }
@@ -1590,7 +1598,29 @@ export struct ReaderPage {
   }
 
   private readerHeaderHeight(): number {
-    return this.showHeader && (this.showChapterTitle || this.showPageNumber) ? READER_TEXT_HEADER_HEIGHT : 0;
+    return this.showHeader && (this.cornerVisible(0) || this.cornerVisible(1)) ? READER_TEXT_HEADER_HEIGHT : 0;
+  }
+
+  private cornerVisible(corner: number): boolean {
+    switch (ReaderCornerLayout.content(this.cornerLayout, corner)) {
+      case ReaderCornerContent.ChapterTitle: return this.showChapterTitle;
+      case ReaderCornerContent.PageNumber: return this.showPageNumber;
+      case ReaderCornerContent.ChapterNumber: return this.showChapterNumber;
+      default: return this.showBookName;
+    }
+  }
+
+  private cornerText(corner: number): string {
+    switch (ReaderCornerLayout.content(this.cornerLayout, corner)) {
+      case ReaderCornerContent.ChapterTitle: return this.chapterTitle(this.onlineTextChapterIndex());
+      case ReaderCornerContent.PageNumber:
+        return this.pageTurnMode === PageTurnMode.Vertical ?
+          `${Math.round(this.currentOnlineTextCharOffset() / Math.max(1, this.onlineTextContent.length) * 100)}%` :
+          this.onlineTextPageLabel();
+      case ReaderCornerContent.ChapterNumber:
+        return this.book !== null ? `${this.onlineTextChapterIndex() + 1}/${this.book.chapters.length}` : '';
+      default: return this.book?.title ?? '';
+    }
   }
 
   private readerGutter(): number {
@@ -1607,7 +1637,7 @@ export struct ReaderPage {
   }
 
   private readerFooterHeight(): number {
-    return this.showFooter && (this.showChapterNumber || this.showBookName || this.showReadingStatus) ? READER_TEXT_FOOTER_HEIGHT : 0;
+    return this.showFooter && (this.cornerVisible(2) || this.cornerVisible(3) || this.showReadingStatus) ? READER_TEXT_FOOTER_HEIGHT : 0;
   }
 
   private readerTextBottomPaddingVp(): number {
@@ -1906,7 +1936,7 @@ export struct ReaderPage {
                     bottom: this.readerTextBottomPaddingVp() + this.readerFooterHeight()
                   })
                 if (this.showFooter && this.showReadingStatus) {
-                  ReaderStatusIndicator({ color: this.palette.secondary })
+                  ReaderStatusIndicator({ color: this.palette.primary })
                     .height(this.readerFooterHeight())
                     .margin({ bottom: this.readerTextBottomPaddingVp() })
                 }
@@ -2001,18 +2031,21 @@ export struct ReaderPage {
       })
       Column() {
         Row() {
-          Text(this.chapterTitle(this.onlineTextChapterIndex()))
+          Text(this.cornerText(0))
             .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
+            .fontColor(this.palette.primary)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
-            .visibility(this.showChapterTitle ? Visibility.Visible : Visibility.Hidden)
-          Text(this.pageTurnMode === PageTurnMode.Vertical ?
-            `${Math.round(this.currentOnlineTextCharOffset() / Math.max(1, this.onlineTextContent.length) * 100)}%` : this.onlineTextPageLabel())
+            .visibility(this.cornerVisible(0) ? Visibility.Visible : Visibility.Hidden)
+          Text(this.cornerText(1))
             .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
-            .visibility(this.showPageNumber ? Visibility.Visible : Visibility.Hidden)
+            .fontColor(this.palette.primary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .textAlign(TextAlign.End)
+            .constraintSize({ maxWidth: '50%' })
+            .visibility(this.cornerVisible(1) ? Visibility.Visible : Visibility.Hidden)
             .onSizeChange((_previous: SizeOptions, current: SizeOptions): void => {
               if (typeof current.width === 'number') this.pageLabelWidthVp = current.width;
             })
@@ -2073,24 +2106,24 @@ export struct ReaderPage {
         .onSizeChange((_oldSize: SizeOptions, size: SizeOptions): void => this.handleReaderTextSizeChange(size))
 
         Row({ space: AppSpace.Sm }) {
-          Text(this.book !== null ? `${this.onlineTextChapterIndex() + 1}/${this.book.chapters.length}` : '')
+          Text(this.cornerText(2))
             .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
+            .fontColor(this.palette.primary)
             .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .visibility(this.showChapterNumber ? Visibility.Visible : Visibility.Hidden)
+            .visibility(this.cornerVisible(2) ? Visibility.Visible : Visibility.Hidden)
           if (this.showFooter && this.showReadingStatus) {
-            ReaderStatusIndicator({ color: this.palette.secondary })
+            ReaderStatusIndicator({ color: this.palette.primary })
           }
-          Text(this.book !== null ? this.book.title : '')
+          Text(this.cornerText(3))
             .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
+            .fontColor(this.palette.primary)
             .layoutWeight(1)
             .textAlign(TextAlign.End)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .visibility(this.showBookName ? Visibility.Visible : Visibility.Hidden)
+            .visibility(this.cornerVisible(3) ? Visibility.Visible : Visibility.Hidden)
         }
         .width('100%')
         .height(this.readerFooterHeight())
@@ -2351,6 +2384,12 @@ export struct ReaderPage {
           tapBottomPercent: this.tapBottomPercent,
 
       showHeader: this.showHeader,
+      cornerLayout: this.cornerLayout,
+      onCornerChange: (corner: number, content: number): void => {
+        this.cornerLayout = ReaderCornerLayout.swap(this.cornerLayout, corner, content);
+        this.applyReadingSettings();
+        this.saveReadingSettings();
+      },
       showFooter: this.showFooter,
       showChapterTitle: this.showChapterTitle,
       showPageNumber: this.showPageNumber,

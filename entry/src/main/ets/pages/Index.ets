@@ -6,6 +6,7 @@ import { BookDetailPage } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { MembershipPage } from './MembershipPage';
+import { MembershipSubscriptionPage } from './MembershipSubscriptionPage';
 import { AboutPage } from './AboutPage';
 import { TechnicalSupportPage } from './TechnicalSupportPage';
 import { AccountPage } from './AccountPage';
@@ -384,7 +385,11 @@ struct Index {
       ProfileMenuDestination() {
         SettingsPage({ navStack: this.navStack })
       }
-    } else if (name === 'membership' || name === 'membershipSubscription') {
+    } else if (name === 'membershipSubscription') {
+      ProfileMenuDestination() {
+        MembershipSubscriptionPage({ navStack: this.navStack })
+      }
+    } else if (name === 'membership') {
       ProfileMenuDestination() {
         MembershipPage({ navStack: this.navStack })
       }

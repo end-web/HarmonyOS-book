@@ -36,6 +36,7 @@ export struct RuleSourcePanelPage {
   @Local busy: boolean = false;
   @Local errorMessage: string = '';
   @Local entryCount: number = 0;
+  @Local settingsPanel: boolean = false;
   @Local safeTop: number = WindowUtils.getStatusBarHeightVp();
   @Local safeBottom: number = WindowUtils.getBottomSafeVp();
   private entries: ControlDataSource = new ControlDataSource();
@@ -57,6 +58,7 @@ export struct RuleSourcePanelPage {
   }
 
   private async load(): Promise<void> {
+    this.settingsPanel = false;
     this.loading = true;
     this.errorMessage = '';
     try {
@@ -84,6 +86,13 @@ export struct RuleSourcePanelPage {
     try {
       const result = await LocalRulePanelService.act(source, control, this.controls, this.login);
       if (!this.alive) return;
+      if (result.panel !== undefined) {
+        this.controls = result.panel.controls;
+        this.entries.setItems(result.panel.entries);
+        this.entryCount = result.panel.entries.length;
+        this.settingsPanel = true;
+        return;
+      }
       if (result.message) this.getUIContext().getPromptAction().showToast({ message: result.message });
       if (result.browserUrl) {
         const route = RuleSourceLoginRouteParams.of(source.bookSourceUrl, source.bookSourceName, result.browserUrl);
@@ -106,7 +115,7 @@ export struct RuleSourcePanelPage {
         route.title = control.title;
         route.moreUrl = result.browseUrl;
         this.navStack.pushPathByName('blockMore', route);
-      } else if (result.refresh) {
+      } else if (result.refresh && !this.settingsPanel) {
         await this.load();
       }
     } catch (error) {
@@ -138,8 +147,14 @@ export struct RuleSourcePanelPage {
     this.navStack.pushPathByName('blockMore', route);
   }
 
+  private backFromSettings(): boolean {
+    if (!this.settingsPanel) return false;
+    if (!this.busy) this.load();
+    return true;
+  }
+
   build() {
-    ProfileMenuDestination() {
+    ProfileMenuDestination({ onBackRequested: (): boolean => this.backFromSettings() }) {
       Column() {
         Row({ space: AppSpace.Xs }) {
           Button({ type: ButtonType.Circle }) {
@@ -148,7 +163,7 @@ export struct RuleSourcePanelPage {
           }
           .width(44).height(44).backgroundColor(Color.Transparent)
           .accessibilityText($r('app.string.common_back'))
-          .onClick(() => this.navStack.pop())
+          .onClick(() => { if (!this.backFromSettings()) this.navStack.pop(); })
           Text(this.login ? $r('app.string.rule_source_login_panel') : $r('app.string.rule_source_explore'))
             .fontSize(AppFont.TitleL).fontWeight(FontWeight.Bold)
             .fontColor($r('sys.color.font_primary')).layoutWeight(1).maxLines(1)
@@ -179,6 +194,21 @@ export struct RuleSourcePanelPage {
             ForEach(this.controls, (control: LocalRuleControl) => {
               ListItem() { this.ControlField(control) }
             }, (control: LocalRuleControl): string => control.id)
+            if (this.settingsPanel) {
+              ListItem() {
+                Button($r('app.string.rule_source_save'))
+                  .width('100%').height(48).backgroundColor(AppColor.Brand).enabled(!this.busy)
+                  .onClick(async () => {
+                    const save = new LocalRuleControl();
+                    save.action = 'java.refreshExplore();';
+                    await this.runAction(save);
+                    if (!this.errorMessage) {
+                      this.settingsPanel = false;
+                      await this.load();
+                    }
+                  })
+              }
+            }
             LazyForEach(this.entries, (entry: LocalRuleControl) => {
               ListItem() {
                 if (entry.url) {

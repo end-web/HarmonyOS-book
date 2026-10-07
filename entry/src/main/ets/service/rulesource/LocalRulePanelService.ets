@@ -5,10 +5,15 @@ import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
 import { LocalRuleJsonLiteral } from './LocalRuleJsonLiteral';
 import { LocalRuleTemplate } from './LocalRuleTemplate';
+import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
+import { GuangYuAuthService } from './guangyu/GuangYuAuthService';
+import { GuangYuPanelService } from './guangyu/GuangYuPanelService';
+import { SourceDataService } from '../SourceDataService';
 
 export class LocalRulePanelService {
   static async load(source: LocalRuleSource, login: boolean,
     variables: Record<string, string> = {}): Promise<LocalRulePanel> {
+    if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl)) await GuangYuAuthService.syncScriptSession();
     const rule = login ? source.loginUi : source.exploreUrl;
     const value = LocalRuleScriptRuntime.hasScript(rule)
       ? await LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl,
@@ -19,6 +24,7 @@ export class LocalRulePanelService {
       if (state.loginInfo) {
         const saved: Record<string, Object> = JSON.parse(state.loginInfo);
         for (const control of panel.controls) {
+          if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl) && control.type === 'password') continue;
           if (saved[control.title] !== undefined) control.value = LocalRulePanelService.scalar(saved[control.title]);
         }
       }
@@ -115,8 +121,23 @@ export class LocalRulePanelService {
 
   static async act(source: LocalRuleSource, control: LocalRuleControl,
     controls: LocalRuleControl[], login: boolean): Promise<LocalRulePanelAction> {
+    const isGuangYu = GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl);
+    if (isGuangYu) {
+      const account = await GuangYuPanelService.accountAction(control.action, controls);
+      if (account !== undefined) return account;
+      const settings = await GuangYuPanelService.settings(source, control.action);
+      if (settings !== undefined) {
+        const result = new LocalRulePanelAction();
+        result.panel = settings;
+        return result;
+      }
+      await GuangYuAuthService.syncScriptSession();
+    }
     const values: Record<string, string> = {};
-    for (const input of controls) values[input.title] = input.value;
+    for (const input of controls) {
+      if (isGuangYu && input.type === 'password') continue;
+      values[input.title] = input.value;
+    }
     const variables: Record<string, string> = { 'infoMap': JSON.stringify(values) };
     const code = LocalRuleScriptRuntime.standaloneCode(control.action) || control.action;
     const inputs: string[] = [];
@@ -128,9 +149,14 @@ export class LocalRulePanelService {
     }
     const response = await LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl,
       `${login ? LocalRulePanelService.loginLibrary(source) + 'source.putLoginInfo(infoMap);\n' : ''}` +
+      `${isGuangYu && login ? 'globalThis.result=infoMap;\n' : ''}` +
       `${inputs.join('\n;')}\n;${code}`, source, variables);
-    if (login && !variables['__openBrowser']) await LocalRulePanelService.checkLogin(source, response, variables);
+    if (isGuangYu) SourceDataService.invalidateLocalSources(source.bookSourceUrl);
+    if (login && !isGuangYu && !variables['__openBrowser']) await LocalRulePanelService.checkLogin(source, response, variables);
     const result = new LocalRulePanelAction();
+    if (isGuangYu && control.id === 'guangyu-setting--发现页类型') {
+      result.panel = await GuangYuPanelService.settings(source, 'getHtmlSettings()');
+    }
     result.message = variables['__toast'] ?? '';
     result.searchKeyword = variables['__searchBook'] ?? '';
     result.refresh = login || variables['__refreshExplore'] === 'true';

@@ -1,7 +1,7 @@
 import { ReaderTapPolicy } from '../../utils/ReaderTapPolicy';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
-import { TextReadingPosition, TextReadingSettings } from '../../model/TextReading';
+import { TextReadingPosition, TextReadingSettings, ReaderCornerLayout } from '../../model/TextReading';
 import { findThemePreset } from '../../model/ReaderTheme';
 import { SpeechPosition } from '../../model/TextToSpeechState';
 import { TextReadingProgressService } from './TextReadingProgressService';
@@ -10,6 +10,7 @@ import { TextToSpeechService } from './TextToSpeechService';
 
 /** 只迁移常规阅读选项；自定义图片、字体、配色及本机文件路径不进入快照。 */
 export class ReadingSettingsBackup {
+  cornerLayout: string | undefined = undefined;
   textAlignment: string = 'justify';
   fontSize: number = 18;
   lineHeight: number = 1.9;
@@ -71,6 +72,7 @@ export class ReadingBackupService {
     saved.tapTopPercent = settings.tapTopPercent;
     saved.tapBottomPercent = settings.tapBottomPercent;
     saved.showHeader = settings.showHeader;
+    saved.cornerLayout = ReaderCornerLayout.normalize(settings.cornerLayout);
     saved.showFooter = settings.showFooter;
     saved.showChapterTitle = settings.showChapterTitle;
     saved.showPageNumber = settings.showPageNumber;
@@ -131,6 +133,7 @@ export class ReadingBackupService {
     settings.tapTopPercent = typeof saved.tapTopPercent === 'number' ? ReaderTapPolicy.percent(saved.tapTopPercent) : 33;
     settings.tapBottomPercent = typeof saved.tapBottomPercent === 'number' ? ReaderTapPolicy.percent(saved.tapBottomPercent, settings.tapTopPercent) : 33;
     settings.showHeader = saved.showHeader !== false;
+    settings.cornerLayout = ReaderCornerLayout.normalize(saved.cornerLayout ?? ReaderCornerLayout.DEFAULT);
     settings.showFooter = saved.showFooter !== false;
     settings.showChapterTitle = saved.showChapterTitle !== false;
     settings.showPageNumber = saved.showPageNumber !== false;
@@ -184,6 +187,8 @@ export class ReadingBackupService {
       snapshot.speechLanguage.length > 128 || typeof snapshot.speechFollow !== 'boolean') return false;
     const settings = snapshot.settings;
     return !!settings && ReadingBackupService.inRange(settings.fontSize, 14, 50) &&
+      (settings.cornerLayout === undefined || (typeof settings.cornerLayout === 'string' &&
+        ReaderCornerLayout.normalize(settings.cornerLayout) === settings.cornerLayout)) &&
       (settings.textAlignment === undefined || ['justify', 'start', 'center', 'end'].includes(settings.textAlignment)) &&
       ReadingBackupService.inRange(settings.lineHeight, 1, 2.4) &&
       (settings.paragraphSpacing === undefined || ReadingBackupService.inRange(settings.paragraphSpacing, 0, 2)) &&

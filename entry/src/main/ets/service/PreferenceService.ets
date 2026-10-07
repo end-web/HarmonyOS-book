@@ -1,3 +1,5 @@
+import lazy { MembershipService } from './MembershipService';
+import { MembershipState } from '../model/MembershipState';
 import { preferences } from '@kit.ArkData';
 import { ReadingSessionService } from './ReadingSessionService';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
@@ -103,7 +105,7 @@ export class PreferenceBackupSnapshot {
   audioAutoResume: boolean = true;
   homeGridColumns: number = 3;
   preloadChapters: number = 1;
-  searchConcurrency: number = 6;
+  searchConcurrency: number = 3;
 }
 
 /**
@@ -989,8 +991,16 @@ export class PreferenceService {
 
   static async getSearchConcurrency(): Promise<number> {
     const s = await PreferenceService.ensureStore();
-    const count = await s.get(KEY_SEARCH_CONCURRENCY, 6);
-    return typeof count === 'number' && Number.isInteger(count) && count >= 1 && count <= 12 ? count : 6;
+    if (!await MembershipService.instance.hasCurrentEntitlement()) {
+      const previous = await s.get(KEY_SEARCH_CONCURRENCY, 3);
+      if (previous !== 3) {
+        await s.put(KEY_SEARCH_CONCURRENCY, 3);
+        try { await s.flush(); } catch (_error) { /* 本次搜索仍只使用默认并发。 */ }
+      }
+      return 3;
+    }
+    const count = await s.get(KEY_SEARCH_CONCURRENCY, 3);
+    return typeof count === 'number' && Number.isInteger(count) && count >= 1 && count <= 12 ? count : 3;
   }
 
   static async setSearchConcurrency(count: number): Promise<void> {
@@ -998,7 +1008,10 @@ export class PreferenceService {
       throw new Error('Search concurrency must be an integer from 1 to 12');
     }
     const s = await PreferenceService.ensureStore();
-    const previous = await PreferenceService.getSearchConcurrency();
+    if (count !== 3 && !await MembershipService.instance.hasCurrentEntitlement()) {
+      throw new Error('MEMBERSHIP_REQUIRED');
+    }
+    const previous = await s.get(KEY_SEARCH_CONCURRENCY, 3);
     await s.put(KEY_SEARCH_CONCURRENCY, count);
     try {
       await s.flush();
@@ -1218,9 +1231,9 @@ export class PreferenceService {
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
     await s.put(KEY_PRELOAD_CHAPTERS, Number.isFinite(snapshot.preloadChapters) ?
       Math.max(0, Math.min(50, Math.round(snapshot.preloadChapters))) : 1);
-    await s.put(KEY_SEARCH_CONCURRENCY, typeof snapshot.searchConcurrency === 'number' &&
+    await s.put(KEY_SEARCH_CONCURRENCY, MembershipState.current.hasAccess && typeof snapshot.searchConcurrency === 'number' &&
       Number.isInteger(snapshot.searchConcurrency) && snapshot.searchConcurrency >= 1 &&
-      snapshot.searchConcurrency <= 12 ? snapshot.searchConcurrency : 6);
+      snapshot.searchConcurrency <= 12 ? snapshot.searchConcurrency : 3);
     await s.flush();
     AppAppearance.current.material = material;
     AppAppearance.current.accent = accent;

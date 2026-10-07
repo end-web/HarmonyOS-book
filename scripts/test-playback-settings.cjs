@@ -17,7 +17,7 @@ function compile(source, dependencies = {}) {
   const store = { get: async (k, v) => memory.get(k) ?? v, put: async (k, v) => memory.set(k, v),
     flush: async () => { if (failFlush) throw new Error('disk full'); for (const [k, v] of memory) disk.set(k, v); } };
   const source = fs.readFileSync(path.join(root, 'service/PreferenceService.ets'), 'utf8');
-  const dependencies = { '@kit.AbilityKit': { ConfigurationConstant: { ColorMode: { COLOR_MODE_NOT_SET: -1 } } } };
+  const dependencies = { './MembershipService': { MembershipService: { instance: { hasCurrentEntitlement: async () => true } } }, '@kit.AbilityKit': { ConfigurationConstant: { ColorMode: { COLOR_MODE_NOT_SET: -1 } } } };
   const prefs = compile(source, dependencies).PreferenceService;
   prefs.ensureStore = async () => store;
   await prefs.setSearchConcurrency(3); await prefs.setPreloadChapters(7);

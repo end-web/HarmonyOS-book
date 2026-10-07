@@ -2,8 +2,10 @@ import { common, sendableContextManager } from '@kit.AbilityKit';
 import { MembershipState } from '../model/MembershipState';
 import { MembershipPlan, MembershipService } from '../service/MembershipService';
 import { AppIconService } from '../service/AppIconService';
-import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
+import { AppColor, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
+import { AuthService } from '../service/AuthService';
+import { AccountAvatar } from '../components/AccountAvatar';
 import { MembershipBadge } from '../components/MembershipBadge';
 
 @ComponentV2
@@ -11,7 +13,13 @@ export struct MembershipSubscriptionPage {
   @Param navStack: NavPathStack = new NavPathStack();
   @Local membership: MembershipService = MembershipService.instance;
   @Local state: MembershipState = MembershipState.current;
+  @Param inSheet: boolean = false;
+  @Event onClose: () => void = () => {};
+  @Local auth: AuthService = AuthService.instance;
+  @Local selectedPlan: string = 'lastVip';
+  @Local showDetails: boolean = false;
   @Local agreed: boolean = false;
+  @Local contentViewportHeight: number = 0;
 
   aboutToAppear(): void {
     const context = this.abilityContext();
@@ -64,100 +72,147 @@ export struct MembershipSubscriptionPage {
 
   @Builder
   planCard(productId: string) {
-    Row({ space: AppSpace.Md }) {
-      MembershipBadge({ productId: productId, badgeWidth: 52 })
-      Column({ space: AppSpace.Xs }) {
-        Text(productId === 'lastVip' ? $r('app.string.membership_lifetime') :
-          productId === 'iconMonth' ? $r('app.string.membership_month') : $r('app.string.membership_year'))
-          .fontSize(AppFont.BodyL).fontWeight(FontWeight.Medium).fontColor($r('sys.color.font_primary'))
-        Text(productId === 'lastVip' ? $r('app.string.membership_lifetime_period') :
-          productId === 'iconMonth' ? $r('app.string.membership_month_period') : $r('app.string.membership_year_period'))
-          .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary'))
-        Text(this.planPrice(productId)).fontSize(AppFont.Title).fontWeight(FontWeight.Bold).fontColor(AppColor.Brand)
-      }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      Button(this.planAction(productId))
-        .backgroundColor(AppColor.Brand).fontColor(AppColor.OnBrand)
-        .enabled(this.canSelectPlan(productId))
-        .onClick((): void => {
-          if (this.state.active && productId !== 'lastVip') this.manage();
-          else {
-            const plan = this.findPlan(productId);
-            if (plan) this.purchase(plan);
-          }
-        })
-    }.width('100%').padding(AppSpace.Md).borderRadius(AppRadius.Lg)
-    .backgroundColor($r('sys.color.comp_background_primary'))
+    Column({ space: 8 }) {
+      MembershipBadge({ productId: productId, badgeWidth: 30 })
+      Text(productId === 'lastVip' ? $r('app.string.membership_lifetime') :
+        productId === 'iconMonth' ? $r('app.string.membership_month') : $r('app.string.membership_year'))
+        .fontSize(15).fontWeight(FontWeight.Medium).fontColor('#30291F')
+      Text(this.planPrice(productId)).fontSize(this.findPlan(productId) ? 20 : 14).fontWeight(FontWeight.Bold).fontColor('#30291F')
+      Text(productId === 'lastVip' ? $r('app.string.membership_lifetime_period') :
+        productId === 'iconMonth' ? $r('app.string.membership_month_period') : $r('app.string.membership_year_period'))
+        .fontSize(11).fontColor('#7A6A55').textAlign(TextAlign.Center)
+    }.width(130).constraintSize({ minHeight: 132 }).padding(12).borderRadius(12)
+    .backgroundColor(this.selectedPlan === productId ? '#FFFAF1' : '#FFFFFF')
+    .border({ width: this.selectedPlan === productId ? 2 : 1,
+      color: this.selectedPlan === productId ? '#AD8450' : '#FFFFFF' })
+    .onClick((): void => { this.selectedPlan = productId; })
+    .accessibilitySelected(this.selectedPlan === productId)
+  }
+
+  @Builder
+  accountHeader() {
+    Row({ space: 10 }) {
+      AccountAvatar({ uri: this.auth.avatarUri, avatarSize: 36 })
+      Row({ space: 5 }) {
+        Text(this.auth.isLoggedIn ? (this.auth.nickName || $r('app.string.hw_auth_account_title')) :
+          $r('app.string.hw_auth_login_title'))
+          .fontSize(15).fontWeight(FontWeight.Medium).fontColor('#30291F').flexShrink(1)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.state.active) {
+          MembershipBadge({ productId: this.state.productId, badgeWidth: 22 })
+        }
+      }.layoutWeight(1).justifyContent(FlexAlign.Start)
+      Button($r('app.string.membership_manage')).fontSize(11).height(28)
+        .backgroundColor('#D9BE8C').fontColor('#55432C')
+        .enabled(!this.membership.busy && this.membership.supported).onClick(() => this.manage())
+    }.width('100%').padding({ top: 4, bottom: 4 })
+  }
+
+  @Builder
+  benefitCard() {
+    Column({ space: 8 }) {
+      Text($r('app.string.membership_card_title')).fontSize(18).fontWeight(FontWeight.Bold).fontColor('#624023')
+      Text(this.membership.message).fontSize(12).fontColor('#725338').width('100%')
+      if (this.state.active) {
+        Text(this.state.lifetime ? $r('app.string.membership_lifetime_valid') :
+          $r('app.string.membership_expires', new Date(this.state.expiresAt).toLocaleDateString()))
+          .fontSize(12).fontColor('#725338').width('100%')
+        if (!this.state.lifetime) {
+          Text(this.state.autoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
+            .fontSize(12).fontColor('#725338').width('100%')
+        }
+      }
+      Text($r('app.string.membership_benefit_short')).fontSize(12).fontColor('#624023')
+        .width('100%').margin({ top: 10 })
+    }.width('100%').padding(16).borderRadius(14).alignItems(HorizontalAlign.Start)
+    .linearGradient({ angle: 120, colors: [['#EBD5B4', 0], ['#C59962', 1]] })
   }
 
   build() {
     Column() {
       Row({ space: AppSpace.Sm }) {
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(24).fontColor([$r('sys.color.font_primary')])
-        }.width(40).height(40).backgroundColor(Color.Transparent)
-        .accessibilityText($r('app.string.app_icon_back')).onClick(() => this.navStack.pop())
-        Text($r('app.string.membership_subscription_title')).fontSize(AppFont.Title).fontWeight(FontWeight.Bold)
-          .fontColor($r('sys.color.font_primary'))
-        Blank()
+        Text($r('app.string.membership_subscription_title')).fontSize(20).fontWeight(FontWeight.Bold)
+          .fontColor('#30291F').layoutWeight(1)
         if (this.membership.busy) {
-          LoadingProgress().width(24).height(24).color(AppColor.Brand)
+          LoadingProgress().width(20).height(20).color(AppColor.Brand)
         }
-      }.width('100%').padding({ top: WindowUtils.getStatusBarHeightVp() + AppSpace.Sm,
-        left: AppSpace.Sm, right: AppSpace.Md, bottom: AppSpace.Sm })
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor(['#30291F'])
+        }.width(32).height(32).backgroundColor('#1A8B744C')
+        .accessibilityText($r('app.string.membership_close'))
+        .onClick((): void => { if (this.inSheet) this.onClose(); else this.navStack.pop(); })
+      }.width('100%').padding({ top: this.inSheet ? 14 : WindowUtils.getStatusBarHeightVp() + 14,
+        left: 16, right: 16, bottom: 8 })
       Scroll() {
-        Column({ space: AppSpace.Md }) {
-          Column({ space: AppSpace.Sm }) {
-            Text(this.membership.message).fontSize(AppFont.BodyL).fontWeight(FontWeight.Medium)
-              .fontColor($r('sys.color.font_primary')).width('100%')
-            if (this.state.active) {
-              Text(this.state.lifetime ? $r('app.string.membership_lifetime_valid') :
-                $r('app.string.membership_expires', new Date(this.state.expiresAt).toLocaleString()))
-                .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary')).width('100%')
-              if (!this.state.lifetime) {
-                Text(this.state.autoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
-                  .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).width('100%')
-              }
-            }
-            Text($r('app.string.membership_benefit')).fontSize(AppFont.Body)
-              .fontColor($r('sys.color.font_secondary')).width('100%')
-            if (!AppIconService.instance.supported) {
-              Text($r('app.string.app_icon_unsupported')).fontSize(AppFont.Body)
-                .fontColor($r('sys.color.font_secondary')).width('100%')
-            }
-            if (this.membership.confirmationPending) {
-              Text($r('app.string.membership_confirmation_pending')).fontSize(AppFont.Caption)
-                .fontColor($r('sys.color.font_secondary')).width('100%')
-            }
-          }.width('100%').padding(AppSpace.Md).borderRadius(AppRadius.Lg)
-          .backgroundColor($r('sys.color.comp_background_primary'))
-          this.planCard('iconMonth')
-          this.planCard('iconYear')
-          this.planCard('lastVip')
-          Text($r('app.string.membership_lifetime_renewal_notice')).fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary')).width('100%')
-          Text(this.membership.productsMessage).fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary')).width('100%')
-          Text($r('app.string.membership_terms')).fontSize(AppFont.Body)
-            .fontColor($r('sys.color.font_secondary')).width('100%')
+        Column({ space: 12 }) {
+          this.accountHeader()
+          this.benefitCard()
+          Text($r('app.string.membership_period_title')).fontSize(15).fontWeight(FontWeight.Medium)
+            .fontColor('#665C4D').width('100%').margin({ top: 4 })
+          Scroll() {
+            Row({ space: 10 }) {
+              this.planCard('lastVip')
+              this.planCard('iconYear')
+              this.planCard('iconMonth')
+            }.padding({ top: 2, bottom: 2 })
+          }.width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+          if (!AppIconService.instance.supported) {
+            Text($r('app.string.app_icon_unsupported')).fontSize(12).fontColor('#746B5E').width('100%')
+          }
+          if (this.membership.confirmationPending) {
+            Text($r('app.string.membership_confirmation_pending')).fontSize(12)
+              .fontColor('#746B5E').width('100%')
+          }
+          if (this.selectedPlan === 'lastVip') {
+            Text($r('app.string.membership_lifetime_renewal_notice')).fontSize(12)
+              .fontColor('#746B5E').width('100%')
+          }
+          if (this.membership.supported) {
+            Text(this.membership.productsMessage).fontSize(12)
+              .fontColor('#746B5E').width('100%')
+          }
+          Button($r('app.string.membership_details')).height(30).fontSize(12).fontColor('#806039')
+            .backgroundColor(Color.Transparent).onClick((): void => { this.showDetails = !this.showDetails; })
+          if (this.showDetails) {
+            Text($r('app.string.membership_benefit')).fontSize(12).fontColor('#746B5E').width('100%')
+            Text($r('app.string.membership_terms')).fontSize(12).fontColor('#746B5E').width('100%')
+          }
           if (!this.state.active || !this.state.lifetime) {
             Row({ space: AppSpace.Sm }) {
-              Checkbox({ name: 'subscriptionConsent' }).select(this.agreed).selectedColor(AppColor.Brand)
+              Checkbox({ name: 'subscriptionConsent' }).width(18).height(18).select(this.agreed).selectedColor(AppColor.Brand)
                 .onChange((value: boolean): void => { this.agreed = value; })
                 .accessibilityText($r('app.string.membership_consent'))
-              Text($r('app.string.membership_consent')).fontSize(AppFont.Body)
-                .fontColor($r('sys.color.font_primary')).layoutWeight(1)
+              Text($r('app.string.membership_consent')).fontSize(12)
+                .fontColor('#30291F').layoutWeight(1)
             }.width('100%')
           }
+          Button(this.planAction(this.selectedPlan)).width('100%').height(40)
+            .fontSize(15).fontWeight(FontWeight.Medium).backgroundColor('#B9905C').fontColor(Color.White)
+            .enabled(this.canSelectPlan(this.selectedPlan))
+            .onClick((): void => {
+              if (this.state.active && this.selectedPlan !== 'lastVip') this.manage();
+              else {
+                const plan = this.findPlan(this.selectedPlan);
+                if (plan) this.purchase(plan);
+              }
+            })
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceAround }) {
-            Button($r('app.string.membership_restore')).backgroundColor(Color.Transparent).fontColor(AppColor.Brand)
+            Button($r('app.string.membership_restore')).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#806039')
               .enabled(!this.membership.busy).onClick(() => this.restore())
-            Button($r('app.string.membership_manage')).backgroundColor(Color.Transparent).fontColor(AppColor.Brand)
+            Button($r('app.string.membership_manage')).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#806039')
               .enabled(!this.membership.busy && this.membership.supported).onClick(() => this.manage())
           }.width('100%')
-        }.width('100%').constraintSize({ maxWidth: 680 }).padding({ left: AppSpace.Md, right: AppSpace.Md,
-          top: AppSpace.Sm, bottom: WindowUtils.getBottomSafeVp() + AppSpace.Lg })
+        }.width('100%').constraintSize({ maxWidth: 680, minHeight: this.contentViewportHeight })
+        .justifyContent(FlexAlign.SpaceBetween).padding({ left: AppSpace.Md, right: AppSpace.Md,
+          top: AppSpace.Sm, bottom: WindowUtils.getBottomSafeVp() + AppSpace.Sm })
       }.width('100%').layoutWeight(1).scrollBar(BarState.Off).align(Alignment.Top)
-    }.width('100%').height('100%').backgroundColor($r('sys.color.background_primary'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        const height = Number(newArea.height);
+        if (Number.isFinite(height) && height > 0 && this.contentViewportHeight !== height) {
+          this.contentViewportHeight = height;
+        }
+      })
+    }.width('100%').height('100%')
+    .linearGradient({ angle: 180, colors: [['#E3D1A9', 0], ['#EEE7D8', 0.55], ['#F3F4F5', 1]] })
   }
 }

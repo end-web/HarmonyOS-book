@@ -1,5 +1,6 @@
 import { bundleManager } from '@kit.AbilityKit';
 import { PlatformCompat } from '../utils/PlatformCompat';
+import { MembershipState } from '../model/MembershipState';
 
 export class AppIconOption {
   name: string;
@@ -52,6 +53,7 @@ export class AppIconService {
 
   async select(name: string): Promise<string> {
     if (!this.supported) throw new Error('Alternate icons require API 26');
+    if (name !== '' && !MembershipState.current.hasAccess) throw new Error('Active icon membership required');
     if (this.changing) throw new Error('Icon change in progress');
     if (!this.getOptions().some((option: AppIconOption) => option.name === name)) {
       throw new Error('Invalid alternate icon');

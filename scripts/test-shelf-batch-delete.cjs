@@ -54,7 +54,12 @@ const { Shelf } = compile(`export class Shelf { ${filter}\n${methods}\n }`, {
     fileCalls.push(`download:${id}`);
     if (id === failFile) throw new Error('file busy');
   } }) },
-  DataService: { removeImportedBook: async id => { fileCalls.push(`import:${id}`); } },
+  DataService: {
+    removeImportedBook: async id => { fileCalls.push(`import:${id}`); },
+    getBookById: async (ctx, id) => ({ chapters: [], sourceUrl: 'test-source', bookUrl: id })
+  },
+  ChapterCacheService: { getInstance: () => ({ clearBook: id => { fileCalls.push(`chapters:${id}`); } }) },
+  OnlineTextContentCache: { removeBook: async (ctx, source, id) => { fileCalls.push(`content:${id}`); } },
   $r: (name, ...args) => ({ name, args })
 });
 function makeShelf() {
@@ -130,6 +135,8 @@ async function run() {
   assert.equal(shelf.isManaging, true, 'failed books remain selected for retry');
   assert(!fileCalls.includes('import:import_text'), 'failed download cleanup does not remove imported metadata');
   assert(fileCalls.includes('reading:audio') && fileCalls.includes('reading:legacy-id'));
+  assert(fileCalls.includes('chapters:audio') && fileCalls.includes('content:legacy-id'));
+  assert(!fileCalls.includes('content:import_text'), 'failed file deletion retains cached content');
   assert(!fileCalls.includes('reading:import_text'), 'failed file deletion retains records');
   assert(fileCalls.indexOf('stop-audio') < fileCalls.indexOf('download:audio'));
   assert.equal(await PreferenceService.getLastPlayed(), null);

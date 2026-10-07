@@ -690,7 +690,8 @@ export class BookSourceService {
   static async getAudioUrl(source: BookSource, chapterUrl: string,
     _variables?: Record<string, string>): Promise<string> {
     if (NativeRuleSourceDispatcher.isSource(source)) {
-      return NativeRuleSourceDispatcher.getAudioUrl(source.bookSourceUrl, chapterUrl);
+      return NativeRuleSourceDispatcher.getAudioUrl(source.bookSourceUrl, chapterUrl,
+        _variables?.['__audioSourceVoice'] ?? _variables?.['custom'] ?? '');
     }
     const localSource = await BookSourceService.resolveLocalSource(source);
     return localSource === undefined
@@ -702,7 +703,7 @@ export class BookSourceService {
     variables?: Record<string, string>, chapterVariables?: Record<string, string>): Promise<AudioRequestInfo> {
     if (NativeRuleSourceDispatcher.isSource(source)) {
       const resolved = await NativeRuleSourceDispatcher.resolveContent(
-        source.bookSourceUrl, chapterUrl);
+        source.bookSourceUrl, chapterUrl, variables?.['__audioSourceVoice'] ?? variables?.['custom'] ?? '');
       const info: AudioRequestInfo = {
         url: resolved.audioUrl,
         headers: resolved.requestHeaders,

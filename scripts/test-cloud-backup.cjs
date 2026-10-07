@@ -1,6 +1,13 @@
 // DEVECO_HOME=<Release IDE> node scripts/test-cloud-backup.cjs
 const { assert, fs, path, fixtures, snapshot, harness, until } = require('./backup-test-harness.cjs');
 
+async function retryStart(h) {
+  await until(() => h.timers.size === 2);
+  const [id, callback] = [...h.timers.entries()].at(-1);
+  h.timers.delete(id);
+  callback();
+}
+
 (async () => {
   const manual = harness();
   manual.control.auto = false;
@@ -75,10 +82,66 @@ const { assert, fs, path, fixtures, snapshot, harness, until } = require('./back
   const unavailable = harness();
   unavailable.control.initialCompleted = true;
   unavailable.control.startError = 22400001;
-  await assert.rejects(unavailable.service.backup(unavailable.context), e => e.code === unavailable.codes.UNAVAILABLE);
+  const unavailableTask = unavailable.service.backup(unavailable.context);
+  const unavailableRejected = assert.rejects(unavailableTask, e =>
+    e.code === unavailable.codes.NOT_READY && e.systemCode === 22400001);
+  await retryStart(unavailable);
+  await retryStart(unavailable);
+  await unavailableRejected;
+  assert.equal(unavailable.syncTasks.length, 3, 'cloud-not-ready retries are bounded');
   assert.equal(unavailable.control.cloudWrites, 0);
   assert.equal(unavailable.service.lastBackupAt, 0);
   unavailable.settled();
+
+  const warming = harness();
+  warming.control.startErrors = [22400001, 22400001, 0];
+  const warmingTask = warming.service.backup(warming.context);
+  await retryStart(warming);
+  assert.equal(warming.control.cloudWrites, 0);
+  await retryStart(warming);
+  await warmingTask;
+  assert.ok(warming.service.lastBackupAt > 0, 'transient cloud initialization recovers within the same backup');
+  warming.settled();
+
+  for (const mode of ['cancel', 'switch']) {
+    const waiting = harness();
+    waiting.control.startError = 22400001;
+    const task = waiting.service.backup(waiting.context);
+    const rejected = assert.rejects(task, e => e.code ===
+      (mode === 'cancel' ? waiting.codes.CANCELLED : waiting.codes.ACCOUNT_CHANGED));
+    await until(() => waiting.timers.size === 2);
+    if (mode === 'cancel') waiting.service.cancel();
+    else {
+      waiting.control.identity = 'account-B';
+      await retryStart(waiting);
+    }
+    await rejected;
+    assert.equal(waiting.syncTasks.length, 1, 'cancel/account change prevents another cloud start');
+    assert.equal(waiting.control.cloudWrites, 0);
+    waiting.settled();
+  }
+
+  // A removed source must not make its bookshelf, playback history or progress disappear in backup.
+  const orphan = harness();
+  orphan.control.backupBooks = [{ id: 'online-book', title: '保留的书', author: '作者', narrator: '',
+    cover: '', category: '', intro: '', totalDuration: 0, chapterCount: 10, rating: 0,
+    tags: [], chapters: [], bookUrl: 'https://removed.example/book/1', sourceUrl: 'https://removed.example' }];
+  orphan.control.backupPreferences.history = [{ bookId: 'online-book', chapterId: 'c3',
+    chapterTitle: '第三章', progressMs: 12000, durationMs: 60000, updatedAt: Date.now() }];
+  orphan.control.backupPreferences.progresses = [{ bookId: 'online-book', chapterId: 'c3',
+    chapterTitle: '第三章', chapterIndex: 2, positionMs: 12000, durationMs: 60000, updatedAt: Date.now() }];
+  await orphan.service.backup(orphan.context);
+  const orphanSnapshot = JSON.parse(fs.readFileSync(orphan.cloudPath(), 'utf8'));
+  assert.equal(orphanSnapshot.ruleSources.length, 0);
+  assert.equal(orphanSnapshot.books[0].sourceUrl, 'https://removed.example');
+  assert.deepEqual(orphanSnapshot.preferences.favorites, ['online-book']);
+  assert.equal(orphanSnapshot.preferences.history[0].progressMs, 12000);
+  assert.equal(orphanSnapshot.preferences.progresses[0].chapterIndex, 2);
+  assert.equal(await orphan.service.restore(orphan.context, async () => true), true);
+  assert.equal(orphan.control.restoredBooks[0].sourceUrl, 'https://removed.example');
+  assert.deepEqual(Array.from(orphan.control.selectedData.favorites), ['online-book']);
+  assert.equal(orphan.control.selectedData.history[0].progressMs, 12000);
+  orphan.settled();
 
   const full = harness();
   full.control.auto = false;

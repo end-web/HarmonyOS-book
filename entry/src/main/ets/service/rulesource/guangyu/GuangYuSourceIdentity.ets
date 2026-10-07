@@ -1,7 +1,7 @@
 import { BookSource } from '../../../model/BookSource';
 
 export const GUANG_YU_SOURCE_URL: string = '光遇聚合';
-export const GUANG_YU_SOURCE_VERSION: string = '26.8.28';
+export const GUANG_YU_SOURCE_VERSION: string = '26.9.29';
 
 const BOOK_PREFIX: string = 'gy://book/';
 const CATALOG_PREFIX: string = 'gy://catalog/';
@@ -22,22 +22,23 @@ export class GuangYuRoute {
   bookId: string = '';
   itemId: string = '';
   toneId: string = '4';
+  upstreamUrl: string = '';
 
-  static book(tab: string, provider: string, bookId: string): string {
+  static book(tab: string, provider: string, bookId: string, upstreamUrl: string = ''): string {
     return `${BOOK_PREFIX}${GuangYuRoute.encode(tab)}/${GuangYuRoute.encode(provider)}/` +
-      `${GuangYuRoute.encode(bookId)}`;
+      `${GuangYuRoute.encode(bookId)}` + GuangYuRoute.upstreamSuffix(upstreamUrl);
   }
 
-  static catalog(tab: string, provider: string, bookId: string, toneId: string): string {
+  static catalog(tab: string, provider: string, bookId: string, toneId: string, upstreamUrl: string = ''): string {
     return `${CATALOG_PREFIX}${GuangYuRoute.encode(tab)}/${GuangYuRoute.encode(provider)}/` +
-      `${GuangYuRoute.encode(bookId)}/${GuangYuRoute.encode(toneId || '4')}`;
+      `${GuangYuRoute.encode(bookId)}/${GuangYuRoute.encode(toneId || '4')}` + GuangYuRoute.upstreamSuffix(upstreamUrl);
   }
 
   static chapter(tab: string, provider: string, bookId: string,
-    itemId: string, toneId: string): string {
+    itemId: string, toneId: string, upstreamUrl: string = ''): string {
     return `${CHAPTER_PREFIX}${GuangYuRoute.encode(tab)}/${GuangYuRoute.encode(provider)}/` +
       `${GuangYuRoute.encode(bookId)}/${GuangYuRoute.encode(itemId)}/` +
-      `${GuangYuRoute.encode(toneId || '4')}`;
+      `${GuangYuRoute.encode(toneId || '4')}` + GuangYuRoute.upstreamSuffix(upstreamUrl);
   }
 
   static parse(value: string): GuangYuRoute {
@@ -61,11 +62,15 @@ export class GuangYuRoute {
     }
 
     const parts = payload.split('/');
-    if (parts.length !== expectedParts) return new GuangYuRoute();
+    if (parts.length !== expectedParts && parts.length !== expectedParts + 1) return new GuangYuRoute();
     try {
       route.tab = decodeURIComponent(parts[0]);
       route.provider = decodeURIComponent(parts[1]);
       route.bookId = decodeURIComponent(parts[2]);
+      if (parts.length > expectedParts) {
+        route.upstreamUrl = decodeURIComponent(parts[expectedParts]);
+        if (!new RegExp('^https?://', 'i').test(route.upstreamUrl)) return new GuangYuRoute();
+      }
       if (route.kind === GuangYuRouteKind.CATALOG) {
         route.toneId = decodeURIComponent(parts[3]) || '4';
       } else if (route.kind === GuangYuRouteKind.CHAPTER) {
@@ -86,6 +91,11 @@ export class GuangYuRoute {
 
   private static encode(value: string): string {
     return encodeURIComponent(value.trim());
+  }
+
+  private static upstreamSuffix(value: string): string {
+    const clean = value.trim();
+    return new RegExp('^https?://', 'i').test(clean) ? '/' + encodeURIComponent(clean) : '';
   }
 }
 

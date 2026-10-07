@@ -55,7 +55,39 @@ export enum PageTurnMode {
   Vertical = 'vertical'
 }
 
+export enum ReaderCornerContent {
+  ChapterTitle = 0,
+  PageNumber = 1,
+  ChapterNumber = 2,
+  BookName = 3
+}
+
+/** 顺序为左上、右上、左下、右下；每种内容只占一个位置。 */
+export class ReaderCornerLayout {
+  static readonly DEFAULT: string = '0123';
+
+  static normalize(value: string): string {
+    return /^[0-3]{4}$/.test(value) && new Set(value.split('')).size === 4 ? value : ReaderCornerLayout.DEFAULT;
+  }
+
+  static content(layout: string, corner: number): number {
+    return Number(ReaderCornerLayout.normalize(layout).charAt(corner));
+  }
+
+  static swap(layout: string, corner: number, content: number): string {
+    const normalized = ReaderCornerLayout.normalize(layout);
+    if (!Number.isInteger(corner) || corner < 0 || corner > 3 ||
+      !Number.isInteger(content) || content < 0 || content > 3) return normalized;
+    const slots = normalized.split('');
+    const previous = slots.indexOf(content.toString());
+    slots[previous] = slots[corner];
+    slots[corner] = content.toString();
+    return slots.join('');
+  }
+}
+
 export class TextReadingSettings {
+  cornerLayout: string = ReaderCornerLayout.DEFAULT;
   textAlignment: string = 'justify';
 
   static normalizeTextAlignment(value?: string): string {

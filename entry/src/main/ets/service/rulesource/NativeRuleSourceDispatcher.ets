@@ -80,10 +80,10 @@ export class NativeRuleSourceDispatcher {
   }
 
   static async resolveContent(sourceUrl: string,
-    chapterUrl: string): Promise<LocalRuleContentResult> {
+    chapterUrl: string, toneId: string = ''): Promise<LocalRuleContentResult> {
     if (TalebookSourceIdentity.isSourceUrl(sourceUrl)) return TalebookSourceAdapter.content(sourceUrl, chapterUrl);
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
-      return GuangYuSourceAdapter.resolveContent(chapterUrl);
+      return GuangYuSourceAdapter.resolveContent(chapterUrl, toneId);
     }
     if (ShuShanSourceIdentity.isSourceUrl(sourceUrl)) {
       return ShuShanSourceAdapter.resolveContent(chapterUrl);
@@ -91,12 +91,12 @@ export class NativeRuleSourceDispatcher {
     throw new Error('当前书源没有原生内容适配器');
   }
 
-  static async getAudioUrl(sourceUrl: string, chapterUrl: string): Promise<string> {
+  static async getAudioUrl(sourceUrl: string, chapterUrl: string, toneId: string = ''): Promise<string> {
     if (TalebookSourceIdentity.isSourceUrl(sourceUrl)) {
       return (await TalebookSourceAdapter.content(sourceUrl, chapterUrl)).audioUrl;
     }
     if (GuangYuSourceIdentity.isSourceUrl(sourceUrl)) {
-      return GuangYuSourceAdapter.getAudioUrl(chapterUrl);
+      return GuangYuSourceAdapter.getAudioUrl(chapterUrl, toneId);
     }
     if (ShuShanSourceIdentity.isSourceUrl(sourceUrl)) {
       return ShuShanSourceAdapter.getAudioUrl(chapterUrl);

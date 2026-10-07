@@ -43,7 +43,7 @@ const { assert, fs, path, fixtures, snapshot, harness } = require('./backup-test
     h.stored('online_text_reading_progress').set('position_broken', '{bad json');
     h.stored('online_text_reading_progress').set('position_negative', JSON.stringify({ ...position, charOffset: -1 }));
     const options = new TextReadingSettings();
-    Object.assign(options, { fontSize: 24, lineHeight: 2, pageTurnMode: 'vertical', marginTop: 45,
+    Object.assign(options, { fontSize: 24, lineHeight: 2, pageTurnMode: 'vertical', marginTop: 45, cornerLayout: '3210',
       alwaysShowStatusBar: false, screenOnMinutes: 5, themeId: 'image', pattern: 'image',
       backgroundImage: '/PRIVATE_background.jpg', fontPath: '/PRIVATE_font.ttf', fontName: 'PRIVATE_FONT' });
     await settings.save(h.context, options);
@@ -79,6 +79,7 @@ const { assert, fs, path, fixtures, snapshot, harness } = require('./backup-test
     assert.equal(exported.reading.positions.length, 1);
     assert.equal(exported.reading.positions[0].charOffset, 1234);
     assert.equal(exported.reading.settings.fontSize, 24);
+    assert.equal(exported.reading.settings.cornerLayout, '3210');
     assert.equal(exported.reading.speechPositions.length, 1);
     assert.equal(exported.reading.speechSpeed, 1.5);
     assert.equal(fs.readFileSync(savedPath, 'utf8').includes('PRIVATE_'), false);
@@ -100,6 +101,7 @@ const { assert, fs, path, fixtures, snapshot, harness } = require('./backup-test
     assert.equal(await progress.get(h.context, 'stale-online'), null);
     assert.equal((await progress.get(h.context, 'import_local')).charOffset, 99);
     const restored = await settings.get(h.context);
+    assert.equal(restored.cornerLayout, '3210', 'local/cloud backups preserve all four corner positions');
     assert.equal(restored.fontSize, 24);
     assert.equal(restored.pageTurnMode, 'vertical');
     assert.equal(restored.alwaysShowStatusBar, false);
