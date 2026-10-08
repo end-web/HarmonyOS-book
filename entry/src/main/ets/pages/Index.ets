@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { MainPage } from './MainPage';
 import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
-import { BookDetailPage } from './BookDetailPage';
+import { BookDetailPage, DetailBackInterceptor, DetailTitleBarActions, DetailTitleBarState } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { MembershipPage } from './MembershipPage';
@@ -37,7 +37,8 @@ import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { LocalRuleBrowserLoginCoordinator } from '../service/rulesource/LocalRuleBrowserLoginCoordinator';
 import { emitter } from '@kit.BasicServicesKit';
 import { EVT_WIDGET_ROUTE, KEY_WIDGET_ROUTE, WidgetRoute } from '../entryability/EntryAbility';
-import { HdsNavDestination } from '@kit.UIDesignKit';
+import { HdsNavDestination, HdsNavDestinationTitleMode } from '@kit.UIDesignKit';
+import { HdsCompat } from '../utils/HdsCompat';
 import { AppRadius } from '../theme/Theme';
 import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -68,6 +69,19 @@ struct Index {
   @Local playerDragState: PlayerDragState = PlayerDragTransition.getInstance().state;
   @Local navigationEnabled: boolean = true;
   @Local detailOpacity: number = 1;
+  /**
+   * 详情页正文滚动控制器。交给详情 NavDestination 的 bindToScrollable，
+   * HDS 才能按滚动量在顶栏绘制沉浸渐变模糊（详情页顶栏的光感就靠这一条）。
+   */
+  @Local detailScroller: Scroller = new Scroller();
+  /**
+   * 详情页收藏态。
+   * HDS 标题栏内容是一次性渲染的独立子树，详情页把状态写进 DetailTitleBarState
+   * 并不会让标题栏里的组件重新 build，所以这里镜像一份 @Local：
+   * 桥上的 @Trace 一变就改这个值，Index 重新 build → titleBar 的 stackBuilder 重跑 → 图标刷新。
+   */
+  @Local titleBarBridge: DetailTitleBarState = DetailTitleBarState.get();
+  @Local detailFavorite: boolean = false;
   private widgetSubscribed: boolean = false;
   private homeBackHandler: (() => boolean) | undefined = undefined;
   private homeShownHandler: (() => void) | undefined = undefined;
@@ -78,6 +92,11 @@ struct Index {
   };
 
   aboutToAppear(): void {
+    // 详情页顶栏（HDS 标题栏内容）不是本组件的常规子树，收不到外部 @ObservedV2 的刷新，
+    // 只能由这里在被通知后改自己的 @Local，重跑 titleBar 的 stackBuilder 来刷新。
+    this.titleBarBridge.onChanged = (): void => {
+      this.detailFavorite = this.titleBarBridge.isFavorite;
+    };
     // 先 push home 作为栈底,再消费 widget 路由,保证栈不空
     this.navStack.pushPathByName('home', null, false);
     LocalRuleBrowserLoginCoordinator.bindNavigation(this.browserLoginOpener);
@@ -221,6 +240,19 @@ struct Index {
     return animatedTransition;
   }
 
+  /**
+   * 详情页标题栏内容：返回 + 收藏。
+   * 只能放在这里——按钮要在 HDS 标题栏内部才既不被模糊盖住、又能点得动，
+   * 而按钮的收藏态/动作由详情页通过 DetailTitleBarState 单例同步（组件自己订阅 @Trace）。
+   */
+  @Builder
+  detailTitleBarContent() {
+    DetailTitleBarActions({
+      isFavorite: this.detailFavorite,
+      horizontalPadding: this.titleBarBridge.horizontalPadding
+    })
+  }
+
   @Builder
   routerMap(name: string, param: object) {
     if (name === 'home') {
@@ -256,15 +288,47 @@ struct Index {
         }
       })
     } else if (name === 'detail') {
-      NavDestination() {
+      HdsNavDestination() {
         DetailPageWrapper({
           navStack: this.navStack,
           bookId: param as Object as string,
+          contentScroller: this.detailScroller,
           onTransitionFinished: (): void => { this.navigationEnabled = true; }
         })
       }
-      .hideTitleBar(true)
+      // 顶栏不能用 hideTitleBar 关掉：HDS 标题栏是详情页唯一能出「沉浸光感」的载体。
+      // 详情页属于 NavDestination，AppMaterial / systemMaterial 在这类页面里根本不绘制，
+      // 只有 HDS 的 scrollEffect（IMMERSIVE_GRADIENT_BLUR）会随正文上滑在顶部画渐变模糊。
+      //
+      // 返回/收藏按钮必须放在标题栏内容里，不能由 BookDetailPage 自己画：
+      // 实测 dumpLayout，TitleBar 的 zIndex=2 高于 NavDestinationContent，且会阻塞兄弟节点，
+      // 页面自己画的顶栏会被模糊盖成灰影、并且完全点不动。
+      // 按钮状态（收藏态）通过 DetailTitleBarState 这个 @ObservedV2 单例从详情页同步过来。
+      .titleBar({
+        avoidLayoutSafeArea: true,
+        content: {
+          stackBuilder: (): void => { this.detailTitleBarContent() }
+        },
+        style: {
+          scrollEffectOpts: {
+            scrollEffectType: HdsCompat.scrollEffect
+          },
+          // 初态与滚动态都保持透明背景：模糊由系统按滚动量叠加，背景色会盖住效果。
+          originalStyle: {
+            backgroundStyle: { backgroundColor: Color.Transparent }
+          },
+          scrollEffectStyle: {
+            backgroundStyle: { backgroundColor: Color.Transparent }
+          },
+          thermoCtrl: true
+        }
+      })
+      .titleMode(HdsNavDestinationTitleMode.MINI)
+      .hideBackButton(true)
+      .bindToScrollable([this.detailScroller])
       .backgroundColor(Color.Transparent)
+      // 目录/换源弹层打开时，返回键先关弹层而不是退整页
+      .onBackPressed((): boolean => DetailBackInterceptor.consume())
       // 封面转场由根 Navigation 接管；其他入口仅淡入淡出。
       .systemTransition(NavigationSystemTransitionType.NONE)
       .opacity(this.detailOpacity)
@@ -361,7 +425,7 @@ struct Index {
       .onHidden((): void => this.syncReaderWindowMode())
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'search') {
-      SearchPage({ navStack: this.navStack })
+      SearchPage({ navStack: this.navStack, initialKeyword: this.resolveParam(param, 'keyword') })
     } else if (name === 'readerKitVerify') {
       // 华为 ReaderKit 验证页面已禁用（需要 HMS Core ReaderService 依赖）
       NavDestination() {
@@ -517,6 +581,8 @@ struct Index {
 struct DetailPageWrapper {
   @Param navStack: NavPathStack = new NavPathStack();
   @Param bookId: string = '';
+  /** 由详情 NavDestination 的 bindToScrollable 共用，用来驱动顶栏沉浸渐变模糊。 */
+  @Param contentScroller: Scroller = new Scroller();
   @Event onTransitionFinished: () => void = () => {};
   @Local detailOpacity: number = 1;
   @Local coverHidden: boolean = false;
@@ -738,6 +804,7 @@ struct DetailPageWrapper {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       BookDetailPage({ navStack: this.navStack, bookId: this.bookId,
+        contentScroller: this.contentScroller,
         transitionCoverHidden: this.coverHidden, deferEntry: !this.entryReady,
         onCoverReady: (url: string): void => this.onDetailCoverReady(url) })
         .width('100%')

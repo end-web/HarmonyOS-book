@@ -265,18 +265,99 @@ export class LocalRuleStageExtractor {
     return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : 0;
   }
 
-  static applyCleanup(value: string, pattern: string): string {
-    const cleanPattern = pattern.trim();
-    if (!cleanPattern) return value;
-    try {
-      const parts = LocalRuleStageExtractor.splitEscapedRegex(cleanPattern);
-      const regexText = parts[0];
-      const replacement = parts.length > 1 ? parts[1] : '';
-      if (!regexText) return value;
-      return value.replace(LocalRuleRegexCompat.compile(regexText, 'g'), LocalRuleRegexCompat.replacement(replacement));
-    } catch (_error) {
-      throw new Error('正文净化正则无效');
+  /**
+   * 正文净化（书源 replaceRegex / 阅读里的「净化规则」）。
+   *
+   * 语义对齐阅读（Legado）的 applyContentReplaceRule：
+   *   1. 先把 `</p><p>` 与 `<br>` 折成换行，书源里的正文替换普遍按段落书写；
+   *   2. 在**第一个** `@js:` 处把规则切成两段：前段是正则、后段是脚本；
+   *   3. 正则段：以 `##` 开头表示「只给模式、命中即删除」，否则以第一个未转义的 `##`
+   *      作为模式/替换的分隔符；两段都会先展开 `{{ }}` 模板；
+   *   4. 脚本段：交给 QuickJS 运行层执行，`result` 绑定当前值，取脚本的求值结果。
+   *
+   * 关键：整条规则跑在**原始正文**上（此时可能还是 HTML）。幽香书房这类书源用
+   * `<i class="icon icon-uniE001">` 这种私有区字形标签做敏感词混淆，`@js:` 段的作用
+   * 就是把这些标签换回汉字；如果先 stripHtml 再净化，标签已经没了，正则段反而会把
+   * `@js:` 源码当成替换串塞进正文——表现就是正文里出现一大段 JavaScript。
+   */
+  static async applyContentCleanup(value: string, rule: string, baseUrl: string,
+    source: LocalRuleSource, variables: Record<string, string>): Promise<string> {
+    const cleanRule = rule.trim();
+    // 没有净化规则时保持原样：换行归一化只服务于按段落书写的规则，不该影响其他书源。
+    if (!cleanRule) return value;
+    let content = LocalRuleStageExtractor.normalizeCleanupBreaks(value);
+
+    const jsIndex = cleanRule.indexOf('@js:');
+    const regexPart = (jsIndex >= 0 ? cleanRule.substring(0, jsIndex) : cleanRule).trim();
+    const jsPart = jsIndex >= 0 ? cleanRule.substring(jsIndex + 4).trim() : '';
+
+    if (regexPart) {
+      content = await LocalRuleStageExtractor.applyCleanupRegex(content, regexPart, baseUrl, source, variables);
     }
+    if (jsPart) {
+      try {
+        // result 绑定当前值；脚本出错时 evaluate 会抛，保持净化前的正文。
+        content = await LocalRuleScriptRuntime.evaluate(content, baseUrl, jsPart, source, variables, content);
+      } catch (error) {
+        // 与阅读一致：净化脚本失败只跳过这一步，不让整章正文作废。
+        LocalRuleDiagnostics.record(variables, 'warn', '正文净化脚本执行失败',
+          LocalRuleStageExtractor.errorText(error));
+      }
+    }
+    return content;
+  }
+
+  /** `</p><p>` 与 `<br>` 先折成换行，让按段落书写的净化规则能对上。 */
+  private static normalizeCleanupBreaks(value: string): string {
+    return value.replace(new RegExp('</p>\\s*<p', 'gi'), '</p>\n<p')
+      .replace(new RegExp('<br\\s*/?>', 'gi'), '<br>\n');
+  }
+
+  private static async applyCleanupRegex(value: string, regexPart: string, baseUrl: string,
+    source: LocalRuleSource, variables: Record<string, string>): Promise<string> {
+    let pattern = '';
+    let replacement = '';
+    if (regexPart.startsWith('##')) {
+      // 前导 ## 是阅读的写法：只给模式，命中即删除。
+      pattern = regexPart.substring(2);
+    } else {
+      const delimiter = LocalRuleStageExtractor.firstUnescapedDoubleHash(regexPart);
+      if (delimiter >= 0) {
+        pattern = regexPart.substring(0, delimiter);
+        replacement = regexPart.substring(delimiter + 2);
+      } else {
+        pattern = regexPart;
+      }
+    }
+    pattern = await LocalRuleStageExtractor.expandCleanupTemplate(
+      pattern.replace(new RegExp('\\\\##', 'g'), '##'), baseUrl, source, variables);
+    replacement = await LocalRuleStageExtractor.expandCleanupTemplate(
+      replacement.replace(new RegExp('\\\\##', 'g'), '##'), baseUrl, source, variables);
+    if (!pattern) return value;
+    try {
+      return value.replace(LocalRuleRegexCompat.compile(pattern, 'g'),
+        LocalRuleRegexCompat.replacement(replacement));
+    } catch (_error) {
+      return value;
+    }
+  }
+
+  private static firstUnescapedDoubleHash(value: string): number {
+    for (let index = 0; index < value.length - 1; index++) {
+      if (value.charAt(index) === '#' && value.charAt(index + 1) === '#' &&
+        value.charAt(index - 1) !== '\\') return index;
+    }
+    return -1;
+  }
+
+  private static async expandCleanupTemplate(value: string, baseUrl: string,
+    source: LocalRuleSource, variables: Record<string, string>): Promise<string> {
+    if (!value.includes('{{')) return value;
+    return LocalRuleScriptRuntime.resolveText(value, baseUrl, source, variables);
+  }
+
+  private static errorText(error: Object): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   static stripHtml(value: string): string {
@@ -300,6 +381,15 @@ export class LocalRuleStageExtractor {
 
   static limit(value: string, maximum: number = LocalRuleExecutionLimits.MAX_FIELD_CHARS): string {
     return value.length > maximum ? value.substring(0, maximum) : value;
+  }
+
+  /**
+   * `html` / `@html` 是「当前节点原文」标记（阅读语义），任何文档类型都返回原始载荷；
+   * JSON 字段名请写 `$.html` / `@json:html`。
+   */
+  private static isRawContentToken(rule: string): boolean {
+    const clean = rule.trim().toLowerCase();
+    return clean === 'html' || clean === '@html';
   }
 
   private static async extractBaseValues(document: LocalRuleDocument, rule: string,
@@ -349,6 +439,11 @@ export class LocalRuleStageExtractor {
       cleanRule.toLowerCase().startsWith('@regex:')) {
       return LocalRuleStageExtractor.directRegex(document.payload, cleanRule);
     }
+    // 与阅读（Legado）一致：`html` / `@html` 表示「当前节点的原文」，不是 JSON 字段名。
+    // JSON 响应必须返回原始响应体，否则音频书源惯用的 `html<js>result.replace(...)</js>`
+    // （如「有听网」的 api-getneoplay 音频接口）会被当成 JSONPath `$["html"]` 取到空值，
+    // 表现为「书源未返回可播放的音频地址」。JSON 字段请用 `$.html` / `@json:html`。
+    if (LocalRuleStageExtractor.isRawContentToken(cleanRule)) return [document.payload];
     if (document.kind === LocalRuleDocumentKind.JSON || cleanRule.toLowerCase().startsWith('@json:')) {
       return LocalRuleStageExtractor.extractJson(document.payload, cleanRule);
     }
@@ -763,11 +858,14 @@ export class LocalRuleStageExtractor {
     const baseValues = chain.baseRule.length > 0
       ? await LocalRuleStageExtractor.extractValues(document, chain.baseRule, source, variables)
       : [document.payload];
+    // `html` / `@html` 取的是原文，脚本里的 `result` 必须是字符串（阅读一致）。
+    // 若仍按「载荷是 JSON」把 result 解析成对象，`result.replace(...)` 会直接抛异常。
+    const rawContentBase = LocalRuleStageExtractor.isRawContentToken(chain.baseRule);
     const output: string[] = [];
     for (const baseValue of baseValues) {
       const scripted = await LocalRuleScriptRuntime.evaluate(document.payload, document.baseUrl,
         chain.code, source, variables, baseValue,
-        document.kind === LocalRuleDocumentKind.JSON &&
+        !rawContentBase && document.kind === LocalRuleDocumentKind.JSON &&
           LocalRuleStageExtractor.createDocument(baseValue, document.baseUrl).kind === LocalRuleDocumentKind.JSON);
       if (chain.trailingRule.length > 0) {
         const scriptedDocument = LocalRuleStageExtractor.createDocument(scripted, document.baseUrl);

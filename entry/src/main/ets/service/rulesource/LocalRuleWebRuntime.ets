@@ -101,6 +101,17 @@ export class LocalRuleWebRuntime {
     });
   }
 
+  /**
+   * 等待 DOM 解析宿主挂载。
+   *
+   * 预算按「首次冷启动」而不是「稳态」定：置位 needRuleParser 之后要走
+   * MainPage 重建 → 挂载隐藏 Web → ArkWeb 内核初始化 → onControllerAttached，
+   * 这一串在真机冷启动实测接近 5 秒（模拟器上恰好越过 5 秒预算，日志里
+   * 「宿主挂载超时」之后 0.25 秒才打出「DOM controller ready」）。
+   * 宿主一旦挂上就常驻，所以放宽只影响首次等待，不会拖慢后续解析。
+   */
+  private static readonly CONTROLLER_MOUNT_TIMEOUT_MS: number = 20000;
+
   private ensureController(): Promise<void> {
     if (this.controller !== undefined) return Promise.resolve();
     if (this.controllerReady === undefined) {
@@ -116,7 +127,7 @@ export class LocalRuleWebRuntime {
         if (settled) return;
         settled = true;
         reject(new Error('本地规则 DOM 解析宿主挂载超时'));
-      }, 5000);
+      }, LocalRuleWebRuntime.CONTROLLER_MOUNT_TIMEOUT_MS);
       ready.then((): void => {
         if (settled) return;
         settled = true;

@@ -5,6 +5,13 @@ import { LocalRuleExecutionLimits } from './LocalRuleRuntimeTypes';
 
 /** 只解释音频规则的返回值，不执行返回值中的脚本，也不扫描任意 JSON 字段。 */
 export class LocalRuleAudioResolver {
+  /**
+   * 音频规则返回值（接口 JSON / 播放页 HTML）的扫描上限。
+   * 不能复用 `MAX_FIELD_CHARS`(8 KiB)：不少音频接口一次返回整本书的分集列表，
+   * 超过 8 KiB 时旧实现直接放弃扫描，表现为「书源未返回可播放的音频地址」。
+   */
+  private static readonly MAX_AUDIO_PAYLOAD_CHARS: number = 1024 * 1024;
+
   static isBaseUrlRule(rule: string): boolean {
     const code = rule.trim().replace(new RegExp('^<js>\\s*|\\s*</js>$', 'gi'), '')
       .replace(new RegExp('^@?js:\\s*', 'i'), '').replace(new RegExp(';\\s*$'), '').trim();
@@ -13,7 +20,7 @@ export class LocalRuleAudioResolver {
 
   static extract(value: string, baseUrl: string, depth: number = 0): string {
     const text = value.trim();
-    if (!text || text.length > LocalRuleExecutionLimits.MAX_FIELD_CHARS || depth > 8) return '';
+    if (!text || text.length > LocalRuleAudioResolver.MAX_AUDIO_PAYLOAD_CHARS || depth > 8) return '';
     if (new RegExp('^[\\[{"]').test(text)) {
       try {
         const parsed: Object = JSON.parse(text);
@@ -26,9 +33,7 @@ export class LocalRuleAudioResolver {
           }
         } else if (parsed !== null && typeof parsed === 'object') {
           const fields: Record<string, Object> = JSON.parse(text);
-          for (const key of ['audioUrl', 'audio_url', 'playUrl', 'play_url', 'playurl', 'listenUrl',
-            'streamUrl', 'mediaUrl', 'main_url', 'mainUrl', 'src', 'file', 'path', 'url',
-            'playInfo', 'decodedContent', 'content', 'data', 'result', 'payload', 'audio', 'media']) {
+          for (const key of LocalRuleAudioResolver.FIELD_KEYS) {
             const field = fields[key];
             if (field === undefined || field === null) continue;
             const candidate = LocalRuleAudioResolver.extract(JSON.stringify(field), baseUrl, depth + 1);
@@ -38,7 +43,14 @@ export class LocalRuleAudioResolver {
         return '';
       } catch (_error) { /* 非 JSON 的规则结果继续按地址处理。 */ }
     }
-    for (const line of text.split(new RegExp('\\r?\\n')).slice(0, 64)) {
+    // 先扫「像音频」的行，再退回任意地址：播放页 HTML 里封面/统计/接口链接通常排在
+    // 播放器之前，按行取第一个地址会拿到非媒体链接（对齐阅读的 media 优先顺序）。
+    const lines = text.split(new RegExp('\\r?\\n')).slice(0, 64);
+    for (const line of lines) {
+      const candidate = LocalRuleAudioResolver.candidate(line, baseUrl);
+      if (candidate && LocalRuleAudioResolver.looksLikeMediaUrl(candidate)) return candidate;
+    }
+    for (const line of lines) {
       const candidate = LocalRuleAudioResolver.candidate(line, baseUrl);
       if (candidate) return candidate;
     }
@@ -49,8 +61,23 @@ export class LocalRuleAudioResolver {
       const candidate = LocalRuleAudioResolver.candidate(attribute[1], baseUrl);
       if (candidate) return candidate;
     }
-    const media = decoded.match(new RegExp('(?:https?:)?//[^\\s"\x27<>\\\\]+?\\.(?:mp3|m4a|aac|ogg|opus|wav|flac|m3u8|mp4)(?:[?][^\\s"\x27<>\\\\]*)?', 'i'));
+    const media = decoded.match(LocalRuleAudioResolver.MEDIA_URL_PATTERN);
     return media === null ? '' : LocalRuleAudioResolver.candidate(media[0], baseUrl);
+  }
+
+  /** 阅读（Legado）音频直链字段候选表，顺序即优先级。 */
+  private static readonly FIELD_KEYS: string[] = ['audio_url', 'audioUrl', 'play_url', 'playUrl',
+    'playurl', 'main_url', 'mainUrl', 'listenUrl', 'downloadUrl', 'streamUrl', 'mediaUrl',
+    'backup_url', 'backupUrl', 'src', 'file', 'path', 'url', 'url_list', 'urlList',
+    'backup_urls', 'backupUrls', 'audio_list', 'audioList', 'play_info', 'playInfo',
+    'decodedContent', 'content', 'data', 'result', 'payload', 'audio', 'media'];
+
+  private static readonly MEDIA_URL_PATTERN: RegExp =
+    new RegExp('(?:https?:)?//[^\\s"\x27<>\\\\]+?\\.(?:mp3|m4a|aac|ogg|opus|wav|flac|m3u8|mp4|ape|wma)(?:[?][^\\s"\x27<>\\\\]*)?', 'i');
+
+  private static looksLikeMediaUrl(url: string): boolean {
+    const path = url.split('#')[0].split('?')[0];
+    return new RegExp('\\.(?:mp3|m4a|aac|ogg|opus|wav|flac|m3u8|mp4|ape|wma)$', 'i').test(path);
   }
 
   static candidate(value: string, baseUrl: string): string {

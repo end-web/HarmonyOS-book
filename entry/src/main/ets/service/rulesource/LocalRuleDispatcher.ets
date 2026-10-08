@@ -17,6 +17,7 @@ import {
 import { LocalRuleStageExtractor } from './LocalRuleStageExtractor';
 import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
 import { LocalRuleChapterRequest } from './LocalRuleChapterRequest';
+import { LocalRuleUrlAnalyzer } from './LocalRuleUrlAnalyzer';
 import { LocalRuleAudioResolver } from './LocalRuleAudioResolver';
 import { CoverPrefetcher } from '../CoverPrefetcher';
 import { LocalRuleExploreResult } from '../../model/LocalRulePanel';
@@ -166,6 +167,7 @@ export class LocalRuleDispatcher {
     if (!source.canExecute()) return null;
     try {
       variables['bookUrl'] = bookUrl;
+      LocalRuleDispatcher.seedBookVariables(variables, bookUrl);
       await LocalRuleDispatcher.prepareVariables(source, variables, bookUrl);
       const fetch = await LocalRuleHttpClient.fetch(source, bookUrl, variables);
       LocalRuleDispatcher.assertFetch(fetch, '详情');
@@ -223,6 +225,7 @@ export class LocalRuleDispatcher {
     onBatch?: (items: TocItem[]) => void): Promise<TocItem[]> {
     if (!source.canExecute()) return [];
     try {
+      LocalRuleDispatcher.seedBookVariables(variables, variables['bookUrl'] ?? '');
       await LocalRuleDispatcher.prepareVariables(source, variables, tocUrl);
       const output: TocItem[] = [];
       let reportedCount = 0;
@@ -465,9 +468,9 @@ export class LocalRuleDispatcher {
     item.updateTime = LocalRuleStageExtractor.limit(await LocalRuleStageExtractor.extract(element,
       rule.updateTime, source, variables), 120);
     item.sourceName = source.bookSourceName;
-    const declaredType = (variables['__sourceContentType'] ?? '').trim().toLowerCase();
-    if (['audio', '听书', '有声'].includes(declaredType)) item.contentType = 'audio';
-    else if (['novel', 'text', '小说'].includes(declaredType)) item.contentType = 'text';
+    const declaredType = LocalRuleDispatcher.declaredContentType(variables['__sourceContentType'] ?? '');
+    if (declaredType === 'audio') item.contentType = 'audio';
+    else if (declaredType === 'text') item.contentType = 'text';
     item.sourceUrl = source.bookSourceUrl;
     variables['__bookContentType'] = item.contentType;
     item.variables = LocalRuleDispatcher.copyVariables(variables);
@@ -475,8 +478,31 @@ export class LocalRuleDispatcher {
     return item;
   }
 
+  /**
+   * 从书籍 URL 播种 book_id / bookId，对齐阅读（Legado）的 seedBookVariables。
+   *
+   * 大量书源在目录规则里直接用 `{{book_id}}` 拼接口签名（七猫小说就是
+   * `id={{book_id}}`），而书籍 URL 里往往只有 `id=`。阅读会把 URL 查询串里的
+   * book_id / bookid / id 取出来播种成 book_id，HSDA 之前没有这一步，
+   * 结果 `{{book_id}}` 解析成空串、目录接口签名对不上。
+   *
+   * 只播种 book_id / bookId：`id` 与 `book` 不碰——HSDA 的 `{{id}}` 在 JSON 元素
+   * 上下文里会先查变量，播种 `id` 会让目录项模板取到书籍 id 而不是当前章节 id。
+   */
+  private static seedBookVariables(variables: Record<string, string>, bookUrl: string): void {
+    const clean = (bookUrl || '').trim();
+    if (!clean) return;
+    if (!variables['bookUrl']) variables['bookUrl'] = clean;
+    const id = LocalRuleUrlAnalyzer.bookId(clean);
+    if (!id) return;
+    if (!variables['book_id']) variables['book_id'] = id;
+    if (!variables['bookId']) variables['bookId'] = id;
+  }
+
   private static async resolveContentStrict(source: LocalRuleSource, chapterUrl: string,
     variables: Record<string, string>): Promise<LocalRuleContentResult> {
+    // 只在确实知道书籍 URL 时播种；章节 URL 的尾段不能当书籍 id 用。
+    LocalRuleDispatcher.seedBookVariables(variables, variables['bookUrl'] ?? '');
     const result = new LocalRuleContentResult();
     result.requestHeaders = LocalRuleDispatcher.getAudioHeaders(source, chapterUrl, variables);
     const pageUrls = new Set<string>();
@@ -529,9 +555,12 @@ export class LocalRuleDispatcher {
           result.audioUrl = LocalRuleDispatcher.firstResolvedUrl(extractedContent, fetch.requestUrl);
         }
       } else {
-        let content = extractedContent;
+        // 净化规则必须跑在 HTML 上：书源的正文替换普遍靠标签定位（幽香书房就是把
+        // <i class="icon icon-uniE0xx"> 映射回汉字），先剥标签会让这些规则永远匹配不上，
+        // 甚至把 @js: 源码当成替换串写进正文。顺序与阅读一致：先净化，再剥标签。
+        let content = await LocalRuleStageExtractor.applyContentCleanup(extractedContent,
+          source.ruleContent.replaceRegex, fetch.requestUrl, source, variables);
         if (content.includes('<') && content.includes('>')) content = LocalRuleStageExtractor.stripHtml(content);
-        content = LocalRuleStageExtractor.applyCleanup(content, source.ruleContent.replaceRegex);
         if (content) {
           totalCharacters += content.length;
           if (totalCharacters > LocalRuleExecutionLimits.MAX_CONTENT_CHARS) {
@@ -602,6 +631,12 @@ export class LocalRuleDispatcher {
   }
 
   private static matchAudioUrl(body: string, pattern: string, baseUrl: string): string {
+    // 对齐阅读：sourceRegex 的候选集合里「最终响应地址」排在响应体之前。
+    // 章节地址被 302 到媒体直链时响应体里没有任何可匹配内容，只有响应地址能命中。
+    if (pattern.trim() && LocalRuleAudioResolver.match(baseUrl, pattern)) {
+      const direct = LocalRuleAudioResolver.candidate(baseUrl, baseUrl);
+      if (direct) return direct;
+    }
     return LocalRuleAudioResolver.fromBody(body, pattern, baseUrl);
   }
 
@@ -675,10 +710,23 @@ export class LocalRuleDispatcher {
     }
   }
 
+  /**
+   * 归一化书源声明的类型文本，词表与阅读（Legado）的 `BookTypeSupport.typeFromTab` 对齐。
+   * 之前只认 `audio/听书/有声`，`listen`、`audiobook`、`音频`、`畅听` 会被当成小说，
+   * 听书源的搜索/详情会走正文链。
+   */
+  private static declaredContentType(value: string): 'audio' | 'text' | '' {
+    const clean = (value ?? '').trim().toLowerCase();
+    if (['audio', 'listen', 'audiobook', '听书', '音频', '有声', '畅听'].includes(clean)) return 'audio';
+    if (['novel', 'text', '小说', '电子书'].includes(clean)) return 'text';
+    return '';
+  }
+
   private static isAudioContent(source: LocalRuleSource, variables: Record<string, string>): boolean {
-    const value = (variables['__bookContentType'] ?? variables['__sourceContentType'] ?? '').trim().toLowerCase();
-    if (['audio', '听书', '有声'].includes(value)) return true;
-    if (['novel', 'text', '小说'].includes(value)) return false;
+    const declared = LocalRuleDispatcher.declaredContentType(
+      variables['__bookContentType'] ?? variables['__sourceContentType'] ?? '');
+    if (declared === 'audio') return true;
+    if (declared === 'text') return false;
     return source.isAudio();
   }
 

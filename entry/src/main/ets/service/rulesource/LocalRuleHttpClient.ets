@@ -189,7 +189,7 @@ export class LocalRuleHttpClient {
         retry: 0,
         autoRedirect: false
       };
-      const response: HttpResponse = await HttpClient.request(plan.url, requestOptions);
+      const response: HttpResponse = await LocalRuleHttpClient.send(plan, requestOptions);
       if (response.body.length > LocalRuleExecutionLimits.MAX_RESPONSE_CHARS) {
         return LocalRuleFetchResult.failed(plan.url,
           `响应超过 ${LocalRuleExecutionLimits.MAX_RESPONSE_CHARS} 字符`, response.statusCode);
@@ -205,6 +205,32 @@ export class LocalRuleHttpClient {
     } catch (error) {
       return LocalRuleFetchResult.failed(plan.url, LocalRuleHttpClient.errorMessage(error));
     }
+  }
+
+  /**
+   * 选择传输通道并发送请求。
+   *
+   * rcp 会丢掉空值请求头（实测 `Authorization: ""` / `Qm-Params: ""` 送不出去），
+   * 而七猫小说这类网关要求这些头必须存在，缺一个就 401。书源 header 里一旦出现空值，
+   * 就直接走 @ohos.net.http；否则仍用 rcp（保留 TLS 信任、重定向自控等能力）。
+   * 另外给 rcp 加一层兜底：万一还有别的头被 rcp 吞掉，401/403 时用另一条通道再试一次。
+   */
+  private static async send(plan: LocalRuleRequestPlan,
+    requestOptions: HttpRequestOptions): Promise<HttpResponse> {
+    if (HttpClient.hasEmptyHeaderValue(plan.headers)) {
+      console.info(`[LocalRuleHttpClient] legacy transport ${plan.url} (empty header value)`);
+      return HttpClient.requestLegacy(plan.url, requestOptions);
+    }
+    const response = await HttpClient.request(plan.url, requestOptions);
+    if (response.statusCode === 401 || response.statusCode === 403) {
+      const retried = await HttpClient.requestLegacy(plan.url, requestOptions);
+      if (retried.statusCode >= 200 && retried.statusCode < 400) {
+        console.info(`[LocalRuleHttpClient] legacy retry recovered ${plan.url} ` +
+          `(${response.statusCode} -> ${retried.statusCode})`);
+        return retried;
+      }
+    }
+    return response;
   }
 
   static async hydrateCookies(sourceUrl: string): Promise<void> {

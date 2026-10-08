@@ -31,6 +31,17 @@ const RANKING_DECK_HEIGHT: number = 208;
 // 折叠与展开共用封面尺寸，窗口增加的宽度分配给介绍，避免图片随窗口放大。
 const RANKING_COVER_WIDTH: number = 120;
 const RANKING_SEARCH_HEIGHT: number = 56;
+// 榜单区块：每列上下两本，列横向排列，最多六本；一屏一列，右侧露出下一列提示可滑动。
+const RANKING_SECTION_COLUMN_SIZE: number = 2;
+const RANKING_SECTION_ITEMS: number = 6;
+const RANKING_SECTION_ROW_HEIGHT: number = 102;
+const RANKING_SECTION_ROW_GAP: number = 4;
+const RANKING_SECTION_COLUMN_GAP: number = 12;
+const RANKING_SECTION_HEIGHT: number = RANKING_SECTION_COLUMN_SIZE * RANKING_SECTION_ROW_HEIGHT +
+  RANKING_SECTION_ROW_GAP;
+// 左侧内边距 24vp，右侧固定露出 28vp 的下一列，提示还能左滑。
+const RANKING_SECTION_EDGE: number = 24;
+const RANKING_SECTION_PEEK: number = 28;
 
 @ComponentV2
 struct RankingBookRow {
@@ -57,16 +68,39 @@ struct RankingBookRow {
   }
 }
 
+/** 榜单区块的一列：上下两本；ArkTS 不使用匿名对象，用类承载。 */
+class RankingColumn {
+  books: RankingBook[];
+  key: string;
+  constructor(books: RankingBook[], key: string) {
+    this.books = books;
+    this.key = key;
+  }
+}
+
 @ComponentV2
 struct RankingSection {
   @Require @Param board: RankingBoard;
   @Event onChoose: (book: RankingBook) => void = () => {};
   @Event onMore: (board: RankingBoard) => void = () => {};
+  @Local columns: RankingColumn[] = [];
   private audioData: HomeRecommendationDataSource<RankingBook> = new HomeRecommendationDataSource<RankingBook>();
 
-  aboutToAppear(): void { this.audioData.setItems(this.board.books.slice(0, 8)); }
+  aboutToAppear(): void { this.syncBooks(); }
   @Monitor('board')
-  updateBoard(): void { this.audioData.setItems(this.board.books.slice(0, 8)); }
+  updateBoard(): void { this.syncBooks(); }
+
+  private syncBooks(): void {
+    const books = this.board.books.slice(0, RANKING_SECTION_ITEMS);
+    const columns: RankingColumn[] = [];
+    for (let index = 0; index < books.length; index += RANKING_SECTION_COLUMN_SIZE) {
+      const column = books.slice(index, index + RANKING_SECTION_COLUMN_SIZE);
+      columns.push(new RankingColumn(column,
+        column.map((book: RankingBook): string => book.id).join('|')));
+    }
+    this.columns = columns;
+    this.audioData.setItems(books);
+  }
 
   build() {
     Column({ space: 16 }) {
@@ -90,11 +124,19 @@ struct RankingSection {
         Text(this.board.unavailable ? $r('app.string.ranking_unavailable') : $r('app.string.ranking_loading'))
           .fontSize(13).fontColor($r('sys.color.font_tertiary')).width('100%').height(90)
       } else if (this.board.books[0]?.contentType === 'text') {
-        Column() {
-          ForEach(this.board.books.slice(0, 3), (book: RankingBook) => {
-            RankingBookRow({ book: book, onChoose: this.onChoose })
-          }, (book: RankingBook): string => book.id)
-        }.padding({ left: 24, right: 24 }).width('100%')
+        // 一屏一列（上下两本），prevMargin 提供左侧内边距，nextMargin 露出下一列。
+        Swiper() {
+          ForEach(this.columns, (column: RankingColumn) => {
+            Column({ space: RANKING_SECTION_ROW_GAP }) {
+              ForEach(column.books, (book: RankingBook) => {
+                RankingBookRow({ book: book, onChoose: this.onChoose })
+              }, (book: RankingBook): string => book.id)
+            }.width('100%').alignItems(HorizontalAlign.Start)
+            .padding({ right: RANKING_SECTION_COLUMN_GAP })
+          }, (column: RankingColumn): string => column.key)
+        }.width('100%').height(RANKING_SECTION_HEIGHT)
+        .loop(false).indicator(false).duration(300).curve(Curve.EaseOut)
+        .prevMargin(RANKING_SECTION_EDGE).nextMargin(RANKING_SECTION_PEEK)
       } else {
         List({ space: 16 }) {
           LazyForEach(this.audioData, (book: RankingBook) => {

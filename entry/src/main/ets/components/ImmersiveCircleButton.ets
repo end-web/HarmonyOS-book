@@ -21,6 +21,8 @@ export struct ImmersiveCircleButton {
   @Param label: Resource = $r('app.string.content_reload');
   @Param diameter: number = 40;
   @Param iconSize: number = 24;
+  /** 图标色；已选态（如已加入书架）传品牌色。 */
+  @Param iconColor: ResourceColor = $r('sys.color.font_primary');
   @Event onPress: () => void = () => {};
 
   @Builder
@@ -32,7 +34,7 @@ export struct ImmersiveCircleButton {
   iconContent() {
     SymbolGlyph(this.icon)
       .fontSize(this.iconSize)
-      .fontColor([$r('sys.color.font_primary')]).hitTestBehavior(HitTestMode.None)
+      .fontColor([this.iconColor]).hitTestBehavior(HitTestMode.None)
   }
 
   build() {

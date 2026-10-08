@@ -16,6 +16,8 @@ class RankingCacheRecord {
 
 export class RankingService {
   static readonly HOME_URL: string = 'home://rankings';
+  /** 榜单详情页最多展示 99 项，超出部分不解析进内存也不落盘。 */
+  static readonly MAX_BOOKS: number = 99;
   private static readonly TTL: number = 6 * 60 * 60 * 1000;
   private static pending: Map<string, Promise<RankingBoard>> = new Map<string, Promise<RankingBoard>>();
 
@@ -102,7 +104,7 @@ export class RankingService {
       if (time <= 0 || time > Date.now() + 60000 || Date.now() - time > 30 * 86400000) return board;
       const books = RankingParser.parse(board.platformId, board.id, record.getString('body'));
       if (books.length > 0) {
-        board.books = books;
+        board.books = books.slice(0, RankingService.MAX_BOOKS);
         board.fetchedAt = time;
         board.stale = Date.now() - time >= RankingService.TTL;
       }
@@ -151,7 +153,7 @@ export class RankingService {
       if (response.statusCode !== 200) throw new Error(`Ranking HTTP ${response.statusCode}`);
       const books = RankingParser.parse(board.platformId, board.id, response.body);
       if (books.length === 0) throw new Error('Ranking page changed or empty');
-      next.books = books;
+      next.books = books.slice(0, RankingService.MAX_BOOKS);
       next.fetchedAt = Date.now();
       await RankingStorage.write(context, board.id, JSON.stringify(new RankingCacheRecord(next.fetchedAt, response.body)));
     } catch (_error) {

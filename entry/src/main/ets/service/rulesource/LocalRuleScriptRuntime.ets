@@ -177,6 +177,28 @@ export class LocalRuleScriptRuntime {
       LocalRuleScriptRuntime.copyVariables(variables), response.body, true, library);
   }
 
+  /**
+   * 单步脚本的 CPU 预算。
+   *
+   * `LocalRuleQuickJsRequest` 的默认预算是 1 秒，对标题/作者这类字段脚本够用，
+   * 但**正文/目录这类大载荷上的脚本普遍是纯 JS 解码器**：七猫小说的正文规则就是
+   * 手写的 AES-256-CBC（10 轮轮函数 + 逐字节 S 盒），同一份密文在 V8 里要 290ms，
+   * 在 QuickJS 里会超过 1 秒 → 表现为「书源脚本执行失败：执行超时」、阅读页
+   * 「章节正文为空」。所以按载荷规模给预算：大载荷放到运行时硬上限（5s），
+   * 小载荷仍保持 1s，避免把字段级脚本的失败反馈也一起拖慢。
+   * 5s 这个量级与 `LocalRuleChaCha20Poly1305` 的做法一致，且仍受
+   * `LocalRuleQuickJsRuntime.MAX_TIMEOUT_MS` 约束（原生 interrupt 兜底）。
+   */
+  private static stepTimeoutMs(content: string): number {
+    return content.length > LocalRuleScriptRuntime.HEAVY_PAYLOAD_CHARS
+      ? LocalRuleScriptRuntime.HEAVY_STEP_TIMEOUT_MS
+      : LocalRuleScriptRuntime.DEFAULT_STEP_TIMEOUT_MS;
+  }
+
+  private static readonly DEFAULT_STEP_TIMEOUT_MS: number = 1000;
+  private static readonly HEAVY_STEP_TIMEOUT_MS: number = 5000;
+  private static readonly HEAVY_PAYLOAD_CHARS: number = 4096;
+
   private static async evaluateLocked(content: string, baseUrl: string, code: string,
     source: LocalRuleSource, variables: Record<string, string>, initialResult: string,
     readOnly: boolean = false, readOnlyLibrary: string = '',
@@ -214,6 +236,7 @@ export class LocalRuleScriptRuntime {
       request.script = script;
       request.sourceUrl = source.bookSourceUrl;
       request.maxPendingJobs = 32;
+      request.timeoutMs = LocalRuleScriptRuntime.stepTimeoutMs(content);
       const execution: LocalRuleQuickJsResult = await LocalRuleQuickJsRuntime.execute(request);
       if (!execution.success) {
         const detail = execution.timedOut ? '执行超时' : (execution.errorMessage || '未知错误');
@@ -412,6 +435,20 @@ export class LocalRuleScriptRuntime {
       `const c3=s[i+2]==='='?-1:b64chars.indexOf(s[i+2]),c4=s[i+3]==='='?-1:b64chars.indexOf(s[i+3]);` +
       `if(c1<0||c2<0)continue;const n=(c1<<18)|(c2<<12)|((c3<0?0:c3)<<6)|(c4<0?0:c4);` +
       `a.push((n>>>16)&255);if(c3>=0)a.push((n>>>8)&255);if(c4>=0)a.push(n&255);}return utf8String(a);};` +
+      // atob/btoa 是浏览器全局，阅读（Legado）的 JS 运行层里有，书源普遍依赖它们做
+      // 二进制 base64 往返（七猫小说的 AES-256-CBC 自解密器就是 atob(b64) 拿字节）。
+      // 这里必须按「字节」而不是按 UTF-8 解：atob 的契约是每个字符一个字节。
+      `const b64ToBinary=function(v){const s=String(v??'').replace(/[^A-Za-z0-9+\\/=]/g,'');let o='';` +
+      `for(let i=0;i<s.length;i+=4){const c1=b64chars.indexOf(s[i]),c2=b64chars.indexOf(s[i+1]);` +
+      `const c3=s[i+2]==='='?-1:b64chars.indexOf(s[i+2]),c4=s[i+3]==='='?-1:b64chars.indexOf(s[i+3]);` +
+      `if(c1<0||c2<0)continue;const n=(c1<<18)|(c2<<12)|((c3<0?0:c3)<<6)|(c4<0?0:c4);` +
+      `o+=String.fromCharCode((n>>>16)&255);if(c3>=0)o+=String.fromCharCode((n>>>8)&255);` +
+      `if(c4>=0)o+=String.fromCharCode(n&255);}return o;};` +
+      `const b64FromBinary=function(v){const s=String(v??'');let o='';` +
+      `for(let i=0;i<s.length;i+=3){const n=(s.charCodeAt(i)<<16)|` +
+      `((i+1<s.length?s.charCodeAt(i+1):0)<<8)|(i+2<s.length?s.charCodeAt(i+2):0);` +
+      `o+=b64chars[(n>>>18)&63]+b64chars[(n>>>12)&63]+` +
+      `(i+1<s.length?b64chars[(n>>>6)&63]:'=')+(i+2<s.length?b64chars[n&63]:'=');}return o;};` +
       `const hexEncode=function(v){return utf8Bytes(v).map(function(x){return Number(x).toString(16).padStart(2,'0');}).join('');};` +
       `const hexDecode=function(v){const s=String(v??'').replace(/\\s+/g,''),a=[];` +
       `for(let i=0;i+1<s.length;i+=2){const n=parseInt(s.substring(i,i+2),16);if(!Number.isNaN(n))a.push(n);}return utf8String(a);};` +
@@ -515,7 +552,8 @@ export class LocalRuleScriptRuntime {
       `if(V.__jsonResult==='true'){result=parseValue(result);if(result&&typeof result==='object'&&!Object.prototype.hasOwnProperty.call(result,'toString'))` +
       `Object.defineProperty(result,'toString',{value:function(){return JSON.stringify(this);},configurable:true});}` +
       `Object.assign(globalThis,{result:result,$:$,java:java,source:source,cookie:cookie,cache:cache,book:book,chapter:chapter,` +
-      `baseUrl:baseUrl,src:src,url:url,key:key,searchKey:searchKey,page:page,pageIndex:pageIndex,title:title,infoMap:infoMap,Date:StableDate});` +
+      `baseUrl:baseUrl,src:src,url:url,key:key,searchKey:searchKey,page:page,pageIndex:pageIndex,title:title,infoMap:infoMap,Date:StableDate,` +
+      `atob:b64ToBinary,btoa:b64FromBinary});` +
       `Object.keys(V).forEach(function(k){if(/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k)&&!k.startsWith('__')&&!(k in globalThis))globalThis[k]=V[k];});` +
       `globalThis.keyword=String(V.keyword??key);globalThis.searchKeyRaw=String(V.searchKeyRaw??key);` +
       // Library declarations must share the isolated global scope used by this.helper() calls.

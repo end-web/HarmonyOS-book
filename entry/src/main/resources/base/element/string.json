@@ -2064,6 +2064,27 @@
     {"name": "membership_lifetime_valid", "value": "终身会员 · 长期有效"},
     {"name": "membership_lifetime_owned", "value": "已开通终身会员"},
     {"name": "membership_buy_lifetime", "value": "一次购买"},
-    {"name": "membership_lifetime_renewal_notice", "value": "已有月度或年度订阅的用户，购买终身会员后请到“管理订阅”关闭原订阅的自动续费，购买终身会员不会自动取消原订阅。"}
+    {"name": "membership_lifetime_renewal_notice", "value": "已有月度或年度订阅的用户，购买终身会员后请到“管理订阅”关闭原订阅的自动续费，购买终身会员不会自动取消原订阅。"},
+    {"name": "book_detail_action_in_shelf", "value": "已在书架"},
+    {"name": "book_detail_action_add_shelf", "value": "加入书架"},
+    {"name": "book_detail_action_chapters", "value": "查看目录"},
+    {"name": "book_detail_action_switch_source", "value": "换源"},
+    {"name": "book_detail_action_listen_record", "value": "收听记录"},
+    {"name": "book_detail_action_read_record", "value": "阅读记录"},
+    {"name": "book_detail_reading", "value": "在听"},
+    {"name": "book_detail_reading_text", "value": "在读"},
+    {"name": "book_detail_latest", "value": "最新"},
+    {"name": "book_detail_progress_audio", "value": "共 %d 集 · 已下载 %d 集"},
+    {"name": "book_detail_progress_text", "value": "共 %d 章 · 已下载 %d 章"},
+    {"name": "book_detail_total_audio", "value": "共 %d 集"},
+    {"name": "book_detail_total_text", "value": "共 %d 章"},
+    {"name": "book_detail_tags_label", "value": "标签："},
+    {"name": "book_detail_intro_label", "value": "简介："},
+    {"name": "book_detail_start_listen", "value": "听书"},
+    {"name": "book_detail_start_read", "value": "阅读"},
+    {"name": "book_detail_continue_listen", "value": "继续收听"},
+    {"name": "book_detail_continue_read", "value": "继续阅读"},
+    {"name": "book_detail_score", "value": "%s分"},
+    {"name": "book_detail_score_none", "value": "暂无"}
   ]
 }

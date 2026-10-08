@@ -79,6 +79,8 @@ struct SearchOptionItem {
 export struct SearchPage {
   @Local bookColumns: number = 3;
   @Param navStack: NavPathStack = new NavPathStack();
+  /** 从详情页分类标签进入时预填并直接检索的关键词；为空表示普通进入。 */
+  @Param initialKeyword: string = '';
 
   @Local keyword: string = '';
   @Local exactSearch: boolean = false;
@@ -180,7 +182,26 @@ export struct SearchPage {
   private handlePageShown(): void {
     if (this.leavingPage) return;
     this.pageShown = true;
+    if (this.applyInitialKeyword()) return;
     this.scheduleRecommendations();
+  }
+
+  /**
+   * 详情页分类标签进入：预填关键词并直接检索，替代展示推荐位。
+   * 返回 true 表示已接管首屏，不再调度推荐。
+   */
+  private applyInitialKeyword(): boolean {
+    const value = this.initialKeyword.trim();
+    if (value.length === 0 || this.hasSearched) return false;
+    this.keyword = value;
+    this.recommendationsLoaded = true;
+    this.recommendationsLoading = false;
+    this.recommendationTimerId = setTimeout((): void => {
+      this.recommendationTimerId = -1;
+      if (this.leavingPage || this.hasSearched) return;
+      this.doSearch().catch((): void => {});
+    }, SEARCH_ENTRY_SETTLE_MS);
+    return true;
   }
 
   private handlePageHidden(): void {

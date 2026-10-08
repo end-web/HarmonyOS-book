@@ -8,6 +8,7 @@
  */
 
 import { rcp } from '@kit.RemoteCommunicationKit';
+import http from '@ohos.net.http';
 import { PlatformCompat } from '../../utils/PlatformCompat';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CharsetCodec } from '../../utils/CharsetCodec';
@@ -48,6 +49,99 @@ function getSession(): rcp.Session {
 }
 
 export class HttpClient {
+
+  /**
+   * 请求头里是否存在空值（去掉首尾空白后为空）。
+   *
+   * 存在的理由：rcp 会**丢弃空值请求头**。把同一组头发到回显服务实测，
+   * rcp 送出的头里少了 `Authorization: ""` 和 `Qm-Params: ""`，而 @ohos.net.http 原样送出。
+   * 有些书源的网关要求这些头必须存在——七猫小说的接口缺任意一个都回 401，
+   * 而它的书源 header 里恰好有 `"AUTHORIZATION":""` 与 `"qm-params":""`。
+   * 这类请求必须换一条通道，见 requestLegacy。
+   */
+  static hasEmptyHeaderValue(headers: Record<string, string> | undefined): boolean {
+    if (headers === undefined) return false;
+    const names = Object.keys(headers);
+    for (const name of names) {
+      if ((headers[name] ?? '').trim().length === 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 用 @ohos.net.http 发送同一个请求（契约与 request() 一致）。
+   *
+   * 只在 rcp 表达不了的场景使用：书源声明了空值请求头（rcp 会把它们丢掉）。
+   * 与 rcp 通道的差异：
+   * - 不接 LocalRuleTlsTrustStore 的「跳过校验」——@ohos.net.http 没有等价开关，
+   *   所以只有 rcp 通道失败时才可能走到这里，自签名站点不受影响；
+   * - 重定向由系统跟随（最多 5 跳），调用方的 autoRedirect:false 在这里不生效。
+   */
+  static async requestLegacy(url: string, options: HttpRequestOptions = {}): Promise<HttpResponse> {
+    const client = http.createHttp();
+    try {
+      const headers: Record<string, string> = {};
+      const declared: Record<string, string> = options.headers ?? headers;
+      const headerNames = Object.keys(declared);
+      for (const name of headerNames) headers[name] = declared[name] ?? '';
+      const timeout = options.timeout || DEFAULT_TIMEOUT;
+      let extraData: string | undefined = undefined;
+      if (options.body !== undefined && options.body !== null) {
+        extraData = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+      }
+      const requestOptions: http.HttpRequestOptions = {
+        method: HttpClient.legacyMethod(options.method),
+        header: headers,
+        extraData: extraData,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: timeout,
+        readTimeout: timeout
+      };
+      const response = await client.request(url, requestOptions);
+      const responseHeaders = HttpClient.legacyHeaderRecord(response.header);
+      const raw = response.result;
+      let body = '';
+      if (raw instanceof ArrayBuffer && raw.byteLength > 0) {
+        const declared = (options.charset || '').toLowerCase();
+        const charset = (!declared || declared === 'utf-8' || declared === 'utf8')
+          ? HttpClient.detectCharset(responseHeaders, raw) : declared;
+        body = CharsetCodec.decodeBuffer(raw, charset);
+      }
+      const result: HttpResponse = {
+        statusCode: response.responseCode,
+        headers: responseHeaders,
+        body: body,
+        url: url
+      };
+      return result;
+    } finally {
+      client.destroy();
+    }
+  }
+
+  private static legacyMethod(method: string | undefined): http.RequestMethod {
+    const upper = (method || 'GET').toUpperCase();
+    if (upper === 'POST') return http.RequestMethod.POST;
+    if (upper === 'PUT') return http.RequestMethod.PUT;
+    if (upper === 'DELETE') return http.RequestMethod.DELETE;
+    if (upper === 'HEAD') return http.RequestMethod.HEAD;
+    if (upper === 'OPTIONS') return http.RequestMethod.OPTIONS;
+    return http.RequestMethod.GET;
+  }
+
+  private static legacyHeaderRecord(header: Object | undefined): Record<string, string> {
+    const record: Record<string, string> = {};
+    if (header === undefined || header === null) return record;
+    const source = header as Record<string, Object>;
+    const names = Object.keys(source);
+    for (const name of names) {
+      const value = source[name];
+      if (value === undefined || value === null || typeof value === 'object') continue;
+      record[name] = String(value);
+    }
+    return record;
+  }
+
   /**
    * 预建链：与目标域名的连接与业务逻辑并行建立，此后再用同一 session 访问同域
    * 可跳过 DNS/TCP/TLS 握手。仅建立连接，不发送请求体、不接收响应。

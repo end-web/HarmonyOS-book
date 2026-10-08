@@ -259,6 +259,10 @@
 
 JSON 响应中也接受 `name`、`data.books` 等简写及 `@json:` 前缀，推荐完整 `$.` 写法。
 
+`html` / `@html` 是**当前节点原文**标记，不是 JSON 字段名：对 JSON 响应返回原始响应体（对齐阅读）。
+音频接口常见的 `"content": "html<js>result.replace(/^\\s+/,'')</js>"` 依赖这个语义；要取名为 `html` 的 JSON 字段请写 `$.html` / `@json:html`。
+裸 `text` / `@text` 在 JSON 响应上仍按字段名处理（`$["text"]`），与 §4.2 简写规则一致。
+
 ### 4.3 拼接 URL、备选与组合
 
 字段规则可以通过模板拼接 URL：

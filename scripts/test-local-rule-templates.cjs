@@ -39,6 +39,7 @@ const stubs = {
   [prefix + 'LocalRuleBrowserActions']: { LocalRuleBrowserActions: { PREFIX: 'local-rule-browser:' } },
   [prefix + 'talebook/TalebookSourceIdentity']: { TalebookSourceIdentity: { isSourceUrl: () => false } },
   [prefix + 'talebook/TalebookSourceAdapter']: { TalebookSourceAdapter: {} },
+  [prefix + 'guangyu/GuangYuSourceAdapter']: { GuangYuSourceAdapter: {} },
   [prefix + 'LocalRuleWebRuntime']: {
     LocalRuleWebSelector: class {},
     LocalRuleWebExtractMode: { TEXT: 'text', HTML: 'html', OUTER_HTML: 'outerHtml', ATTRIBUTE: 'attribute' },
@@ -152,15 +153,16 @@ async function run() {
     'params=' + JSON.stringify([p.getTLen(), p.getIV()]);</js>`, source), 'params=[128,[2,3]]');
   await assert.rejects(() => extractor.extract(compatDocument,
     '<js>new javax.crypto.spec.GCMParameterSpec(128,[1],0,2)</js>', source), /Invalid nonce range/);
+  const cleanup = (value, rule) => extractor.applyContentCleanup(value, rule, bookUrl, source, {});
   const { LocalRuleRegexCompat: regex } = load(prefix + 'LocalRuleRegexCompat');
-  assert.equal(extractor.applyCleanup('广告\n中间\n结束 正文', '(?s)广告.*?结束'), ' 正文');
-  assert.equal(extractor.applyCleanup('ABC abc', '(?i)abc##[$0]'), '[ABC] [abc]');
-  assert.equal(extractor.applyCleanup('a.b [x]', String.raw`\Qa.b\E##保留`), '保留 [x]');
-  assert.equal(extractor.applyCleanup(' a\t b\r\nc', String.raw`\h+|\R##/`), '/a/b/c');
-  assert.equal(extractor.applyCleanup('汉字123', String.raw`\p{L}+##文字`), '文字123');
-  assert.equal(extractor.applyCleanup('aaaa!', 'a++##A'), 'A!');
-  assert.equal(extractor.applyCleanup('aaaa!', '(?>a+)##A'), 'A!');
-  assert.equal(extractor.applyCleanup('ab', String.raw`(a)(b)##$2\$1`), 'b$1');
+  assert.equal(await cleanup('广告\n中间\n结束 正文', '(?s)广告.*?结束'), ' 正文');
+  assert.equal(await cleanup('ABC abc', '(?i)abc##[$0]'), '[ABC] [abc]');
+  assert.equal(await cleanup('a.b [x]', String.raw`\Qa.b\E##保留`), '保留 [x]');
+  assert.equal(await cleanup(' a\t b\r\nc', String.raw`\h+|\R##/`), '/a/b/c');
+  assert.equal(await cleanup('汉字123', String.raw`\p{L}+##文字`), '文字123');
+  assert.equal(await cleanup('aaaa!', 'a++##A'), 'A!');
+  assert.equal(await cleanup('aaaa!', '(?>a+)##A'), 'A!');
+  assert.equal(await cleanup('ab', String.raw`(a)(b)##$2\$1`), 'b$1');
   assert.equal(regex.compile(String.raw`end\z`).test('end\n'), false);
   assert.equal(regex.compile(String.raw`end\Z`).test('end\n'), true);
   assert.equal(regex.compile('(?x)a  #comment\n b').test('ab'), true);
