@@ -68,8 +68,8 @@ struct Index {
   @Local playerOpacity: number = 1;
   @Local playerDragState: PlayerDragState = PlayerDragTransition.getInstance().state;
   @Local navigationEnabled: boolean = true;
-  @Local detailOpacity: number = 1;
   @Local detailOpaqueBackground: boolean = true;
+  @Local homeCoveredByDetail: boolean = false;
   /**
    * 详情页正文滚动控制器。交给详情 NavDestination 的 bindToScrollable，
    * HDS 才能按滚动量在顶栏绘制沉浸渐变模糊（详情页顶栏的光感就靠这一条）。
@@ -267,11 +267,16 @@ struct Index {
             this.homeBackHandler = handler;
           }
         })
+        // 保留首页布局供返回封面定位，但不绘制被详情遮住的轮播与实时材质。
+        .visibility(this.homeCoveredByDetail ? Visibility.Hidden : Visibility.Visible)
       }
       .hideTitleBar(true)
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.NONE)
-      .onShown((): void => { this.homeShownHandler?.(); })
+      .onShown((): void => {
+        this.homeCoveredByDetail = false;
+        this.homeShownHandler?.();
+      })
       .onBackPressed((): boolean => {
         if (this.homeBackHandler?.()) return true;
         if (PlatformCompat.desktopWindow) {
@@ -294,7 +299,10 @@ struct Index {
           navStack: this.navStack,
           bookId: param as Object as string,
           contentScroller: this.detailScroller,
-          onTransitionStarted: (isPush: boolean): void => { this.detailOpaqueBackground = isPush; },
+          onTransitionStarted: (isPush: boolean): void => {
+            this.detailOpaqueBackground = isPush;
+            this.homeCoveredByDetail = isPush;
+          },
           onTransitionFinished: (): void => { this.navigationEnabled = true; }
         })
       }
@@ -331,37 +339,9 @@ struct Index {
       .backgroundColor(this.detailOpaqueBackground ? $r('sys.color.background_primary') : Color.Transparent)
       // 目录/换源弹层打开时，返回键先关弹层而不是退整页
       .onBackPressed((): boolean => DetailBackInterceptor.consume())
-      // 封面转场由根 Navigation 接管；其他入口仅淡入淡出。
+      // 所有详情转场只由根 Navigation 接管，无封面时由 wrapper 降级淡入。
+      // 不再叠加 NavDestination.customTransition，否则整页淡入会和封面动画同时运行。
       .systemTransition(NavigationSystemTransitionType.NONE)
-      .opacity(this.detailOpacity)
-      .customTransition((op: NavigationOperation, isEnter: boolean): Array<NavDestinationTransition> | undefined => {
-        if (op === NavigationOperation.PUSH && isEnter) {
-          // 无可用封面时保留轻量淡入。
-          this.detailOpacity = 0;
-          return [{
-            duration: 320,
-            curve: Curve.LinearOutSlowIn,
-            event: () => {
-              this.detailOpacity = 1;
-            },
-            onTransitionEnd: () => {}
-          }];
-        } else if (op === NavigationOperation.POP && !isEnter) {
-          // 无可用封面时淡出返回。
-          this.detailOpacity = 1;
-          return [{
-            duration: 240,
-            curve: Curve.FastOutLinearIn,
-            event: () => {
-              this.detailOpacity = 0;
-            },
-            onTransitionEnd: () => {
-              this.detailOpacity = 1;
-            }
-          }];
-        }
-        return undefined;
-      })
     } else if (name === 'player') {
       NavDestination() {
         PlayerPageWrapper({ navStack: this.navStack, param: param as Object, deferEntry: this.playerDragState.active })
@@ -597,7 +577,6 @@ struct DetailPageWrapper {
   @Local previewBaseWidth: number = 1;
   @Local previewBaseHeight: number = 1;
   @Local previewRadius: number = AppRadius.Md;
-  @Local previewOpacity: number = 1;
   @Local entryReady: boolean = true;
 
   private payload: BookOneShotPayload | undefined = undefined;
@@ -614,6 +593,7 @@ struct DetailPageWrapper {
 
   aboutToAppear(): void {
     this.onTransitionStarted(true);
+    OneShotTransitionCoordinator.getInstance().register(this.bookId, this.navigationRunner);
     const payload = OneShotTransitionCoordinator.getInstance().claim(this.bookId);
     if (payload === undefined || payload.snapshot === undefined) return;
     this.payload = payload;
@@ -623,7 +603,6 @@ struct DetailPageWrapper {
     this.coverHidden = true;
     this.previewVisible = false;
     this.applyRect(payload.sourceRect, payload.viewportRect, payload.sourceRadius);
-    OneShotTransitionCoordinator.getInstance().register(this.bookId, this.navigationRunner);
   }
 
   aboutToDisappear(): void {
@@ -710,6 +689,7 @@ struct DetailPageWrapper {
     }
     this.running = true;
     this.onTransitionStarted(isPush);
+    if (isPush && this.payload === undefined) this.detailOpacity = 0;
     // 早于 Navigation 的 timeout 清理，布局未就绪/旋转/离屏也不能留下透明页面。
     this.watchdog = setTimeout((): void => this.finish(proxy, isPush), isPush ? 1800 : 1200);
     this.afterLayout((): void => this.prepareTransition(isPush, proxy));
@@ -747,7 +727,6 @@ struct DetailPageWrapper {
     this.applyRect(isPush ? source : target, viewport, isPush ? payload.sourceRadius : AppRadius.Sm);
     this.previewBaseWidth = Math.max(1, this.previewWidth);
     this.previewBaseHeight = Math.max(1, this.previewHeight);
-    this.previewOpacity = 1;
     this.previewVisible = true;
     this.coverHidden = true;
     OneShotTransitionCoordinator.getInstance().coverState.hiddenSourceId = payload.sourceNodeId;
@@ -792,14 +771,8 @@ struct DetailPageWrapper {
     const proxy = this.coverHandoffProxy;
     if (proxy === undefined) return;
     this.coverHidden = false;
-    // 封面已经到达目标位置，再交接真实图片，两个位置不会同时可见。
-    this.afterLayout((): void => {
-      this.getUIContext().animateTo({
-        duration: 100,
-        curve: Curve.Linear,
-        onFinish: (): void => this.finish(proxy, true)
-      }, (): void => { this.previewOpacity = 0; });
-    });
+    // 真图提交后直接移除同位置快照，不再追加 100ms 淡出并继续锁住导航。
+    this.afterLayout((): void => this.finish(proxy, true));
   }
 
   private fadeFallback(isPush: boolean, proxy: NavigationTransitionProxy): void {
@@ -833,7 +806,6 @@ struct DetailPageWrapper {
           .borderRadius(this.previewRadius)
           .clip(true)
           .objectFit(ImageFit.Contain)
-          .opacity(this.previewOpacity)
           .hitTestBehavior(HitTestMode.None)
       }
     }
