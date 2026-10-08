@@ -812,10 +812,22 @@ export struct HomePage {
     return this.coverNodePrefix + '-' + kind + '-' + OneShotTransitionIds.sourceCover(this.homeBookId(r));
   }
 
-  private openCoverBook(r: SearchResult, nodeId: string, radius: number): void {
-    const book = this.homeBookFromResult(r);
-    OneShotTransitionCoordinator.getInstance().capture(this.getUIContext(), book.id, nodeId, radius);
-    this.openBook(book);
+  private async openCoverBook(r: SearchResult, nodeId: string, radius: number): Promise<void> {
+    if (this.openingCarouselBook) return;
+    this.openingCarouselBook = true;
+    const categoryIndex = this.selectedCategoryIndex;
+    const coordinator = OneShotTransitionCoordinator.getInstance();
+    try {
+      const book = this.homeBookFromResult(r);
+      await coordinator.captureAsync(this.getUIContext(), book.id, nodeId, radius);
+      if (!this.visible || this.selectedCategoryIndex !== categoryIndex) {
+        coordinator.discardPending();
+        return;
+      }
+      this.openBook(book);
+    } finally {
+      this.openingCarouselBook = false;
+    }
   }
 
   private async openCarouselBook(r: SearchResult, nodeId: string, radius: number): Promise<void> {

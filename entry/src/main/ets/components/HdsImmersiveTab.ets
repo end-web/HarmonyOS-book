@@ -54,7 +54,7 @@ export struct HdsImmersiveTab {
     if (typeof label !== 'string') return 72;
     let units: number = 0;
     for (let index: number = 0; index < label.length; index++) {
-      units += label.charCodeAt(index) > 0x2E80 ? 13 : 7.6;
+      units += label.charCodeAt(index) > 0x2E80 ? 14 : 8;
     }
     return Math.round(Math.min(Math.max(units + 28, 56), 240));
   }
@@ -71,7 +71,7 @@ export struct HdsImmersiveTab {
   @Builder
   tabLabel() {
     Text(this.label)
-      .fontSize(13)
+      .fontSize(14)
       .fontColor(this.selected ? HomeTheme.Accent : $r('sys.color.font_secondary'))
       .fontWeight(this.selected ? FontWeight.Medium : FontWeight.Regular)
       .maxLines(1)

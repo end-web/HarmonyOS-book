@@ -38,8 +38,8 @@ const DETAIL_LOG_TAG: string = 'BookDetailPage';
  * 做法：图标装进一个高度等于正文行高的容器并垂直居中，而不是让 Row 顶端对齐。
  */
 const META_ICON_SIZE: number = 16;
-const META_TAG_LINE_HEIGHT: number = 20;
-const META_INTRO_LINE_HEIGHT: number = 22;
+const META_TAG_LINE_HEIGHT: number = 24;
+const META_INTRO_LINE_HEIGHT: number = 26;
 
 /**
  * HDS 迷你标题栏高度。详情页的顶栏按钮改由标题栏承载（见 DetailTitleBarActions），
@@ -182,8 +182,8 @@ export struct BookDetailPage {
   }
   @Local debugInfo: string = '';
   @Local downloadTick: number = 0;
-  @Local viewportWidth: number = 0;
-  @Local viewportHeight: number = 0;
+  @Local viewportWidth: number = WindowUtils.getWindowWidthVp();
+  @Local viewportHeight: number = WindowUtils.getWindowHeightVp();
   /** 章节目录弹层；详情页只保留入口，目录本体与播放/阅读页共用 ChapterSheet。 */
   @Local showChapterSheet: boolean = false;
   /** 换源弹层。 */
@@ -1022,10 +1022,15 @@ export struct BookDetailPage {
       .clip(true)
       .id(OneShotTransitionIds.detailCover(this.bookId))
       .opacity(this.transitionCoverHidden ? 0 : 1)
+      // 图片比例变化只调整图片本身，不把下方整页内容向下推。
+      .margin({
+        top: (AdaptiveLayout.detailCoverHeight(this.viewportWidth, this.viewportHeight) - this.detailCoverHeight()) / 2,
+        bottom: (AdaptiveLayout.detailCoverHeight(this.viewportWidth, this.viewportHeight) - this.detailCoverHeight()) / 2
+      })
 
       Column({ space: AppSpace.Xs }) {
         Text(this.book!.title)
-          .fontSize(AppFont.TitleL)
+          .fontSize(24)
           .fontColor($r('sys.color.font_primary'))
           .fontWeight(FontWeight.Bold)
           .maxLines(2)
@@ -1033,7 +1038,7 @@ export struct BookDetailPage {
         if (this.heroSubtitle().length > 0) {
           // 作者允许两行：长笔名 / 多作者不再被截成一行省略号。
           Text(this.heroSubtitle())
-            .fontSize(AppFont.Body)
+            .fontSize(AppFont.BodyL)
             .fontColor($r('sys.color.font_secondary'))
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1088,15 +1093,7 @@ export struct BookDetailPage {
     return `${minutes > 0 ? minutes : 1}分钟`;
   }
 
-  /**
-   * 分数 / 分类 / 状态 / 更新时间 / 体量：统一用沉浸 Tab 呈现。
-   * 全部不选中（无下划线、无强调色），放不下时横向滚动而不是压缩截断。
-   * 这排只做展示，不挂点击（tappable 默认 false），避免假交互。
-   *
-   * 这里必须用 HdsImmersiveTab 而不是 ImmersiveTabComponent：
-   * 详情页属于 NavDestination，ArkUI 的 systemMaterial 在该类页面里不绘制
-   * （首页的同类标签在 NavBar/HdsTitleBar 里才出材质），只有 HDS 浮动栏这条路径能出光感。
-   */
+  /** 只读信息使用原生 HDS 沉浸胶囊，横向滑动联动外层 Scroll。 */
   @Builder
   buildStatsRow() {
     Scroll(this.statsScroller) {
@@ -1158,13 +1155,7 @@ export struct BookDetailPage {
     .padding({ top: AppSpace.Md, bottom: AppSpace.Md })
   }
 
-  /**
-   * 数据行 + 操作行。
-   *
-   * 数据行必须直接落在氛围背景上：沉浸 Tab 自己就是一层 systemMaterial，
-   * 外面再套一层 systemMaterial 面板会让胶囊材质完全不渲染（只剩文字，同首页对照可验）。
-   * 操作行没有材质子节点，照常给沉浸表面。
-   */
+  /** 信息胶囊与快捷操作直接布局在封面氛围背景上。 */
   @Builder
   buildInfoPanel() {
     Column() {
@@ -1245,38 +1236,28 @@ export struct BookDetailPage {
 
   @Builder
   buildBodyInfo() {
-    Column({ space: AppSpace.Xs }) {
-      if (this.progressChapterLabel().length > 0) {
-        Text() {
-          Span(this.book!.contentType === 'text'
-            ? $r('app.string.book_detail_reading_text')
+    Column({ space: 6 }) {
+      // 当前进度回填时替换同一行，不能额外插入一行推动简介和标签。
+      Text() {
+        Span(this.progressChapterLabel().length > 0
+          ? (this.book!.contentType === 'text' ? $r('app.string.book_detail_reading_text')
             : $r('app.string.book_detail_reading'))
-            .fontColor($r('sys.color.font_secondary'))
-          Span(' · ').fontColor($r('sys.color.font_tertiary'))
-          Span(this.progressChapterLabel()).fontColor($r('sys.color.font_primary'))
-        }
-        .fontSize(AppFont.BodyL)
-        .fontWeight(FontWeight.Bold)
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
+          : $r('app.string.book_detail_latest'))
+          .fontColor($r('sys.color.font_secondary'))
+        Span(' · ').fontColor($r('sys.color.font_tertiary'))
+        Span(this.progressChapterLabel() || this.latestChapterLabel() || '—')
+          .fontColor($r('sys.color.font_primary'))
       }
+      .fontSize(this.progressChapterLabel().length > 0 ? AppFont.Title : AppFont.BodyL)
+      .lineHeight(26)
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .width('100%')
 
-      if (this.latestChapterLabel().length > 0) {
-        Text() {
-          Span($r('app.string.book_detail_latest')).fontColor($r('sys.color.font_tertiary'))
-          Span(' · ').fontColor($r('sys.color.font_tertiary'))
-          Span(this.latestChapterLabel()).fontColor($r('sys.color.font_secondary'))
-        }
-        .fontSize(AppFont.Body)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-      }
-
-      Text(this.countLine())
-        .fontSize(AppFont.Caption + 1)
-        .fontColor($r('sys.color.font_tertiary'))
+      Text(this.countLine() || '—')
+        .fontSize(15)
+        .lineHeight(22)
+        .fontColor($r('sys.color.font_secondary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
@@ -1309,77 +1290,69 @@ export struct BookDetailPage {
   @Builder
   buildTagsBlock() {
     if (this.displayTagLine().length > 0) {
-      Row({ space: AppSpace.Sm }) {
-        // 图标高度对齐首行行高并居中，避免 Row 顶端对齐时图标偏高。
-        Column() {
-          SymbolGlyph($r('sys.symbol.pin'))
-            .fontSize(META_ICON_SIZE)
-            .fontColor([$r('sys.color.font_tertiary')])
-        }
-        .height(META_TAG_LINE_HEIGHT)
-        .justifyContent(FlexAlign.Center)
-        Text() {
-          Span($r('app.string.book_detail_tags_label')).fontColor($r('sys.color.font_tertiary'))
-          Span(this.displayTagLine()).fontColor($r('sys.color.font_secondary'))
-        }
-        .fontSize(AppFont.Caption + 1)
-        .lineHeight(META_TAG_LINE_HEIGHT)
-        .layoutWeight(1)
+      Text() {
+        SymbolSpan($r('sys.symbol.pin'))
+          .fontSize(META_ICON_SIZE)
+          .fontColor([$r('sys.color.font_tertiary')])
+        Span(' ')
+        Span($r('app.string.book_detail_tags_label'))
+          .fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('sys.color.font_secondary'))
+        Span(this.displayTagLine()).fontColor($r('sys.color.font_secondary'))
       }
+      .fontSize(14)
+      .lineHeight(META_TAG_LINE_HEIGHT)
       .width('100%')
-      .alignItems(VerticalAlign.Top)
       .padding({
         left: this.horizontalPadding(),
         right: this.horizontalPadding(),
-        top: AppSpace.Lg
+        top: AppSpace.Md
       })
     }
   }
 
   @Builder
   buildIntroBlock() {
-    Row({ space: AppSpace.Sm }) {
-      // 同上：图标容器高度 = 简介正文行高，图标在容器内居中 → 与首行文字中线对齐。
+    Column({ space: AppSpace.Xs }) {
+      // 图标参与同一行的字形排版；六行占位由外层承担，短简介也从顶部开始。
       Column() {
-        SymbolGlyph($r('sys.symbol.doc_text'))
-          .fontSize(META_ICON_SIZE)
-          .fontColor([$r('sys.color.font_tertiary')])
-      }
-      .height(META_INTRO_LINE_HEIGHT)
-      .justifyContent(FlexAlign.Center)
-      Column({ space: AppSpace.Xs }) {
         Text() {
-          Span($r('app.string.book_detail_intro_label')).fontColor($r('sys.color.font_tertiary'))
+          SymbolSpan($r('sys.symbol.doc_text'))
+            .fontSize(META_ICON_SIZE)
+            .fontColor([$r('sys.color.font_tertiary')])
+          Span(' ')
+          Span($r('app.string.book_detail_intro_label'))
+            .fontSize(16).fontWeight(FontWeight.Medium).fontColor($r('sys.color.font_secondary'))
           Span(this.displayIntro.length > 0 ? this.displayIntro : '暂无简介')
             .fontColor(this.displayIntro.length > 0
               ? $r('sys.color.font_secondary')
               : $r('sys.color.font_tertiary'))
         }
-        .fontSize(AppFont.Caption + 1)
+        .fontSize(15)
         .lineHeight(META_INTRO_LINE_HEIGHT)
-        .maxLines(this.introExpanded ? 100 : 3)
+        .maxLines(this.introExpanded ? 100 : 6)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
         .onClick(() => {
           if (this.introExpanded) this.introExpanded = false;
           else if (this.displayIntro.length > 60) this.introExpanded = true;
         })
-        if (this.displayIntro.length > 60) {
-          Text(this.introExpanded ? '收起' : '查看更多')
-            .fontSize(AppFont.Caption)
-            .fontColor(AppColor.Brand)
-            .onClick(() => { this.introExpanded = !this.introExpanded; })
-        }
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+      .constraintSize({ minHeight: META_INTRO_LINE_HEIGHT * 6 })
+      .justifyContent(FlexAlign.Start)
+      if (this.displayIntro.length > 60) {
+        Text(this.introExpanded ? '收起' : '查看更多')
+          .fontSize(AppFont.Body)
+          .fontColor(AppColor.Brand)
+          .onClick(() => { this.introExpanded = !this.introExpanded; })
+      }
     }
+    .alignItems(HorizontalAlign.Start)
     .width('100%')
-    .alignItems(VerticalAlign.Top)
     .padding({
       left: this.horizontalPadding(),
       right: this.horizontalPadding(),
-      top: AppSpace.Lg
+      top: AppSpace.Md
     })
   }
 
@@ -1402,7 +1375,7 @@ export struct BookDetailPage {
         .fontSize(18)
         .fontColor(['#FFFFFF'])
       Text(this.primaryCtaLabel())
-        .fontSize(AppFont.BodyL)
+        .fontSize(AppFont.Title)
         .fontColor('#FFFFFF')
         .fontWeight(FontWeight.Bold)
         .maxLines(1)
@@ -1413,10 +1386,10 @@ export struct BookDetailPage {
       angle: 135,
       colors: [[AppColor.BrandHover, 0.0], [AppColor.Brand, 1.0]]
     })
-    .shadow({ radius: 26, color: '#44C4475B', offsetY: 10 })
+    .shadow({ radius: 16, color: '#33C4475B', offsetY: 6 })
     .margin({
       right: this.horizontalPadding(),
-      bottom: WindowUtils.getBottomSafeVp() + AppSpace.Xl
+      bottom: WindowUtils.getBottomSafeVp() + 12
     })
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.97 })
     .onClick((): void => { this.openPrimaryAction(); })
@@ -1540,19 +1513,19 @@ export struct BookDetailPage {
 
             // 顶栏不再占用布局：返回/收藏按钮已经交给 HDS 标题栏（Index.ets），
             // 正文从页面顶端开始铺，滚动时才能钻进标题栏底下被画成沉浸渐变模糊。
-            // 首屏视觉不变靠 Scroll 内容顶部的等高占位。
+            // 使用内容内边距避让顶栏；空 Column 占位会在长正文布局中被压缩。
             Scroll(this.contentScroller) {
               Column() {
-                Column().width('100%').height(DETAIL_TITLE_BAR_HEIGHT)
                 this.buildHero()
                 this.buildInfoPanel()
                 this.buildBodyInfo()
                 this.buildTagsBlock()
                 this.buildIntroBlock()
                 // 给悬浮 CTA 留出呼吸空间，避免最后一段文字被压住
-                Column().width('100%').height(96 + WindowUtils.getBottomSafeVp())
+                Column().width('100%').height(80 + WindowUtils.getBottomSafeVp()).flexShrink(0)
               }
               .width('100%')
+              .padding({ top: DETAIL_TITLE_BAR_HEIGHT + 48 })
             }
             .width('100%')
             .height('100%')

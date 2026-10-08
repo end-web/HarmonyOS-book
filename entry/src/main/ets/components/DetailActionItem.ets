@@ -16,12 +16,12 @@ export struct DetailActionItem {
   @Event onTap: () => void = () => {};
 
   build() {
-    Column({ space: AppSpace.Xs }) {
+    Column({ space: 6 }) {
       SymbolGlyph(this.icon)
-        .fontSize(22)
+        .fontSize(24)
         .fontColor([this.active ? AppColor.Brand : $r('sys.color.font_primary')])
       Text(this.label)
-        .fontSize(AppFont.Caption)
+        .fontSize(AppFont.Body)
         .fontColor(this.active ? AppColor.Brand : $r('sys.color.font_secondary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
