@@ -12,7 +12,8 @@ import { Book, Chapter } from '../model/Book';
 import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
-import { OneShotCoverState, OneShotTransitionCoordinator, OneShotTransitionIds } from '../utils/OneShotTransition';
+import { HomeBookRow } from '../components/HomeBookRow';
+import { OneShotCoverState, OneShotTransitionCoordinator } from '../utils/OneShotTransition';
 import { CoverImage } from '../components/CoverImage';
 import { RankingPosterBackground } from '../components/RankingPosterBackground';
 import {
@@ -805,12 +806,7 @@ export struct HomePage {
   }
 
   @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
-  private coverNodePrefix: string = OneShotTransitionIds.nextSourceId('home');
   @Local openingCarouselBook: boolean = false;
-
-  private coverNodeId(r: SearchResult, kind: string): string {
-    return this.coverNodePrefix + '-' + kind + '-' + OneShotTransitionIds.sourceCover(this.homeBookId(r));
-  }
 
   private async openCoverBook(r: SearchResult, nodeId: string, radius: number): Promise<void> {
     if (this.openingCarouselBook) return;
@@ -902,6 +898,11 @@ export struct HomePage {
       }
     }
     return books;
+  }
+
+  private isFeaturedBlock(block: HomeBlockSection): boolean {
+    // 分批插入会改变顺序，LazyForEach 已挂载项的旧 index 不能决定首板块。
+    return this.homeBlocks.length > 0 && this.homeBlockKey(block) === this.homeBlockKey(this.homeBlocks[0]);
   }
 
   private homeBlockKey(block: HomeBlockSection): string {
@@ -1652,16 +1653,21 @@ export struct HomePage {
       .height(HOME_BLOCK_TITLE_HEIGHT)
       .padding({ left: AppSpace.Md, right: AppSpace.Md })
       .alignItems(VerticalAlign.Center)
-      .translate({ y: blockIdx === 0 ? HOME_FIRST_BLOCK_TITLE_OFFSET : 0 })
+      .translate({ y: this.isFeaturedBlock(block) ? HOME_FIRST_BLOCK_TITLE_OFFSET : 0 })
 
       // 首板块采用每屏三条的横向轮播，形成参考图中的紧凑私享列表。
-      if (blockIdx === 0) {
+      if (this.isFeaturedBlock(block)) {
         this.buildFeaturedCarousel(block)
       } else if (block.layout === 'grid') {
         // 大卡片 + 简介：竖向 List
         Column({ space: AppSpace.Sm }) {
           ForEach(block.books, (r: SearchResult) => {
-            this.buildHomeListItem(r, block.title + block.moreUrl)
+            HomeBookRow({
+              result: r,
+              onOpen: (result: SearchResult, nodeId: string, radius: number): void => {
+                this.openCoverBook(result, nodeId, radius);
+              }
+            })
           }, (r: SearchResult) => `${block.sourceUrl}#${r.bookUrl}`)
         }
         .width('100%')
@@ -1694,7 +1700,15 @@ export struct HomePage {
       LazyForEach(this.featuredPageDataSource, (pageBooks: SearchResult[]) => {
         Column() {
           ForEach(pageBooks, (rowBook: SearchResult, rowIndex?: number) => {
-            this.buildFeaturedRow(rowBook, (rowIndex ?? 0) < pageBooks.length - 1)
+            HomeBookRow({
+              result: rowBook, featured: true,
+              showDivider: (rowIndex ?? 0) < pageBooks.length - 1,
+              favorite: this.isFeaturedFavorite(rowBook), savingFavorite: this.savingFavorite,
+              onOpen: (result: SearchResult, nodeId: string, radius: number): void => {
+                this.openCoverBook(result, nodeId, radius);
+              },
+              onFavorite: (result: SearchResult): void => { this.toggleFeaturedFavorite(result); }
+            })
           }, (rowBook: SearchResult) => `${block.sourceUrl}#featured#${rowBook.bookUrl}`)
         }
         .width('100%')
@@ -1708,88 +1722,6 @@ export struct HomePage {
     .loop(false)
     .cachedCount(1)
     .effectMode(EdgeEffect.Spring)
-  }
-
-  @Builder
-  buildFeaturedRow(r: SearchResult, showDivider: boolean) {
-    Column() {
-      Row({ space: AppSpace.Sm }) {
-        Stack() {
-          if (r.coverUrl && r.coverUrl.startsWith('http')) {
-            CoverImage({
-              url: r.coverUrl,
-              imgWidth: FEATURED_COVER_SIZE,
-              imgHeight: FEATURED_COVER_SIZE,
-              useFixedHeight: true,
-              radius: AppRadius.Sm,
-              decodeW: 180,
-              decodeH: 180,
-              highPriority: true
-            })
-          } else {
-            Image($r('app.media.app_icon_legacy'))
-              .width(FEATURED_COVER_SIZE)
-              .height(FEATURED_COVER_SIZE)
-              .borderRadius(AppRadius.Sm)
-              .objectFit(ImageFit.Cover)
-          }
-        }
-        .width(FEATURED_COVER_SIZE).height(FEATURED_COVER_SIZE)
-        .id(this.coverNodeId(r, 'featured'))
-        .opacity(this.coverState.hiddenSourceId === this.coverNodeId(r, 'featured') ? 0 : 1)
-
-        Column({ space: AppSpace.Xxs }) {
-          Text(r.name)
-            .fontSize(AppFont.BodyL)
-            .fontColor($r('sys.color.font_primary'))
-            .fontWeight(FontWeight.Medium)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-          if (r.author) {
-            Text(r.author)
-              .fontSize(AppFont.Caption)
-              .fontColor($r('sys.color.font_secondary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-          }
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        .justifyContent(FlexAlign.Center)
-
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph(this.isFeaturedFavorite(r) ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
-            .fontSize(22)
-            .fontColor([this.isFeaturedFavorite(r) ? AppColor.Brand : $r('sys.color.font_secondary')])
-        }
-        .width(40)
-        .height(40)
-        .backgroundColor(Color.Transparent)
-        .enabled(!this.savingFavorite)
-        .accessibilityText(this.isFeaturedFavorite(r) ?
-          $r('app.string.home_favorite_remove') : $r('app.string.home_favorite_add'))
-        .onClick(() => {
-          this.toggleFeaturedFavorite(r);
-        })
-      }
-      .width('100%')
-      .height(FEATURED_ROW_HEIGHT - 1)
-      .alignItems(VerticalAlign.Center)
-      .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.99 })
-      .onClick(() => {
-        this.openCoverBook(r, this.coverNodeId(r, 'featured'), AppRadius.Sm);
-      })
-
-      if (showDivider) {
-        Divider()
-          .color(AppColor.Divider)
-          .margin({ left: FEATURED_COVER_SIZE + AppSpace.Sm })
-      }
-    }
-    .width('100%')
-    .height(FEATURED_ROW_HEIGHT)
   }
 
   @Builder
@@ -1807,70 +1739,6 @@ export struct HomePage {
       })
     }
     .width(HOME_COVER_CARD_SIZE)
-  }
-
-  @Builder
-  buildHomeListItem(r: SearchResult, sectionId: string) {
-    Row({ space: AppSpace.Md }) {
-      Stack() {
-        if (r.coverUrl && r.coverUrl.startsWith('http')) {
-          CoverImage({
-            url: r.coverUrl,
-            imgWidth: 72,
-            imgHeight: 72,
-            useFixedHeight: true,
-            radius: AppRadius.Sm,
-            decodeW: 216,
-            decodeH: 216,
-            highPriority: true
-          })
-        } else {
-          Stack() {
-            Column().width('100%').height('100%').backgroundColor($r('sys.color.brand'))
-            Text(r.name ? r.name.substring(0, 1) : '?')
-              .fontSize(24).fontColor($r('sys.color.font_on_primary')).fontWeight(FontWeight.Bold)
-          }
-          .width(72).height(72).borderRadius(AppRadius.Sm).clip(true)
-        }
-      }
-      .width(72).height(72)
-      .id(this.coverNodeId(r, 'list-' + sectionId))
-      .opacity(this.coverState.hiddenSourceId === this.coverNodeId(r, 'list-' + sectionId) ? 0 : 1)
-
-      Column({ space: 4 }) {
-        Text(r.name)
-          .fontSize(AppFont.Body)
-          .fontColor($r('sys.color.font_primary'))
-          .fontWeight(FontWeight.Medium)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        if (r.author) {
-          Text(r.author)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-        }
-        if (r.intro) {
-          Text(r.intro)
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.Center)
-    }
-    .width('100%')
-    .padding({ top: AppSpace.Xs, bottom: AppSpace.Xs })
-    .onClick(() => {
-      this.openCoverBook(r, this.coverNodeId(r, 'list-' + sectionId), AppRadius.Sm);
-    })
   }
 
   @Builder

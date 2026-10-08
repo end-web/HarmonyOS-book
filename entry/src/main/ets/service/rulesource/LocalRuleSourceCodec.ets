@@ -9,7 +9,7 @@ export class LocalRuleSourceCodec {
       const definition: Record<string, Object> = JSON.parse(LocalRuleSourceCodec.stringify(source));
       definitions.push(definition);
     }
-    return JSON.stringify(definitions, null, 2);
+    return JSON.stringify(definitions);
   }
 
   static stringify(source: LocalRuleSource): string {
@@ -17,7 +17,13 @@ export class LocalRuleSourceCodec {
       ? JSON.parse(source.rawSourceJson) : {};
     const current: Record<string, Object> = JSON.parse(JSON.stringify(source));
     const originals = LocalRuleSourceImportParser.parse(source.rawSourceJson).sources;
-    const baseline: Record<string, Object> = originals.length === 1 ? JSON.parse(JSON.stringify(originals[0])) : {};
+    const baselineSource = originals.length === 1 ? originals[0] : new LocalRuleSource();
+    // The parser supplies the current time when the definition has no timestamp.
+    // It is an import default, not an edit to the portable definition.
+    if (originals.length === 1 && original['lastUpdateTime'] === undefined) {
+      baselineSource.lastUpdateTime = source.lastUpdateTime;
+    }
+    const baseline: Record<string, Object> = JSON.parse(JSON.stringify(baselineSource));
     const result: Record<string, Object> = {};
     const omitted: string[] = ['rawSourceJson', 'validationStatus', 'validationMessage', 'locked',
       'loginHeader', 'loginInfo', 'loginResult', 'cookie', 'cookies', 'cookieHeader',
@@ -28,9 +34,12 @@ export class LocalRuleSourceCodec {
     const groups: string[] = ['ruleSearch', 'ruleExplore', 'ruleBookInfo', 'ruleToc', 'ruleContent'];
     for (const key of Object.keys(current)) {
       if (omitted.includes(key)) continue;
+      const needsExploreFlag = key === 'enabledExplore' && original[key] === undefined &&
+        source.enabledExplore !== (source.exploreUrl.length > 0);
+      if (originals.length === 1 && JSON.stringify(current[key]) === JSON.stringify(baseline[key]) &&
+        !(key === 'isLocked' && original['locked'] !== undefined) && !needsExploreFlag) continue;
       if (groups.includes(key)) {
-        result[key] = original[key] !== undefined && JSON.stringify(current[key]) === JSON.stringify(baseline[key])
-          ? original[key] : LocalRuleSourceCodec.mergeGroup(original[key], current[key]);
+        result[key] = LocalRuleSourceCodec.mergeGroup(original[key], current[key], baseline[key]);
       } else {
         result[key] = current[key];
       }
@@ -38,14 +47,22 @@ export class LocalRuleSourceCodec {
     return JSON.stringify(result);
   }
 
-  private static mergeGroup(original: Object | undefined, current: Object): Record<string, Object> {
+  private static mergeGroup(original: Object | undefined, current: Object,
+    baseline: Object): Record<string, Object> {
     const result: Record<string, Object> = {};
-    if (original !== undefined && original !== null && typeof original === 'object' && !Array.isArray(original)) {
+    const hasOriginalFields = original !== undefined && original !== null &&
+      typeof original === 'object' && !Array.isArray(original);
+    if (hasOriginalFields) {
       const fields: Record<string, Object> = JSON.parse(JSON.stringify(original));
       for (const key of Object.keys(fields)) result[key] = fields[key];
     }
     const edited: Record<string, Object> = JSON.parse(JSON.stringify(current));
-    for (const key of Object.keys(edited)) result[key] = edited[key];
+    const previous: Record<string, Object> = JSON.parse(JSON.stringify(baseline));
+    for (const key of Object.keys(edited)) {
+      if (hasOriginalFields && JSON.stringify(edited[key]) === JSON.stringify(previous[key])) continue;
+      if (!hasOriginalFields && edited[key] === '') continue;
+      result[key] = edited[key];
+    }
     return result;
   }
 }

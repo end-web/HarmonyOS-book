@@ -1,11 +1,13 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { taskpool } from '@kit.ArkTS';
 import { Book, Chapter } from '../model/Book';
 import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { PreferenceService } from './PreferenceService';
 import { TextReadingProgressService } from './text/TextReadingProgressService';
 import { StorageMigrationService } from './StorageMigrationService';
 import { OnlineTextContentCache } from './text/OnlineTextContentCache';
+import { parseCachedChapters } from './ChapterCacheWorker';
 
 /** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
 const CACHED_BOOKS_FILE = 'cached_books_v1.json';
@@ -188,7 +190,7 @@ export class DataService {
     if (id.startsWith('import_') && DataService.ctx) {
       const imported = await DataService.readFileSafe(`${DataService.ctx.filesDir}/imported_toc/${id}.json`);
       if (imported.ok && imported.json) {
-        const chapters: Chapter[] = JSON.parse(imported.json);
+        const chapters = await taskpool.execute<[string], Chapter[]>(parseCachedChapters, imported.json);
         return chapters;
       }
     }
@@ -200,8 +202,7 @@ export class DataService {
     }
     if (!read.ok || !read.json) return [];
     try {
-      const parsed: Object = JSON.parse(read.json) as Object;
-      return Array.isArray(parsed) ? parsed as Chapter[] : [];
+      return await taskpool.execute<[string], Chapter[]>(parseCachedChapters, read.json);
     } catch (_e) {
       return [];
     }

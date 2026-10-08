@@ -39,6 +39,8 @@ export struct HdsImmersiveTab {
   @Param tabWidth: number = 0;
   @Param tabHeight: number = 34;
   @Param selected: boolean = false;
+  /** 封面转场先显示同尺寸标签，交接后再建立独立的 HDS 材质树。 */
+  @Param materialEnabled: boolean = true;
   /**
    * 外层横向 Scroll 的控制器。
    * 胶囊内部是 HdsTabs（Swiper + 自带可点的 TabBar），从胶囊上起手时
@@ -82,7 +84,13 @@ export struct HdsImmersiveTab {
 
   build() {
     Stack({ alignContent: Alignment.Center }) {
-      if (PlatformCompat.floatingTabs) {
+      if (!this.materialEnabled) {
+        Column()
+          .width('100%').height('100%')
+          .borderRadius(AppRadius.Pill)
+          .backgroundColor(AppColor.GlassControlFallback)
+          .hitTestBehavior(HitTestMode.None)
+      } else if (PlatformCompat.floatingTabs) {
         // HdsTabs 内部是 Swiper，会抢横向拖动的手势，导致外层横向 Scroll 滑不动。
         // 这里只借它的浮动栏承载材质，命中测试全部让给外层 Stack。
         HdsTabs({ barPosition: BarPosition.End, index: 0 }) {

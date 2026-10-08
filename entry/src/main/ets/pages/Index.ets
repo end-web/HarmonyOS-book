@@ -584,10 +584,6 @@ struct DetailPageWrapper {
   private running: boolean = false;
   private disposed: boolean = false;
   private watchdog: number = -1;
-  private coverWaitTimer: number = -1;
-  private coverReady: boolean = false;
-  private waitingForCover: boolean = false;
-  private coverHandoffProxy: NavigationTransitionProxy | undefined = undefined;
   private navigationRunner: NavigationOneShotRunner =
     (isPush: boolean, proxy: NavigationTransitionProxy): void => this.runTransition(isPush, proxy);
 
@@ -609,8 +605,6 @@ struct DetailPageWrapper {
     this.disposed = true;
     this.running = false;
     this.clearWatchdog();
-    this.clearCoverWaitTimer();
-    this.coverHandoffProxy = undefined;
     this.onTransitionFinished();
     this.restoreSource();
     OneShotTransitionCoordinator.getInstance().unregister(this.bookId);
@@ -623,35 +617,20 @@ struct DetailPageWrapper {
     this.watchdog = -1;
   }
 
-  private clearCoverWaitTimer(): void {
-    if (this.coverWaitTimer >= 0) clearTimeout(this.coverWaitTimer);
-    this.coverWaitTimer = -1;
-  }
-
-  private onDetailCoverReady(_url: string): void {
-    this.coverReady = true;
-    if (this.waitingForCover) this.beginCoverHandoff();
-  }
-
   private restoreSource(): void {
     const state = OneShotTransitionCoordinator.getInstance().coverState;
     if (state.hiddenSourceId === this.payload?.sourceNodeId) state.hiddenSourceId = '';
   }
 
   private measureRect(id: string): OneShotRect | undefined {
-    try {
-      const rect = OneShotRect.fromComponentInfo(this.getUIContext().getComponentUtils().getRectangleById(id));
-      return rect.isValid() ? rect : undefined;
-    } catch (_error) {
-      return undefined;
-    }
+    return OneShotRect.measure(this.getUIContext(), id);
   }
 
   private applyRect(rect: OneShotRect, viewport: OneShotRect, radius: number): void {
-    this.previewX = WindowUtils.pxToVp(rect.leftPx - viewport.leftPx);
-    this.previewY = WindowUtils.pxToVp(rect.topPx - viewport.topPx);
-    this.previewWidth = WindowUtils.pxToVp(rect.widthPx);
-    this.previewHeight = WindowUtils.pxToVp(rect.heightPx);
+    this.previewX = this.getUIContext().px2vp(rect.leftPx - viewport.leftPx);
+    this.previewY = this.getUIContext().px2vp(rect.topPx - viewport.topPx);
+    this.previewWidth = this.getUIContext().px2vp(rect.widthPx);
+    this.previewHeight = this.getUIContext().px2vp(rect.heightPx);
     this.previewRadius = radius;
   }
 
@@ -669,9 +648,6 @@ struct DetailPageWrapper {
     if (!this.running) return;
     this.running = false;
     this.clearWatchdog();
-    this.clearCoverWaitTimer();
-    this.waitingForCover = false;
-    this.coverHandoffProxy = undefined;
     this.onTransitionFinished();
     this.restoreSource();
     this.coverHidden = false;
@@ -724,13 +700,15 @@ struct DetailPageWrapper {
         return;
       }
     }
+    console.info(`[OneShot] ${isPush ? 'push' : 'pop'} book=${this.bookId} source=${payload.sourceNodeId}` +
+      ` rect=${source.leftPx},${source.topPx},${source.widthPx},${source.heightPx}`);
     this.applyRect(isPush ? source : target, viewport, isPush ? payload.sourceRadius : AppRadius.Sm);
     this.previewBaseWidth = Math.max(1, this.previewWidth);
     this.previewBaseHeight = Math.max(1, this.previewHeight);
     this.previewVisible = true;
     this.coverHidden = true;
     OneShotTransitionCoordinator.getInstance().coverState.hiddenSourceId = payload.sourceNodeId;
-    // 详情先成为不透明底层，只移动封面；整页透明度动画会让两页实时材质持续叠绘。
+    // 进入时只绘制详情和运动封面，避免两页材质叠绘和整页离屏合成。
     if (isPush) this.detailOpacity = 1;
     // 起止位置均为最终布局坐标，不再缩放整个详情或在运动途中淡掉封面。
     this.afterLayout((): void => {
@@ -741,7 +719,7 @@ struct DetailPageWrapper {
       this.getUIContext().animateTo({
         duration: isPush ? 420 : 350,
         curve: Curve.FastOutSlowIn,
-        expectedFrameRateRange: { min: 60, max: 60, expected: 60 },
+        expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
         onFinish: (): void => {
           if (!this.running || this.disposed) return;
           if (isPush) this.handoffCover(proxy);
@@ -755,23 +733,8 @@ struct DetailPageWrapper {
   }
 
   private handoffCover(proxy: NavigationTransitionProxy): void {
-    this.coverHandoffProxy = proxy;
-    this.waitingForCover = true;
-    if (this.coverReady) {
-      this.beginCoverHandoff();
-      return;
-    }
-    this.coverWaitTimer = setTimeout((): void => this.beginCoverHandoff(), 700);
-  }
-
-  private beginCoverHandoff(): void {
-    if (!this.running || !this.waitingForCover) return;
-    this.waitingForCover = false;
-    this.clearCoverWaitTimer();
-    const proxy = this.coverHandoffProxy;
-    if (proxy === undefined) return;
     this.coverHidden = false;
-    // 真图提交后直接移除同位置快照，不再追加 100ms 淡出并继续锁住导航。
+    // 仅等待显隐提交；慢图使用图片组件的占位，不让网络加载继续锁住导航和详情请求。
     this.afterLayout((): void => this.finish(proxy, true));
   }
 
@@ -790,8 +753,7 @@ struct DetailPageWrapper {
     Stack({ alignContent: Alignment.TopStart }) {
       BookDetailPage({ navStack: this.navStack, bookId: this.bookId,
         contentScroller: this.contentScroller,
-        transitionCoverHidden: this.coverHidden, deferEntry: !this.entryReady,
-        onCoverReady: (url: string): void => this.onDetailCoverReady(url) })
+        transitionCoverHidden: this.coverHidden, deferEntry: !this.entryReady })
         .width('100%')
         .height('100%')
         .opacity(this.detailOpacity)

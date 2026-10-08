@@ -9,6 +9,25 @@ export class OneShotRect {
   widthPx: number = 0;
   heightPx: number = 0;
 
+  /** 包含祖先的滚动/绘制位移；布局 windowOffset 不能作为屏幕上封面的起点。 */
+  static measure(uiContext: UIContext, nodeId: string): OneShotRect | undefined {
+    try {
+      const node = uiContext.getFrameNodeById(nodeId);
+      if (node === null) return undefined;
+      const info = uiContext.getComponentUtils().getRectangleById(nodeId);
+      const position = node.getPositionToWindowWithTransform();
+      const rect = new OneShotRect();
+      // FrameNode 返回 vp，ComponentInfo.size 返回 px；不再重复叠加自身 translate。
+      rect.leftPx = uiContext.vp2px(position.x);
+      rect.topPx = uiContext.vp2px(position.y);
+      rect.widthPx = info.size.width * info.scale.x;
+      rect.heightPx = info.size.height * info.scale.y;
+      return rect.isValid() ? rect : undefined;
+    } catch (_error) {
+      return undefined;
+    }
+  }
+
   static fromComponentInfo(info: componentUtils.ComponentInfo): OneShotRect {
     const rect = new OneShotRect();
     const scaleX = info.scale.x > 0 ? info.scale.x : 1;
@@ -31,7 +50,9 @@ export class OneShotRect {
   }
 
   isValid(): boolean {
-    return this.widthPx > 1 && this.heightPx > 1;
+    return Number.isFinite(this.leftPx) && Number.isFinite(this.topPx) &&
+      Number.isFinite(this.widthPx) && Number.isFinite(this.heightPx) &&
+      this.widthPx > 1 && this.heightPx > 1;
   }
 }
 
@@ -130,10 +151,9 @@ export class OneShotTransitionCoordinator {
 
   capture(uiContext: UIContext, bookId: string, nodeId: string, radius: number): void {
     try {
-      const sourceRect = OneShotRect.fromComponentInfo(uiContext.getComponentUtils().getRectangleById(nodeId));
-      const viewportRect = OneShotRect.fromComponentInfo(
-        uiContext.getComponentUtils().getRectangleById(OneShotTransitionIds.ROOT_NAVIGATION));
-      if (!sourceRect.isValid() || !viewportRect.isValid()) {
+      const sourceRect = OneShotRect.measure(uiContext, nodeId);
+      const viewportRect = OneShotRect.measure(uiContext, OneShotTransitionIds.ROOT_NAVIGATION);
+      if (sourceRect === undefined || viewportRect === undefined) {
         this.discardPending();
         return;
       }
@@ -155,26 +175,36 @@ export class OneShotTransitionCoordinator {
     this.discardPending();
     const generation = this.captureGeneration;
     try {
-      const sourceRect = OneShotRect.fromComponentInfo(uiContext.getComponentUtils().getRectangleById(nodeId));
-      const viewportRect = OneShotRect.fromComponentInfo(
-        uiContext.getComponentUtils().getRectangleById(OneShotTransitionIds.ROOT_NAVIGATION));
-      if (!sourceRect.isValid() || !viewportRect.isValid()) return;
+      const sourceRect = OneShotRect.measure(uiContext, nodeId);
+      const viewportRect = OneShotRect.measure(uiContext, OneShotTransitionIds.ROOT_NAVIGATION);
+      if (sourceRect === undefined || viewportRect === undefined) return;
       // 截图只服务于动效；GPU 忙时及时进入详情，迟到的像素图直接释放。
       await new Promise<void>((resolve: () => void): void => {
         let settled: boolean = false;
         const timer = setTimeout((): void => {
           settled = true;
           resolve();
-        }, 160);
+        }, 80);
         uiContext.getComponentSnapshot().get(nodeId, {
           scale: Math.min(1, 600 / Math.max(sourceRect.widthPx, sourceRect.heightPx))
         }).then((snapshot: image.PixelMap): void => {
           if (settled || generation !== this.captureGeneration) {
             OneShotTransitionCoordinator.releaseSnapshot(snapshot);
           } else {
-            const payload = BookOneShotPayload.create(bookId, nodeId, sourceRect, viewportRect, snapshot);
-            payload.sourceRadius = radius;
-            this.prepare(payload);
+            // 截图期间列表可能仍在惯性滚动，跳转前重新读取屏幕上的实际位置。
+            const currentSource = OneShotRect.measure(uiContext, nodeId);
+            const currentViewport = OneShotRect.measure(uiContext, OneShotTransitionIds.ROOT_NAVIGATION);
+            if (currentSource !== undefined && currentViewport !== undefined &&
+              Math.abs(currentViewport.widthPx - viewportRect.widthPx) <= 2 &&
+              Math.abs(currentViewport.heightPx - viewportRect.heightPx) <= 2 &&
+              Math.abs(currentSource.widthPx - sourceRect.widthPx) <= 2 &&
+              Math.abs(currentSource.heightPx - sourceRect.heightPx) <= 2) {
+              const payload = BookOneShotPayload.create(bookId, nodeId, currentSource, currentViewport, snapshot);
+              payload.sourceRadius = radius;
+              this.prepare(payload);
+            } else {
+              OneShotTransitionCoordinator.releaseSnapshot(snapshot);
+            }
           }
           settled = true;
           clearTimeout(timer);

@@ -21,7 +21,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { TextReaderRouteParams, TextReadingPosition, EVT_READER_JUMP_CHAPTER, ReaderJumpChapterEvent } from '../model/TextReading';
 import { TextReadingProgressService } from '../service/text/TextReadingProgressService';
-import { OneShotTransitionIds } from '../utils/OneShotTransition';
+import { OneShotLayoutCallback, OneShotTransitionIds } from '../utils/OneShotTransition';
 import { CoverImage } from '../components/CoverImage';
 import { CoverAspectRatio } from '../utils/CoverAspectRatio';
 import { ImmersiveCircleButton } from '../components/ImmersiveCircleButton';
@@ -158,6 +158,8 @@ export struct BookDetailPage {
   @Param deferEntry: boolean = false;
   @Event onCoverReady: (url: string) => void = () => {};
   private entryStarted: boolean = false;
+  @Local entryMaterialStage: number = 0;
+  @Local ambientOpacity: number = 0;
   @Local book: Book | null = null;
   @Local coverRatio: number = 1;
   @Local loadingDetail: boolean = true;
@@ -262,7 +264,22 @@ export struct BookDetailPage {
   private finishEntering(): void {
     if (!this.detailActive || this.deferEntry || this.entryStarted) return;
     this.entryStarted = true;
-    this.loadBook();
+    // 先提交封面交接和导航结束，再分帧恢复背景与五个独立材质，避免集中在结束帧。
+    this.restoreEntryMaterials();
+  }
+
+  private restoreEntryMaterials(): void {
+    this.getUIContext().postFrameCallback(new OneShotLayoutCallback((): void => {
+      if (!this.detailActive || this.deferEntry) return;
+      this.entryMaterialStage++;
+      if (this.entryMaterialStage === 1) this.loadBook();
+      if (this.entryMaterialStage === 2) {
+        this.getUIContext().animateTo({ duration: 320, curve: Curve.EaseInOut }, (): void => {
+          this.ambientOpacity = 1;
+        });
+      }
+      if (this.entryMaterialStage < 6) this.restoreEntryMaterials();
+    }));
   }
 
   /** 同步从 SearchCache 取 book,让首帧有内容,后续重活推迟 */
@@ -942,6 +959,7 @@ export struct BookDetailPage {
     .width('100%')
     .height(this.ambientHeight())
     .clip(true)
+    .opacity(this.ambientOpacity)
     .hitTestBehavior(HitTestMode.None)
     .accessibilityLevel('no')
   }
@@ -1098,12 +1116,12 @@ export struct BookDetailPage {
   buildStatsRow() {
     Scroll(this.statsScroller) {
       Row({ space: AppSpace.Sm }) {
-        HdsImmersiveTab({ label: this.displayCategory(), scroller: this.statsScroller })
-        HdsImmersiveTab({ label: this.displayStatus(), scroller: this.statsScroller })
-        HdsImmersiveTab({ label: this.displayUpdateShort(), scroller: this.statsScroller })
-        HdsImmersiveTab({ label: this.displayScale(), scroller: this.statsScroller })
+        HdsImmersiveTab({ label: this.displayCategory(), scroller: this.statsScroller, materialEnabled: this.entryMaterialStage >= 2 })
+        HdsImmersiveTab({ label: this.displayStatus(), scroller: this.statsScroller, materialEnabled: this.entryMaterialStage >= 3 })
+        HdsImmersiveTab({ label: this.displayUpdateShort(), scroller: this.statsScroller, materialEnabled: this.entryMaterialStage >= 4 })
+        HdsImmersiveTab({ label: this.displayScale(), scroller: this.statsScroller, materialEnabled: this.entryMaterialStage >= 5 })
         // 评分放最后：多数书源没有评分，避免「暂无」占住首屏第一个位置。
-        HdsImmersiveTab({ label: this.scoreText(), scroller: this.statsScroller })
+        HdsImmersiveTab({ label: this.scoreText(), scroller: this.statsScroller, materialEnabled: this.entryMaterialStage >= 6 })
       }
       .height(58)
       .alignItems(VerticalAlign.Center)
@@ -1509,7 +1527,10 @@ export struct BookDetailPage {
         Stack({ alignContent: Alignment.BottomEnd }) {
           // 内容层：氛围背景 + 固定顶栏 + 可滚动正文
           Stack({ alignContent: Alignment.TopStart }) {
-            this.buildAmbientBackdrop()
+            // 转场期间保留最终正文布局，封面模糊氛围层在交接后再绘制。
+            if (this.entryMaterialStage >= 1) {
+              this.buildAmbientBackdrop()
+            }
 
             // 顶栏不再占用布局：返回/收藏按钮已经交给 HDS 标题栏（Index.ets），
             // 正文从页面顶端开始铺，滚动时才能钻进标题栏底下被画成沉浸渐变模糊。

@@ -28,8 +28,11 @@ export struct BookCard {
   private static shownIds: Set<string> = new Set();
   private static transitionIdSeed: number = 0;
   private transitionNodeId: string = '';
+  private static openingDetail: boolean = false;
+  private disposed: boolean = false;
 
   aboutToAppear(): void {
+    this.disposed = false;
     if (this.transitionNodeId.length === 0) {
       BookCard.transitionIdSeed = BookCard.transitionIdSeed + 1;
       this.transitionNodeId = OneShotTransitionIds.sourceCover(this.book.id) + '-' +
@@ -63,9 +66,23 @@ export struct BookCard {
     return path.startsWith('/data/') || path.startsWith('file://');
   }
 
-  private prepareOneShotTransition(): void {
-    OneShotTransitionCoordinator.getInstance().capture(
-      this.getUIContext(), this.book.id, this.transitionNodeId, AppRadius.Md);
+  aboutToDisappear(): void {
+    this.disposed = true;
+  }
+
+  private async openDetail(): Promise<void> {
+    if (BookCard.openingDetail) return;
+    BookCard.openingDetail = true;
+    const bookId = this.book.id;
+    try {
+      await OneShotTransitionCoordinator.getInstance().captureAsync(
+        this.getUIContext(), bookId, this.transitionNodeId, AppRadius.Md);
+      if (!this.disposed && this.book.id === bookId) {
+        this.onTap(bookId);
+      }
+    } finally {
+      BookCard.openingDetail = false;
+    }
   }
 
   build() {
@@ -158,8 +175,7 @@ export struct BookCard {
     .animation({ duration: AppMotion.Base, curve: AppCurve.Emphasized })
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 1 })
     .onClick(() => {
-      this.prepareOneShotTransition();
-      this.onTap(this.book.id);
+      this.openDetail();
     })
   }
 }

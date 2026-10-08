@@ -128,7 +128,7 @@ function load(relative) {
       putSync: (key, value) => diagnosticSettings.set(key, value),
       async flush() { if (diagnosticFlushFails) throw new Error('settings write failed'); }
     }) } };
-    if (name === '@kit.ArkTS') return { util: { TextDecoder: { create(encoding, options) {
+    if (name === '@kit.ArkTS') return { taskpool: { execute: async (fn, ...args) => fn(...args) }, util: { TextDecoder: { create(encoding, options) {
       const decoder = new TextDecoder(encoding, options);
       return { decodeToString: (bytes, opts) => decoder.decode(bytes, opts) };
     } } } };
