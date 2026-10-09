@@ -129,8 +129,9 @@ struct Index {
     }
   }
 
-  private resolveParam(param: object, key: string): string {
-    if (typeof param === 'string') return '';
+  private resolveParam(param: object | null | undefined, key: string): string {
+    // 首页搜索等无参入口会传入 null，必须在读取关键词等字段前返回默认值。
+    if (param === null || param === undefined || typeof param === 'string') return '';
     const r = param as Record<string, Object>;
     const v = r[key];
     return typeof v === 'string' ? v : '';
