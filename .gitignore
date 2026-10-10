@@ -27,6 +27,8 @@ obfuscation-cache.json
 /artifacts/*.app.sha256
 /artifacts/releases/
 /signing/
+/.env
+/.certs/
 /*.hap
 /ui-dump*/
 

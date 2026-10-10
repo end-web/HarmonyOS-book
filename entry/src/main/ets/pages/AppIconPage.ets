@@ -39,21 +39,22 @@ export struct AppIconPage {
   }
 
   private async selectIcon(option: AppIconOption): Promise<void> {
-    if (this.switching || !this.service.supported) return;
-    if (option.name !== '' && !this.memberState.hasAccess) {
-      this.onMembershipRequired();
-      return;
-    }
-    if (this.loading || this.loadFailed || this.membership.busy || this.current === option.name) return;
+    if (this.switching || !this.service.supported || this.loading || this.loadFailed ||
+      this.membership.busy || this.current === option.name) return;
     this.switching = true;
     try {
-      if (option.name !== '') {
+      // 切换图标复用仍有效的已验签权益；未知或过期时才合并查询。
+      if (option.name !== '' && !this.memberState.hasAccess) {
         const host = this.getUIContext().getHostContext();
         if (!host) return;
         const context = sendableContextManager.convertToUIAbilityContext(sendableContextManager.convertFromContext(host));
-        await this.membership.refresh(context, true);
+        await this.membership.refresh(context);
         if (!this.memberState.hasAccess) {
-          this.onMembershipRequired();
+          if (this.memberState.confirmedInactive) {
+            this.onMembershipRequired();
+          } else {
+            this.getUIContext().getPromptAction().showToast({ message: this.membership.message });
+          }
           return;
         }
       }
@@ -76,7 +77,7 @@ export struct AppIconPage {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Blank()
-        if (this.loading || this.switching) {
+        if (this.loading || this.switching || this.membership.busy) {
           LoadingProgress().width(24).height(24).color(AppColor.Brand)
         }
       }
@@ -136,8 +137,7 @@ export struct AppIconPage {
             .borderRadius(AppRadius.Lg)
             .backgroundColor($r('sys.color.comp_background_primary'))
             .enabled(this.service.supported && !this.switching &&
-              ((option.name !== '' && !this.memberState.hasAccess) ||
-                (!this.loading && !this.loadFailed && !this.membership.busy)))
+              !this.loading && !this.loadFailed && !this.membership.busy)
             .accessibilityText(option.label)
             .onClick(() => this.selectIcon(option))
           }

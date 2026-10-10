@@ -42,6 +42,10 @@
   purchaseOrderId
   finishStatus
   purchaseTime
+  # Display-only membership cache must survive process and release upgrades.
+  expiresAt
+  autoRenew
+  verifiedAt
   # Bounded on-device diagnostic log, stable across release upgrades
   id
   time
@@ -228,6 +232,15 @@
   avatar
   reviewUrl
   # Book
+  # Persisted metadata and legacy release aliases (v0.1.48 and earlier).
+  latestChapterTitle
+  tocComplete
+  coverFromDetail
+  coverFallback
+  i36
+  b40
+  i40
+  j40
   id
   contentType
   title

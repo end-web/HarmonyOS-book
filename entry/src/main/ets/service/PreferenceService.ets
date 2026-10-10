@@ -17,6 +17,7 @@ export const EVT_HOME_SOURCE_CHANGED = 'app.home.source.changed';
 const STORE_NAME = 'listenbook_prefs';
 const KEY_FAVORITES = 'favorite_book_ids';
 const KEY_PINNED_FAVORITES = 'pinned_favorite_book_ids';
+const KEY_SHELF_STATUS_FILTER = 'shelf_status_filter';
 const KEY_HISTORY = 'play_history';
 const KEY_LAST_PLAYED = 'last_played';
 const KEY_COLOR_MODE = 'color_mode';
@@ -693,6 +694,18 @@ export class PreferenceService {
     const idx = await s.get(KEY_DEFAULT_TAB, 0) as number;
     if (idx < 0 || idx > 3) return 0;
     return idx;
+  }
+
+  static async getShelfStatusFilter(): Promise<number> {
+    const store = await PreferenceService.ensureStore();
+    const value = await store.get(KEY_SHELF_STATUS_FILTER, 0);
+    return value === 1 || value === 2 ? value : 0;
+  }
+
+  static async setShelfStatusFilter(value: number): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    await store.put(KEY_SHELF_STATUS_FILTER, value === 1 || value === 2 ? value : 0);
+    await store.flush();
   }
 
   static async setDefaultTab(idx: number): Promise<void> {

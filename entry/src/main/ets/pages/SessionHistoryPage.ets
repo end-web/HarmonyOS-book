@@ -6,8 +6,7 @@ import { TextReadingProgressService } from '../service/text/TextReadingProgressS
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { AppColor } from '../theme/Theme';
 import { AudioService } from '../service/AudioService';
-import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
-import { HdsCompat } from '../utils/HdsCompat';
+import { HdsNavDestination, HdsNavDestinationTitleMode } from '@kit.UIDesignKit';
 import { WindowUtils } from '../utils/WindowUtils';
 
 class SessionDataSource implements IDataSource {
@@ -33,21 +32,70 @@ export struct SessionHistoryPage {
   @Local failed: boolean = false;
   @Local count: number = 0;
   @Local jumping: boolean = false;
+  @Local transitionOffset: number = 0;
+  private transitioning: boolean = false;
   private records: SessionDataSource = new SessionDataSource();
   private scroller: Scroller = new Scroller();
+  private visible: boolean = false;
+  private loaded: boolean = false;
+  private loadGeneration: number = 0;
+  private entryTimer: number = -1;
 
-  aboutToAppear(): void { this.load(); }
+  aboutToDisappear(): void { this.stopLoading(); }
+
+  private onPageShown(): void {
+    this.visible = true;
+    if (this.loaded || this.entryTimer !== -1) return;
+    // 等当前导航事务提交；有转场时由结束回调接续，不猜测动画耗时。
+    this.entryTimer = setTimeout((): void => {
+      this.entryTimer = -1;
+      if (this.visible && !this.transitioning) this.load();
+    }, 0);
+  }
+
+  private historyTransition(operation: NavigationOperation, isEnter: boolean): NavDestinationTransition[] | undefined {
+    if (operation !== NavigationOperation.PUSH && operation !== NavigationOperation.POP) return undefined;
+    this.transitioning = true;
+    const entering = operation === NavigationOperation.PUSH && isEnter;
+    const leaving = operation === NavigationOperation.POP && !isEnter;
+    this.transitionOffset = entering ? WindowUtils.getWindowWidthVp() : 0;
+    return [{
+      duration: 280,
+      curve: Curve.FastOutSlowIn,
+      event: (): void => {
+        this.transitionOffset = leaving ? WindowUtils.getWindowWidthVp() : 0;
+      },
+      onTransitionEnd: (): void => {
+        this.transitioning = false;
+        if (isEnter && this.visible) this.onPageShown();
+      }
+    }];
+  }
+
+  private stopLoading(): void {
+    this.visible = false;
+    this.loadGeneration++;
+    if (this.entryTimer !== -1) clearTimeout(this.entryTimer);
+    this.entryTimer = -1;
+  }
 
   private async load(): Promise<void> {
+    const generation = ++this.loadGeneration;
     this.loading = true;
     this.failed = false;
     try {
       const ids: string[] = JSON.parse(this.bookIds);
-      const entries = await ReadingSessionService.list(ids);
+      const entries = await ReadingSessionService.list(ids,
+        (): boolean => this.visible && generation === this.loadGeneration);
+      if (!this.visible || generation !== this.loadGeneration) return;
       this.records.update(entries);
       this.count = entries.length;
-    } catch (_error) { this.failed = true; }
-    finally { this.loading = false; }
+      this.loaded = true;
+    } catch (_error) {
+      if (this.visible && generation === this.loadGeneration) this.failed = true;
+    } finally {
+      if (this.visible && generation === this.loadGeneration) this.loading = false;
+    }
   }
 
   private time(ms: number): string {
@@ -114,7 +162,7 @@ export struct SessionHistoryPage {
   }
 
   build() {
-    HdsNavigation() {
+    HdsNavDestination() {
         List({ scroller: this.scroller, space: 0 }) {
           ListItem() {
             Text($r('app.string.session_retention')).fontSize(12)
@@ -164,7 +212,7 @@ export struct SessionHistoryPage {
         .scrollBar(BarState.Off)
         .contentStartOffset(WindowUtils.getStatusBarHeightVp() + 56 + 16)
         .contentEndOffset(WindowUtils.getBottomSafeVp() + 24)
-    }.mode(NavigationMode.Stack)
+    }
     .titleBar({
       avoidLayoutSafeArea: true,
       content: {
@@ -172,28 +220,23 @@ export struct SessionHistoryPage {
         backIcon: { icon: $r('sys.symbol.chevron_left'), action: (): void => { this.navStack.pop(); } }
       },
       style: {
-        scrollEffectOpts: { scrollEffectType: HdsCompat.scrollEffect },
         originalStyle: {
-          backgroundStyle: { backgroundColor: Color.Transparent },
+          backgroundStyle: { backgroundColor: $r('sys.color.background_secondary') },
           contentStyle: {
             titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
             backIconStyle: { iconColor: $r('sys.color.icon_primary') }
           }
-        },
-        scrollEffectStyle: {
-          backgroundStyle: { backgroundColor: Color.Transparent },
-          contentStyle: {
-            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
-            backIconStyle: { iconColor: $r('sys.color.icon_primary') }
-          }
-        },
-        systemMaterialEffect: HdsCompat.material
+        }
       }
     })
-    .titleMode(HdsNavigationTitleMode.MINI)
-    .bindToScrollable([this.scroller])
+    .titleMode(HdsNavDestinationTitleMode.MINI)
     .width('100%').height('100%')
     .backgroundColor($r('sys.color.background_secondary'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .translate({ x: this.transitionOffset })
+    .customTransition((operation: NavigationOperation, isEnter: boolean): NavDestinationTransition[] | undefined =>
+      this.historyTransition(operation, isEnter))
+    .onShown((): void => this.onPageShown())
+    .onWillHide((): void => this.stopLoading())
   }
 }

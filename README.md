@@ -1,6 +1,6 @@
-# 简听
+# 简听阅读
 
-简听是面向 HarmonyOS 6.0 及以上手机（含折叠屏）、平板及鸿蒙电脑的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
+简听阅读是面向 HarmonyOS 6.0 及以上手机（含折叠屏）、平板及鸿蒙电脑的听书与小说阅读 App。用户可以导入 Legado/Reader 书源，在设备端搜索、阅读和收听，也可以导入本地音频、下载章节并管理书架与收听记录。个人数据默认保存在本机。
 
 当前版本：`0.1.28`，最低 API 20 / 目标 API 26，`com.huan.listenbook`。版本以 [AppScope/app.json5](AppScope/app.json5) 为准。
 
@@ -22,9 +22,9 @@ hdc install JianTing-v0.1.27.hap
 
 [在线介绍](https://end-web.github.io/HarmonyOS-book/) · [隐私政策](https://end-web.github.io/HarmonyOS-book/privacy.html) · [上架素材说明](docs/app-gallery/README.md) · [中文上架文案](docs/app-gallery/zh-CN.json)
 
-| 关于简听 | 我的书架 | 导入音频 | 使用说明 |
+| 关于简听阅读 | 我的书架 | 导入音频 | 使用说明 |
 |---|---|---|---|
-| ![简听关于页面](docs/app-gallery/screenshots/01-about.png) | ![简听书架](docs/app-gallery/screenshots/02-library.png) | ![简听音频导入](docs/app-gallery/screenshots/03-import.png) | ![简听使用说明](docs/app-gallery/screenshots/04-guide.png) |
+| ![简听阅读关于页面](docs/app-gallery/screenshots/01-about.png) | ![简听阅读书架](docs/app-gallery/screenshots/02-library.png) | ![简听阅读音频导入](docs/app-gallery/screenshots/03-import.png) | ![简听阅读使用说明](docs/app-gallery/screenshots/04-guide.png) |
 
 ## 标准手表适配（开发中）
 

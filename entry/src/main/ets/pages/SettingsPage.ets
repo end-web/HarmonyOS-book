@@ -1,4 +1,5 @@
 import { MembershipState } from '../model/MembershipState';
+import { MembershipService } from '../service/MembershipService';
 import { ImmersiveActionButton } from '../components/ImmersiveActionButton';
 import { ImmersiveOptionTabs } from '../components/ImmersiveOptionTabs';
 import { ConfigurationConstant } from '@kit.AbilityKit';
@@ -83,6 +84,8 @@ export struct SettingsPage {
   @Local preloadDraft: string = '1';
   @Local preloadCustom: boolean = false;
   @Local membership: MembershipState = MembershipState.current;
+  @Local membershipService: MembershipService = MembershipService.instance;
+  @Local checkingSearchMembership: boolean = false;
   @Local searchConcurrency: number = 3;
   @Local searchConcurrencyDraft: string = '3';
   @Local searchConcurrencyCustom: boolean = false;
@@ -90,6 +93,11 @@ export struct SettingsPage {
   @Local isSavingPreload: boolean = false;
   @Local isClearingListeningTime: boolean = false;
   @Local isLoaded: boolean = false;
+  @Local preferencesLoadFailed: boolean = false;
+  @Local searchConcurrencyLoading: boolean = true;
+  @Local searchConcurrencyLoadFailed: boolean = false;
+  private alive: boolean = false;
+  private preferencesLoadSerial: number = 0;
   @Local coverSuperResolution: boolean = false;
   @Local isSavingCoverSuperResolution: boolean = false;
   @Local isClearingCache: boolean = false;
@@ -100,10 +108,13 @@ export struct SettingsPage {
   private viewportUpdateTimerId: number = -1;
 
   aboutToAppear(): void {
+    this.alive = true;
     this.loadPrefs();
   }
 
   aboutToDisappear(): void {
+    this.alive = false;
+    this.preferencesLoadSerial++;
     this.cancelViewportUpdateTimer();
   }
 
@@ -136,23 +147,54 @@ export struct SettingsPage {
   }
 
   private async loadPrefs(): Promise<void> {
-    this.currentMode = await PreferenceService.getColorMode();
-    this.selectedThemeIndex = THEME_OPTIONS.findIndex((opt: ThemeOption) => opt.mode === this.currentMode);
-    if (this.selectedThemeIndex === -1) {
-      this.selectedThemeIndex = 0;
+    const serial = ++this.preferencesLoadSerial;
+    this.isLoaded = false;
+    this.preferencesLoadFailed = false;
+    // 搜索并发需要联网核验会员，只更新自身控件，不阻塞本地设置首屏。
+    this.loadSearchConcurrency(serial);
+    try {
+      const mode = await PreferenceService.getColorMode();
+      const defaultTab = await PreferenceService.getDefaultTab();
+      const autoPlay = await PreferenceService.getAutoPlayOnLaunch();
+      const coverResolution = await PreferenceService.getCoverSuperResolution();
+      const focusMode = await PreferenceService.getAudioInterruptMode();
+      const autoResume = await PreferenceService.getAudioAutoResume();
+      const preloadCount = await PreferenceService.getPreloadChapters();
+      if (!this.alive || serial !== this.preferencesLoadSerial) return;
+      this.currentMode = mode;
+      this.selectedThemeIndex = Math.max(0, THEME_OPTIONS.findIndex((opt: ThemeOption) => opt.mode === mode));
+      this.defaultTab = defaultTab;
+      this.autoPlayOnLaunch = autoPlay;
+      this.coverSuperResolution = coverResolution;
+      this.focusMode = focusMode;
+      this.autoResume = autoResume;
+      this.preloadCount = preloadCount;
+      this.preloadDraft = preloadCount.toString();
+      this.preloadCustom = !PRELOAD_OPTIONS.some((opt: PreloadOption): boolean => opt.count === preloadCount);
+      this.isLoaded = true;
+    } catch (_error) {
+      if (this.alive && serial === this.preferencesLoadSerial) this.preferencesLoadFailed = true;
     }
-    this.defaultTab = await PreferenceService.getDefaultTab();
-    this.autoPlayOnLaunch = await PreferenceService.getAutoPlayOnLaunch();
-    this.coverSuperResolution = await PreferenceService.getCoverSuperResolution();
-    this.focusMode = await PreferenceService.getAudioInterruptMode();
-    this.autoResume = await PreferenceService.getAudioAutoResume();
-    this.preloadCount = await PreferenceService.getPreloadChapters();
-    this.preloadDraft = this.preloadCount.toString();
-    this.preloadCustom = !PRELOAD_OPTIONS.some((opt: PreloadOption): boolean => opt.count === this.preloadCount);
-    this.searchConcurrency = await PreferenceService.getSearchConcurrency();
-    this.searchConcurrencyDraft = this.searchConcurrency.toString();
-    this.searchConcurrencyCustom = !SEARCH_CONCURRENCY_OPTIONS.includes(this.searchConcurrency);
-    this.isLoaded = true;
+  }
+
+  private async loadSearchConcurrency(serial: number): Promise<void> {
+    this.searchConcurrencyLoading = true;
+    this.searchConcurrencyLoadFailed = false;
+    try {
+      const count = await PreferenceService.getSearchConcurrency();
+      if (!this.alive || serial !== this.preferencesLoadSerial) return;
+      if (!this.membership.hasAccess && !this.membership.confirmedInactive) {
+        this.searchConcurrencyLoadFailed = true;
+        return;
+      }
+      this.searchConcurrency = this.membership.hasAccess ? count : 3;
+      this.searchConcurrencyDraft = this.searchConcurrency.toString();
+      this.searchConcurrencyCustom = !SEARCH_CONCURRENCY_OPTIONS.includes(this.searchConcurrency);
+    } catch (_error) {
+      if (this.alive && serial === this.preferencesLoadSerial) this.searchConcurrencyLoadFailed = true;
+    } finally {
+      if (this.alive && serial === this.preferencesLoadSerial) this.searchConcurrencyLoading = false;
+    }
   }
 
   private async setDefaultTab(idx: number): Promise<void> {
@@ -231,26 +273,40 @@ export struct SettingsPage {
     }
   }
 
-  private requireSearchMembership(): boolean {
-    if (this.membership.hasAccess) return true;
-    this.searchConcurrency = 3;
-    this.searchConcurrencyDraft = '3';
-    this.searchConcurrencyCustom = false;
-    this.navStack.pushPathByName('membershipSubscription', '');
-    return false;
+  private async requireSearchMembership(): Promise<boolean> {
+    if (this.checkingSearchMembership || this.searchConcurrencyLoading || this.searchConcurrencyLoadFailed) return false;
+    this.checkingSearchMembership = true;
+    try {
+      const entitled = await this.membershipService.hasCurrentEntitlement();
+      if (!this.alive) return false;
+      if (entitled) return true;
+      this.showSearchMembershipUnavailable();
+      return false;
+    } finally {
+      this.checkingSearchMembership = false;
+    }
+  }
+
+  private showSearchMembershipUnavailable(): void {
+    if (this.membership.confirmedInactive && !this.membershipService.busy) {
+      this.onSearchMembershipChanged();
+      this.navStack.pushPathByName('membershipSubscription', '');
+    } else {
+      this.getUIContext().getPromptAction().showToast({ message: this.membershipService.message });
+    }
   }
 
   @Monitor('membership.confirmedInactive')
   private onSearchMembershipChanged(): void {
-    if (!this.membership.hasAccess) {
+    if (this.membership.confirmedInactive && !this.membership.hasAccess) {
       this.searchConcurrency = 3;
       this.searchConcurrencyDraft = '3';
       this.searchConcurrencyCustom = false;
     }
   }
 
-  private submitSearchConcurrency(): void {
-    if (!this.requireSearchMembership()) return;
+  private async submitSearchConcurrency(): Promise<void> {
+    if (!await this.requireSearchMembership()) return;
     const count = Number(this.searchConcurrencyDraft);
     if (!new RegExp('^[0-9]+$').test(this.searchConcurrencyDraft) ||
       !Number.isInteger(count) || count < 1 || count > 12) {
@@ -260,20 +316,30 @@ export struct SettingsPage {
     this.setSearchConcurrency(count, true);
   }
 
+  private async chooseSearchConcurrency(index: number): Promise<void> {
+    if (index === 4) {
+      if (await this.requireSearchMembership()) this.searchConcurrencyCustom = true;
+    } else {
+      await this.setSearchConcurrency(SEARCH_CONCURRENCY_OPTIONS[index], false);
+    }
+  }
+
   private async setSearchConcurrency(count: number, custom: boolean): Promise<void> {
-    if (this.isSavingSearchConcurrency || !this.requireSearchMembership()) return;
+    if (this.isSavingSearchConcurrency || !await this.requireSearchMembership()) return;
     const previous = this.searchConcurrency;
     const previousCustom = this.searchConcurrencyCustom;
     this.isSavingSearchConcurrency = true;
     try {
       await PreferenceService.setSearchConcurrency(count);
+      if (!this.alive) return;
       this.searchConcurrency = count;
       this.searchConcurrencyDraft = count.toString();
       this.searchConcurrencyCustom = custom;
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_search_concurrency_saved', count) });
     } catch (error) {
+      if (!this.alive) return;
       if (!this.membership.hasAccess) {
-        this.requireSearchMembership();
+        this.showSearchMembershipUnavailable();
         return;
       }
       this.searchConcurrencyDraft = previous.toString();
@@ -455,27 +521,38 @@ export struct SettingsPage {
     Column() {
       this.buildHeader()
 
-      if (this.isLoaded) {
-        Scroll() {
-          GridRow({ columns: this.viewportWidth >= AdaptiveLayout.LARGE_WIDTH ? 2 : 1,
-            gutter: AdaptiveLayout.sectionSpacing(this.viewportWidth, this.viewportHeight) }) {
-            GridCol() { this.buildAppearanceGroup() }
-            GridCol() { this.buildLaunchGroup() }
-            GridCol() { this.buildPlaybackGroup() }
-            GridCol() { this.buildSearchGroup() }
+      if (!this.isLoaded) {
+        Row({ space: AppSpace.Sm }) {
+          if (!this.preferencesLoadFailed) {
+            LoadingProgress().width(20).height(20).color(AppColor.Brand)
           }
-          .width('100%')
-          .padding({
-            left: this.horizontalPadding(),
-            right: this.horizontalPadding(),
-            top: this.isCompactLayout() ? 0 : AppSpace.Sm,
-            bottom: AppSpace.Xl
-          })
-        }
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
+          Text(this.preferencesLoadFailed ? $r('app.string.settings_load_failed') : $r('app.string.settings_loading'))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+          if (this.preferencesLoadFailed) {
+            Button($r('app.string.common_retry'), { buttonStyle: ButtonStyleMode.TEXTUAL })
+              .fontColor(AppColor.Brand).onClick((): void => { this.loadPrefs(); })
+          }
+        }.width('100%').padding({ left: AppSpace.Md, right: AppSpace.Md, bottom: AppSpace.Sm })
       }
+      Scroll() {
+        GridRow({ columns: this.viewportWidth >= AdaptiveLayout.LARGE_WIDTH ? 2 : 1,
+          gutter: AdaptiveLayout.sectionSpacing(this.viewportWidth, this.viewportHeight) }) {
+          GridCol() { this.buildAppearanceGroup() }.enabled(this.isLoaded)
+          GridCol() { this.buildLaunchGroup() }.enabled(this.isLoaded)
+          GridCol() { this.buildPlaybackGroup() }.enabled(this.isLoaded)
+          GridCol() { this.buildSearchGroup() }
+        }
+        .width('100%')
+        .padding({
+          left: this.horizontalPadding(),
+          right: this.horizontalPadding(),
+          top: this.isCompactLayout() ? 0 : AppSpace.Sm,
+          bottom: AppSpace.Xl
+        })
+      }
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
     .height('100%')
@@ -706,30 +783,41 @@ export struct SettingsPage {
           .fontSize(AppFont.BodyL)
           .fontColor($r('sys.color.font_primary'))
           .width('100%')
+        if (this.searchConcurrencyLoading || this.checkingSearchMembership || this.membershipService.busy) {
+          Row({ space: AppSpace.Sm }) {
+            LoadingProgress().width(18).height(18).color(AppColor.Brand)
+            Text($r('app.string.settings_search_loading')).fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+          }.width('100%')
+        } else if (this.searchConcurrencyLoadFailed) {
+          Row({ space: AppSpace.Sm }) {
+            Text($r('app.string.settings_search_load_failed')).fontSize(AppFont.Caption)
+              .fontColor($r('sys.color.font_secondary')).layoutWeight(1)
+            Button($r('app.string.common_retry'), { buttonStyle: ButtonStyleMode.TEXTUAL })
+              .fontColor(AppColor.Brand)
+              .onClick((): void => { this.loadSearchConcurrency(this.preferencesLoadSerial); })
+          }.width('100%')
+        }
         Row({ space: AppSpace.Sm }) {
           ImmersiveOptionTabs({
             labels: ['3', '6', '9', '12', $r('app.string.settings_search_custom')],
             fillWidth: true,
             selected: this.searchConcurrencyCustom ? 4 : SEARCH_CONCURRENCY_OPTIONS.indexOf(this.searchConcurrency),
             onSelect: (index: number): void => {
-              if (!this.requireSearchMembership()) return;
-              if (index === 4) {
-                this.searchConcurrencyCustom = true;
-              } else {
-                this.setSearchConcurrency(SEARCH_CONCURRENCY_OPTIONS[index], false);
-              }
+              this.chooseSearchConcurrency(index);
             }
           }).layoutWeight(1.5)
           TextInput({ text: this.searchConcurrencyDraft, placeholder: $r('app.string.settings_search_concurrency_hint') })
             .enabled(this.membership.hasAccess)
             .type(InputType.Number).maxLength(2).layoutWeight(1).height(40)
             .onChange((value: string): void => { this.searchConcurrencyDraft = value; })
-            .onSubmit((): void => this.submitSearchConcurrency())
-          ImmersiveActionButton({ onPress: (): void => this.submitSearchConcurrency() }).layoutWeight(0.8)
+            .onSubmit((): void => { this.submitSearchConcurrency(); })
+          ImmersiveActionButton({ onPress: (): void => { this.submitSearchConcurrency(); } }).layoutWeight(0.8)
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
-        .enabled(!this.isSavingSearchConcurrency)
+        .enabled(!this.isSavingSearchConcurrency && !this.searchConcurrencyLoading && !this.searchConcurrencyLoadFailed &&
+          !this.checkingSearchMembership && !this.membershipService.busy)
       }
       .width('100%')
       .padding(ROW_INDENT)

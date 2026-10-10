@@ -220,21 +220,10 @@ export struct ProfilePage {
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .flexShrink(1)
-            if (this.auth.isLoggedIn && this.medalService.ready && this.medalService.selectedMedalId !== '') {
-              Image(this.medalService.selected()?.badge)
-                .width(20)
-                .height(20)
-                .objectFit(ImageFit.Contain)
-                .flexShrink(0)
-                .accessibilityText(this.medalService.selected()?.name ?? $r('app.string.account_medal_list'))
+            if (this.membership.displayActive) {
+              MembershipBadge({ productId: this.membership.displayProductId, badgeWidth: 20 })
             }
-            if (this.membership.active) {
-              MembershipBadge({ productId: this.membership.productId, badgeWidth: 36 })
-            }
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Center)
-          .justifyContent(FlexAlign.Start)
+          }.width('100%').alignItems(VerticalAlign.Center)
           if (!this.auth.isLoggedIn) {
             Text($r('app.string.hw_auth_login_desc'))
               .fontSize(AppFont.Caption)
@@ -244,6 +233,8 @@ export struct ProfilePage {
           }
         }
         .layoutWeight(1)
+        .constraintSize({ minHeight: 56 })
+        .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Start)
 
         if (this.auth.logging || this.auth.restoring) {
@@ -380,9 +371,20 @@ export struct ProfilePage {
       .borderRadius(7)
 
       Column({ space: 2 }) {
-        Text(item.label)
-          .fontSize(AppFont.BodyL)
-          .fontColor($r('sys.color.font_primary'))
+        Row({ space: 6 }) {
+          Text(item.label)
+            .fontSize(AppFont.BodyL)
+            .fontColor($r('sys.color.font_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .flexShrink(1)
+          if (item.id === 'achievements' && this.auth.isLoggedIn && this.medalService.ready &&
+            this.medalService.selectedMedalId !== '') {
+            Image(this.medalService.selected()?.badge)
+              .width(20).height(20).objectFit(ImageFit.Contain).flexShrink(0)
+              .accessibilityText(this.medalService.selected()?.name ?? $r('app.string.account_medal_list'))
+          }
+        }.width('100%').alignItems(VerticalAlign.Center)
         if (typeof item.subtitle !== 'string' || item.subtitle.length > 0) {
           Text(item.subtitle)
             .fontSize(AppFont.Caption)

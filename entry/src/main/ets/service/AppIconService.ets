@@ -40,7 +40,9 @@ export class AppIconService {
       new AppIconOption('retro', $r('app.string.app_icon_retro'), $r('app.media.app_icon_retro_legacy')),
       new AppIconOption('cartoon', $r('app.string.app_icon_cartoon'), $r('app.media.app_icon_cartoon_legacy')),
       new AppIconOption('cartooncat', $r('app.string.app_icon_cartooncat'), $r('app.media.app_icon_cartooncat_legacy')),
-      new AppIconOption('cartoondog', $r('app.string.app_icon_cartoondog'), $r('app.media.app_icon_cartoondog_legacy'))
+      new AppIconOption('cartoondog', $r('app.string.app_icon_cartoondog'), $r('app.media.app_icon_cartoondog_legacy')),
+      new AppIconOption('wave', $r('app.string.app_icon_wave'), $r('app.media.app_icon_wave_legacy')),
+      new AppIconOption('life', $r('app.string.app_icon_life'), $r('app.media.app_icon_life_legacy'))
     ];
   }
 

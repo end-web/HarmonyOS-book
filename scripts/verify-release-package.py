@@ -13,13 +13,15 @@ def verify_hap(data, name, args):
         app = json.loads(hap.read('module.json'))['app']
         summary = {key: app.get(key) for key in (
             'bundleName', 'versionName', 'versionCode', 'minAPIVersion',
-            'targetAPIVersion', 'compileSdkVersion', 'apiReleaseType', 'debug')}
+            'targetAPIVersion', 'compileSdkVersion', 'apiReleaseType', 'buildMode', 'debug')}
         summary['module'] = name
         errors = []
         if app.get('apiReleaseType') != 'Release':
             errors.append('SDK channel must be Release')
         if app.get('debug') is not False:
             errors.append('debug must be false')
+        if app.get('buildMode') != 'release':
+            errors.append('buildMode must be release')
         if app.get('bundleName') != 'com.huan.listenbook':
             errors.append('unexpected bundleName')
         if app.get('versionName') != args.version:

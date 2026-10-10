@@ -23,6 +23,8 @@ export struct AccountPage {
   @Local local: LocalBackupService = LocalBackupService.instance;
   @Local automatic: AutoBackupService = AutoBackupService.instance;
   @Local membership: MembershipState = MembershipState.current;
+  @Local membershipService: MembershipService = MembershipService.instance;
+  @Local checkingMembership: boolean = false;
   @Local manualPending: boolean = false;
   @Local autoReady: boolean = false;
   @Local message: ResourceStr = '';
@@ -33,11 +35,12 @@ export struct AccountPage {
   @Local localBackupExpanded: boolean = false;
   @Local cloudBackupExpanded: boolean = false;
   private finishConfirmation: ((confirmed: boolean) => void) | null = null;
+  private alive: boolean = false;
 
   aboutToAppear(): void {
+    this.alive = true;
     const context = this.getUIContext().getHostContext();
     if (context) {
-      MembershipService.instance.hasCurrentEntitlement();
       this.auth.restore(context).then(async (): Promise<void> => {
         await this.automatic.refresh(context);
         this.autoReady = true;
@@ -47,6 +50,7 @@ export struct AccountPage {
   }
 
   aboutToDisappear(): void {
+    this.alive = false;
     this.finishConfirmation?.(false);
     this.finishConfirmation = null;
     if (!this.automatic.running) this.cloud.cancel();
@@ -80,18 +84,34 @@ export struct AccountPage {
     }
   }
 
-  private async setAutomatic(enabled: boolean, days: number): Promise<void> {
-    if (!this.membership.hasAccess) {
-      this.navStack.pushPathByName('membershipSubscription', '');
-      return;
+  private async requireAutoMembership(): Promise<boolean> {
+    if (this.checkingMembership) return false;
+    this.checkingMembership = true;
+    try {
+      const entitled = await this.membershipService.hasCurrentEntitlement();
+      if (!this.alive) return false;
+      if (entitled) return true;
+      if (this.membership.confirmedInactive) {
+        this.navStack.pushPathByName('membershipSubscription', '');
+      } else {
+        this.toast(this.membershipService.message);
+      }
+      return false;
+    } finally {
+      this.checkingMembership = false;
     }
+  }
+
+  private async setAutomatic(enabled: boolean, days: number): Promise<void> {
+    if (!await this.requireAutoMembership()) return;
     const context = this.getUIContext().getHostContext();
     if (!context || !this.auth.isLoggedIn || !this.manualAvailable()) return;
     try {
       await this.automatic.configure(context, enabled, days);
     } catch (_error) {
+      if (!this.alive) return;
       this.toast(this.membership.hasAccess ? $r('app.string.auto_backup_save_failed') :
-        $r('app.string.auto_backup_membership_required'));
+        this.membership.confirmedInactive ? $r('app.string.auto_backup_membership_required') : this.membershipService.message);
     }
   }
 
@@ -101,11 +121,8 @@ export struct AccountPage {
         $r('app.string.auto_backup_daily');
   }
 
-  private chooseFrequency(): void {
-    if (!this.membership.hasAccess) {
-      this.navStack.pushPathByName('membershipSubscription', '');
-      return;
-    }
+  private async chooseFrequency(): Promise<void> {
+    if (!await this.requireAutoMembership()) return;
     this.getUIContext().getPromptAction().showActionMenu({
       title: $r('app.string.auto_backup_frequency'),
       buttons: [
@@ -119,7 +136,9 @@ export struct AccountPage {
   }
 
   private autoStatus(): ResourceStr {
-    if (!this.membership.hasAccess) return $r('app.string.auto_backup_membership_required');
+    if (this.membershipService.busy || this.checkingMembership) return $r('app.string.membership_syncing');
+    if (!this.membership.hasAccess) return this.membership.confirmedInactive ?
+      $r('app.string.auto_backup_membership_required') : this.membershipService.message;
     if (!this.auth.isLoggedIn) return $r('app.string.auto_backup_login_required');
     if (this.automatic.storageFailed) return $r('app.string.auto_backup_save_failed');
     if (this.automatic.accountId !== this.auth.openID || !this.automatic.settings.enabled) {
@@ -524,7 +543,8 @@ export struct AccountPage {
         Toggle({ type: ToggleType.Switch, isOn: this.membership.hasAccess && this.auth.isLoggedIn &&
           this.automatic.accountId === this.auth.openID && this.automatic.settings.enabled })
           .selectedColor(AppColor.Brand)
-          .enabled(this.membership.hasAccess && this.autoReady && this.auth.isLoggedIn && this.manualAvailable())
+          .enabled(this.membership.hasAccess && this.autoReady && this.auth.isLoggedIn && this.manualAvailable() &&
+            !this.membershipService.busy && !this.checkingMembership)
           .accessibilityText($r('app.string.auto_backup_title'))
           .onChange((enabled: boolean): void => { this.setAutomatic(enabled, this.automatic.settings.intervalDays); })
           if (!this.membership.hasAccess) {
@@ -532,8 +552,10 @@ export struct AccountPage {
               Row().width(52).height(32)
             }
             .backgroundColor(Color.Transparent)
-            .accessibilityText($r('app.string.auto_backup_membership_required'))
-            .onClick(() => this.navStack.pushPathByName('membershipSubscription', ''))
+            .accessibilityText(this.membership.confirmedInactive ?
+              $r('app.string.auto_backup_membership_required') : $r('app.string.common_retry'))
+            .enabled(!this.membershipService.busy && !this.checkingMembership)
+            .onClick(() => this.requireAutoMembership())
           }
         }
       }
@@ -550,15 +572,21 @@ export struct AccountPage {
         }
         .width('100%')
         .constraintSize({ minHeight: 44 })
-        .enabled((!this.membership.hasAccess || this.automatic.settings.enabled) && this.manualAvailable())
+        .enabled((!this.membership.hasAccess || this.automatic.settings.enabled) && this.manualAvailable() &&
+          !this.membershipService.busy && !this.checkingMembership)
         .onClick(() => this.chooseFrequency())
       }
       Text(this.autoStatus()).fontSize(AppFont.Caption).lineHeight(19)
         .fontColor($r('sys.color.font_secondary'))
-      if (!this.membership.hasAccess) {
+      if (this.membershipService.busy || this.checkingMembership) {
+        LoadingProgress().width(18).height(18).color(AppColor.Brand)
+      } else if (!this.membership.hasAccess && this.membership.confirmedInactive) {
         Button($r('app.string.membership_subscription_entry'))
           .fontColor(AppColor.Brand).backgroundColor(Color.Transparent)
-          .onClick(() => this.navStack.pushPathByName('membershipSubscription', ''))
+          .onClick(() => this.requireAutoMembership())
+      } else if (!this.membership.hasAccess) {
+        Button($r('app.string.common_retry'), { buttonStyle: ButtonStyleMode.TEXTUAL })
+          .fontColor(AppColor.Brand).onClick(() => this.requireAutoMembership())
       }
       if (this.auth.isLoggedIn && this.automatic.accountId === this.auth.openID &&
         this.automatic.settings.enabled && this.automatic.settings.errorCode !== 0 &&

@@ -787,6 +787,7 @@ export struct BookDetailPage {
   }
 
   private openPrimaryAction(chapter?: Chapter): void {
+    if (this.chaptersLoading() || !this.book || this.isStartingPlay) return;
     if (this.book?.contentType === 'text') {
       this.openTextReader(chapter);
       return;
@@ -1377,6 +1378,7 @@ export struct BookDetailPage {
   // ==================== 主 CTA ====================
 
   private primaryCtaLabel(): ResourceStr {
+    if (this.chaptersLoading()) return $r('app.string.book_detail_loading_chapters');
     if (this.book?.contentType === 'text') {
       return this.textReadingProgress
         ? $r('app.string.book_detail_continue_read')
@@ -1384,6 +1386,10 @@ export struct BookDetailPage {
     }
     if (!this.lastHistory) return $r('app.string.book_detail_start_listen');
     return $r('app.string.book_detail_continue_listen');
+  }
+
+  private chaptersLoading(): boolean {
+    return this.deferEntry || this.loadingDetail || this.loadingToc;
   }
 
   @Builder
@@ -1410,6 +1416,8 @@ export struct BookDetailPage {
       bottom: WindowUtils.getBottomSafeVp() + 12
     })
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.97 })
+    .enabled(!this.chaptersLoading() && this.book !== null && !this.isStartingPlay)
+    .opacity(this.chaptersLoading() || this.isStartingPlay ? 0.6 : 1)
     .onClick((): void => { this.openPrimaryAction(); })
   }
 

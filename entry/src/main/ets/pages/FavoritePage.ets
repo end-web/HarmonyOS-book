@@ -2,7 +2,7 @@ import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
-import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
+import { promptAction, CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common, ApplicationStateChangeCallback } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
@@ -27,6 +27,7 @@ import { StatsService } from '../service/StatsService';
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { PlaybackStore } from '../service/PlaybackStore';
 import { SearchCache } from '../utils/SearchCache';
+import { OneShotLayoutCallback } from '../utils/OneShotTransition';
 import { WindowUtils } from '../utils/WindowUtils';
 import { BookDataSource } from '../utils/BookDataSource';
 import { ShelfBatchActions } from '../components/ShelfBatchActions';
@@ -40,8 +41,10 @@ import { TextReadingProgressService, EVT_TEXT_READING_PROGRESS_CHANGED } from '.
 const BOOKSHELF_COVER_RATIO: number = 0.75;
 const MINI_TITLE_BAR_HEIGHT: number = 56;
 const SHELF_FILTER_TOP_OFFSET: number = MINI_TITLE_BAR_HEIGHT;
-const SHELF_FILTER_ROW_HEIGHT: number = 40;
-const SHELF_CONTENT_GAP: number = 18;
+const SHELF_FILTER_ROW_HEIGHT: number = 48;
+const SHELF_SEARCH_ROW_HEIGHT: number = 50;
+const SHELF_CONTENT_GAP: number = 24;
+const SHELF_SEARCH_GEOMETRY_ID: string = 'shelf-search-morph';
 
 function cloneChapter(ch: Chapter): Chapter {
   return {
@@ -136,6 +139,13 @@ export struct FavoritePage {
   @Local missingFavoriteCount: number = 0;
   @Local viewMode: number = 0; // 0=网格，1=列表
   @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
+  @Local shelfStatusFilter: number = 0; // 0=全部, 1=连载中, 2=已完结
+  @Local shelfKeyword: string = '';
+  @Local showShelfSearch: boolean = false;
+  @Local shelfSearchAnimating: boolean = false;
+  private shelfSearchController: SearchController = new SearchController();
+  private statusFilterRevision: number = 0;
+  private statusSaveTask: Promise<void> = Promise.resolve();
   @Local topSafeVp: number = WindowUtils.getStatusBarHeightVp();
   @Local textProgressMap: Map<string, TextReadingPosition> = new Map();
   @Param visible: boolean = false;
@@ -242,6 +252,12 @@ export struct FavoritePage {
       if (this.alive && this.updateReport.checkedAt < report.checkedAt) this.applyUpdateReport(report);
     });
     this.loadFavorites();
+    const revision = this.statusFilterRevision;
+    PreferenceService.getShelfStatusFilter().then((value: number): void => {
+      if (!this.alive || revision !== this.statusFilterRevision) return;
+      this.shelfStatusFilter = value;
+      this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
+    }).catch((): void => {});
     emitter.on(EVT_HISTORY_UPDATED, this.historyUpdatedHandler);
     emitter.on(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     emitter.on(EVT_TEXT_READING_PROGRESS_CHANGED, this.textProgressChangedHandler);
@@ -696,10 +712,73 @@ export struct FavoritePage {
     });
   }
 
+  private shelfHeaderHeight(): number {
+    return SHELF_FILTER_ROW_HEIGHT + (this.showShelfSearch ? SHELF_SEARCH_ROW_HEIGHT : 0);
+  }
+
+  private toggleShelfSearch(): void {
+    if (this.isManaging || this.removingBook || this.showBatchDelete || this.shelfSearchAnimating) return;
+    if (this.showShelfSearch) this.shelfSearchController.stopEditing();
+    this.shelfSearchAnimating = true;
+    this.listScroller.scrollToIndex(0);
+    // 先让回顶布局落定；按钮和输入框的位置、尺寸及圆角由共享元素转场计算。
+    this.getUIContext().postFrameCallback(new OneShotLayoutCallback((): void => {
+      if (!this.alive) return;
+      if (!this.visible) {
+        this.shelfSearchAnimating = false;
+        return;
+      }
+      this.getUIContext().animateTo({
+        duration: 320,
+        curve: Curve.FastOutSlowIn,
+        onFinish: (): void => { if (this.alive) this.shelfSearchAnimating = false; }
+      }, (): void => { this.showShelfSearch = !this.showShelfSearch; });
+    }));
+  }
+
   private filteredBooks(books: Book[]): Book[] {
-    if (this.shelfFilter === 1) return books.filter((book: Book): boolean => book.contentType !== 'text');
-    if (this.shelfFilter === 2) return books.filter((book: Book): boolean => book.contentType === 'text');
-    return books;
+    const keyword = this.shelfKeyword.trim().toLocaleLowerCase();
+    return books.filter((book: Book): boolean => {
+      if (this.shelfFilter === 1 && book.contentType === 'text') return false;
+      if (this.shelfFilter === 2 && book.contentType !== 'text') return false;
+      // 与详情页一致：只有明确的 false 表示连载，缺失状态默认完结。
+      if (this.shelfStatusFilter === 1 && book.completed !== false) return false;
+      if (this.shelfStatusFilter === 2 && book.completed === false) return false;
+      return keyword.length === 0 || [book.title, book.author, book.narrator]
+        .some((value: string): boolean => (value || '').toLocaleLowerCase().includes(keyword));
+    });
+  }
+
+  private statusFilterLabel(index: number): Resource {
+    if (index === 1) return $r('app.string.shelf_status_ongoing');
+    if (index === 2) return $r('app.string.shelf_status_completed');
+    return $r('app.string.shelf_status_all');
+  }
+
+  private showStatusFilter(): void {
+    if (this.removingBook || this.showBatchDelete) return;
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: $r('app.string.shelf_status_filter'),
+      buttons: [this.statusFilterButton(0), this.statusFilterButton(1), this.statusFilterButton(2)]
+    }).then((result): void => {
+      if (!this.alive || this.removingBook || this.showBatchDelete) return;
+      const value = result.index;
+      if (value < 0 || value > 2) return;
+      this.statusFilterRevision++;
+      this.shelfStatusFilter = value;
+      this.selectedBookIds = new Set();
+      this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
+      this.listScroller.scrollToIndex(0);
+      this.statusSaveTask = this.statusSaveTask.then((): Promise<void> =>
+        PreferenceService.setShelfStatusFilter(value)).catch((): void => {
+        if (this.alive) this.getUIContext().getPromptAction().showToast({ message: $r('app.string.shelf_filter_save_failed') });
+      });
+    }).catch((): void => {});
+  }
+
+  private statusFilterButton(index: number): promptAction.Button {
+    return { text: this.statusFilterLabel(index),
+      color: index === this.shelfStatusFilter ? AppColor.Brand : $r('sys.color.font_primary') };
   }
 
   private selectShelfFilter(index: number): void {
@@ -1116,7 +1195,23 @@ export struct FavoritePage {
 
       HdsNavigation() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.refreshIndicator() }) {
-          if (this.viewMode === 0) {
+          if (!this.loading && this.filteredBooks(this.favoriteBooks).length === 0) {
+            List({ scroller: this.listScroller }) {
+              ListItemGroup({ header: this.buildShelfContentInset() }) {
+                ListItem() {
+                  Column({ space: AppSpace.Md }) {
+                    Text($r('app.string.shelf_filter_empty')).fontSize(AppFont.Body)
+                      .fontColor($r('sys.color.font_secondary'))
+                    Text($r('app.string.shelf_filter_empty_hint')).fontSize(AppFont.Caption)
+                      .fontColor($r('sys.color.font_tertiary'))
+                    if (!this.isManaging) { this.buildAddListItem() }
+                  }.width('100%').padding(AppSpace.Lg)
+                }
+              }
+            }.width('100%').height('100%').scrollBar(BarState.Off)
+            .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + (this.isManaging ? 72 : 0))
+            .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+          } else if (this.viewMode === 0) {
             // 三列书卡复用 List 的首尾边界，内容不足一屏时回弹后仍停留在安全起点。
             List({ scroller: this.listScroller }) {
               ListItemGroup({ header: this.buildShelfContentInset(), space: AppSpace.Md }) {
@@ -1190,30 +1285,10 @@ export struct FavoritePage {
       .titleBar({
         avoidLayoutSafeArea: true,
         content: {
-          title: {
-            mainTitle: this.isManaging ? $r('app.string.shelf_selected_count', this.selectedBookIds.size) :
-              $r('app.string.shelf_title')
-          },
+          stackBuilder: (): void => this.buildShelfTitleBar(),
           bottomBuilder: {
             builder: (): void => this.buildShelfFilter(),
-            height: SHELF_FILTER_ROW_HEIGHT
-          },
-          menu: {
-            value: [{
-              content: {
-                icon: $r('sys.symbol.arrow_clockwise'),
-                label: $r('app.string.shelf_updates_title'),
-                action: (): void => { if (!this.isManaging && !this.removingBook) this.showUpdates = true; }
-              }
-            }, {
-              content: {
-                icon: this.viewMode === 0
-                  ? $r('sys.symbol.list_bullet')
-                  : $r('sys.symbol.square_grid_2x2'),
-                label: this.viewMode === 0 ? '切换为列表' : '切换为网格',
-                action: () => { if (!this.removingBook && !this.showBatchDelete) this.toggleViewMode(); }
-              }
-            }]
+            height: this.shelfHeaderHeight()
           }
         },
         style: {
@@ -1469,7 +1544,7 @@ export struct FavoritePage {
     .height(56)
     .justifyContent(FlexAlign.Center)
       .translate({
-        y: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET + SHELF_FILTER_ROW_HEIGHT
+        y: WindowUtils.getStatusBarHeightVp() + SHELF_FILTER_TOP_OFFSET + this.shelfHeaderHeight()
       })
   }
 
@@ -1478,13 +1553,89 @@ export struct FavoritePage {
     // 使用真实的全宽组头预留导航空间，避免沉浸导航绑定后的滚动偏移影响首行位置。
     Column()
       .width('100%')
-      .height(this.topSafeVp + SHELF_FILTER_TOP_OFFSET + SHELF_FILTER_ROW_HEIGHT + SHELF_CONTENT_GAP)
+      .height(this.topSafeVp + SHELF_FILTER_TOP_OFFSET + this.shelfHeaderHeight() + SHELF_CONTENT_GAP)
       .hitTestBehavior(HitTestMode.None)
   }
 
   @Builder
+  buildShelfTitleBar() {
+    Row({ space: 8 }) {
+      Text(this.isManaging ? $r('app.string.shelf_selected_count', this.selectedBookIds.size) :
+        $r('app.string.shelf_title'))
+        .fontSize(26).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+      // 仅收起态按钮与 Search 配对；展开态保留独立收起入口，不占用共享 ID。
+      Stack() {
+        if (!this.showShelfSearch) {
+          Button({ type: ButtonType.Normal }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              .fontSize(24).fontWeight(FontWeight.Regular)
+              .fontColor([this.shelfKeyword.trim().length > 0 ? AppColor.Brand : $r('sys.color.icon_primary')])
+          }
+          .width(40).height(40).borderRadius(20).clip(true)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          .geometryTransition(SHELF_SEARCH_GEOMETRY_ID)
+          .transition(TransitionEffect.OPACITY)
+          .enabled(!this.isManaging && !this.removingBook && !this.showBatchDelete && !this.shelfSearchAnimating)
+          .accessibilityText($r('app.string.shelf_search_expand'))
+          .onClick((): void => this.toggleShelfSearch())
+        } else {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.magnifyingglass'))
+              .fontSize(24).fontWeight(FontWeight.Regular).fontColor([AppColor.Brand])
+          }
+          .width(40).height(40).backgroundColor($r('sys.color.comp_background_tertiary'))
+          .transition(TransitionEffect.OPACITY)
+          .enabled(!this.isManaging && !this.removingBook && !this.showBatchDelete && !this.shelfSearchAnimating)
+          .accessibilityText($r('app.string.shelf_search_collapse'))
+          .onClick((): void => this.toggleShelfSearch())
+        }
+      }.id('shelf-search-toggle').width(40).height(40).clip(false)
+      this.buildShelfToolButton($r('sys.symbol.funnel'), $r('app.string.shelf_status_filter'),
+        !this.removingBook && !this.showBatchDelete, (): void => this.showStatusFilter())
+      this.buildShelfToolButton($r('sys.symbol.arrow_clockwise'), $r('app.string.shelf_updates_title'),
+        !this.isManaging && !this.removingBook, (): void => { this.showUpdates = true; })
+      this.buildShelfToolButton(this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'),
+        this.viewMode === 0 ? $r('app.string.shelf_view_list') : $r('app.string.shelf_view_grid'),
+        !this.removingBook && !this.showBatchDelete, (): void => this.toggleViewMode())
+    }
+    .width('100%').height(MINI_TITLE_BAR_HEIGHT)
+    .padding({ left: AppSpace.Md, right: AppSpace.Md })
+    .clip(false)
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  buildShelfToolButton(icon: Resource, label: Resource, enabled: boolean, action: () => void) {
+    Button({ type: ButtonType.Circle }) {
+      SymbolGlyph(icon).fontSize(24).fontWeight(FontWeight.Regular).fontColor([$r('sys.color.icon_primary')])
+    }
+    .width(40).height(40).backgroundColor($r('sys.color.comp_background_tertiary'))
+    .enabled(enabled).accessibilityText(label).onClick(action)
+  }
+
+  @Builder
   buildShelfFilter() {
-    Row() {
+    Column({ space: 6 }) {
+      if (this.showShelfSearch) {
+        Search({ value: this.shelfKeyword, placeholder: $r('app.string.shelf_search_hint'),
+          controller: this.shelfSearchController })
+          .id('shelf-search-input')
+          .height(44).width('100%').enabled(!this.removingBook && !this.showBatchDelete)
+          .placeholderFont({ size: AppFont.Body, weight: FontWeight.Regular })
+          .textFont({ size: AppFont.Body, weight: FontWeight.Regular })
+          .borderRadius(22).clip(true)
+          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          .geometryTransition(SHELF_SEARCH_GEOMETRY_ID)
+          .transition(TransitionEffect.OPACITY)
+          .zIndex(2)
+          .onChange((value: string): void => {
+            this.shelfKeyword = value;
+            this.selectedBookIds = new Set();
+            this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
+            this.listScroller.scrollToIndex(0);
+          })
+      }
       Stack({ alignContent: Alignment.Bottom }) {
         CapsuleSegmentButtonV2({
           items: this.shelfFilterItems,
@@ -1519,13 +1670,15 @@ export struct FavoritePage {
         .padding({ left: 2, right: 2, bottom: 4 })
         .hitTestBehavior(HitTestMode.None)
       }
-      .layoutWeight(1)
+      .width('100%').height(40)
 
     }
     .width('100%')
-    .height(SHELF_FILTER_ROW_HEIGHT)
-    .padding({ left: AppSpace.Md, right: AppSpace.Md })
-    .alignItems(VerticalAlign.Center)
+    .height(this.shelfHeaderHeight())
+    .id('shelf-search-region')
+    .clip(false)
+    .padding({ left: AppSpace.Md, right: AppSpace.Md, top: 4, bottom: 4 })
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder

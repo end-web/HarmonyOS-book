@@ -42,6 +42,11 @@ export struct MembershipSubscriptionPage {
 
   private restore(): void {
     const context = this.abilityContext();
+    if (context) this.membership.load(context, true);
+  }
+
+  private retryMembership(): void {
+    const context = this.abilityContext();
     if (context) this.membership.load(context);
   }
 
@@ -55,7 +60,8 @@ export struct MembershipSubscriptionPage {
   }
 
   private planPrice(productId: string): ResourceStr {
-    return this.findPlan(productId)?.price || $r('app.string.membership_plan_unavailable');
+    return this.findPlan(productId)?.price || (this.membership.productsLoading ?
+      $r('app.string.membership_products_loading') : $r('app.string.membership_plan_unavailable'));
   }
 
   private planAction(productId: string): Resource {
@@ -66,6 +72,7 @@ export struct MembershipSubscriptionPage {
 
   private canSelectPlan(productId: string): boolean {
     if (this.membership.busy || !this.membership.supported || (this.state.active && this.state.lifetime)) return false;
+    if (!this.state.hasAccess && !this.state.confirmedInactive) return false;
     if (this.state.active && productId !== 'lastVip') return true;
     return this.agreed && this.findPlan(productId) !== undefined;
   }
@@ -80,7 +87,7 @@ export struct MembershipSubscriptionPage {
       Text(this.planPrice(productId)).fontSize(this.findPlan(productId) ? 20 : 14).fontWeight(FontWeight.Bold).fontColor('#30291F')
       Text(productId === 'lastVip' ? $r('app.string.membership_lifetime_period') :
         productId === 'iconMonth' ? $r('app.string.membership_month_period') : $r('app.string.membership_year_period'))
-        .fontSize(11).fontColor('#7A6A55').textAlign(TextAlign.Center)
+        .fontSize(11).fontColor('#7A6A55').textAlign(TextAlign.Center).maxLines(1)
     }.width(130).constraintSize({ minHeight: 132 }).padding(12).borderRadius(12)
     .backgroundColor(this.selectedPlan === productId ? '#FFFAF1' : '#FFFFFF')
     .border({ width: this.selectedPlan === productId ? 2 : 1,
@@ -98,8 +105,8 @@ export struct MembershipSubscriptionPage {
           $r('app.string.hw_auth_login_title'))
           .fontSize(15).fontWeight(FontWeight.Medium).fontColor('#30291F').flexShrink(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (this.state.active) {
-          MembershipBadge({ productId: this.state.productId, badgeWidth: 22 })
+        if (this.state.displayActive) {
+          MembershipBadge({ productId: this.state.displayProductId, badgeWidth: 22 })
         }
       }.layoutWeight(1).justifyContent(FlexAlign.Start)
       Button($r('app.string.membership_manage')).fontSize(11).height(28)
@@ -112,13 +119,19 @@ export struct MembershipSubscriptionPage {
   benefitCard() {
     Column({ space: 8 }) {
       Text($r('app.string.membership_card_title')).fontSize(18).fontWeight(FontWeight.Bold).fontColor('#624023')
-      Text(this.membership.message).fontSize(12).fontColor('#725338').width('100%')
-      if (this.state.active) {
-        Text(this.state.lifetime ? $r('app.string.membership_lifetime_valid') :
-          $r('app.string.membership_expires', new Date(this.state.expiresAt).toLocaleDateString()))
+      if (!this.state.active || this.membership.message.id !== $r('app.string.membership_active').id) {
+        Text(this.membership.message).fontSize(12).fontColor('#725338').width('100%')
+      }
+      if (!this.membership.busy && this.membership.supported && !this.state.hasAccess && !this.state.confirmedInactive) {
+        Button($r('app.string.common_retry'), { buttonStyle: ButtonStyleMode.TEXTUAL })
+          .fontColor('#725338').onClick(() => this.retryMembership())
+      }
+      if (this.state.displayActive) {
+        Text(this.state.displayLifetime ? $r('app.string.membership_lifetime_valid') :
+          $r('app.string.membership_expires', new Date(this.state.displayExpiresAt).toLocaleDateString()))
           .fontSize(12).fontColor('#725338').width('100%')
-        if (!this.state.lifetime) {
-          Text(this.state.autoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
+        if (!this.state.displayLifetime) {
+          Text(this.state.displayAutoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
             .fontSize(12).fontColor('#725338').width('100%')
         }
       }

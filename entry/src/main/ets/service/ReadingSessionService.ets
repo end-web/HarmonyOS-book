@@ -113,24 +113,49 @@ export class ReadingSessionService {
     }).catch((error: Error): void => { DiagnosticLogService.info('session.save.failed', error.message); });
   }
 
-  static async list(bookIds: string[]): Promise<ReadingSession[]> {
-    for (const entry of ReadingSessionService.active.values()) ReadingSessionService.persist(entry);
+  private static mergeActive(result: Map<string, ReadingSession>, bookIds: Set<string>): void {
+    for (const entry of ReadingSessionService.active.values()) {
+      if (!bookIds.has(entry.end.bookId)) continue;
+      // 返回独立快照，持续播放时不原地修改已显示的列表项。
+      const snapshot: ReadingSession = JSON.parse(JSON.stringify(entry));
+      result.set(snapshot.id, snapshot);
+    }
+  }
+
+  static async list(bookIds: string[], isActive: () => boolean = (): boolean => true): Promise<ReadingSession[]> {
+    const wanted = new Set<string>(bookIds);
+    if (wanted.size === 0 || !isActive()) return [];
+    const result = new Map<string, ReadingSession>();
+    // 读取不触发额外写盘；在途会话通过内存快照覆盖已保存的旧进度。
+    ReadingSessionService.mergeActive(result, wanted);
     await ReadingSessionService.chain;
     await ReadingSessionService.ready;
+    if (!isActive()) return [];
     const store = ReadingSessionService.store;
     if (!store) throw new Error('Session store unavailable');
-    const result: ReadingSession[] = [];
-    for (const key of Object.keys(await store.getAll())) {
-      const raw = store.getSync(key, '');
+    ReadingSessionService.mergeActive(result, wanted);
+    const values: preferences.ValueType[] = Object.values(await store.getAll());
+    for (let index = 0; index < values.length; index++) {
+      // 每批让出事件循环，避免 2000 条 JSON 解析连占 UI 线程；离页后立即停止。
+      if (index % 32 === 0) {
+        await new Promise<void>((resolve): void => { setTimeout(resolve, 0); });
+        if (!isActive()) return [];
+      }
+      const raw = values[index];
       if (typeof raw !== 'string') continue;
       try {
         const item: ReadingSession = JSON.parse(raw);
         if (item && item.start && item.end && typeof item.id === 'string' &&
-          ['audio', 'reading', 'tts'].includes(item.kind) && bookIds.includes(item.end.bookId) &&
+          ['audio', 'reading', 'tts'].includes(item.kind) && wanted.has(item.end.bookId) &&
           Number.isFinite(item.startedAt) && Number.isFinite(item.endedAt) &&
-          Number.isFinite(item.start.position) && Number.isFinite(item.end.position)) result.push(item);
+          Number.isFinite(item.start.position) && Number.isFinite(item.end.position)) {
+          const previous = result.get(item.id);
+          if (!previous || item.endedAt > previous.endedAt) result.set(item.id, item);
+        }
       } catch (_error) { /* 单条损坏不覆盖其他会话。 */ }
     }
-    return result.sort((left: ReadingSession, right: ReadingSession): number => right.startedAt - left.startedAt);
+    ReadingSessionService.mergeActive(result, wanted);
+    return Array.from(result.values()).sort((left: ReadingSession, right: ReadingSession): number =>
+      right.startedAt - left.startedAt);
   }
 }

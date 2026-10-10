@@ -84,7 +84,7 @@ export class SubscriptionVerifier {
     if (!SubscriptionVerifier.root) {
       SubscriptionVerifier.root = await cert.createX509Cert({
         data: await context.resourceManager.getRawFileContent('iap/huawei_cbg_root_ca_g2.cer'),
-        encodingFormat: cert.EncodingFormat.FORMAT_DER
+        encodingFormat: cert.EncodingFormat.FORMAT_PEM
       });
     }
     // 绝不把 header 自带的根证书当作信任锚，也不使用系统 CA 扩大信任范围。
@@ -97,8 +97,11 @@ export class SubscriptionVerifier {
     const hasIapOid = oids.data.some((oid: Uint8Array): boolean =>
       decoder.decodeToString(oid).replace(/\0+$/, '') === '1.3.6.1.4.1.2011.2.415.1.1');
     if (!hasIapOid) throw new Error('Missing Huawei IAP certificate OID');
+    // Cert 公钥对象仅用于 X509Cert.verify；跨到 CryptoFramework 必须先导出并重新导入。
+    const keyPair = await cryptoFramework.createAsyKeyGenerator('ECC256')
+      .convertKey(leaf.getPublicKey().getEncoded(), null);
     const verifier = cryptoFramework.createVerify('ECC256|SHA256');
-    await verifier.init(leaf.getPublicKey());
+    await verifier.init(keyPair.pubKey);
     const valid = await verifier.verify({ data: new util.TextEncoder().encodeInto(parts[0] + '.' + parts[1]) },
       { data: SubscriptionVerifier.signatureDer(SubscriptionVerifier.decodeBase64(parts[2], true)) });
     if (!valid) throw new Error('Invalid subscription signature');

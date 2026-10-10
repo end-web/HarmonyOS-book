@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>简听 · 新增主题图标「声波」</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin:0; padding:38px 44px 46px; background:#F2F4F6; color:#1A1A1A;
+         font-family:"HarmonyOS Sans SC","Microsoft YaHei",sans-serif; }
+  h1 { font-size:25px; font-weight:700; margin:0 0 6px; letter-spacing:.4px; }
+  .sub { font-size:13.5px; color:#6B7280; margin-bottom:32px; line-height:1.6; }
+  h2 { font-size:15px; font-weight:600; margin:0 0 16px; color:#374151; }
+  .sec { margin-bottom:38px; }
+  .squircle { border-radius:23%; overflow:hidden; display:block;
+              box-shadow:0 12px 30px rgba(15,40,30,.20), 0 2px 6px rgba(15,40,30,.10); }
+  .row { display:flex; gap:36px; align-items:flex-start; }
+  .cell { text-align:center; }
+  .cap { margin-top:11px; font-size:13px; font-weight:600; }
+  .note { margin-top:3px; font-size:11.5px; color:#8A9099; line-height:1.5; }
+  .sizes { display:flex; align-items:flex-end; gap:26px; }
+  .layers { display:flex; gap:30px; align-items:flex-end; }
+  .checker { background-image:
+      linear-gradient(45deg,#DDE1E4 25%,transparent 25%,transparent 75%,#DDE1E4 75%),
+      linear-gradient(45deg,#DDE1E4 25%,transparent 25%,transparent 75%,#DDE1E4 75%);
+    background-size:24px 24px; background-position:0 0,12px 12px; background-color:#F7F8F9;
+    border-radius:10px; padding:10px; }
+  /* 图标选择页栅格模拟 */
+  .picker { display:grid; grid-template-columns:repeat(3, 150px); gap:16px 14px;
+            background:#FFFFFF; border-radius:18px; padding:18px; width:max-content;
+            box-shadow:0 6px 20px rgba(15,40,30,.08); }
+  .picker .card { background:#F6F7F8; border-radius:14px; padding:6px 6px 10px; }
+  .picker img { width:100%; border-radius:11px; display:block; }
+  .picker .name { margin-top:7px; font-size:13px; text-align:center; color:#1A1A1A; }
+  .picker .exclusive { font-size:11px; text-align:center; color:#8A9099; margin-top:2px; }
+  .tag { display:inline-block; margin-top:6px; font-size:11px; color:#0A7A55;
+         background:#E3F7EF; border-radius:6px; padding:1px 7px; }
+  code { background:#EEF1F3; border-radius:4px; padding:1px 5px; font-size:11.5px; }
+</style>
+</head>
+<body>
+<h1>简听 · 新增主题图标「声波」</h1>
+<div class="sub">
+  沿用「绿色 + 摊开的书 + 声波」这一识别母题，重绘为矢量分层图标；<br>
+  以<strong>新增</strong>方式接入现有主题图标体系（默认图标与其余 11 款样式均未改动）。
+</div>
+
+<div class="sec">
+  <h2>图标本体</h2>
+  <div class="row">
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="216" height="216">
+      <div class="cap">声波</div><div class="note">圆角方（系统默认形状）</div></div>
+    <div class="cell"><img src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="168" height="168"
+        style="border-radius:50%;display:block;box-shadow:0 10px 26px rgba(15,40,30,.18)">
+      <div class="cap">圆形蒙版</div><div class="note">书角不被切</div></div>
+    <div class="cell"><img src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="168" height="168"
+        style="border-radius:14%;display:block;box-shadow:0 10px 26px rgba(15,40,30,.18)">
+      <div class="cap">小圆角蒙版</div><div class="note">内容安全区 76%×60%</div></div>
+    <div class="cell" style="max-width:280px;text-align:left;font-size:12px;color:#8A9099;line-height:1.75;margin-left:4px">
+      书体正视、中缝留书脊缝，页顶水平、页底向书缝下垂；<br>
+      声波以<strong>镂空</strong>方式横贯书身，书形轮廓始终完整；<br>
+      背景为品牌绿（#00A070 系）三段渐变 + 左上柔光 + 边缘暗角，前景带投影。
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>在主题图标选择页中的样子</h2>
+  <div class="picker">
+    <div class="card"><img src="../../AppScope/resources/base/media/app_icon_legacy.png"><div class="name">默认</div></div>
+    <div class="card"><img src="../../AppScope/resources/base/media/app_icon_leather_legacy.png"><div class="name">拟物</div><div class="exclusive">会员专属</div></div>
+    <div class="card"><img src="../../AppScope/resources/base/media/app_icon_ink_legacy.png"><div class="name">水墨</div><div class="exclusive">会员专属</div></div>
+    <div class="card"><img src="../../AppScope/resources/base/media/app_icon_glass_legacy.png"><div class="name">磨砂玻璃</div><div class="exclusive">会员专属</div></div>
+    <div class="card"><img src="../../AppScope/resources/base/media/app_icon_cartoon_legacy.png"><div class="name">小狐狸</div><div class="exclusive">会员专属</div></div>
+    <div class="card" style="background:#EAF7F2;outline:2px solid #00A070;outline-offset:-2px">
+      <img src="../../AppScope/resources/base/media/app_icon_wave_legacy.png"><div class="name">声波</div>
+      <div class="exclusive">会员专属</div></div>
+  </div>
+  <div class="note" style="margin-top:12px;max-width:760px">
+    栅格仍是 3 列，新增一项直接追加在第 12 格，无需改版式；标签文案取自
+    <code>app_icon_wave</code>。
+  </div>
+</div>
+
+<div class="sec">
+  <h2>尺寸阶梯</h2>
+  <div class="sizes">
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="144" height="144"><div class="cap">144</div></div>
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="108" height="108"><div class="cap">108</div></div>
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="84" height="84"><div class="cap">84</div></div>
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="64" height="64"><div class="cap">64</div></div>
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="48" height="48"><div class="cap">48</div></div>
+    <div class="cell"><img class="squircle" src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="32" height="32"><div class="cap">32</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <h2>分层资产（1024×1024）</h2>
+  <div class="layers">
+    <div class="cell">
+      <img src="../../AppScope/resources/base/media/app_icon_wave_background.png" width="146" height="146" style="display:block;border-radius:8px">
+      <div class="cap">_background</div><div class="note">满幅不透明<br>45.4 KB</div>
+    </div>
+    <div class="cell">
+      <div class="checker"><img src="../../AppScope/resources/base/media/app_icon_wave_foreground.png" width="146" height="146" style="display:block"></div>
+      <div class="cap">_foreground</div><div class="note">透明底 + 投影<br>115.3 KB</div>
+    </div>
+    <div class="cell">
+      <img src="../../AppScope/resources/base/media/app_icon_wave_legacy.png" width="146" height="146" style="display:block;border-radius:8px">
+      <div class="cap">_legacy</div><div class="note">合成图，供选择页预览<br>70.1 KB</div>
+    </div>
+    <div class="cell" style="max-width:330px;text-align:left;font-size:12px;color:#8A9099;line-height:1.85;margin-left:4px">
+      接入点（与 app_icon_leather 等完全同构）：<br>
+      <code>AppScope/resources/base/media/</code> 与 <code>entry/src/main/resources/base/media/</code> 各一套 PNG + <code>app_icon_wave.json</code><br>
+      <code>AppScope/app.json5</code> → alternateIcons 追加一项<br>
+      <code>AppIconService.getOptions()</code> → 追加一个 AppIconOption<br>
+      <code>string.json</code> → <code>app_icon_wave</code> = 声波
+    </div>
+  </div>
+</div>
+</body>
+</html>

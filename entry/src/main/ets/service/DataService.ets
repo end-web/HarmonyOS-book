@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { taskpool } from '@kit.ArkTS';
 import { Book, Chapter } from '../model/Book';
+import { BookStorageCompat } from '../utils/BookStorageCompat';
 import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { PreferenceService } from './PreferenceService';
 import { TextReadingProgressService } from './text/TextReadingProgressService';
@@ -329,9 +330,10 @@ export class DataService {
   private static parseBookList(json: string): Book[] {
     if (!json || json === '[]') return [];
     try {
-      const parsed: Object = JSON.parse(json) as Object;
+      const parsed: Book[] = JSON.parse(json);
       if (!Array.isArray(parsed)) return [];
-      return parsed as Book[];
+      return parsed.filter((book: Book): boolean => !!book && typeof book === 'object' && typeof book.id === 'string')
+        .map((book: Book): Book => BookStorageCompat.restoreMetadata(book));
     } catch (_e) {
       return [];
     }
@@ -450,8 +452,7 @@ export class DataService {
   static async getImportedBooks(): Promise<Book[]> {
     try {
       const json = await PreferenceService.getImportedBooks();
-      const parsed: Object = JSON.parse(json) as Object;
-      return parsed as Book[];
+      return DataService.parseBookList(json);
     } catch (_e) {
       return [];
     }
@@ -618,7 +619,7 @@ export class DataService {
     const current = await DataService.loadCachedBooks();
     const restored = books
       .filter((book: Book) => !!book && !!book.id && !book.id.startsWith('import_'))
-      .map((book: Book): Book => DataService.slimBook(book));
+      .map((book: Book): Book => DataService.slimBook(BookStorageCompat.restoreMetadata(book)));
     const merged = DataService.mergeBookLists(restored, current);
     if (strict) {
       const path = DataService.cachedFilePath();

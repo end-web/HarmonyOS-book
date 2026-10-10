@@ -916,7 +916,9 @@ export struct RankingHomePage {
                 Text(match.book.author || match.book.intro).fontSize(12).maxLines(2)
                   .fontColor($r('sys.color.font_secondary')).textOverflow({ overflow: TextOverflow.Ellipsis })
               }.width('100%').padding(14).alignItems(HorizontalAlign.Start).borderRadius(14)
-              .backgroundColor(AppColor.GlassSheetControlTint).enabled(!this.opening)
+              .backgroundColor($r('app.color.ranking_match_surface'))
+              .border({ width: 1, color: $r('app.color.ranking_match_border') })
+              .enabled(!this.opening)
               .onClick(() => this.chooseMatch(match))
             }
           }, (match: RankingMatch): string => `${match.book.sourceUrl}\u001f${match.book.bookUrl}`)

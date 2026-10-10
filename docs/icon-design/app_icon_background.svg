@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- 简听 · 分层图标背景层：满幅不透明，无圆角/边框，由系统做形状蒙版 -->
+  <defs>
+    <linearGradient id="bg" x1="0.06" y1="0" x2="0.62" y2="1">
+      <stop offset="0" stop-color="#3EDCA9"/>
+      <stop offset="0.44" stop-color="#00A876"/>
+      <stop offset="1" stop-color="#006E4C"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.30" cy="0.12" r="0.88">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="0.50" stop-color="#FFFFFF" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="vignette" cx="0.5" cy="0.52" r="0.78">
+      <stop offset="0.62" stop-color="#00301F" stop-opacity="0"/>
+      <stop offset="1" stop-color="#00301F" stop-opacity="0.18"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <rect width="1024" height="1024" fill="url(#vignette)"/>
+</svg>

@@ -507,11 +507,7 @@ struct Index {
       .backgroundColor($r('sys.color.background_primary'))
       .systemTransition(NavigationSystemTransitionType.SLIDE_RIGHT)
     } else if (name === 'sessionHistory') {
-      NavDestination() {
-        SessionHistoryPage({ navStack: this.navStack, bookIds: this.resolveParam(param, 'bookIds') })
-      }
-      .hideTitleBar(true)
-      .backgroundColor($r('sys.color.background_primary'))
+      SessionHistoryPage({ navStack: this.navStack, bookIds: this.resolveParam(param, 'bookIds') })
     } else if (name === 'unfavoriteHistory') {
       NavDestination() {
         UnfavoritedHistoryPage({ navStack: this.navStack })

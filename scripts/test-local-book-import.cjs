@@ -183,6 +183,28 @@ function load(relative) {
     getResourceContent: () => { throw new Error('Not found'); }
   }, 29, 'missing.html'), /Invalid request/);
   const { DataService: data } = load('service/DataService');
+  // A real release-cache fixture: preserve false, prefer canonical fields, tolerate malformed entries.
+  const oldMetadata = { id: 'release_metadata', title: 'Release book', i36: 'Chapter 90', b40: false,
+    i40: true, j40: 'https://example.test/search.jpg', chapters: [] };
+  const migrated = data.parseBookList(JSON.stringify([null, 42, oldMetadata]));
+  assert.equal(migrated.length, 1);
+  assert.equal(migrated[0].latestChapterTitle, 'Chapter 90');
+  assert.equal(migrated[0].tocComplete, false);
+  assert.equal(migrated[0].coverFromDetail, true);
+  assert.equal(migrated[0].coverFallback, oldMetadata.j40);
+  const canonical = data.parseBookList(JSON.stringify([{ ...oldMetadata, latestChapterTitle: '',
+    tocComplete: true, coverFromDetail: false, coverFallback: '' }]))[0];
+  assert.equal(canonical.latestChapterTitle, '');
+  assert.equal(canonical.tocComplete, true);
+  assert.equal(canonical.coverFromDetail, false);
+  assert.equal(canonical.coverFallback, '');
+  const invalidMetadata = data.parseBookList(JSON.stringify([{ id: 'bad', b40: 'false', i40: 1, i36: 42 }]))[0];
+  assert.equal(invalidMetadata.tocComplete, undefined);
+  assert.equal(invalidMetadata.coverFromDetail, undefined);
+  assert.equal(invalidMetadata.latestChapterTitle, undefined);
+  values.set('books', JSON.stringify([oldMetadata]));
+  assert.equal((await data.getImportedBooks())[0].tocComplete, false);
+  values.delete('books');
   await fsp.mkdir(path.join(context.cacheDir, 'cached_toc'), { recursive: true });
   await fsp.mkdir(path.join(context.filesDir, 'cached_toc'), { recursive: true });
   const legacyBook = { id: 'migration_book', title: 'current cache', sourceUrl: 'source', bookUrl: 'book', chapters: [] };
@@ -458,6 +480,16 @@ function load(relative) {
   assert.equal(fs.existsSync(path.join(temp, 'imported_toc', book.id + '.json')), false);
   assert.equal(handles.size, 0);
   console.log('PASS: streaming chapters, Unicode/GB18030, HTML, EPUB adapter, restart persistence, space failure, deletion');
+  await data.restoreBackupBookShells([oldMetadata], true);
+  data.cachedBooksMem = null;
+  const restoredMetadata = await data.getBookById(context, oldMetadata.id);
+  assert.equal(restoredMetadata.tocComplete, false, 'backup restore retains incomplete-TOC flag after restart');
+  assert.equal(restoredMetadata.latestChapterTitle, 'Chapter 90');
+  const storedMetadata = JSON.parse(await fsp.readFile(path.join(context.filesDir, 'library_books_v1.json'), 'utf8'))
+    .find(item => item.id === oldMetadata.id);
+  assert.equal(storedMetadata.coverFallback, oldMetadata.j40);
+  assert.equal(storedMetadata.b40, undefined, 'new writes contain canonical metadata only');
+  console.log('PASS release book metadata: old cache/import/backup, canonical precedence, false flags, restart');
   const { DiagnosticLogService: logs } = load('service/DiagnosticLogService');
   await logs.list();
   logs.init(context);

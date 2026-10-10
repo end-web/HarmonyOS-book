@@ -11,6 +11,8 @@ import { AppIconService } from './AppIconService';
 import { SubscriptionOrder, SubscriptionPayload, SubscriptionPolicy, SubscriptionStatus } from './membership/SubscriptionData';
 import { SubscriptionVerifier } from './membership/SubscriptionVerifier';
 import { LifetimeOrder, LifetimePolicy } from './membership/LifetimeData';
+import { MembershipDisplaySnapshot } from '../model/MembershipDisplaySnapshot';
+import { MembershipDisplayStore } from './membership/MembershipDisplayStore';
 
 export class MembershipPlan {
   id: string;
@@ -42,13 +44,43 @@ export class MembershipService {
   @Trace productsMessage: Resource = $r('app.string.membership_products_loading');
   @Trace confirmationPending: boolean = false;
   private refreshTask: Promise<void> | null = null;
+  @Trace productsLoading: boolean = false;
+  private productsTask: Promise<void> | null = null;
+  private productsAt: number = 0;
+  private productsQueryAt: number = 0;
   private queryAt: number = 0;
   private refreshedAt: number = 0;
   private expiryTimer: number = -1;
   private allowSandbox: boolean = false;
   private sandboxChecked: boolean = false;
+  private sandboxTask: Promise<void> | null = null;
   private inForeground: boolean = true;
   private abilityContext: common.UIAbilityContext | null = null;
+  private displayRestoreStarted: boolean = false;
+  private displayRevision: number = 0;
+  private displayWriteTask: Promise<void> = Promise.resolve();
+
+  private async restoreDisplay(context: common.UIAbilityContext): Promise<void> {
+    if (this.displayRestoreStarted) return;
+    this.displayRestoreStarted = true;
+    const revision = this.displayRevision;
+    try {
+      const snapshot = await MembershipDisplayStore.read(context);
+      // 联网结果始终优先，迟到的磁盘读取不能恢复已撤销的展示。
+      if (revision === this.displayRevision && !MembershipState.current.active &&
+        !MembershipState.current.confirmedInactive) MembershipState.current.restoreDisplay(snapshot);
+    } catch (_error) { /* 缓存损坏或读取失败不影响真实会员核验。 */ }
+  }
+
+  private persistDisplay(context: common.UIAbilityContext, snapshot: MembershipDisplaySnapshot | null): Promise<void> {
+    this.displayRevision++;
+    MembershipState.current.restoreDisplay(snapshot);
+    this.displayWriteTask = this.displayWriteTask.then((): Promise<void> =>
+      MembershipDisplayStore.write(context, snapshot)).catch((): void => {
+      hilog.warn(0x0000, 'MembershipService', 'Membership display cache could not be saved');
+    });
+    return this.displayWriteTask;
+  }
 
   /** 共用已验签权益；到期、换号或核验失败时不放行新的会员操作。 */
   async hasCurrentEntitlement(): Promise<boolean> {
@@ -78,92 +110,116 @@ export class MembershipService {
     this.inForeground = true;
     if (this.busy) return;
     this.sandboxChecked = false;
-    MembershipState.current.clear();
-    MembershipState.current.confirmedInactive = false;
+    this.productsAt = 0;
+    const state = MembershipState.current;
+    // 有效快照继续用于徽标和套餐展示；不清零再等待 IAP，避免前台恢复时闪烁。
+    if (!state.active) state.clearEntitlement();
+    state.confirmedInactive = false;
+    state.revalidating = true;
     this.refresh(context, true).catch((): void => {});
   }
 
-  async load(context: common.UIAbilityContext): Promise<void> {
-    await this.refresh(context);
-    if (!this.supported || this.busy) return;
-    this.busy = true;
+  async load(context: common.UIAbilityContext, restore: boolean = false): Promise<void> {
+    // 价格不依赖权益查询；两个请求各自合并，慢价格不会锁住会员操作。
+    await Promise.all([this.refresh(context, restore, restore), this.loadProducts(context, restore)]);
+  }
+
+  private async loadProducts(context: common.UIAbilityContext, force: boolean = false): Promise<void> {
+    if (!this.supported) return;
+    if (this.productsTask) return this.productsTask;
+    const age = Date.now() - this.productsAt;
+    if (!force && this.productsAt > 0 && age >= 0 && age < 5 * 60 * 1000) return;
+    this.productsLoading = true;
+    this.productsMessage = $r('app.string.membership_products_loading');
+    this.productsTask = this.loadProductsInner(context).finally((): void => {
+      this.productsLoading = false;
+      this.productsTask = null;
+    });
+    return this.productsTask;
+  }
+
+  private async loadProductsInner(context: common.UIAbilityContext): Promise<void> {
     try {
+      const delay = Math.max(0, this.productsQueryAt + 5100 - Date.now());
+      if (delay > 0) await new Promise<void>((resolve): void => { setTimeout(resolve, delay); });
+      this.productsQueryAt = Date.now();
       await this.bounded(iap.queryEnvironmentStatus(context));
+      await this.checkSandbox(context);
+      // API 20 起支持跨商品类型批量查询，最低支持版本已覆盖。
+      const products = await this.bounded(iap.queryProducts(context,
+        [SubscriptionPolicy.month, SubscriptionPolicy.year, LifetimePolicy.product]));
       const plans: MembershipPlan[] = [];
-      try {
-        const products = await this.bounded(iap.queryProducts(context, {
-          productType: iap.ProductType.AUTORENEWABLE,
-          productIds: [SubscriptionPolicy.month, SubscriptionPolicy.year]
-        }));
-        for (const product of products) {
-          const info = product.subscriptionInfo;
-          if (!SubscriptionPolicy.knownProduct(product.id) || product.type !== iap.ProductType.AUTORENEWABLE ||
-            (product.status !== undefined && product.status !== iap.ProductStatus.VALID) ||
-            !info || !info.groupId || !product.price) continue;
-          // 套餐文案与华为实际计费周期一致；不把周商品当作月商品销售。
-          const expected = product.id === SubscriptionPolicy.month ? iap.PeriodUnit.MONTH : iap.PeriodUnit.YEAR;
-          if ((info.periodUnit !== expected || info.periodCount !== 1) &&
-            !(this.allowSandbox && info.periodUnit === iap.PeriodUnit.MINUTE)) continue;
+      for (const product of products) {
+        if ((product.status !== undefined && product.status !== iap.ProductStatus.VALID) ||
+          !(product.localPrice || product.price)) continue;
+        if (product.id === LifetimePolicy.product && product.type === iap.ProductType.NONCONSUMABLE) {
           plans.push(new MembershipPlan(product));
+          continue;
         }
-        if (plans.length === 2 && plans[0].groupId !== plans[1].groupId) {
-          plans.length = 0;
-          throw new Error('Subscription products must share one group');
-        }
-      } catch (_error) { /* 月/年商品不可售时，继续查询独立的终身商品。 */ }
-      // 两种商品类型分开查询，遵守同一 API 的调用间隔；终身商品不可售不影响月/年套餐。
-      this.plans = plans;
-      await new Promise<void>((resolve): void => { setTimeout(resolve, 5100); });
-      try {
-        const lifetimeProducts = await this.bounded(iap.queryProducts(context, {
-          productType: iap.ProductType.NONCONSUMABLE, productIds: [LifetimePolicy.product]
-        }));
-        for (const product of lifetimeProducts) {
-          if (product.id === LifetimePolicy.product && product.type === iap.ProductType.NONCONSUMABLE &&
-            (product.status === undefined || product.status === iap.ProductStatus.VALID) &&
-            (product.localPrice || product.price)) plans.push(new MembershipPlan(product));
-        }
-      } catch (_error) { /* 套餐卡保留“暂不可购买”，不伪造终身价格。 */ }
-      this.plans = plans.sort((a: MembershipPlan, b: MembershipPlan): number => a.id.localeCompare(b.id));
-      this.productsMessage = plans.length > 0 ? $r('app.string.membership_price_hint') : $r('app.string.membership_products_unavailable');
+        const info = product.subscriptionInfo;
+        if (!SubscriptionPolicy.knownProduct(product.id) || product.type !== iap.ProductType.AUTORENEWABLE ||
+          !info || !info.groupId) continue;
+        const expected = product.id === SubscriptionPolicy.month ? iap.PeriodUnit.MONTH : iap.PeriodUnit.YEAR;
+        if ((info.periodUnit !== expected || info.periodCount !== 1) &&
+          !(this.allowSandbox && info.periodUnit === iap.PeriodUnit.MINUTE)) continue;
+        plans.push(new MembershipPlan(product));
+      }
+      const subscriptions = plans.filter((plan: MembershipPlan): boolean => plan.id !== LifetimePolicy.product);
+      this.plans = subscriptions.length === 2 && subscriptions[0].groupId !== subscriptions[1].groupId ?
+        plans.filter((plan: MembershipPlan): boolean => plan.id === LifetimePolicy.product) : plans;
+      this.productsAt = Date.now();
+      this.productsMessage = this.plans.length > 0 ? $r('app.string.membership_price_hint') :
+        $r('app.string.membership_products_unavailable');
     } catch (error) {
       this.plans = [];
+      this.productsAt = 0;
       this.productsMessage = this.errorMessage(error);
-    } finally {
-      this.busy = false;
     }
   }
 
-  async refresh(context: common.UIAbilityContext, force: boolean = false): Promise<void> {
+  async refresh(context: common.UIAbilityContext, force: boolean = false, recoverUnfinished: boolean = false): Promise<void> {
     this.abilityContext = context;
     MembershipState.current.developerAccess = DeveloperMembership.allowed(context.applicationInfo.debug);
     if (MembershipState.current.developerAccess) {
+      MembershipState.current.revalidating = false;
       MembershipState.current.confirmedInactive = false;
       this.message = $r('app.string.membership_developer_active');
       return;
     }
     if (!this.supported) {
+      MembershipState.current.revalidating = false;
       MembershipState.current.clear();
       MembershipState.current.confirmedInactive = true;
+      await this.persistDisplay(context, null);
       await this.resetDefaults(context);
       this.message = $r('app.string.membership_unsupported');
       return;
     }
-    if (this.refreshTask) return this.refreshTask;
+    this.restoreDisplay(context);
+    if (this.refreshTask) {
+      await this.refreshTask;
+      if (!recoverUnfinished) return;
+    }
     if (this.busy) return;
-    if (!force && this.refreshedAt > 0 && Date.now() - this.refreshedAt < 5000) return;
+    const age = Date.now() - this.refreshedAt;
+    // 普通入口共用权益自身的有效窗口；过期、换号及强制核验不会命中。
+    if (!force && (MembershipState.current.active ||
+      (this.refreshedAt > 0 && age >= 0 && age < 60000 && MembershipState.current.confirmedInactive))) return;
     this.busy = true;
     this.message = $r('app.string.membership_checking');
-    this.refreshTask = this.refreshInner(context).catch(async (error: BusinessError): Promise<void> => {
+    this.refreshTask = this.refreshInner(context, recoverUnfinished).catch(async (error: BusinessError): Promise<void> => {
       // 无有效会员凭据时恢复受限设置；不改变真实购买记录。
       MembershipState.current.clear();
-      MembershipState.current.confirmedInactive = true;
+      // 查询失败表示状态未知，不能据此引导用户重新开通。
+      MembershipState.current.confirmedInactive = false;
+      await this.persistDisplay(context, null);
       await this.resetDefaults(context);
       this.refreshedAt = 0;
       if (this.expiryTimer !== -1) clearTimeout(this.expiryTimer);
       this.expiryTimer = -1;
       this.message = this.errorMessage(error);
     }).finally((): void => {
+      MembershipState.current.revalidating = false;
       this.busy = false;
       this.refreshTask = null;
     });
@@ -172,6 +228,12 @@ export class MembershipService {
 
   private async checkSandbox(context: common.UIAbilityContext): Promise<void> {
     if (this.sandboxChecked) return;
+    if (this.sandboxTask) return this.sandboxTask;
+    this.sandboxTask = this.checkSandboxInner(context).finally((): void => { this.sandboxTask = null; });
+    return this.sandboxTask;
+  }
+
+  private async checkSandboxInner(context: common.UIAbilityContext): Promise<void> {
     this.allowSandbox = false;
     if (context.applicationInfo.debug) {
       try { this.allowSandbox = await this.bounded(iap.isSandboxActivated(context)); } catch (_error) { /* 生产凭据仍可验签。 */ }
@@ -208,8 +270,16 @@ export class MembershipService {
       const result = await this.bounded(iap.queryPurchases(context, {
         productType: productType, queryType: type, continuationToken: token || undefined
       }));
-      if (result.purchaseDataList.length + payloads.length > 200) throw new Error('Too many subscription records');
-      for (const data of result.purchaseDataList) {
+      // 无购买记录时，实机 IAP 可能省略列表或返回 null；仅在查询成功后将空值视为空列表。
+      const purchaseDataList: string[] = result.purchaseDataList ?? [];
+      if (!Array.isArray(purchaseDataList)) throw new Error('Invalid purchase list');
+      if (context.applicationInfo.debug) {
+        hilog.info(0x0000, 'MembershipService',
+          'IAP query succeeded, type=%{public}d, query=%{public}d, count=%{public}d, absent=%{public}s',
+          productType, type, purchaseDataList.length, String(result.purchaseDataList === undefined || result.purchaseDataList === null));
+      }
+      if (purchaseDataList.length + payloads.length > 200) throw new Error('Too many subscription records');
+      for (const data of purchaseDataList) {
         payloads.push(data);
       }
       token = result.continuationToken || '';
@@ -220,7 +290,7 @@ export class MembershipService {
     throw new Error('Subscription pagination limit');
   }
 
-  private async refreshInner(context: common.UIAbilityContext): Promise<void> {
+  private async refreshInner(context: common.UIAbilityContext, recoverUnfinished: boolean): Promise<void> {
     await this.checkSandbox(context);
     const payloads = await this.query(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
     const lifetimeOrders = await this.queryLifetime(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
@@ -251,10 +321,13 @@ export class MembershipService {
     this.refreshedAt = now;
     this.message = state.active ? $r('app.string.membership_active') : $r('app.string.membership_inactive');
     this.scheduleRefresh(context);
+    await this.persistDisplay(context, state.createDisplaySnapshot());
     if (state.confirmedInactive) await this.resetDefaults(context);
     this.confirmationPending = false;
     const finished = new Set<string>();
     for (const order of orders) await this.finish(context, order, finished);
+    // 日常核验只确认当前订单；手动恢复及支付结果不确定时再扫描历史未完成订单。
+    if (!recoverUnfinished) return;
     // 补发货不覆盖 CURRENT_ENTITLEMENT 的最新状态，防止历史凭据恢复已撤销的权益。
     try {
       const unfinished = await this.query(context, iap.PurchaseQueryType.UNFINISHED);
@@ -319,7 +392,7 @@ export class MembershipService {
     } finally {
       this.busy = false;
     }
-    if (reconcile) await this.refresh(context, true);
+    if (reconcile) await this.refresh(context, true, true);
   }
 
   async manage(context: common.UIAbilityContext): Promise<boolean> {
@@ -353,6 +426,7 @@ export class MembershipService {
       if (!state.lifetime && Date.now() >= state.expiresAt) {
         state.clear();
         state.confirmedInactive = true;
+        this.persistDisplay(context, null);
         this.resetDefaults(context);
       }
       this.refresh(context, true);

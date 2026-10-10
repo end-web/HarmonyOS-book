@@ -1,4 +1,4 @@
-"""从应用字符串资源导出简听上架隐私政策和图标，避免应用内外文案漂移。"""
+"""从应用字符串资源导出简听阅读上架隐私政策和图标，避免应用内外文案漂移。"""
 
 import html
 import json
@@ -33,8 +33,8 @@ def main():
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="简听隐私政策：了解本地数据、书源访问、系统权限与数据管理方式。">
-  <title>简听隐私政策</title>
+  <meta name="description" content="简听阅读隐私政策：了解本地数据、书源访问、系统权限与数据管理方式。">
+  <title>简听阅读隐私政策</title>
   <style>
     :root { color-scheme: light dark; }
     body { margin: 0; font: 16px/1.85 system-ui, sans-serif; color: #242424; background: #faf9f7; }
@@ -51,7 +51,7 @@ def main():
 </head>
 <body>
 <main>
-  <header><h1>简听隐私政策</h1><p>开发者：ylwang · 更新日期：2026 年 9 月 14 日</p></header>
+  <header><h1>简听阅读隐私政策</h1><p>开发者：ylwang · 更新日期：2026 年 9 月 14 日</p></header>
 ''' + '\n'.join(sections) + '''
   <footer><a href="https://github.com/end-web/HarmonyOS-book/issues">联系开发者</a></footer>
 </main>
@@ -68,14 +68,14 @@ def main():
     description = '\n'.join('<p>' + html.escape(p) + '</p>'
                             for p in metadata['fullDescription'].split('\n\n'))
     gallery = '\n'.join('<img src="' + html.escape(path, quote=True)
-                        + '" alt="简听手机应用截图 ' + str(index + 1)
+                        + '" alt="简听阅读手机应用截图 ' + str(index + 1)
                         + '" width="1280" height="2832" loading="lazy">'
                         for index, path in enumerate(metadata['screenshots']))
     landing = '''<!doctype html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="简听，一款面向 HarmonyOS 手机的音频收听与小说阅读应用。">
-<title>简听 · 随心收听，静心阅读</title>
+<meta name="description" content="简听阅读，一款面向 HarmonyOS 手机的音频收听与小说阅读应用。">
+<title>简听阅读 · 随心收听，静心阅读</title>
 <link rel="icon" href="icon.png">
 <style>
 body { margin: 0; color: #292621; background: #faf8f4; font: 16px/1.85 system-ui, sans-serif; }
@@ -89,15 +89,15 @@ nav { display: flex; gap: 24px; flex-wrap: wrap; } .description { max-width: 780
 footer { margin-top: 44px; color: #655e54; }
 @media (max-width: 760px) { .gallery { grid-template-columns: repeat(2, 1fr); } }
 </style></head><body><main>
-<header><img src="icon.png" width="88" height="88" alt="简听图标"><h1>简听</h1>
+<header><img src="icon.png" width="88" height="88" alt="简听阅读图标"><h1>简听阅读</h1>
 <p class="tagline">随心收听，静心阅读</p>
 <nav><a href="https://github.com/end-web/HarmonyOS-book/releases/latest">版本与下载</a>
 <a href="privacy.html">隐私政策</a><a href="https://github.com/end-web/HarmonyOS-book">项目主页</a></nav></header>
-<section class="description"><h2>关于简听</h2>
+<section class="description"><h2>关于简听阅读</h2>
 ''' + description + '''</section>
 <section><h2>应用截图</h2><div class="gallery">
 ''' + gallery + '''</div></section>
-<footer>简听 · ylwang</footer>
+<footer>简听阅读 · ylwang</footer>
 </main></body></html>
 '''
     (DEST / 'index.html').write_text(landing, encoding='utf-8', newline='\n')
