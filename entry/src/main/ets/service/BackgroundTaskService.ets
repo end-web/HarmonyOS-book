@@ -96,6 +96,11 @@ export class BackgroundTaskService {
     return BackgroundTaskService.running;
   }
 
+  /** 只由用户明确的播放操作解除系统取消后的本地阻挡；自动预取不得自行解锁。 */
+  static resumeAfterUserAction(): void {
+    BackgroundTaskService.systemBlocked = false;
+  }
+
   static hasMode(mode: string): boolean {
     return BackgroundTaskService.requestedModes.has(mode);
   }

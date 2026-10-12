@@ -4,6 +4,7 @@ import { ImmersiveActionButton } from '../components/ImmersiveActionButton';
 import { ImmersiveOptionTabs } from '../components/ImmersiveOptionTabs';
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { common } from '@kit.AbilityKit';
+import { Binding, UIUtils } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppRadius, AppSpace, AppFont, AppColor } from '../theme/Theme';
 import { PreferenceService } from '../service/PreferenceService';
@@ -638,9 +639,10 @@ export struct SettingsPage {
           $r('app.string.settings_cover_super_resolution'),
           CoverSuperResolutionService.supported() ? $r('app.string.settings_cover_super_resolution_desc')
             : $r('app.string.settings_cover_super_resolution_unavailable'),
-          this.coverSuperResolution,
+          UIUtils.makeBinding<boolean>(() => this.coverSuperResolution),
           (enabled: boolean): void => { this.setCoverSuperResolution(enabled); },
-          this.isLoaded && !this.isSavingCoverSuperResolution && CoverSuperResolutionService.supported()
+          UIUtils.makeBinding<boolean>(() =>
+            this.isLoaded && !this.isSavingCoverSuperResolution && CoverSuperResolutionService.supported())
         )
       }
       .width('100%')
@@ -670,9 +672,9 @@ export struct SettingsPage {
         this.buildSwitchItem(
           $r('app.string.settings_auto_play_on_launch'),
           $r('app.string.settings_auto_play_on_launch_desc'),
-          this.autoPlayOnLaunch,
+          UIUtils.makeBinding<boolean>(() => this.autoPlayOnLaunch),
           (isOn: boolean) => this.setAutoPlayOnLaunch(isOn),
-          !this.isSavingAutoPlayOnLaunch
+          UIUtils.makeBinding<boolean>(() => !this.isSavingAutoPlayOnLaunch)
         )
       }
       .width('100%')
@@ -702,8 +704,9 @@ export struct SettingsPage {
         this.buildSwitchItem(
           '失焦后自动恢复',
           '被来电、导航、视频打断后自动续播',
-          this.autoResume,
-          (isOn: boolean) => this.setAutoResume(isOn)
+          UIUtils.makeBinding<boolean>(() => this.autoResume),
+          (isOn: boolean) => this.setAutoResume(isOn),
+          UIUtils.makeBinding<boolean>(() => this.isLoaded)
         )
 
         this.buildDivider()
@@ -852,13 +855,14 @@ export struct SettingsPage {
     .width('100%').padding(ROW_INDENT)
   }
 
+  // 多参数 Builder 的普通布尔值只保留首帧；绑定保证加载、保存及失败回滚同步到开关。
   @Builder
   buildSwitchItem(
     title: ResourceStr,
     subtitle: ResourceStr,
-    isOn: boolean,
+    isOn: Binding<boolean>,
     onChange: (isOn: boolean) => void,
-    enabled: boolean = true
+    enabled: Binding<boolean>
   ) {
     Row() {
       Column({ space: 2 }) {
@@ -874,9 +878,9 @@ export struct SettingsPage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      Toggle({ type: ToggleType.Switch, isOn: isOn })
+      Toggle({ type: ToggleType.Switch, isOn: isOn.value })
         .selectedColor(AppColor.Brand)
-        .enabled(enabled)
+        .enabled(enabled.value)
         .onChange((on: boolean) => onChange(on))
     }
     .width('100%')

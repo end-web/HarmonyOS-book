@@ -1,6 +1,7 @@
 import { HdsTabs } from '@kit.UIDesignKit';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
+import { AppColor } from '../theme/Theme';
 
 class ImmersiveCircleClip implements AttributeModifier<CommonAttribute> {
   private radius: number;
@@ -24,6 +25,19 @@ export struct ImmersiveCircleButton {
   /** 图标色；已选态（如已加入书架）传品牌色。 */
   @Param iconColor: ResourceColor = $r('sys.color.font_primary');
   @Event onPress: () => void = () => {};
+  @Local touching: boolean = false;
+  @Local touchX: number = 20;
+  @Local touchY: number = 20;
+
+  private updateTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.touching = false;
+    } else if (event.touches.length > 0) {
+      this.touchX = Math.max(0, Math.min(this.diameter, event.touches[0].x));
+      this.touchY = Math.max(0, Math.min(this.diameter, event.touches[0].y));
+      this.touching = true;
+    }
+  }
 
   @Builder
   materialContent() {
@@ -56,14 +70,20 @@ export struct ImmersiveCircleButton {
         Button({ type: ButtonType.Circle, stateEffect: false }) { this.iconContent() }
           .width(this.diameter).height(this.diameter).padding(0).backgroundColor(Color.Transparent)
           .hitTestBehavior(HitTestMode.Transparent)
+          .onTouch((event: TouchEvent): void => this.updateTouch(event))
           .accessibilityText(this.label).onClick((): void => this.onPress())
       } else {
         Button({ type: ButtonType.Circle }) { this.iconContent() }
           .width(this.diameter).height(this.diameter).padding(0).backgroundColor($r('sys.color.comp_background_primary'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .border({ width: 0.5, color: $r('sys.color.comp_divider') })
+          .onTouch((event: TouchEvent): void => this.updateTouch(event))
           .accessibilityText(this.label).onClick((): void => this.onPress())
       }
+      Row().width(this.diameter).height(this.diameter)
+        .radialGradient({ center: [this.touchX, this.touchY], radius: this.diameter,
+          colors: [[AppColor.BrandSoft, 0], [Color.Transparent, 1]] })
+        .opacity(this.touching ? 1 : 0).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
     }.width(this.diameter).height(this.diameter).attributeModifier(new ImmersiveCircleClip(this.diameter / 2))
   }
 }

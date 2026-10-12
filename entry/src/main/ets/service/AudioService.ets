@@ -483,9 +483,7 @@ export class AudioService {
         this.stopTick();
         this.syncPlaybackState();
         PlaybackStore.getInstance().setPlaying(false);
-        if (this.context) {
-          BackgroundTaskService.stop(this.context).catch((_e: Error): void => {});
-        }
+        // 自动切章的解析、联网与缓冲仍属于同一播放任务，不能在缓存边界先释放后台资格。
         this.handleChapterEnd();
       }
     });
@@ -1661,6 +1659,7 @@ export class AudioService {
     if (!automatic) {
       this.pauseRequested = false;
       this.pauseSource = 'none';
+      BackgroundTaskService.resumeAfterUserAction();
     }
     this.pausedByFocus = false;
     const changed = this.state.currentBook?.id !== book.id || this.state.currentChapter?.id !== chapter.id;
@@ -1691,7 +1690,15 @@ export class AudioService {
         return;
       }
     }
-    this.autoPlayNext();
+    this.autoPlayNext().catch((error: Error): void => {
+      hilog.warn(DOMAIN, TAG, 'Automatic chapter continuation failed: %{public}s', error.message);
+    }).finally((): void => { this.stopBackgroundIfIdle(); });
+  }
+
+  private stopBackgroundIfIdle(): void {
+    if (this.context && !this.state?.isPlaying && !this.state?.isLoading && !this.isApplying) {
+      BackgroundTaskService.stop(this.context).catch((_error: Error): void => {});
+    }
   }
 
   private finishSleep(atChapterEnd: boolean): void {
@@ -1716,6 +1723,7 @@ export class AudioService {
     await this.persistHistory();
     PlaybackStore.getInstance().setPlaying(this.state?.isPlaying ?? false);
     this.syncPlaybackState();
+    this.stopBackgroundIfIdle();
   }
 
   /** 定时停在章尾后，用户再次播放从下一章继续；末章沿用原重播行为。 */
@@ -1850,7 +1858,7 @@ export class AudioService {
     this.checkSkipOutro(Math.max(progress, this.state.progressMs));
   }
 
-  private autoPlayNext(): void {
+  private async autoPlayNext(): Promise<void> {
     if (!this.state || !this.state.currentBook || !this.state.currentChapter) return;
     const mode = this.state.sleepMode === SleepMode.Chapters ? PlayMode.Sequence : this.state.playMode;
     const chapters = this.state.currentBook.chapters;
@@ -1859,17 +1867,17 @@ export class AudioService {
 
     if (mode === PlayMode.SingleLoop) {
       // 单集循环:重播当前章节
-      this.playChapterAndSeek(this.state.currentBook, chapters[idx], 0, true);
+      await this.playChapterAndSeek(this.state.currentBook, chapters[idx], 0, true);
       return;
     }
     const next = idx + PreferenceService.chapterStep(this.state.currentBook);
     if (next >= 0 && next < chapters.length) {
-      this.playChapter(this.state.currentBook, chapters[next], true);
+      await this.playChapter(this.state.currentBook, chapters[next], true);
       return;
     }
     if (mode === PlayMode.ListLoop && chapters.length > 0) {
       // 列表循环:回到第一集
-      this.playChapter(this.state.currentBook, PreferenceService.orderedChapters(this.state.currentBook)[0], true);
+      await this.playChapter(this.state.currentBook, PreferenceService.orderedChapters(this.state.currentBook)[0], true);
       return;
     }
     // 片尾跳过也算章末，末章仍在 playing 时必须主动暂停。
@@ -2051,6 +2059,7 @@ export class AudioService {
   /** 系统播控、耳机和卡片共用的播放入口；重复 play 不切换为暂停或重载音源。 */
   async play(): Promise<void> {
     this.tracePlayback('play-request');
+    BackgroundTaskService.resumeAfterUserAction();
     if (this.player?.state !== 'playing') this.autoSleepRequested = true;
     this.pauseSource = 'none';
     this.pauseRequested = false;

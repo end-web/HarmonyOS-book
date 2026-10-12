@@ -1377,7 +1377,7 @@ export struct BookDetailPage {
 
   // ==================== 主 CTA ====================
 
-  private primaryCtaLabel(): ResourceStr {
+  private primaryCtaLabel(): Resource {
     if (this.chaptersLoading()) return $r('app.string.book_detail_loading_chapters');
     if (this.book?.contentType === 'text') {
       return this.textReadingProgress
@@ -1394,23 +1394,23 @@ export struct BookDetailPage {
 
   @Builder
   buildPrimaryCta() {
-    Row({ space: AppSpace.Sm }) {
-      SymbolGlyph(this.book?.contentType === 'text' ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
-        .fontSize(18)
-        .fontColor(['#FFFFFF'])
-      Text(this.primaryCtaLabel())
-        .fontSize(AppFont.Title)
-        .fontColor('#FFFFFF')
-        .fontWeight(FontWeight.Bold)
-        .maxLines(1)
+    Button({ type: ButtonType.Capsule }) {
+      Row({ space: AppSpace.Sm }) {
+        SymbolGlyph(this.book?.contentType === 'text' ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
+          .fontSize(18).fontColor([$r('sys.color.font_primary')])
+        Text(this.primaryCtaLabel())
+          .fontSize(AppFont.Title).fontWeight(FontWeight.Medium)
+          .fontColor($r('sys.color.font_primary')).maxLines(1)
+      }.hitTestBehavior(HitTestMode.None)
     }
-    .padding({ left: 20, right: 24, top: 14, bottom: 14 })
-    .borderRadius(AppRadius.Lg)
-    .linearGradient({
-      angle: 135,
-      colors: [[AppColor.BrandHover, 0.0], [AppColor.Brand, 1.0]]
-    })
-    .shadow({ radius: 16, color: '#33C4475B', offsetY: 6 })
+    .height(48)
+    .padding({ left: 18, right: 18 })
+    .backgroundColor(Color.Transparent)
+    .backgroundEffect({ radius: 12, saturation: 1.08, brightness: 1,
+      color: $r('app.color.detail_action_glass_tint') })
+    .border({ width: 0.5, color: $r('sys.color.comp_divider') })
+    .shadow({ radius: 8, color: '#10000000', offsetY: 3 })
+    .accessibilityText(this.primaryCtaLabel())
     .margin({
       right: this.horizontalPadding(),
       bottom: WindowUtils.getBottomSafeVp() + 12

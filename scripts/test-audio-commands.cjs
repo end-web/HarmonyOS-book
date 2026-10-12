@@ -66,6 +66,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   };
   const playbackStore = { setPlaying() {}, update() {} };
   const cacheCalls = [];
+  const backgroundCalls = [];
   const mediaSources = [];
   const platformCompat = { supports: () => true };
   const cache = {
@@ -136,7 +137,11 @@ async function fixture(initialState = 'paused', realUsage = false) {
     './ExternalMediaWatcher': { ExternalMediaWatcher: Watcher },
     './AVSessionService': { AVSessionService: { getInstance: () => session } },
     './PlaybackStore': { PlaybackStore: { getInstance: () => playbackStore } },
-    './BackgroundTaskService': { BackgroundTaskService: { async start() {}, async stop() {}, isRunning() { return true; } } },
+    './BackgroundTaskService': { BackgroundTaskService: {
+      resumeAfterUserAction() { backgroundCalls.push('user-resume'); },
+      async start() { backgroundCalls.push('start'); },
+      async stop() { backgroundCalls.push('stop'); }, isRunning() { return true; }
+    } },
     './DataService': { DataService: { async upsertCachedBook() {},
       resolveChapterIndex: (book, id) => book.chapters.findIndex(ch => ch.id === id) } },
     './PreferenceService': { PreferenceService: preference },
@@ -173,7 +178,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   service.initAVSession();
   await service.ensurePlayer();
   return { service, player, state, session, savedPositions, events, preference, cacheCalls,
-    cache, mediaSources, platformCompat, usage, usageTimers, advance: ms => { uptime += ms; } };
+    cache, mediaSources, platformCompat, usage, usageTimers, backgroundCalls, advance: ms => { uptime += ms; } };
 }
 
 let passed = 0;
@@ -184,6 +189,50 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('widget resume re-arms background recovery and restarts the preload window', async () => {
+    const f = await fixture('paused');
+    f.state.currentBook.chapters = [f.state.currentChapter];
+    await f.service.play();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.backgroundCalls[0], 'user-resume');
+    assert.ok(f.backgroundCalls.includes('start'));
+    assert.ok(f.cacheCalls.includes('next'));
+    const count = f.backgroundCalls.filter(call => call === 'user-resume').length;
+    f.service.prepareSleepForPlayback(f.state.currentBook, f.state.currentChapter, true);
+    assert.equal(f.backgroundCalls.filter(call => call === 'user-resume').length, count,
+      'Automatic continuation must not override a later system suspension');
+  });
+  await check('cached chapter completion keeps background playback until the next network chapter starts', async () => {
+    const f = await fixture('playing');
+    const next = { id: 'chapter-2', source: { type: 'url', value: 'https://source.invalid/2' } };
+    f.state.currentBook.chapters = [f.state.currentChapter, next];
+    let finish;
+    f.service.playChapter = async (book, chapter) => {
+      assert.equal(chapter, next);
+      f.state.isLoading = true;
+      await new Promise(resolve => { finish = resolve; });
+      f.state.currentChapter = chapter;
+      f.player.transition('playing');
+    };
+    f.player.transition('completed');
+    await flush();
+    assert.equal(f.backgroundCalls.includes('stop'), false, 'Do not release while resolving an uncached chapter');
+    finish(); await flush();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(f.state.isPlaying, true);
+    assert.equal(f.backgroundCalls.includes('stop'), false);
+    assert.ok(f.cacheCalls.includes('next'), 'New chapter schedules the next preload window');
+    f.player.transition('completed'); await flush();
+    assert.ok(f.backgroundCalls.includes('stop'), 'Real book end must release playback ownership');
+  });
+  await check('failed automatic continuation releases background playback instead of leaking a task', async () => {
+    const f = await fixture('playing');
+    f.state.currentBook.chapters = [f.state.currentChapter, { id: 'chapter-2' }];
+    f.service.playChapter = async () => { throw new Error('source unavailable'); };
+    f.player.transition('completed'); await flush();
+    assert.ok(f.backgroundCalls.includes('stop'));
+    assert.equal(f.state.isPlaying, false);
+  });
   await check('automatic sleep persists last duration, starts on explicit playback and never resets active countdown', async () => {
     const f = await fixture('paused');
     try {

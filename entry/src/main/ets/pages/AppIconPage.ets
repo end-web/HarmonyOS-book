@@ -23,7 +23,7 @@ export struct AppIconPage {
 
   @Monitor('membership.busy')
   private onMembershipUpdated(): void {
-    if (!this.membership.busy && !this.switching) this.loadCurrent();
+    if (this.service.membershipRequired && !this.membership.busy && !this.switching) this.loadCurrent();
   }
 
   private async loadCurrent(): Promise<void> {
@@ -40,11 +40,11 @@ export struct AppIconPage {
 
   private async selectIcon(option: AppIconOption): Promise<void> {
     if (this.switching || !this.service.supported || this.loading || this.loadFailed ||
-      this.membership.busy || this.current === option.name) return;
+      (this.service.membershipRequired && this.membership.busy) || this.current === option.name) return;
     this.switching = true;
     try {
       // 切换图标复用仍有效的已验签权益；未知或过期时才合并查询。
-      if (option.name !== '' && !this.memberState.hasAccess) {
+      if (this.service.membershipRequired && option.name !== '' && !this.memberState.hasAccess) {
         const host = this.getUIContext().getHostContext();
         if (!host) return;
         const context = sendableContextManager.convertToUIAbilityContext(sendableContextManager.convertFromContext(host));
@@ -77,7 +77,7 @@ export struct AppIconPage {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Blank()
-        if (this.loading || this.switching || this.membership.busy) {
+        if (this.loading || this.switching || (this.service.membershipRequired && this.membership.busy)) {
           LoadingProgress().width(24).height(24).color(AppColor.Brand)
         }
       }
@@ -125,7 +125,8 @@ export struct AppIconPage {
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                 if (option.name !== '') {
-                  Text($r('app.string.membership_icon_exclusive')).fontSize(AppFont.Caption)
+                  Text(this.service.membershipRequired ? $r('app.string.membership_icon_exclusive') :
+                    $r('app.string.app_icon_invite_free')).fontSize(AppFont.Caption)
                     .fontColor($r('sys.color.font_secondary'))
                 }
               }
@@ -137,7 +138,7 @@ export struct AppIconPage {
             .borderRadius(AppRadius.Lg)
             .backgroundColor($r('sys.color.comp_background_primary'))
             .enabled(this.service.supported && !this.switching &&
-              !this.loading && !this.loadFailed && !this.membership.busy)
+              !this.loading && !this.loadFailed && (!this.service.membershipRequired || !this.membership.busy))
             .accessibilityText(option.label)
             .onClick(() => this.selectIcon(option))
           }

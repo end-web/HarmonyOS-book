@@ -2088,6 +2088,7 @@
     {"name": "book_detail_continue_read", "value": "继续阅读"},
     {"name": "book_detail_score", "value": "%s分"},
     {"name": "book_detail_score_none", "value": "暂无"},
+    {"name": "shelf_view_detail", "value": "查看详情"},
     {"name": "shelf_status_filter", "value": "书架筛选"},
     {"name": "shelf_status_all", "value": "全部"},
     {"name": "shelf_status_ongoing", "value": "连载中"},
@@ -2104,6 +2105,13 @@
     {"name": "settings_load_failed", "value": "本地设置读取失败，请重试"},
     {"name": "settings_search_loading", "value": "正在读取搜索设置并核验会员…"},
     {"name": "settings_search_load_failed", "value": "搜索设置读取失败，请重试"},
-    {"name": "book_detail_loading_chapters", "value": "加载章节中"}
+    {"name": "book_detail_loading_chapters", "value": "加载章节中"},
+    {"name": "app_icon_waveberry", "value": "莓果酒红"},
+    {"name": "app_icon_waveorange", "value": "活力橙"},
+    {"name": "app_icon_wavegraphite", "value": "石墨灰"},
+    {"name": "app_icon_wavepurple", "value": "明亮紫"},
+    {"name": "app_icon_waveclear", "value": "透明玻璃"},
+    {"name": "app_icon_lifewhite", "value": "夜曲·白"},
+    {"name": "app_icon_invite_free", "value": "邀测免费体验"}
   ]
 }

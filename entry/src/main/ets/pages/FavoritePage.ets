@@ -1,3 +1,4 @@
+import { ImmersiveCircleButton } from '../components/ImmersiveCircleButton';
 import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { PlatformCompat } from '../utils/PlatformCompat';
@@ -159,6 +160,7 @@ export struct FavoritePage {
   @Local showBatchDelete: boolean = false;
   @Local deleteLocalFiles: boolean = false;
   private pendingSelection: string = '';
+  private pendingDetailBookId: string = '';
   private pendingManagementExit: boolean = false;
   private favoriteIdsByBookId: Map<string, string[]> = new Map();
   private favoritesLoadSerial: number = 0;
@@ -1119,6 +1121,11 @@ export struct FavoritePage {
       onAppear: (): void => { this.showBookActions = true; },
       onDisappear: (): void => {
         this.showBookActions = false;
+        const detailBookId = this.pendingDetailBookId;
+        this.pendingDetailBookId = '';
+        if (detailBookId.length > 0 && this.alive) {
+          this.navStack.pushPathByName('detail', detailBookId, (): void => { this.loadFavorites(); });
+        }
         const pinBookId = this.pendingPinBookId;
         this.pendingPinBookId = '';
         if (pinBookId.length > 0) this.toggleBookPinned(pinBookId);
@@ -1147,6 +1154,9 @@ export struct FavoritePage {
           if (this.isManaging) this.pendingManagementExit = true;
           else this.enterManagement(book.id);
         })
+      MenuItem({ content: $r('app.string.shelf_view_detail') })
+        .enabled(!this.removingBook && !this.isRefreshing)
+        .onClick((): void => { this.pendingDetailBookId = book.id; })
       if (!this.isManaging) {
       MenuItem({ content: this.pinnedBookIds.has(book.id) ?
         $r('app.string.shelf_unpin') : $r('app.string.shelf_pin') })
@@ -1567,51 +1577,44 @@ export struct FavoritePage {
       // 仅收起态按钮与 Search 配对；展开态保留独立收起入口，不占用共享 ID。
       Stack() {
         if (!this.showShelfSearch) {
-          Button({ type: ButtonType.Normal }) {
-            SymbolGlyph($r('sys.symbol.magnifyingglass'))
-              .fontSize(24).fontWeight(FontWeight.Regular)
-              .fontColor([this.shelfKeyword.trim().length > 0 ? AppColor.Brand : $r('sys.color.icon_primary')])
-          }
-          .width(40).height(40).borderRadius(20).clip(true)
-          .backgroundColor($r('sys.color.comp_background_tertiary'))
+          ImmersiveCircleButton({
+            icon: $r('sys.symbol.magnifyingglass'),
+            label: $r('app.string.shelf_search_expand'),
+            iconColor: this.shelfKeyword.trim().length > 0 ? AppColor.Brand : $r('sys.color.icon_primary'),
+            onPress: (): void => this.toggleShelfSearch()
+          })
           .geometryTransition(SHELF_SEARCH_GEOMETRY_ID)
           .transition(TransitionEffect.OPACITY)
           .enabled(!this.isManaging && !this.removingBook && !this.showBatchDelete && !this.shelfSearchAnimating)
           .accessibilityText($r('app.string.shelf_search_expand'))
-          .onClick((): void => this.toggleShelfSearch())
         } else {
-          Button({ type: ButtonType.Circle }) {
-            SymbolGlyph($r('sys.symbol.magnifyingglass'))
-              .fontSize(24).fontWeight(FontWeight.Regular).fontColor([AppColor.Brand])
-          }
-          .width(40).height(40).backgroundColor($r('sys.color.comp_background_tertiary'))
+          ImmersiveCircleButton({
+            icon: $r('sys.symbol.magnifyingglass'),
+            label: $r('app.string.shelf_search_collapse'),
+            iconColor: AppColor.Brand,
+            onPress: (): void => this.toggleShelfSearch()
+          })
           .transition(TransitionEffect.OPACITY)
           .enabled(!this.isManaging && !this.removingBook && !this.showBatchDelete && !this.shelfSearchAnimating)
           .accessibilityText($r('app.string.shelf_search_collapse'))
-          .onClick((): void => this.toggleShelfSearch())
         }
       }.id('shelf-search-toggle').width(40).height(40).clip(false)
-      this.buildShelfToolButton($r('sys.symbol.funnel'), $r('app.string.shelf_status_filter'),
-        !this.removingBook && !this.showBatchDelete, (): void => this.showStatusFilter())
-      this.buildShelfToolButton($r('sys.symbol.arrow_clockwise'), $r('app.string.shelf_updates_title'),
-        !this.isManaging && !this.removingBook, (): void => { this.showUpdates = true; })
-      this.buildShelfToolButton(this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'),
-        this.viewMode === 0 ? $r('app.string.shelf_view_list') : $r('app.string.shelf_view_grid'),
-        !this.removingBook && !this.showBatchDelete, (): void => this.toggleViewMode())
+      ImmersiveCircleButton({ icon: $r('sys.symbol.funnel'), label: $r('app.string.shelf_status_filter'),
+        onPress: (): void => this.showStatusFilter() })
+        .enabled(!this.removingBook && !this.showBatchDelete)
+      ImmersiveCircleButton({ icon: $r('sys.symbol.arrow_clockwise'), label: $r('app.string.shelf_updates_title'),
+        onPress: (): void => { this.showUpdates = true; } })
+        .enabled(!this.isManaging && !this.removingBook)
+      ImmersiveCircleButton({
+        icon: this.viewMode === 0 ? $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'),
+        label: this.viewMode === 0 ? $r('app.string.shelf_view_list') : $r('app.string.shelf_view_grid'),
+        onPress: (): void => this.toggleViewMode()
+      }).enabled(!this.removingBook && !this.showBatchDelete)
     }
     .width('100%').height(MINI_TITLE_BAR_HEIGHT)
     .padding({ left: AppSpace.Md, right: AppSpace.Md })
     .clip(false)
     .hitTestBehavior(HitTestMode.Transparent)
-  }
-
-  @Builder
-  buildShelfToolButton(icon: Resource, label: Resource, enabled: boolean, action: () => void) {
-    Button({ type: ButtonType.Circle }) {
-      SymbolGlyph(icon).fontSize(24).fontWeight(FontWeight.Regular).fontColor([$r('sys.color.icon_primary')])
-    }
-    .width(40).height(40).backgroundColor($r('sys.color.comp_background_tertiary'))
-    .enabled(enabled).accessibilityText(label).onClick(action)
   }
 
   @Builder

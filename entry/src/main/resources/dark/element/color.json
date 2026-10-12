@@ -41,6 +41,7 @@
     { "name": "app_on_brand", "value": "#FFFFFF" },
     { "name": "app_divider", "value": "#1FFFFFFF" },
     { "name": "app_shadow", "value": "#33000000" },
+    { "name": "detail_action_glass_tint", "value": "#18242A33" },
     { "name": "glass_control_fallback", "value": "#D12C2C2C" },
     { "name": "glass_sheet_fallback", "value": "#F2171A1D" },
     { "name": "glass_control_tint", "value": "#E62C2C2C" },

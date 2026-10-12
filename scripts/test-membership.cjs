@@ -237,7 +237,7 @@ async function main() {
       setFinishError: e => { finishError = e; }, setPurchaseError: e => { purchaseError = e; }, purchaseCount: () => purchaseCount,
       setEmptyPurchaseList: value => { emptyPurchaseList = value; } };
   }
-  function iconPage(s) {
+  function iconPage(s, membershipRequired = true) {
     const source = fs.readFileSync(path.join(root, 'pages/AppIconPage.ets'), 'utf8');
     const methods = source.slice(source.indexOf('  private async loadCurrent()'), source.indexOf('  build()'));
     const exports = {}, selected = [], messages = [];
@@ -253,10 +253,37 @@ async function main() {
       sendableContextManager: { convertFromContext: c => c, convertToUIAbilityContext: c => c } });
     const page = new exports.IconPage();
     page.membership = s.service; page.memberState = s.state;
-    page.service = { supported: true, getCurrent: async () => selected.at(-1) || '',
+    page.service = { supported: true, membershipRequired, getCurrent: async () => selected.at(-1) || '',
       select: async name => { selected.push(name); return name; } };
     return { page, selected, messages };
   }
+  await test('Invite icons work for nonmembers during entitlement sync without requesting IAP', async () => {
+    const s = session(); s.service.busy = true;
+    s.setQueryError({ code: 1001860005 });
+    const h = iconPage(s, false);
+    await h.page.selectIcon({ name: 'lifewhite' });
+    await h.page.selectIcon({ name: 'waveclear' });
+    assert.deepEqual(h.selected, ['lifewhite', 'waveclear']);
+    assert.equal(h.page.required, 0); assert.equal(s.queries.length, 0);
+  });
+  await test('Real icon service requires membership and verifies the system selection', async () => {
+    let enabled = '';
+    const state = { hasAccess: false };
+    const { AppIconService } = load('service/AppIconService.ets', {
+      '@kit.AbilityKit': { bundleManager: {
+        getAlternateIcons: async () => [{ iconName: enabled, enabled: true }],
+        setAlternateIcon: async name => { enabled = name; }
+      } },
+      '../utils/PlatformCompat': { PlatformCompat: { supports: () => true } },
+      '../model/MembershipState': { MembershipState: { current: state } }
+    });
+    assert.equal(AppIconService.instance.membershipRequired, true);
+    await assert.rejects(AppIconService.instance.select('lifewhite'), /Active icon membership required/);
+    assert.equal(await AppIconService.instance.select(''), '');
+    state.hasAccess = true;
+    assert.equal(await AppIconService.instance.select('lifewhite'), 'lifewhite');
+    await assert.rejects(AppIconService.instance.select('invalid'), /Invalid alternate icon/);
+  });
   await test('Repeated icon changes reuse valid entitlement beyond the ordinary query cache', async () => {
     const s = session(); s.current.push(payload()); await s.service.refresh(context);
     now += 70000;

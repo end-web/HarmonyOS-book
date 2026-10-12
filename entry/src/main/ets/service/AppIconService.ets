@@ -27,6 +27,11 @@ export class AppIconService {
     return PlatformCompat.supports(26);
   }
 
+  /** 主题图标会员策略；仅已上传的 v0.1.51 邀测包临时开放。 */
+  get membershipRequired(): boolean {
+    return true;
+  }
+
   getOptions(): AppIconOption[] {
     return [
       new AppIconOption('', $r('app.string.app_icon_default'), $r('app.media.app_icon_legacy')),
@@ -42,7 +47,13 @@ export class AppIconService {
       new AppIconOption('cartooncat', $r('app.string.app_icon_cartooncat'), $r('app.media.app_icon_cartooncat_legacy')),
       new AppIconOption('cartoondog', $r('app.string.app_icon_cartoondog'), $r('app.media.app_icon_cartoondog_legacy')),
       new AppIconOption('wave', $r('app.string.app_icon_wave'), $r('app.media.app_icon_wave_legacy')),
-      new AppIconOption('life', $r('app.string.app_icon_life'), $r('app.media.app_icon_life_legacy'))
+      new AppIconOption('life', $r('app.string.app_icon_life'), $r('app.media.app_icon_life_legacy')),
+      new AppIconOption('lifewhite', $r('app.string.app_icon_lifewhite'), $r('app.media.app_icon_lifewhite_legacy')),
+      new AppIconOption('waveberry', $r('app.string.app_icon_waveberry'), $r('app.media.app_icon_waveberry_legacy')),
+      new AppIconOption('waveorange', $r('app.string.app_icon_waveorange'), $r('app.media.app_icon_waveorange_legacy')),
+      new AppIconOption('wavegraphite', $r('app.string.app_icon_wavegraphite'), $r('app.media.app_icon_wavegraphite_legacy')),
+      new AppIconOption('wavepurple', $r('app.string.app_icon_wavepurple'), $r('app.media.app_icon_wavepurple_legacy')),
+      new AppIconOption('waveclear', $r('app.string.app_icon_waveclear'), $r('app.media.app_icon_waveclear_legacy'))
     ];
   }
 
@@ -55,7 +66,9 @@ export class AppIconService {
 
   async select(name: string): Promise<string> {
     if (!this.supported) throw new Error('Alternate icons require API 26');
-    if (name !== '' && !MembershipState.current.hasAccess) throw new Error('Active icon membership required');
+    if (this.membershipRequired && name !== '' && !MembershipState.current.hasAccess) {
+      throw new Error('Active icon membership required');
+    }
     if (this.changing) throw new Error('Icon change in progress');
     if (!this.getOptions().some((option: AppIconOption) => option.name === name)) {
       throw new Error('Invalid alternate icon');
