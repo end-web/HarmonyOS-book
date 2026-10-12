@@ -2119,6 +2119,8 @@
     {"name": "app_icon_wavepurple", "value": "明亮紫"},
     {"name": "app_icon_waveclear", "value": "透明玻璃"},
     {"name": "app_icon_lifewhite", "value": "夜曲·白"},
-    {"name": "app_icon_invite_free", "value": "邀测免费体验"}
+    {"name": "app_icon_invite_free", "value": "邀测免费体验"},
+    {"name": "settings_default_playback_speed", "value": "全局默认倍速"},
+    {"name": "settings_default_playback_speed_desc", "value": "用于无倍速记录的有声书；单本倍速独立记忆，互不影响"}
   ]
 }

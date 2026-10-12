@@ -80,7 +80,11 @@ export struct SettingsPage {
   @Local autoPlayOnLaunch: boolean = false;
   @Local isSavingAutoPlayOnLaunch: boolean = false;
   @Local focusMode: number = 0;
+  @Local isSavingFocusMode: boolean = false;
   @Local autoResume: boolean = true;
+  @Local defaultPlaybackSpeed: number = 1;
+  @Local defaultPlaybackSpeedDraft: number = 1;
+  @Local isSavingDefaultPlaybackSpeed: boolean = false;
   @Local preloadCount: number = 1;
   @Local preloadDraft: string = '1';
   @Local preloadCustom: boolean = false;
@@ -160,6 +164,7 @@ export struct SettingsPage {
       const coverResolution = await PreferenceService.getCoverSuperResolution();
       const focusMode = await PreferenceService.getAudioInterruptMode();
       const autoResume = await PreferenceService.getAudioAutoResume();
+      const defaultPlaybackSpeed = await PreferenceService.getDefaultPlaybackSpeed();
       const preloadCount = await PreferenceService.getPreloadChapters();
       if (!this.alive || serial !== this.preferencesLoadSerial) return;
       this.currentMode = mode;
@@ -169,6 +174,8 @@ export struct SettingsPage {
       this.coverSuperResolution = coverResolution;
       this.focusMode = focusMode;
       this.autoResume = autoResume;
+      this.defaultPlaybackSpeed = defaultPlaybackSpeed;
+      this.defaultPlaybackSpeedDraft = defaultPlaybackSpeed;
       this.preloadCount = preloadCount;
       this.preloadDraft = preloadCount.toString();
       this.preloadCustom = !PRELOAD_OPTIONS.some((opt: PreloadOption): boolean => opt.count === preloadCount);
@@ -236,13 +243,41 @@ export struct SettingsPage {
   }
 
   private async setFocusMode(mode: number): Promise<void> {
+    if (!this.isLoaded || this.isSavingFocusMode || this.focusMode === mode) return;
+    const previous = this.focusMode;
+    this.isSavingFocusMode = true;
     this.focusMode = mode;
-    await AudioService.getInstance().setInterruptMode(mode);
+    try {
+      await AudioService.getInstance().setInterruptMode(mode);
+    } catch (error) {
+      this.focusMode = previous;
+      hilog.warn(0xFF00, 'SettingsPage', 'Save audio focus failed: %{public}s', String(error));
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_save_failed') });
+    } finally {
+      this.isSavingFocusMode = false;
+    }
   }
 
   private async setAutoResume(enabled: boolean): Promise<void> {
     this.autoResume = enabled;
     await AudioService.getInstance().setAutoResume(enabled);
+  }
+
+  private async setDefaultPlaybackSpeed(speed: number): Promise<void> {
+    if (!this.isLoaded || this.isSavingDefaultPlaybackSpeed) return;
+    const rate = PreferenceService.normalizeDefaultPlaybackSpeed(speed);
+    if (rate === this.defaultPlaybackSpeed) return;
+    this.isSavingDefaultPlaybackSpeed = true;
+    try {
+      await PreferenceService.setDefaultPlaybackSpeed(rate);
+      this.defaultPlaybackSpeed = rate;
+      this.defaultPlaybackSpeedDraft = rate;
+    } catch (_error) {
+      this.defaultPlaybackSpeedDraft = this.defaultPlaybackSpeed;
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.settings_save_failed') });
+    } finally {
+      this.isSavingDefaultPlaybackSpeed = false;
+    }
   }
 
   private submitPreload(): void {
@@ -661,10 +696,11 @@ export struct SettingsPage {
       Column() {
         this.buildSelectItem(
           '默认打开',
-          '',
+          UIUtils.makeBinding<string>(() => ''),
           TAB_OPTIONS.map((opt: TabOption): SelectOption => { return { value: opt.label }; }),
-          this.defaultTab,
-          (index: number) => this.setDefaultTab(index)
+          UIUtils.makeBinding<number>(() => this.defaultTab),
+          (index: number) => this.setDefaultTab(index),
+          UIUtils.makeBinding<boolean>(() => this.isLoaded)
         )
 
         this.buildDivider()
@@ -691,12 +727,36 @@ export struct SettingsPage {
       this.buildGroupTitle('播放')
 
       Column() {
+        Column({ space: AppSpace.Sm }) {
+          Row({ space: AppSpace.Sm }) {
+            Text($r('app.string.settings_default_playback_speed')).fontSize(AppFont.BodyL)
+              .fontColor($r('sys.color.font_primary')).layoutWeight(1)
+            Text(this.defaultPlaybackSpeedDraft.toFixed(2) + 'x')
+              .fontSize(AppFont.BodyL).fontColor(AppColor.Brand)
+          }.width('100%')
+          Text($r('app.string.settings_default_playback_speed_desc'))
+            .fontSize(AppFont.Caption).fontColor($r('sys.color.font_secondary')).width('100%')
+          Slider({ value: this.defaultPlaybackSpeedDraft, min: 0.5, max: 3, step: 0.05 })
+            .selectedColor(AppColor.Brand).width('100%')
+            .accessibilityText($r('app.string.settings_default_playback_speed'))
+            .onChange((value: number, mode: SliderChangeMode): void => {
+              this.defaultPlaybackSpeedDraft = PreferenceService.normalizeDefaultPlaybackSpeed(value);
+              if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                this.setDefaultPlaybackSpeed(this.defaultPlaybackSpeedDraft);
+              }
+            })
+        }.width('100%').padding(ROW_INDENT)
+          .enabled(this.isLoaded && !this.isSavingDefaultPlaybackSpeed)
+
+        this.buildDivider()
+
         this.buildSelectItem(
           '音频焦点',
-          this.focusMode === 1 ? '与本应用其他音频独立计算焦点' : '与系统其他音频互斥（推荐）',
+          UIUtils.makeBinding<string>(() => this.focusMode === 1 ? '与本应用其他音频独立计算焦点' : '与系统其他音频互斥（推荐）'),
           FOCUS_MODE_OPTIONS.map((opt: FocusModeOption): SelectOption => { return { value: opt.label }; }),
-          FOCUS_MODE_OPTIONS.findIndex((opt: FocusModeOption) => opt.mode === this.focusMode),
-          (index: number) => this.setFocusMode(FOCUS_MODE_OPTIONS[index].mode)
+          UIUtils.makeBinding<number>(() => FOCUS_MODE_OPTIONS.findIndex((opt: FocusModeOption) => opt.mode === this.focusMode)),
+          (index: number) => this.setFocusMode(FOCUS_MODE_OPTIONS[index].mode),
+          UIUtils.makeBinding<boolean>(() => this.isLoaded && !this.isSavingFocusMode)
         )
 
         this.buildDivider()
@@ -834,23 +894,24 @@ export struct SettingsPage {
   @Builder
   buildSelectItem(
     title: string,
-    subtitle: string,
+    subtitle: Binding<string>,
     options: SelectOption[],
-    selected: number,
-    onSelect: (index: number) => void
+    selected: Binding<number>,
+    onSelect: (index: number) => void,
+    enabled: Binding<boolean>
   ) {
     Row({ space: AppSpace.Sm }) {
       Column({ space: 2 }) {
       Text(title).fontSize(AppFont.BodyL).fontColor($r('sys.color.font_primary')).width('100%')
-      if (subtitle.length > 0) {
-        Text(subtitle).fontSize(AppFont.Caption).fontColor($r('sys.color.font_tertiary')).width('100%')
+      if (subtitle.value.length > 0) {
+        Text(subtitle.value).fontSize(AppFont.Caption).fontColor($r('sys.color.font_tertiary')).width('100%')
       }
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       ImmersiveOptionTabs({
         labels: options.map((option: SelectOption): ResourceStr => option.value),
-        selected: selected,
+        selected: selected.value,
         onSelect: (index: number): void => onSelect(index)
-      })
+      }).enabled(enabled.value)
     }
     .width('100%').padding(ROW_INDENT)
   }

@@ -93,6 +93,7 @@
   autoPlayOnLaunch
   audioInterruptMode
   audioAutoResume
+  defaultPlaybackSpeed
   homeGridColumns
   preloadChapters
   # Reading-session JSON must survive release builds and upgrades

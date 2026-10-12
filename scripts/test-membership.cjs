@@ -156,7 +156,7 @@ async function main() {
     badOid = true; await assert.rejects(verifier.verify(context, signed(payload()))); badOid = false;
   });
 
-  function session(developerEnabled = false, displayDisk = new Map()) {
+  function session(developerEnabled = false, displayDisk = new Map(), membershipRequired = true) {
     const developer = load('service/membership/DeveloperMembership.ets');
     developer.DeveloperMembership.ENABLED = developerEnabled;
     let defaultsReset = 0;
@@ -243,7 +243,7 @@ async function main() {
       } },
       '@kit.PerformanceAnalysisKit': { hilog: { warn() {}, info() {} } },
       '../utils/PlatformCompat': { PlatformCompat: { wearable: false } },
-      './AppIconService': { AppIconService: { instance: { supported: true, select: async name => icons.push(name) } } },
+      './AppIconService': { AppIconService: { instance: { supported: true, membershipRequired, select: async name => icons.push(name) } } },
       './membership/SubscriptionData': data,
       './membership/LifetimeData': lifetimeData,
       '../model/MembershipDisplaySnapshot': displayData,
@@ -298,7 +298,23 @@ async function main() {
     assert.deepEqual(h.selected, ['lifewhite', 'waveclear']);
     assert.equal(h.page.required, 0); assert.equal(s.queries.length, 0);
   });
-  await test('Real icon service requires membership and verifies the system selection', async () => {
+  await test('Invite icons survive inactive, failed, expired and account-change entitlement callbacks', async () => {
+    const s = session(false, new Map(), false);
+    await s.service.load(context);
+    assert.equal(s.state.active, false);
+    s.current.push(payload()); await s.service.refresh(context, true);
+    assert.equal(s.state.active, true);
+    s.current[0].lastSubscriptionStatus.expiresTime = now - 1;
+    await s.service.refresh(context, true);
+    assert.equal(s.state.active, false);
+    s.setQueryError({ code: 1001860005 }); await s.service.refresh(context, true);
+    s.setQueryError(null); s.setSystemAccount('account-2');
+    await s.service.refresh(context, true);
+    assert.equal(s.state.hasAccess, false);
+    assert.ok(s.defaultsReset() > 0, 'other membership restrictions remain enforced');
+    assert.deepEqual(s.icons, [], 'callbacks must never reset the invite icon');
+  });
+  await test('Real icon service enforces membership and supports the invite policy', async () => {
     let enabled = '';
     const state = { hasAccess: false };
     const { AppIconService } = load('service/AppIconService.ets', {
@@ -315,6 +331,9 @@ async function main() {
     state.hasAccess = true;
     assert.equal(await AppIconService.instance.select('lifewhite'), 'lifewhite');
     await assert.rejects(AppIconService.instance.select('invalid'), /Invalid alternate icon/);
+    state.hasAccess = false;
+    Object.defineProperty(AppIconService.instance, 'membershipRequired', { get: () => false });
+    assert.equal(await AppIconService.instance.select('waveclear'), 'waveclear');
   });
   await test('Repeated icon changes reuse valid entitlement beyond the ordinary query cache', async () => {
     const s = session(); s.current.push(payload()); await s.service.refresh(context);

@@ -294,8 +294,8 @@ export class AudioService {
 
   /** 设置音频焦点模式：0=SHARE_MODE, 1=INDEPENDENT_MODE */
   async setInterruptMode(mode: number): Promise<void> {
-    this.interruptMode = mode;
     await PreferenceService.setAudioInterruptMode(mode);
+    this.interruptMode = mode;
     if (this.player) {
       this.applyInterruptMode(this.player);
     }
@@ -462,7 +462,8 @@ export class AudioService {
           this.stopBackgroundIfIdle();
         }
       } else if (newState === 'playing') {
-        if (this.sleepPausePending || this.pauseRequested || PlaybackCoordinator.speechActive) {
+        if (this.sleepPausePending || this.pauseRequested || this.pausedByFocus ||
+          this.pausedByExternalMedia || PlaybackCoordinator.speechActive) {
           p.pause().catch((err: Error): void => {
             hilog.warn(DOMAIN, TAG, 'Pending pause failed: %{public}s', err.message);
           });
@@ -573,6 +574,7 @@ export class AudioService {
       // 加载/解析过的 URL 失效（缓存或上次解析的临时链接）:清缓存后自动重新解析一次再播，
       // loading 不会提前消失（playChapter 内会重新置 true）；重试仍失败则由限流阻止再次自动重试。
       if (book && ch && usingResolvedUrl && !this.pauseRequested && !this.sleepPausePending
+        && !this.pausedByFocus && !this.pausedByExternalMedia && !PlaybackCoordinator.speechActive
         && this.canAutoRetryLoad(ch.id)) {
         this.autoRetryChapterId = ch.id;
         hilog.warn(DOMAIN, TAG, 'AVPlayer error with resolved URL, auto re-resolve chapter: %{public}s', ch.title);
@@ -708,7 +710,9 @@ export class AudioService {
     this.cancelLiveRecovery();
     this.tracePlayback(`interrupt:type=${event.eventType}:force=${event.forceType}:hint=${event.hintType}:autoResume=${this.autoResume}`);
     if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
-    if (event.forceType === audio.InterruptForceType.INTERRUPT_FORCE) {
+    // SHARE 的 PAUSE/STOP 由应用执行；FORCE 已由系统执行，但同样必须封住异步起播。
+    if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE ||
+      event.hintType === audio.InterruptHint.INTERRUPT_HINT_STOP) {
       if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_PAUSE) {
         // 临时暂停（语音、电话、闹铃等）：标记为焦点暂停，等待系统后续下发 RESUME
         // 旧的视频流 watcher 若残留,先 disarm 以免误触发(当前打断已被新事件接管)
@@ -716,9 +720,12 @@ export class AudioService {
         this.pausedByFocus = true;
         if (this.state) {
           this.state.isPlaying = false;
+          this.state.isLoading = false;
         }
         this.stopTick();
+        this.persistHistory();
         this.syncPlaybackState();
+        PlaybackStore.getInstance().setPlaying(false);
       } else if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_STOP) {
         // 永久失去焦点:系统不会再下发 RESUME(典型场景:抖音/B 站等视频抢焦点)。
         // 不再 reset player —— 留住 paused 状态,arm ExternalMediaWatcher,
@@ -729,6 +736,7 @@ export class AudioService {
         this.pausedByExternalMedia = true;
         if (this.state) {
           this.state.isPlaying = false;
+          this.state.isLoading = false;
         }
         this.stopTick();
         // 立即把当前进度落盘:与 'paused' stateChange 分支同样的理由,
@@ -740,6 +748,13 @@ export class AudioService {
           this.externalWatcher.arm(() => this.resumeAfterExternalMedia());
         }
       }
+      const player = this.player;
+      if (event.forceType === audio.InterruptForceType.INTERRUPT_SHARE && player?.state === 'playing') {
+        player.pause().catch((error: BusinessError): void => {
+          DiagnosticLogService.failure('audio.interrupt-pause', error);
+        });
+      }
+      this.stopBackgroundIfIdle();
       // DUCK / UNDUCK：系统仅做音量变化，播放未中断，无需处理状态
     } else if (event.forceType === audio.InterruptForceType.INTERRUPT_SHARE) {
       if (event.hintType === audio.InterruptHint.INTERRUPT_HINT_RESUME) {
@@ -759,7 +774,8 @@ export class AudioService {
     if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
     try {
       const p = await this.ensurePlayer();
-      if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
+      if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending ||
+        this.pausedByFocus || this.pausedByExternalMedia) return;
       if (p.state === 'paused') {
         // 立即设置播放状态
         if (this.state) {
@@ -786,7 +802,8 @@ export class AudioService {
     this.pausedByExternalMedia = false;
     try {
       const p = await this.ensurePlayer();
-      if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending) return;
+      if (PlaybackCoordinator.speechActive || this.pauseRequested || this.sleepPausePending ||
+        this.pausedByFocus || this.pausedByExternalMedia) return;
       if (p.state === 'paused') {
         if (this.state) {
           this.state.isPlaying = true;
@@ -1071,14 +1088,16 @@ export class AudioService {
       try { await this.persistHistory(); } catch (_e) { /* ignore */ }
       if (bookChanged) ReadingSessionService.end('audio');
     }
-    // 切书(含冷启动首播)时恢复该书上次的倍速;同书切章保持当前倍速不变。
+    // 切书(含冷启动首播)优先恢复单本倍速，没有有效记录才用全局默认值；同书切章保持当前倍速。
     // 必须 await getProgress 走持久化 store:冷启动后 progressMemo 为空,
     // getProgressSync 只读内存缓存会恒为 null,导致重启后倍速永远回落 1.0x。
     // 顺带把该书进度读进 memo,后面 savedDurationMs 兜底也能命中。
     // 真正下发到 AVPlayer 由 prepared 回调里的 state.speed 补回逻辑负责。
     if (bookChanged) {
       const saved = await PreferenceService.getProgress(targetBook.id);
-      this.state.speed = this.normalizeSpeed(saved?.speed);
+      const savedSpeed = saved?.speed;
+      this.state.speed = typeof savedSpeed === 'number' && Number.isFinite(savedSpeed) && savedSpeed > 0
+        ? this.normalizeSpeed(savedSpeed) : await PreferenceService.getDefaultPlaybackSpeed();
     }
     // savedDurationMs 兜底:让 Slider max 在 prepared 之前就有非 0 值,
     // 视觉上不再"从头加载"——立刻显示"当前位置/总时长"比例。

@@ -42,6 +42,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   const player = {
     state: initialState, duration: 180000, currentTime: 42000,
     plays: 0, pauses: 0, seeks: [],
+    rates: [], setPlaybackRate(rate) { this.rates.push(rate); },
     on(name, callback) { events.set(name, callback); },
     off(name) { events.delete(name); },
     emit(name, ...values) { events.get(name)?.(...values); },
@@ -76,6 +77,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   const mediaSources = [];
   const platformCompat = { supports: () => true };
   const cache = {
+    getChapterDuration() { return 0; },
     clearChapter(id) { cacheCalls.push(`clear:${id}`); },
     suspendPreload() { cacheCalls.push('suspend'); },
     resumePreload() { cacheCalls.push('resume'); },
@@ -113,7 +115,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
     delete: async key => preferenceValues.delete(key), flush: async () => {}
   });
   const modules = {
-    './ReadingSessionService': { ReadingSessionService: { checkpoint() {} }, SessionLocation: { audio: () => ({}) } },
+    './ReadingSessionService': { ReadingSessionService: { checkpoint() {}, end() {} }, SessionLocation: { audio: () => ({}) } },
     './LiveAudioService': { LiveAudioService: { isLive: async () => false } },
     './ChapterCacheService': { ChapterCacheService: { getInstance: () => cache } },
     './SourceDataService': { SourceDataService: { getSourceByUrl: async () => ({}) } },
@@ -147,7 +149,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
     './DiagnosticLogService': { DiagnosticLogService: { info() {}, failure() {} } },
     './DataService': { DataService: { async upsertCachedBook() {},
       resolveChapterIndex: (book, id) => book.chapters.findIndex(ch => ch.id === id) } },
-    './PreferenceService': { PreferenceService: preference },
+    './PreferenceService': prefModule.exports,
     './WidgetUpdater': { WidgetUpdater: { async optimisticSetPlaying() {} } }
   };
   const module = { exports: {} };
@@ -193,6 +195,64 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('global speed defaults only new books, survives reload, and never overwrites per-book speed', async () => {
+    const f = await fixture();
+    f.service.persistHistory = Object.getPrototypeOf(f.service).persistHistory;
+    const chapter = { id: 'a-1', title: '第一章', duration: 180, source: { type: 'file', value: '/a.mp3' } };
+    const book = { id: 'a', chapters: [chapter] };
+    const nextChapter = { ...chapter, id: 'a-2' };
+    book.chapters.push(nextChapter);
+    f.state.currentBook = null;
+    f.state.currentChapter = null;
+    assert.equal(await f.preference.getDefaultPlaybackSpeed(), 1);
+    await f.preference.setDefaultPlaybackSpeed(1.5);
+    await f.service.flushBeforeSwitch(book, chapter);
+    assert.equal(f.state.speed, 1.5);
+    f.state.currentBook = book;
+    f.state.currentChapter = chapter;
+    await f.service.setSpeed(1.8);
+    assert.equal((await f.preference.getProgress('a')).speed, 1.8);
+    assert.equal(await f.preference.getDefaultPlaybackSpeed(), 1.5);
+    await f.preference.setDefaultPlaybackSpeed(2);
+    assert.equal(f.state.speed, 1.8, 'Changing global speed must not change current playback');
+    await f.service.flushBeforeSwitch(book, nextChapter);
+    assert.equal(f.state.speed, 1.8, 'Chapter switches keep the current book speed');
+    const other = { id: 'b', chapters: [chapter] };
+    await f.service.flushBeforeSwitch(other, chapter);
+    assert.equal(f.state.speed, 2, 'Another new book uses the new global default');
+    f.state.currentBook = other;
+    await f.service.setSpeed(1);
+    assert.equal(await f.preference.getDefaultPlaybackSpeed(), 2, 'Resetting one book to 1x is local');
+    f.preference.progressMemo.clear();
+    f.state.currentBook = null;
+    f.state.currentChapter = null;
+    await f.service.flushBeforeSwitch(book, chapter);
+    assert.equal(f.state.speed, 1.8, 'Cold restore reads the saved per-book value');
+    await f.service.flushBeforeSwitch(other, chapter);
+    assert.equal(f.state.speed, 1, 'An explicit 1x must override the global default');
+  });
+  await check('missing or invalid old speed uses global default and failed global saves roll back', async () => {
+    const f = await fixture();
+    f.state.currentBook = null;
+    f.state.currentChapter = null;
+    await f.preference.setDefaultPlaybackSpeed(1.25);
+    const chapter = { id: 'old-1', duration: 180 };
+    for (const speed of [undefined, null, 0, -1, 'fast']) {
+      await f.preference.saveProgress({ bookId: 'old', chapterId: chapter.id, speed });
+      f.preference.progressMemo.clear();
+      await f.service.flushBeforeSwitch({ id: 'old', chapters: [chapter] }, chapter);
+      assert.equal(f.state.speed, 1.25);
+    }
+    const store = await f.preference.ensureStore();
+    f.preference.ensureStore = async () => ({ ...store, flush: async () => { throw new Error('disk full'); } });
+    await assert.rejects(f.preference.setDefaultPlaybackSpeed(2), /disk full/);
+    assert.equal(await f.preference.getDefaultPlaybackSpeed(), 1.25);
+    f.preference.ensureStore = async () => store;
+    for (const [input, expected] of [[NaN, 1], [Infinity, 1], [-1, 1], [0.1, 0.5], [4, 3], [1.26, 1.25]]) {
+      await f.preference.setDefaultPlaybackSpeed(input);
+      assert.equal(await f.preference.getDefaultPlaybackSpeed(), expected);
+    }
+  });
   await check('widget play restores a lost background task even while AVPlayer still reports playing', async () => {
     const f = await fixture('playing');
     f.background.isRunning = () => false;
@@ -716,6 +776,56 @@ async function check(name, test) {
     f.player.emit('audioInterrupt', { forceType: 1, hintType: 1 });
     await flush();
     assert.equal(f.player.plays, 1);
+  });
+  await check('shared pause and stop actually silence playback and preserve position', async () => {
+    for (const hintType of [2, 3]) {
+      const f = await fixture('playing');
+      f.player.emit('audioInterrupt', { forceType: 1, hintType });
+      await flush();
+      assert.equal(f.player.state, 'paused');
+      assert.equal(f.player.pauses, 1);
+      assert.equal(f.state.isPlaying, false);
+      assert.equal(f.state.progressMs, 42000);
+      assert.equal(f.service.pausedByFocus, hintType === 2);
+      assert.equal(f.service.pausedByExternalMedia, hintType === 3);
+    }
+  });
+  await check('focus loss blocks late playback and automatic URL-error recovery', async () => {
+    for (const forceType of [0, 1]) {
+      for (const hintType of [2, 3]) {
+        const f = await fixture('playing');
+        f.player.emit('audioInterrupt', { forceType, hintType });
+        f.player.transition('playing');
+        await flush();
+        assert.equal(f.player.state, 'paused');
+        assert.equal(f.state.isPlaying, false);
+        f.state.currentChapter.source = { type: 'url', value: 'https://example.invalid/audio' };
+        f.state.currentChapter.originSourceValue = 'https://example.invalid/chapter';
+        let retries = 0;
+        f.service.playChapterAndSeek = async () => { retries++; };
+        f.player.state = 'error';
+        f.player.emit('error', { code: 5400103, message: 'interrupted renderer failure' });
+        await flush();
+        assert.equal(retries, 0);
+      }
+    }
+  });
+  await check('a new interruption cancels focus and external-media recovery awaiting a player', async () => {
+    for (const external of [false, true]) {
+      const f = await fixture('stopped');
+      let resolvePlayer;
+      f.service.ensurePlayer = () => new Promise(resolve => { resolvePlayer = resolve; });
+      let resumes = 0;
+      f.service.resumeFromState = async () => { resumes++; };
+      f.service.pausedByExternalMedia = external;
+      const recovery = external ? f.service.resumeAfterExternalMedia() : f.service.resumeFromInterrupt();
+      f.player.emit('audioInterrupt', { forceType: 0, hintType: 2 });
+      resolvePlayer(f.player);
+      await recovery;
+      assert.equal(resumes, 0);
+      assert.equal(f.player.plays, 0);
+      assert.equal(f.service.pausedByFocus, true);
+    }
   });
   await check('a late playing event is paused again after headset removal', async () => {
     const f = await fixture('initialized');

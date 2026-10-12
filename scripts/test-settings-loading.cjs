@@ -25,6 +25,7 @@ function harness() {
     getCoverSuperResolution: async () => true,
     getAudioInterruptMode: async () => 1,
     getAudioAutoResume: async () => false,
+    getDefaultPlaybackSpeed: async () => 1.5,
     getPreloadChapters: async () => 7,
     getSearchConcurrency: () => search.promise
   };
@@ -54,6 +55,8 @@ async function tick() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
   assert.equal(slow.page.searchConcurrencyLoading, true);
   assert.equal(slow.page.defaultTab, 2);
   assert.equal(slow.page.autoPlayOnLaunch, true);
+  assert.equal(slow.page.defaultPlaybackSpeed, 1.5);
+  assert.equal(slow.page.defaultPlaybackSpeedDraft, 1.5);
   assert.equal(slow.page.preloadDraft, '7');
   slow.search.resolve(9); await tick();
   assert.equal(slow.page.searchConcurrency, 9);
@@ -89,6 +92,9 @@ async function tick() { for (let i = 0; i < 12; i++) await Promise.resolve(); }
   revoked.page.membership.hasAccess = false; revoked.page.membership.confirmedInactive = true;
   revoked.search.resolve(12); await tick();
   assert.equal(revoked.page.searchConcurrency, 3, 'late result cannot display revoked custom access');
+  await revoked.page.loadPrefs();
+  assert.equal(revoked.page.isLoaded, true);
+  assert.equal(revoked.page.defaultPlaybackSpeed, 1.5, 'default speed is available without membership');
   const unknown = harness(); await unknown.page.loadPrefs();
   unknown.page.membership.hasAccess = false; unknown.search.resolve(3); await tick();
   assert.equal(unknown.page.searchConcurrencyLoadFailed, true, 'unknown membership offers retry instead of a purchase gate');

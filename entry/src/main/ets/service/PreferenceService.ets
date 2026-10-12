@@ -30,6 +30,7 @@ const KEY_COVER_SUPER_RESOLUTION = 'cover_super_resolution';
 export const EVT_COVER_SUPER_RESOLUTION_CHANGED = 'app.cover.super_resolution.changed';
 const KEY_AUDIO_INTERRUPT_MODE = 'audio_interrupt_mode';
 const KEY_AUDIO_AUTO_RESUME = 'audio_auto_resume';
+const KEY_DEFAULT_PLAYBACK_SPEED = 'default_playback_speed';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_HOME_SOURCE_URL = 'home_source_url';
@@ -104,6 +105,7 @@ export class PreferenceBackupSnapshot {
   autoPlayOnLaunch: boolean = false;
   audioInterruptMode: number = 0;
   audioAutoResume: boolean = true;
+  defaultPlaybackSpeed: number = 1;
   homeGridColumns: number = 3;
   preloadChapters: number = 1;
   searchConcurrency: number = 3;
@@ -725,6 +727,31 @@ export class PreferenceService {
     await s.flush();
   }
 
+  static normalizeDefaultPlaybackSpeed(speed: number | undefined): number {
+    if (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0) return 1;
+    return Math.round(Math.max(0.5, Math.min(3, speed)) * 20) / 20;
+  }
+
+  /** 仅供没有单本倍速记录的有声书起播时使用，不修改正在播放的书。 */
+  static async getDefaultPlaybackSpeed(): Promise<number> {
+    const store = await PreferenceService.ensureStore();
+    const value = await store.get(KEY_DEFAULT_PLAYBACK_SPEED, 1);
+    return PreferenceService.normalizeDefaultPlaybackSpeed(typeof value === 'number' ? value : undefined);
+  }
+
+  static async setDefaultPlaybackSpeed(speed: number): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    const previous = await store.get(KEY_DEFAULT_PLAYBACK_SPEED, 1);
+    try {
+      await store.put(KEY_DEFAULT_PLAYBACK_SPEED, PreferenceService.normalizeDefaultPlaybackSpeed(speed));
+      await store.flush();
+    } catch (error) {
+      await store.put(KEY_DEFAULT_PLAYBACK_SPEED, previous);
+      const failure: Error = error;
+      throw failure;
+    }
+  }
+
   /** 0=共享焦点（默认，听书与其他音乐互斥）, 1=独立焦点（不与本应用其他音频互斥） */
   static async getAudioInterruptMode(): Promise<number> {
     const s = await PreferenceService.ensureStore();
@@ -1137,6 +1164,7 @@ export class PreferenceService {
     snapshot.autoPlayOnLaunch = await PreferenceService.getAutoPlayOnLaunch();
     snapshot.audioInterruptMode = await PreferenceService.getAudioInterruptMode();
     snapshot.audioAutoResume = await PreferenceService.getAudioAutoResume();
+    snapshot.defaultPlaybackSpeed = await PreferenceService.getDefaultPlaybackSpeed();
     snapshot.homeGridColumns = await PreferenceService.getHomeGridColumns();
     snapshot.preloadChapters = await PreferenceService.getPreloadChapters();
     snapshot.searchConcurrency = await PreferenceService.getSearchConcurrency();
@@ -1241,6 +1269,8 @@ export class PreferenceService {
     await s.put(KEY_AUTO_PLAY_ON_LAUNCH, snapshot.autoPlayOnLaunch === true);
     await s.put(KEY_AUDIO_INTERRUPT_MODE, snapshot.audioInterruptMode);
     await s.put(KEY_AUDIO_AUTO_RESUME, snapshot.audioAutoResume);
+    await s.put(KEY_DEFAULT_PLAYBACK_SPEED,
+      PreferenceService.normalizeDefaultPlaybackSpeed(snapshot.defaultPlaybackSpeed));
     await s.put(KEY_HOME_GRID_COLUMNS, snapshot.homeGridColumns);
     await s.put(KEY_PRELOAD_CHAPTERS, Number.isFinite(snapshot.preloadChapters) ?
       Math.max(0, Math.min(50, Math.round(snapshot.preloadChapters))) : 1);

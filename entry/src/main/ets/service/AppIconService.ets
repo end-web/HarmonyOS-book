@@ -27,7 +27,7 @@ export class AppIconService {
     return PlatformCompat.supports(26);
   }
 
-  /** 主题图标会员策略；仅已上传的 v0.1.51 邀测包临时开放。 */
+  /** 主题图标会员策略；页面、切换服务和失效回调统一遵循，v0.1.52 邀测包临时开放。 */
   get membershipRequired(): boolean {
     return true;
   }

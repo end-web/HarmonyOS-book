@@ -660,7 +660,7 @@ export class MembershipService {
     // 不等待备份任务：该任务可能正在等待本次会员查询，避免互相等待。
     AutoBackupService.instance.resetMembershipDefaults(context).catch((): void => {});
     try { await PreferenceService.setSearchConcurrency(3); } catch (_error) { /* 后续读取仍按默认并发执行。 */ }
-    if (!AppIconService.instance.supported) return;
+    if (!AppIconService.instance.supported || !AppIconService.instance.membershipRequired) return;
     try { await AppIconService.instance.select(''); } catch (_error) { /* 下次前台刷新重试系统图标。 */ }
   }
 
