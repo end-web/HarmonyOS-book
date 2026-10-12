@@ -1,10 +1,14 @@
 import { AppColor, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
-import { PlayerState } from '../model/PlayerState';
+import { Book } from '../model/Book';
 import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 
 @ComponentV2
 export struct MiniPlayer {
-  @Param playerState: PlayerState = new PlayerState();
+  @Param book: Book | null = null;
+  @Param chapterTitle: string = '';
+  @Param playing: boolean = false;
+  @Param loading: boolean = false;
+  @Param progressPercent: number = 0;
   @Param collapsed: boolean = true;
   @Event onTapBody: () => void = () => {};
   @Event onToggle: () => void = () => {};
@@ -17,38 +21,28 @@ export struct MiniPlayer {
   private draggingPlayer: boolean = false;
   @Local dragState: PlayerDragState = PlayerDragTransition.getInstance().state;
 
-  @Computed
-  get chapterProgressPercent(): number {
-    const durationMs: number = this.playerState.durationMs > 0
-      ? this.playerState.durationMs
-      : this.playerState.savedDurationMs;
-    if (durationMs <= 0) return 0;
-    const percent: number = this.playerState.progressMs / durationMs * 100;
-    return Math.min(100, Math.max(0, percent));
-  }
-
   @Builder
   coverImageBuilder(): void {
-    if (this.playerState.currentBook) {
-      if (this.playerState.currentBook.cover && this.playerState.currentBook.cover.startsWith('http')) {
-        Image(this.playerState.currentBook.cover)
+    if (this.book) {
+      if (this.book.cover && this.book.cover.startsWith('http')) {
+        Image(this.book.cover)
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
           .sourceSize({ width: 300, height: 400 })
           .id('mini-player-cover-image')
-      } else if (this.playerState.currentBook.cover
-        && (this.playerState.currentBook.cover.startsWith('/') || this.playerState.currentBook.cover.startsWith('file://'))) {
+      } else if (this.book.cover
+        && (this.book.cover.startsWith('/') || this.book.cover.startsWith('file://'))) {
         // 判断条件与 BookCard.isLocalFile 对齐:file:// 前缀的本地封面不能掉进 $rawfile 分支
-        Image('file://' + this.playerState.currentBook.cover.replace(/^file:\/\//, ''))
+        Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
           .sourceSize({ width: 300, height: 400 })
           .id('mini-player-cover-image')
-      } else if (this.playerState.currentBook.cover) {
+      } else if (this.book.cover) {
         // rawfile 分支不设 sourceSize:列表(BookCard/FavoritePage)的 rawfile 分支也没设,保持缓存一致
-        Image($rawfile(this.playerState.currentBook.cover))
+        Image($rawfile(this.book.cover))
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
@@ -65,10 +59,10 @@ export struct MiniPlayer {
   }
 
   build() {
-    if (this.playerState.currentBook) {
+    if (this.book) {
       Row({ space: this.collapsed ? 0 : AppSpace.Sm }) {
         Stack() {
-          Progress({ value: this.chapterProgressPercent, total: 100, type: ProgressType.Ring })
+          Progress({ value: this.progressPercent, total: 100, type: ProgressType.Ring })
             .width('100%')
             .height('100%')
             .color(AppColor.Brand)
@@ -104,14 +98,14 @@ export struct MiniPlayer {
 
         if (!this.collapsed) {
           Column({ space: 2 }) {
-            Text(this.playerState.currentBook.title)
+            Text(this.book.title)
               .fontSize(AppFont.Body)
               .fontColor($r('sys.color.font_primary'))
               .fontWeight(FontWeight.Medium)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-            Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : '--')
+            Text(this.chapterTitle || '--')
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_secondary'))
               .maxLines(1)
@@ -122,11 +116,16 @@ export struct MiniPlayer {
           .alignItems(HorizontalAlign.Start)
           .onClick(() => this.onTapBody())
 
-          SymbolGlyph(this.playerState.isPlaying
-            ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
-            .fontSize(24)
-            .fontColor([$r('sys.color.font_primary')])
+          Stack() {
+            if (this.loading) {
+              LoadingProgress().width(24).height(24).color(AppColor.Brand)
+            } else {
+              SymbolGlyph(this.playing ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
+                .fontSize(24).fontColor([$r('sys.color.font_primary')])
+            }
+          }.width(24).height(24).id('mini-player-toggle')
             .hitTestBehavior(HitTestMode.Block)
+            .accessibilityText(this.playing || this.loading ? $r('app.string.tts_pause') : $r('app.string.tts_play'))
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
             .onClick(() => this.onToggle())
 
@@ -134,6 +133,7 @@ export struct MiniPlayer {
             .fontSize(22)
             .fontColor([$r('sys.color.font_primary')])
             .hitTestBehavior(HitTestMode.Block)
+            .id('mini-player-next').accessibilityText($r('app.string.tts_next'))
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
             .onClick(() => this.onNext())
         }

@@ -6,7 +6,9 @@ import { HdsCompat } from '../utils/HdsCompat';
 import { promptAction, CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common, ApplicationStateChangeCallback } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
-import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
+import {
+  HdsNavigation, HdsNavigationTitleMode, BottomBuilderParams, BuilderOptions, TitleBarContentOptions
+} from '@kit.UIDesignKit';
 import {
   AppColor,
   AppRadius,
@@ -176,6 +178,8 @@ export struct FavoritePage {
   private context: common.UIAbilityContext | null = null;
   private listScroller: Scroller = new Scroller();
   private bookDataSource: BookDataSource = new BookDataSource();
+  private readonly shelfTitleBarBuilder: CustomBuilder = (): void => this.buildShelfTitleBar();
+  private readonly shelfFilterBuilder: CustomBuilder = (): void => this.buildShelfFilter();
   private historyUpdatedHandler: (e: emitter.EventData) => void = (e) => this.onHistoryUpdated(e);
   /** 加入/移出书架后重新拉书清单。 */
   private favoritesChangedHandler: () => void = () => {
@@ -305,12 +309,6 @@ export struct FavoritePage {
   async loadFavorites(): Promise<void> {
     if (!this.context) return;
     const serial = ++this.favoritesLoadSerial;
-    // 来源索引只用于标签和在线操作，不决定收藏是否保留或显示。
-    const sources = await SourceDataService.getSources();
-    const sourceNames = new Map<string, string>();
-    for (const source of sources) {
-      sourceNames.set(source.bookSourceUrl, source.bookSourceName);
-    }
     const ids = await PreferenceService.getShelfFavorites();
     const pinnedIds = new Set(await PreferenceService.getPinnedFavorites());
     const allBooks = await DataService.getBooks(this.context);
@@ -357,6 +355,20 @@ export struct FavoritePage {
       missingCount++;
     }
     this.missingFavoriteCount = missingCount;
+
+    // 切 Tab 只解析书架实际引用的来源，避免为名称标签重读全部导入规则。
+    // 禁用源仍可解析，删除源也不影响收藏保留与显示。
+    const sourceNames = new Map<string, string>();
+    const sourceUrls = new Set<string>();
+    for (const book of books) {
+      if (book.sourceUrl) sourceUrls.add(book.sourceUrl);
+    }
+    for (const sourceUrl of sourceUrls) {
+      if (serial !== this.favoritesLoadSerial) return;
+      const source = await SourceDataService.getSourceByUrl(sourceUrl);
+      if (source !== undefined) sourceNames.set(source.bookSourceUrl, source.bookSourceName);
+    }
+    if (serial !== this.favoritesLoadSerial) return;
 
     // 修复历史缓存中的双倍章节:按 title + index 去重(title 稳定,不会被播放覆盖)
     for (const b of books) {
@@ -555,14 +567,13 @@ export struct FavoritePage {
   }
 
   private async checkOnlineBooks(onlineBooks: Book[]): Promise<ShelfUpdateReport> {
-    const sources = await SourceDataService.getSources();
     let updated = 0;
     let failed = 0;
     const updatedBooks: BookUpdateInfo[] = [];
     let completed = 0;
     const refreshBook = async (book: Book): Promise<void> => {
       try {
-        const source = sources.find(s => s.bookSourceUrl === book.sourceUrl);
+        const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
         if (!source) {
           failed++;
           return;
@@ -716,6 +727,26 @@ export struct FavoritePage {
 
   private shelfHeaderHeight(): number {
     return SHELF_FILTER_ROW_HEIGHT + (this.showShelfSearch ? SHELF_SEARCH_ROW_HEIGHT : 0);
+  }
+
+  @Computed
+  get shelfTitleBarContent(): TitleBarContentOptions {
+    const bottom: BottomBuilderParams = {
+      builder: this.shelfFilterBuilder,
+      height: this.shelfHeaderHeight()
+    };
+    const content: TitleBarContentOptions = {
+      stackBuilder: this.shelfTitleBarBuilder,
+      bottomBuilder: bottom
+    };
+    if (PlatformCompat.supports(26)) {
+      // 搜索展开只更新高度和内部状态，保留整排按钮及其 HDS 材质节点。
+      const titleBuilder: BuilderOptions = { builder: this.shelfTitleBarBuilder, updated: false };
+      const filterBuilder: BuilderOptions = { builder: this.shelfFilterBuilder, updated: false };
+      content.stackBuilderContent = titleBuilder;
+      bottom.builderContent = filterBuilder;
+    }
+    return content;
   }
 
   private toggleShelfSearch(): void {
@@ -1294,13 +1325,7 @@ export struct FavoritePage {
       .mode(NavigationMode.Stack)
       .titleBar({
         avoidLayoutSafeArea: true,
-        content: {
-          stackBuilder: (): void => this.buildShelfTitleBar(),
-          bottomBuilder: {
-            builder: (): void => this.buildShelfFilter(),
-            height: this.shelfHeaderHeight()
-          }
-        },
+        content: this.shelfTitleBarContent,
         style: {
           scrollEffectOpts: {
             scrollEffectType: HdsCompat.scrollEffect

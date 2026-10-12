@@ -73,6 +73,11 @@
     { "name": "source_manage_tls_invalid", "value": "请输入有效的 HTTPS 主机名" },
     { "name": "source_manage_tls_confirm", "value": "继续后，本设备将跳过以下精确主机的证书校验：\n%s\n连接可能被冒充或监听，仅在确认书源和网络可信时继续。" },
     { "name": "source_manage_tls_updated", "value": "证书信任已更新" },
-    { "name": "source_manage_tls_strict", "value": "已恢复严格证书校验" }
+    { "name": "source_manage_tls_strict", "value": "已恢复严格证书校验" },
+    { "name": "source_import_address_invalid", "value": "订阅地址无效，请使用 HTTP(S) 地址或阅读书源分享链接。" },
+    { "name": "source_import_auth_required", "value": "订阅服务拒绝访问，请检查订阅凭据或链接是否已过期。" },
+    { "name": "source_import_not_found", "value": "订阅链接不存在或已失效，请获取最新链接后重试。" },
+    { "name": "source_import_html_response", "value": "链接返回了网页而非书源 JSON，请使用订阅直链，或下载 JSON 文件后导入。" },
+    { "name": "source_import_network_failed", "value": "订阅下载失败，请检查网络和服务状态，或下载 JSON 文件后导入。" }
   ]
 }

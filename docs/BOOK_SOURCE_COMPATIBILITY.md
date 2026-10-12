@@ -111,6 +111,21 @@ E 自身也有 `RhinoClassShutter`，拦截敏感 Java/Android 类，不能描�
 
 ## 建议补齐顺序
 
+### HarmonyOS 参考项目的订阅入口（2026-10-12）
+
+另外核对了 `D:\legado-harmony`，版本基线为 `8f0b849`。该工作树没有书山、大灰狼命名的专用适配器，也没有两家的实际订阅定义，不能仅凭通用引擎代码认定这两个订阅已经可用。
+
+| 环节 | `legado-harmony` 的实现 | 简听当前对应路径 |
+| --- | --- | --- |
+| 订阅取数 | `pages/BookSource.ets` 的 `fetchImportUrlBody`：HTTP 请求，之后有 Raw TCP、ArkWeb 下载和系统下载兜底；`VerifyWeb.ets:491` 识别 `yuedu://booksource/importonline`、`legado://import/booksource` 更新链接 | `LocalRuleSourceRemoteImporter`：粘贴/扫码支持 HTTP(S) 和上述阅读分享链接，RCP → 同地址系统 HTTP；未移植浏览器下载/TCP 通道 |
+| 定义入库 | `importSourcesFromJson` 解析数组、`value` 包装或单源；保存 `loginUrl/loginUi/jsLib` 等字段 | `LocalRuleSourceImportParser` → `LocalRuleSourceImportService` → 加密 `rule_sources.db`；保留锁定和数量约束 |
+| 登录与脚本 | `BookSourceScriptRunner`、`BookSourceLoginWebRuntime` 和分阶段运行时，解释导入定义提供的登录界面/脚本、请求和编码数据地址 | 原生账号适配 + `LocalRulePanelService` + 有界 QuickJS；引擎不同，需按实际定义验证调用契约 |
+| 书山身份 | 未找到专用名称分发 | `bookSourceUrl` 严格等于 `书山聚合` 才走现有 `ShuShanSourceAdapter`；其他标识走通用规则 |
+
+本轮新增回归验证正式/简写分享格式、整条 URL 重复编码兼容且签名参数不重复解码、传输兜底、JSON 向真实导入解析器交接、错误分类和 UTF-8 字节限制；HTTP 与平台 URL API 在 Node 中模拟。尚未取得两家真实订阅链接/JSON，因此未完成两家登录 → 搜索 → 详情 → 章节 → 阅读/播放的端到端验证，也未添加订阅地址持久化或自动更新。
+
+### 通用规则引擎的后续工作
+
 | 优先级 | 工作 | 预期收益与验证重点 |
 | --- | --- | --- |
 | P1 | 修正 Base64、时区单位、缺失别名、布尔判断等明确契约差异 | 改动集中，可直接消除“同名方法能调用但结果错”的失败；保护现有简听书源，尤其已经依赖字节数组返回值的脚本 |

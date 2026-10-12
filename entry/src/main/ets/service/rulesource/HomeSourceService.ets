@@ -126,8 +126,8 @@ export class HomeSourceService {
   static async getSelectedSource(): Promise<LocalRuleSource | undefined> {
     const preferred = await PreferenceService.getHomeSourceUrl();
     if (!preferred || preferred === RankingService.HOME_URL) return undefined;
-    return (await HomeSourceService.getSources()).find((source: LocalRuleSource): boolean =>
-      source.bookSourceUrl === preferred);
+    const source = await SourceDataService.getSourceByUrl(preferred);
+    return source instanceof LocalRuleSource && HomeSourceService.isEligible(source) ? source : undefined;
   }
 
   static async setSelectedSource(sourceUrl: string): Promise<void> {

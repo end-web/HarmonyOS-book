@@ -26,14 +26,41 @@ export struct CoverImage {
   @Local retryCount: number = 0;
 
   private static readonly MAX_UI_RETRY: number = 6;
+  private retryTimer: number = -1;
+  private appeared: boolean = false;
 
   aboutToAppear(): void {
+    this.appeared = true;
+    this.resetCover();
+  }
+
+  aboutToDisappear(): void {
+    this.appeared = false;
+    this.cancelRetry();
+  }
+
+  @Monitor('url')
+  onUrlChanged(): void {
+    if (this.appeared) this.resetCover();
+  }
+
+  private resetCover(): void {
+    this.cancelRetry();
+    this.showImage = true;
+    this.giveUp = false;
+    this.retryCount = 0;
     if (this.url.startsWith('http')) {
       CoverPrefetcher.prefetch(this.url, this.highPriority);
     }
   }
 
+  private cancelRetry(): void {
+    if (this.retryTimer >= 0) clearTimeout(this.retryTimer);
+    this.retryTimer = -1;
+  }
+
   private scheduleRetry(): void {
+    if (!this.appeared || this.retryTimer >= 0) return;
     if (this.retryCount >= CoverImage.MAX_UI_RETRY) {
       this.giveUp = true;
       return;
@@ -42,7 +69,10 @@ export struct CoverImage {
     this.showImage = false;
     CoverPrefetcher.retry(this.url);
     const delayMs: number = Math.min(800 * this.retryCount, 5000);
-    setTimeout((): void => {
+    const url = this.url;
+    this.retryTimer = setTimeout((): void => {
+      this.retryTimer = -1;
+      if (!this.appeared || this.url !== url) return;
       this.showImage = true;
     }, delayMs);
   }
@@ -60,7 +90,7 @@ export struct CoverImage {
         .alt($r('app.media.book_cover_placeholder'))
         .onComplete((event) => {
           // 数据加载阶段为原图尺寸；不能用 sourceSize 缩略解码后的尺寸覆盖它。
-          if (event?.loadingStatus !== 0) return;
+          if (!this.appeared || event?.loadingStatus !== 0) return;
           CoverAspectRatio.remember(this.url, event.width, event.height);
           this.onImageSize(this.url, event.width, event.height);
           this.onImageReady(this.url);
@@ -78,7 +108,7 @@ export struct CoverImage {
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
         .alt($r('app.media.book_cover_placeholder'))
         .onComplete((event) => {
-          if (event?.loadingStatus !== 0) return;
+          if (!this.appeared || event?.loadingStatus !== 0) return;
           CoverAspectRatio.remember(this.url, event.width, event.height);
           this.onImageSize(this.url, event.width, event.height);
           this.onImageReady(this.url);

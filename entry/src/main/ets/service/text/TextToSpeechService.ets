@@ -82,6 +82,10 @@ export class TextToSpeechService {
     return TextToSpeechService.instance;
   }
 
+  currentBook(): Book | null {
+    return this.book;
+  }
+
   initialize(context: common.UIAbilityContext): Promise<void> {
     this.context = context;
     PlaybackCoordinator.stopSpeech = (): Promise<void> => { this.stop(); return this.focusChain; };
@@ -847,7 +851,7 @@ export class TextToSpeechService {
     AVSessionService.getInstance().setSpeechCallbacks(callbacks);
   }
 
-  private skipSentence(delta: number): void {
+  skipSentence(delta: number): void {
     if (this.segments.length === 0) return;
     this.pause();
     this.segmentIndex = Math.max(0, Math.min(this.segments.length - 1, this.segmentIndex + delta));

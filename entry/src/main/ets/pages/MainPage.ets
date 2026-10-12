@@ -1,5 +1,4 @@
-import { TextReaderRouteParams } from '../model/TextReading';
-import { SpeechMiniPlayer } from '../components/SpeechMiniPlayer';
+import { Book } from '../model/Book';
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { TextToSpeechState } from '../model/TextToSpeechState';
 import { HdsCompat, CompatibleTabsModifier } from '../utils/HdsCompat';
@@ -271,19 +270,14 @@ export struct MainPage {
    */
   @Builder
   miniBarBuilder(): void {
-    if (this.speechState.active) {
-      SpeechMiniPlayer({ state: this.speechState, collapsed: this.miniBarCollapsed,
-        onOpen: (): void => {
-          if (PlatformCompat.floatingTabs && this.miniBarCollapsed) {
-            this.tabController.applyMiniBarStyle(HdsBarStyle.EXPAND);
-          } else {
-            this.navStack.pushPathByName('reader', TextReaderRouteParams.of(this.speechState.bookId));
-          }
-        }
-      })
-    } else if (this.playerState.currentBook) {
+    if (this.currentPlaybackBook() !== null) {
       MiniPlayer({
-        playerState: this.playerState,
+        book: this.currentPlaybackBook(),
+        chapterTitle: this.speechState.active ? this.speechState.error || this.speechState.chapterTitle
+          : this.playerState.currentChapter?.title ?? '',
+        playing: this.speechState.active ? this.speechState.playing : this.playerState.isPlaying,
+        loading: this.speechState.active ? this.speechState.loading : this.playerState.isLoading,
+        progressPercent: this.playbackProgressPercent(),
         collapsed: this.miniBarCollapsed,
         onPlayerPanStart: (offsetY: number): void => this.beginPlayerDrag(offsetY),
         onPlayerPanUpdate: (offsetY: number): void => PlayerDragTransition.getInstance().update(offsetY),
@@ -298,7 +292,7 @@ export struct MainPage {
             this.navigateToPlayer();
           }
         },
-        onToggle: () => AudioService.getInstance().toggle(),
+        onToggle: (): void => this.togglePlayback(),
         onNext: () => this.playNext(),
         onExpand: () => {
           if (PlatformCompat.floatingTabs && this.miniBarCollapsed) {
@@ -478,7 +472,7 @@ export struct MainPage {
   }
 
   private beginPlayerDrag(offsetY: number): void {
-    const book = this.playerState.currentBook;
+    const book = this.currentPlaybackBook();
     const paths = this.navStack.getAllPathName();
     if (book === null || paths[paths.length - 1] !== 'home') return;
     const transition = PlayerDragTransition.getInstance();
@@ -490,15 +484,45 @@ export struct MainPage {
   }
 
   private navigateToPlayer(): void {
-    if (!this.playerState.currentBook || PlayerDragTransition.getInstance().state.active) return;
-    const bookId = this.playerState.currentBook.id;
+    const book = this.currentPlaybackBook();
+    if (book === null || PlayerDragTransition.getInstance().state.active) return;
+    const bookId = book.id;
     this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', bookId, false);
     });
   }
 
   private playNext(): void {
+    if (this.speechState.active) {
+      TextToSpeechService.getInstance().moveChapter(1);
+      return;
+    }
     if (!this.playerState.currentBook || !this.playerState.currentChapter) return;
     AudioService.getInstance().playNext();
+  }
+
+  private currentPlaybackBook(): Book | null {
+    if (this.speechState.active) {
+      const book = TextToSpeechService.getInstance().currentBook();
+      return book?.id === this.speechState.bookId ? book : null;
+    }
+    return this.playerState.currentBook;
+  }
+
+  private playbackProgressPercent(): number {
+    const total = this.speechState.active ? this.speechState.contentLength :
+      (this.playerState.durationMs > 0 ? this.playerState.durationMs : this.playerState.savedDurationMs);
+    const position = this.speechState.active ? this.speechState.charOffset : this.playerState.progressMs;
+    return total > 0 ? Math.max(0, Math.min(100, position * 100 / total)) : 0;
+  }
+
+  private togglePlayback(): void {
+    if (this.speechState.active) {
+      const speech = TextToSpeechService.getInstance();
+      if (this.speechState.playing || this.speechState.loading) speech.pause();
+      else speech.resume();
+    } else {
+      AudioService.getInstance().toggle();
+    }
   }
 }

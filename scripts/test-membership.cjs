@@ -24,7 +24,8 @@ function load(relative, overrides = {}, globals = {}) {
   vm.runInNewContext(js, {
     exports, require: name => { if (name in overrides) return overrides[name]; throw new Error('Unexpected import: ' + name); },
     $r: name => name, Date: Clock, Uint8Array, Set, Map, console, canIUse: () => true,
-    setTimeout: (fn, delay) => { if (delay <= 5100) { now += delay; queueMicrotask(fn); } return 1; },
+    // Only fast-forward Promise sleep resolvers; operation deadlines and refresh callbacks stay pending.
+    setTimeout: (fn, delay) => { if (fn.length > 0 && delay <= 5100) { now += delay; queueMicrotask(fn); } return 1; },
     clearTimeout() {}, ...globals
   }, { filename: relative });
   return exports;
@@ -177,8 +178,11 @@ async function main() {
     });
     const current = [], unfinished = [], finishes = [], icons = [];
     const lifetimeCurrent = [], lifetimeUnfinished = [], purchases = [], queries = [], productQueries = [];
-    let productGate = Promise.resolve(), queryGate = Promise.resolve();
+    let productGate = Promise.resolve(), queryGate = Promise.resolve(), purchaseGate = Promise.resolve(), finishGate = Promise.resolve();
     let queryError = null, finishError = null, purchaseError = null, purchaseCount = 0;
+    let purchaseData = null, publishPurchase = true, verificationError = null;
+    let savedAccount = 'account-1', systemAccount = 'account-1', accountError = null, accountGate = Promise.resolve();
+    const accountChecks = [];
     let emptyPurchaseList = [];
     const iap = {
       ProductType: { AUTORENEWABLE: 2, NONCONSUMABLE: 1 }, ProductStatus: { VALID: 0 }, PeriodUnit: { MONTH: 2, YEAR: 3, MINUTE: 4 },
@@ -193,13 +197,19 @@ async function main() {
           (req.queryType === 2 ? current : unfinished);
         return { purchaseDataList: orders.length ? orders.map(JSON.stringify) : emptyPurchaseList };
       },
-      finishPurchase: async (_, order) => { finishes.push(order); if (finishError) throw finishError; },
+      finishPurchase: async (_, order) => {
+        finishes.push(order); await finishGate; if (finishError) throw finishError;
+      },
       createPurchase: async (_, req) => {
-        purchaseCount++; purchases.push(req); if (purchaseError) throw purchaseError;
+        purchaseCount++; purchases.push(req); await purchaseGate; if (purchaseError) throw purchaseError;
+        if (purchaseData !== null) return { purchaseData: JSON.stringify(purchaseData) };
         if (req.productId === 'lastVip') {
-          const order = lifetime(); lifetimeCurrent.push(order); return { purchaseData: JSON.stringify(order) };
+          const order = lifetime(); if (publishPurchase) lifetimeCurrent.push(order);
+          return { purchaseData: JSON.stringify(order) };
         }
-        return { purchaseData: '{}' };
+        const subscription = payload(); subscription.lastSubscriptionStatus.lastPurchaseOrder.productId = req.productId;
+        if (publishPurchase) current.push(subscription);
+        return { purchaseData: JSON.stringify(subscription) };
       },
       showManagedSubscriptions: async () => {},
       queryProducts: async (_, ids) => {
@@ -212,10 +222,25 @@ async function main() {
       }
     };
     const { MembershipService } = load('service/MembershipService.ets', {
-      './PreferenceService': { PreferenceService: { setSearchConcurrency: async count => { assert.equal(count, 3); } } },
+      './PreferenceService': { PreferenceService: {
+        ensureReady: async () => {}, getHwAccount: async () => savedAccount ? { openID: savedAccount } : null,
+        setSearchConcurrency: async count => { assert.equal(count, 3); }
+      } },
       './membership/DeveloperMembership': developer,
       './AutoBackupService': { AutoBackupService: { instance: { resetMembershipDefaults: async () => { defaultsReset++; } } } },
       '@kit.IAPKit': { iap }, '../model/MembershipState': stateModule,
+      '@kit.AccountKit': { authentication: {
+        IdType: { OPEN_ID: 2 }, State: { UNLOGGED_IN: 0, AUTHORIZED: 1, UNAUTHORIZED: 2 },
+        HuaweiIDProvider: class {
+          async getHuaweiIDState(request) {
+            accountChecks.push(request);
+            const state = !systemAccount ? 0 : request.idValue === systemAccount ? 1 : 2;
+            await accountGate;
+            if (accountError) throw accountError;
+            return { state };
+          }
+        }
+      } },
       '@kit.PerformanceAnalysisKit': { hilog: { warn() {}, info() {} } },
       '../utils/PlatformCompat': { PlatformCompat: { wearable: false } },
       './AppIconService': { AppIconService: { instance: { supported: true, select: async name => icons.push(name) } } },
@@ -224,13 +249,20 @@ async function main() {
       '../model/MembershipDisplaySnapshot': displayData,
       './membership/MembershipDisplayStore': displayStore,
       './membership/SubscriptionVerifier': { SubscriptionVerifier: {
-        verify: async (_, p) => JSON.parse(p), verifyLifetime: async (_, p) => JSON.parse(p)
+        verify: async (_, p) => { if (verificationError) throw verificationError; return JSON.parse(p); },
+        verifyLifetime: async (_, p) => { if (verificationError) throw verificationError; return JSON.parse(p); }
       } }
     });
     return { defaultsReset: () => defaultsReset, service: MembershipService.instance, state: stateModule.MembershipState.current,
       current, unfinished, finishes, icons, lifetimeCurrent, lifetimeUnfinished, purchases, queries, productQueries,
       setProductGate: gate => { productGate = gate; }, setQueryError: e => { queryError = e; },
       setQueryGate: gate => { queryGate = gate; },
+      setPurchaseGate: gate => { purchaseGate = gate; }, setFinishGate: gate => { finishGate = gate; },
+      setPurchaseData: value => { purchaseData = value; }, setPublishPurchase: value => { publishPurchase = value; },
+      setVerificationError: value => { verificationError = value; },
+      accountChecks, setSystemAccount: value => { systemAccount = value; },
+      setSavedAccount: value => { savedAccount = value; }, setAccountError: value => { accountError = value; },
+      setAccountGate: value => { accountGate = value; },
       displayDisk, displayStore: displayStore.MembershipDisplayStore,
       setDisplayReadGate: gate => { displayReadGate = gate; },
       failDisplayRead: () => { displayReadError = true; }, failDisplayWrite: () => { displayWriteError = true; },
@@ -354,6 +386,7 @@ async function main() {
   });
   await test('Nonmember cache expires and never hides a later entitlement', async () => {
     const s = session(); await s.service.refresh(context);
+    s.service.background(); s.service.foreground(context);
     await s.service.refresh(context); assert.equal(s.queries.length, 2);
     now += 61000; s.current.push(payload());
     assert.equal(await s.service.hasCurrentEntitlement(), true);
@@ -457,12 +490,13 @@ async function main() {
     await s.service.load(context);
     assert.equal(s.productQueries.length, 1);
   });
-  await test('Explicit restore checks unfinished orders and foreground rechecks revoked access', async () => {
+  await test('Explicit restore checks unfinished orders and a changed foreground account rechecks access', async () => {
     const s = session(); s.lifetimeCurrent.push(lifetime());
     await s.service.load(context, true);
     assert.deepEqual(s.queries.map(q => q.queryType), [2, 2, 1, 1]);
     assert.equal(s.state.active, true);
     s.lifetimeCurrent.length = 0;
+    s.setSystemAccount('account-2'); s.setSavedAccount('account-2');
     s.service.background(); s.service.foreground(context);
     assert.equal(s.state.active, true, 'valid badge remains visible while checking the current account');
     assert.equal(s.state.hasAccess, false, 'display snapshot cannot authorize a new operation');
@@ -472,21 +506,45 @@ async function main() {
     assert.equal(s.state.confirmedInactive, true);
     assert.equal(s.queries.length, 6);
   });
-  await test('Warm foreground keeps the verified badge while slow IAP blocks new operations', async () => {
+  await test('Warm foreground waits for the local account check without a spinner or IAP query', async () => {
     const s = session(); s.current.push(payload()); await s.service.refresh(context);
     const product = s.state.productId, color = s.state.nameColor, verifiedAt = s.state.verifiedAt;
-    let release; s.setQueryGate(new Promise(resolve => { release = resolve; }));
+    let release; s.setAccountGate(new Promise(resolve => { release = resolve; }));
+    s.setQueryGate(new Promise(() => {}));
     now += 10000; s.service.background(); s.service.foreground(context);
     assert.equal(s.state.active, true); assert.equal(s.state.productId, product);
     assert.equal(s.state.nameColor, color); assert.equal(s.state.verifiedAt, verifiedAt);
-    assert.equal(s.state.hasAccess, false); assert.equal(s.service.busy, true);
+    assert.equal(s.state.hasAccess, false); assert.equal(s.service.busy, false);
     const settings = membershipPage(s, 'SettingsPage');
     const pending = settings.page.setSearchConcurrency(9, false);
     await Promise.resolve(); assert.equal(settings.saved.length, 0); assert.equal(settings.routes.length, 0);
     release(); await pending;
     assert.equal(s.state.hasAccess, true); assert.equal(s.state.revalidating, false);
     assert.deepEqual(settings.saved, [9]); assert.equal(settings.routes.length, 0);
-    assert.equal(s.queries.length, 4);
+    assert.equal(s.queries.length, 2);
+  });
+  await test('Repeated icon changes and desktop returns reuse the same signed result without extending it', async () => {
+    for (const id of ['iconMonth', 'iconYear', 'lastVip']) {
+      const s = session();
+      if (id === 'lastVip') s.lifetimeCurrent.push(lifetime());
+      else {
+        const subscription = payload(); subscription.lastSubscriptionStatus.lastPurchaseOrder.productId = id;
+        s.current.push(subscription);
+      }
+      await s.service.load(context);
+      const verifiedAt = s.state.verifiedAt, checks = s.accountChecks.length;
+      const h = iconPage(s);
+      for (const name of ['wave', 'life', 'wave']) {
+        await h.page.selectIcon({ name });
+        now += 10000; s.service.background(); s.service.foreground(context);
+        assert.equal(s.service.busy, false);
+        await Promise.all([s.service.load(context), s.service.hasCurrentEntitlement()]);
+        assert.equal(s.state.hasAccess, true); assert.equal(s.state.verifiedAt, verifiedAt);
+      }
+      assert.deepEqual(h.selected, ['wave', 'life', 'wave']);
+      assert.equal(s.queries.length, 2); assert.equal(s.productQueries.length, 1);
+      assert.equal(s.accountChecks.length, checks + 3);
+    }
   });
   await test('Foreground never revives an expired, stale or clock-rollback display snapshot', async () => {
     for (const reason of ['subscription', 'stale', 'clock']) {
@@ -495,20 +553,74 @@ async function main() {
       else if (reason === 'stale') now += 5 * 60000;
       else now = s.state.verifiedAt - 1000;
       s.service.background(); s.service.foreground(context);
-      assert.equal(s.state.active, false); assert.equal(s.state.productId, '');
+      assert.equal(s.state.active, false);
       assert.equal(s.state.hasAccess, false);
       if (reason === 'clock') now += 10000;
       await s.service.refresh(context);
+      assert.equal(s.queries.length, 4, 'expired and clock-rollback results must query IAP');
     }
   });
   await test('Failed foreground validation clears the snapshot without extending its lifetime', async () => {
     const s = session(); s.current.push(payload()); await s.service.refresh(context);
+    s.setAccountError({ code: 12300001 });
     s.setQueryError({ code: 1001860005 }); s.service.background(); s.service.foreground(context);
     assert.equal(s.state.active, true); assert.equal(s.state.hasAccess, false);
     await s.service.refresh(context);
     assert.equal(s.state.active, false); assert.equal(s.state.hasAccess, false);
     assert.equal(s.state.revalidating, false); assert.equal(s.state.confirmedInactive, false);
     assert.equal(s.service.message, 'app.string.membership_network_error');
+  });
+  await test('Missing account binding cannot attach an old entitlement to a newly signed-in account', async () => {
+    const s = session(); s.setSavedAccount(''); s.current.push(payload()); await s.service.refresh(context);
+    s.setSystemAccount('account-2'); s.setSavedAccount('account-2'); s.current.length = 0;
+    s.service.background(); s.service.foreground(context);
+    assert.equal(s.state.hasAccess, false);
+    await s.service.refresh(context);
+    assert.equal(s.queries.length, 4); assert.equal(s.state.hasAccess, false);
+    assert.equal(s.state.confirmedInactive, true);
+  });
+  await test('A local account check failure falls back to IAP without treating login as purchased access', async () => {
+    const s = session(); s.current.push(payload()); await s.service.refresh(context);
+    s.setAccountError({ code: 12300001 });
+    s.service.background(); s.service.foreground(context); await s.service.refresh(context);
+    assert.equal(s.queries.length, 4); assert.equal(s.state.hasAccess, true);
+    s.setAccountError(null); s.current.length = 0;
+    s.service.background(); s.service.foreground(context); await s.service.refresh(context);
+    assert.equal(s.queries.length, 6); assert.equal(s.state.hasAccess, false);
+  });
+  await test('A changed system account during IAP verification cannot bind or grant the older response', async () => {
+    const s = session(); s.current.push(payload());
+    let release; s.setQueryGate(new Promise(resolve => { release = resolve; }));
+    const pending = s.service.refresh(context);
+    for (let i = 0; i < 80 && s.queries.length === 0; i++) await Promise.resolve();
+    assert.equal(s.queries.length, 1);
+    s.setSystemAccount('account-2'); s.setSavedAccount('account-2');
+    release(); await pending;
+    assert.equal(s.state.hasAccess, false); assert.equal(s.state.displayActive, false);
+    assert.equal(s.service.verifiedAccountId, '');
+  });
+  await test('A late local account result cannot release access after a newer desktop return', async () => {
+    const s = session(); s.current.push(payload()); await s.service.refresh(context);
+    let releaseAccount, releaseQuery;
+    s.setAccountGate(new Promise(resolve => { releaseAccount = resolve; }));
+    s.setQueryGate(new Promise(resolve => { releaseQuery = resolve; }));
+    s.service.background(); s.service.foreground(context);
+    s.setSystemAccount('account-2'); s.setSavedAccount('account-2'); s.current.length = 0;
+    s.service.background(); s.service.foreground(context);
+    releaseAccount();
+    for (let i = 0; i < 100 && s.queries.length === 2; i++) await Promise.resolve();
+    assert.equal(s.queries.length, 3); assert.equal(s.state.hasAccess, false);
+    releaseQuery(); await s.service.refresh(context);
+    assert.equal(s.queries.length, 4); assert.equal(s.state.confirmedInactive, true);
+  });
+  await test('Manual restore during a local account check still queries current and unfinished orders once', async () => {
+    const s = session(); s.current.push(payload()); await s.service.load(context);
+    let release; s.setAccountGate(new Promise(resolve => { release = resolve; }));
+    s.service.background(); s.service.foreground(context);
+    const first = s.service.load(context, true), second = s.service.load(context, true);
+    release(); await Promise.all([first, second]);
+    assert.deepEqual(s.queries.slice(2).map(q => q.queryType), [2, 2, 1, 1]);
+    assert.equal(s.state.hasAccess, true); assert.equal(s.service.busy, false);
   });
   async function settleDisplay() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
   await test('A new process displays persisted membership before IAP completes but cannot use or buy membership', async () => {
@@ -684,6 +796,123 @@ async function main() {
     assert.equal(s.state.nameColor, 'app.color.membership_name_year');
     s.setQueryError({ code: 1001860005 }); await s.service.refresh(context, true);
     assert.equal(s.state.nameColor, 'sys.color.font_primary');
+  });
+  await test('Verified purchase becomes usable immediately despite delayed queries and acknowledgement', async () => {
+    for (const id of ['lastVip', 'iconMonth', 'iconYear']) {
+      const s = session(); await s.service.load(context);
+      s.setPublishPurchase(false);
+      let release; s.setFinishGate(new Promise(resolve => { release = resolve; }));
+      const before = s.queries.length, started = now;
+      await s.service.purchase(context, id);
+      assert.equal(s.state.productId, id); assert.equal(s.state.hasAccess, true);
+      assert.equal(s.service.busy, false); assert.equal(now, started, 'no query throttle on the success path');
+      assert.equal(s.queries.length, before, 'recent preflight and verified receipt avoid six extra queries');
+      assert.equal(await s.service.hasCurrentEntitlement(), true);
+      await s.service.load(context); assert.equal(s.queries.length, before);
+      release(); await s.service.confirmationTask;
+      assert.equal(s.finishes.length, 1);
+      await s.service.displayWriteTask;
+      assert.equal(JSON.parse(s.displayDisk.get('snapshot')).productId, id);
+      await s.service.refresh(context, true);
+      assert.equal(s.state.hasAccess, false, 'later authoritative revocation still wins');
+    }
+  });
+  await test('Slow foreground acknowledgement releases access and page loading after verification', async () => {
+    const s = session(); s.current.push(payload());
+    let release; s.setFinishGate(new Promise(resolve => { release = resolve; }));
+    s.service.foreground(context); await s.service.refresh(context);
+    assert.equal(s.state.hasAccess, true); assert.equal(s.service.busy, false);
+    const h = iconPage(s); await h.page.selectIcon({ name: 'wave' });
+    assert.deepEqual(h.selected, ['wave']); assert.equal(s.finishes.length, 1);
+    release(); await s.service.confirmationTask;
+    await s.service.refresh(context, true); await s.service.confirmationTask;
+    assert.equal(s.finishes.length, 1, 'stale finishStatus cannot repeat an acknowledged order');
+  });
+  await test('A known lifetime member needs one current query and retains cached prices across foreground', async () => {
+    const s = session(); s.lifetimeCurrent.push(lifetime()); await s.service.load(context);
+    await s.service.confirmationTask;
+    const before = s.queries.length; now += 10000;
+    s.service.background(); s.service.foreground(context); await s.service.load(context);
+    assert.equal(s.queries.length, before);
+    await s.service.refresh(context, true);
+    assert.equal(s.queries.length, before + 1); assert.equal(s.queries.at(-1).productType, 1);
+    assert.equal(s.state.hasAccess, true); assert.equal(s.productQueries.length, 1);
+    s.lifetimeCurrent.length = 0; s.current.push(payload());
+    await s.service.refresh(context, true);
+    assert.equal(s.state.productId, 'iconMonth'); assert.equal(s.state.hasAccess, true);
+    assert.deepEqual(s.queries.slice(-2).map(q => q.productType), [1, 2]);
+  });
+  await test('An old preflight refreshes once and concurrent purchase clicks open one cashier', async () => {
+    const s = session(); await s.service.load(context); now += 31000;
+    let release; s.setPurchaseGate(new Promise(resolve => { release = resolve; }));
+    const first = s.service.purchase(context, 'lastVip');
+    await s.service.purchase(context, 'lastVip');
+    for (let i = 0; i < 80 && s.purchaseCount() === 0; i++) await Promise.resolve();
+    assert.equal(s.purchaseCount(), 1); assert.equal(s.queries.length, 4);
+    s.service.background(); s.service.foreground(context);
+    release(); await first; await s.service.confirmationTask;
+    assert.equal(s.state.hasAccess, true); assert.equal(s.queries.length, 4);
+  });
+  await test('Rejected purchase signatures, mismatched products and revoked receipts grant nothing', async () => {
+    for (const mode of ['signature', 'revoked', 'wrong-product', 'expired']) {
+      const s = session(); await s.service.load(context); s.setPublishPurchase(false);
+      let id = 'lastVip';
+      if (mode === 'signature') s.setVerificationError(new Error('Invalid signature'));
+      if (mode === 'revoked') s.setPurchaseData(lifetime({ revocationTime: now }));
+      if (mode === 'wrong-product') { id = 'iconYear'; s.setPurchaseData(payload()); }
+      if (mode === 'expired') {
+        id = 'iconMonth'; const expired = payload(); expired.lastSubscriptionStatus.status = '2';
+        s.setPurchaseData(expired);
+      }
+      await s.service.purchase(context, id); await s.service.confirmationTask;
+      assert.equal(s.state.hasAccess, false); assert.equal(s.finishes.length, 0);
+      assert.equal(s.displayDisk.has('snapshot'), false);
+    }
+  });
+  await test('Late cashier foreground consumes the verified receipt once, later foreground still checks the account', async () => {
+    const s = session(); await s.service.load(context); s.setPublishPurchase(false);
+    let release; s.setPurchaseGate(new Promise(resolve => { release = resolve; }));
+    const buying = s.service.purchase(context, 'lastVip');
+    for (let i = 0; i < 80 && s.purchaseCount() === 0; i++) await Promise.resolve();
+    assert.equal(s.purchaseCount(), 1);
+    s.service.background(); release(); await buying; await s.service.confirmationTask;
+    const before = s.queries.length;
+    s.service.foreground(context); await s.service.load(context);
+    assert.equal(s.queries.length, before, 'the cashier return cannot erase the new verified receipt');
+    assert.equal(s.state.hasAccess, true); assert.equal(s.service.busy, false);
+    s.service.background(); s.service.foreground(context); await s.service.refresh(context);
+    assert.equal(s.state.hasAccess, true); assert.equal(s.queries.length, before);
+    s.setSystemAccount('account-2'); s.setSavedAccount('account-2');
+    s.service.background(); s.service.foreground(context); await s.service.refresh(context);
+    assert.equal(s.state.hasAccess, false); assert.equal(s.queries.length, before + 2);
+  });
+  await test('A late acknowledgement failure cannot change a newer revoked entitlement', async () => {
+    const s = session(); await s.service.load(context);
+    let release; s.setFinishGate(new Promise(resolve => { release = resolve; }));
+    s.setFinishError({ code: 1001860005 });
+    await s.service.purchase(context, 'lastVip');
+    s.lifetimeCurrent.length = 0; await s.service.refresh(context, true);
+    assert.equal(s.state.hasAccess, false); assert.equal(s.state.confirmedInactive, true);
+    release(); await s.service.confirmationTask;
+    assert.equal(s.service.confirmationPending, false); assert.equal(s.state.displayActive, false);
+  });
+  await test('Concurrent restore requests share current and unfinished queries without locking valid access', async () => {
+    const s = session(); s.current.push(payload());
+    let release; s.setQueryGate(new Promise(resolve => { release = resolve; }));
+    const ordinary = s.service.refresh(context);
+    const first = s.service.load(context, true), second = s.service.load(context, true);
+    release(); await Promise.all([ordinary, first, second]);
+    assert.deepEqual(s.queries.map(q => q.queryType), [2, 2, 1, 1]);
+    assert.equal(s.finishes.length, 1); assert.equal(s.state.hasAccess, true);
+    for (let i = 1; i < s.queries.length; i++) assert.ok(s.queries[i].at - s.queries[i - 1].at >= 5100);
+  });
+  await test('Failed purchase acknowledgement retains access and retries once without a spinner', async () => {
+    const s = session(); await s.service.load(context); s.setFinishError({ code: 1001860005 });
+    await s.service.purchase(context, 'lastVip'); await s.service.confirmationTask;
+    assert.equal(s.state.hasAccess, true); assert.equal(s.service.busy, false);
+    assert.equal(s.service.confirmationPending, true);
+    s.setFinishError(null); await s.service.refresh(context, true); await s.service.confirmationTask;
+    assert.equal(s.service.confirmationPending, false); assert.equal(s.finishes.length, 2);
   });
   await test('Missing or unavailable membership resets defaults', async () => {
     const s = session();

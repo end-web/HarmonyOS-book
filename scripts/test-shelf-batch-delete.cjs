@@ -65,7 +65,8 @@ const { Shelf } = compile(`export class Shelf { ${filter}\n${methods}\n }`, {
 function makeShelf() {
   const shelf = new Shelf();
   Object.assign(shelf, {
-    context: {}, visible: true, shelfFilter: 0, isManaging: false, showBatchDelete: false,
+    context: {}, visible: true, shelfFilter: 0, shelfStatusFilter: 0, shelfKeyword: '',
+    isManaging: false, showBatchDelete: false,
     removingBook: false, isRefreshing: false, resolvingTocId: '', showBookActions: false,
     selectedBookIds: new Set(), favoritesLoadSerial: 0, favoriteIdsByBookId: new Map(),
     favoriteBooks: [{ id: 'audio', contentType: 'audio' }, { id: 'import_text', contentType: 'text' },

@@ -59,6 +59,13 @@ export struct MembershipSubscriptionPage {
     return this.membership.plans.find((plan: MembershipPlan): boolean => plan.id === productId);
   }
 
+  private subscriptionSummary(): Resource {
+    const date = new Date(this.state.displayExpiresAt);
+    return this.state.displayAutoRenew ?
+      $r('app.string.membership_expiry_renew_on', date.getFullYear(), date.getMonth() + 1, date.getDate()) :
+      $r('app.string.membership_expiry_renew_off', date.getFullYear(), date.getMonth() + 1, date.getDate());
+  }
+
   private planPrice(productId: string): ResourceStr {
     return this.findPlan(productId)?.price || (this.membership.productsLoading ?
       $r('app.string.membership_products_loading') : $r('app.string.membership_plan_unavailable'));
@@ -128,12 +135,9 @@ export struct MembershipSubscriptionPage {
       }
       if (this.state.displayActive) {
         Text(this.state.displayLifetime ? $r('app.string.membership_lifetime_valid') :
-          $r('app.string.membership_expires', new Date(this.state.displayExpiresAt).toLocaleDateString()))
+          this.subscriptionSummary())
           .fontSize(12).fontColor('#725338').width('100%')
-        if (!this.state.displayLifetime) {
-          Text(this.state.displayAutoRenew ? $r('app.string.membership_renew_on') : $r('app.string.membership_renew_off'))
-            .fontSize(12).fontColor('#725338').width('100%')
-        }
+          .maxLines(1).minFontSize(10).maxFontSize(12).heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
       }
       Text($r('app.string.membership_benefit_short')).fontSize(12).fontColor('#624023')
         .width('100%').margin({ top: 10 })

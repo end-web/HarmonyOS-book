@@ -26,6 +26,9 @@ import { ChapterCacheService, EVT_CHAPTER_DURATION_UPDATED } from '../service/Ch
 import { ChapterDataSource } from '../utils/ChapterDataSource';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
+import { TextToSpeechService } from '../service/text/TextToSpeechService';
+import { TextToSpeechState } from '../model/TextToSpeechState';
+import { ReaderSpeechSheet } from '../components/ReaderSpeechSheet';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
@@ -130,6 +133,7 @@ export struct PlayerPage {
   /** 倍速滑块当前值(拖动时实时显示,松手才真正下发到 AudioService) */
   @Local speedValue: number = 1.0;
   @Local playerState: PlayerState = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;;
+  @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
   @Local seeking: boolean = false;
   @Local seekValueMs: number = 0;
   /** 缓存版本号：每次有章节时长被解析出来就 +1，强制 V2 重渲染章节列表 */
@@ -224,7 +228,8 @@ export struct PlayerPage {
   /** 同步从 SearchCache 取得 book，避免首帧空白 */
   private primeFromCache(): void {
     let b = SearchCache.get(this.bookId);
-    const current = this.playerState.currentBook;
+    const speechBook = TextToSpeechService.getInstance().currentBook();
+    const current = speechBook?.id === this.bookId ? speechBook : this.playerState.currentBook;
     if (b && current && this.isSameBook(b, current)
       && b.chapters.length === 0 && current.chapters.length > 0) {
       b = current;
@@ -238,7 +243,6 @@ export struct PlayerPage {
   private finishEntering(): void {
     if (this.entryFinished || this.isLeaving) return;
     this.entryFinished = true;
-    AudioService.getInstance().setPlayMode(PlayMode.Sequence);
     this.cancelPendingClearTimers();
     WindowUtils.setStatusBarLight(true);
     emitter.on(EVT_CHAPTER_DURATION_UPDATED, this.chapterDurationHandler);
@@ -271,7 +275,7 @@ export struct PlayerPage {
       emitter.off(EVT_SLEEP_CANCELLED, this.sleepCancelledHandler);
     }
     WindowUtils.setStatusBarLight(false);
-    AudioService.getInstance().flushHistory();
+    if (!this.isSpeechBook()) AudioService.getInstance().flushHistory();
   }
 
   private handleViewportSizeChange(newValue: SizeOptions): void {
@@ -384,7 +388,8 @@ export struct PlayerPage {
     await AudioService.getInstance().whenReady();
     if (this.isLeaving) return;
     let b = SearchCache.get(this.bookId);
-    const current = this.playerState.currentBook;
+    const speechBook = TextToSpeechService.getInstance().currentBook();
+    const current = speechBook?.id === this.bookId ? speechBook : this.playerState.currentBook;
     if (b && current && this.isSameBook(b, current)
       && b.chapters.length === 0 && current.chapters.length > 0) {
       b = current;
@@ -409,6 +414,18 @@ export struct PlayerPage {
       });
       return;
     }
+    if (b.contentType === 'text') {
+      if (this.context === null) return;
+      await TextToSpeechService.getInstance().initialize(this.context);
+      await PreferenceService.applyTocOrder(b);
+      if (this.isLeaving) return;
+      this.book = b;
+      this.chapterDataSource.setChapters(PreferenceService.orderedChapters(b));
+      this.loadSourceName(b);
+      this.isFavorite = await PreferenceService.isFavorite(b.id);
+      return;
+    }
+    AudioService.getInstance().setPlayMode(PlayMode.Sequence);
     if (this.needsChapterHydration(b)) {
       b = await this.hydrateBookChapters(b);
       if (this.isLeaving) return;
@@ -454,6 +471,73 @@ export struct PlayerPage {
   private isSameBook(left: Book, right: Book): boolean {
     if (left.id === right.id) return true;
     return left.bookUrl.length > 0 && left.bookUrl === right.bookUrl && left.sourceUrl === right.sourceUrl;
+  }
+
+  private isSpeechBook(): boolean {
+    return this.book?.contentType === 'text';
+  }
+
+  private speechMatchesBook(): boolean {
+    return this.book !== null && this.speechState.bookId === this.book.id;
+  }
+
+  private playbackLoading(): boolean {
+    return this.isSpeechBook() ? this.speechMatchesBook() && this.speechState.loading : this.playerState.isLoading;
+  }
+
+  private playbackPlaying(): boolean {
+    return this.isSpeechBook() ? this.speechMatchesBook() && this.speechState.playing : this.playerState.isPlaying;
+  }
+
+  private playbackSpeed(): number {
+    return this.isSpeechBook() ? this.speechState.speed : this.playerState.speed;
+  }
+
+  private playbackChapter(): Chapter | null {
+    if (!this.isSpeechBook()) return this.playerState.currentChapter;
+    return this.speechMatchesBook() ? this.book?.chapters[this.speechState.chapterIndex] ?? null : null;
+  }
+
+  private setPlaybackSpeed(speed: number): void {
+    if (this.isSpeechBook()) TextToSpeechService.getInstance().setSpeed(speed);
+    else AudioService.getInstance().setSpeed(speed);
+  }
+
+  private skipPlayback(delta: number): void {
+    if (this.isSpeechBook()) {
+      if (this.speechMatchesBook()) TextToSpeechService.getInstance().skipSentence(delta);
+    } else {
+      AudioService.getInstance().seekBy(delta * 15000);
+    }
+  }
+
+  private canSkipPlayback(): boolean {
+    if (this.isSpeechBook()) return this.speechMatchesBook() && !this.speechState.loading && this.speechState.contentLength > 0;
+    return !this.isLiveBook() && !this.playerState.isLoading && this.playerState.durationMs > 0;
+  }
+
+  private speechProgress(): number {
+    if (!this.speechMatchesBook() || this.speechState.contentLength <= 0) return 0;
+    return Math.max(0, Math.min(100, this.speechState.charOffset * 100 / this.speechState.contentLength));
+  }
+
+  private openVoiceSheet(): void {
+    if (this.isSpeechBook()) {
+      TextToSpeechService.getInstance().refreshVoices();
+    } else {
+      this.sourceVoiceDraft = this.book?.variables?.['__audioSourceVoice'] ?? this.book?.variables?.['custom'] ?? '';
+    }
+    this.showSourceVoice = true;
+  }
+
+  @Builder
+  private buildPlaybackVoiceSheet(): void {
+    if (this.isSpeechBook()) {
+      ReaderSpeechSheet({ state: this.speechState, voiceOnly: true,
+        onClose: (): void => { this.showSourceVoice = false; } })
+    } else {
+      this.buildSourceVoiceSheet()
+    }
   }
 
   private async loadSourceName(book: Book): Promise<void> {
@@ -659,10 +743,24 @@ export struct PlayerPage {
   }
 
   private async togglePlay(): Promise<void> {
+    if (this.isSpeechBook()) {
+      const speech = TextToSpeechService.getInstance();
+      if (this.speechMatchesBook()) {
+        if (this.speechState.playing || this.speechState.loading) speech.pause();
+        else await speech.resume();
+      } else if (this.book !== null) {
+        await speech.start(this.book, 0, 0, true);
+      }
+      return;
+    }
     await AudioService.getInstance().toggle();
   }
 
   private async playPrev(): Promise<void> {
+    if (this.isSpeechBook()) {
+      if (this.speechMatchesBook()) await TextToSpeechService.getInstance().moveChapter(-1);
+      return;
+    }
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
     const target = idx - PreferenceService.chapterStep(this.book);
@@ -674,6 +772,10 @@ export struct PlayerPage {
   }
 
   private async playNext(): Promise<void> {
+    if (this.isSpeechBook()) {
+      if (this.speechMatchesBook()) await TextToSpeechService.getInstance().moveChapter(1);
+      return;
+    }
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
     const target = idx + PreferenceService.chapterStep(this.book);
@@ -710,12 +812,14 @@ export struct PlayerPage {
   }
 
   private async resetSpeed(): Promise<void> {
-    if (this.playerState.speed === 1.0) return;
+    if (this.playbackSpeed() === 1.0) return;
     this.hapticTick();
-    await AudioService.getInstance().setSpeed(1.0);
+    this.speedValue = 1;
+    this.setPlaybackSpeed(1);
   }
 
   private isCurrentChapter(ch: Chapter): boolean {
+    if (this.isSpeechBook()) return this.playbackChapter()?.id === ch.id;
     if (!this.playerState.currentChapter) return false;
     if (this.playerState.currentChapter.id === ch.id) return true;
     if (!this.book) return false;
@@ -759,7 +863,7 @@ export struct PlayerPage {
   }
 
   private handleChapterDownloadLongPress(ch: Chapter): void {
-    if (!this.book) return;
+    if (!this.book || this.isSpeechBook()) return;
     if (this.playerState.isLive && this.playerState.currentChapter?.id === ch.id) {
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.player_live_no_download') });
       return;
@@ -809,6 +913,11 @@ export struct PlayerPage {
     if (!this.book) return;
     // 立即关抽屉（不要等 await playChapter，否则 WebView 嗅探的几秒内 UI 卡在章节列表上）
     this.showChapterList = false;
+    if (this.isSpeechBook()) {
+      const index = this.book.chapters.findIndex((chapter: Chapter): boolean => chapter.id === ch.id);
+      if (index >= 0) await TextToSpeechService.getInstance().start(this.book, index, 0);
+      return;
+    }
     // AudioService 内部用 playGen 替换式取消旧任务，所以反复点章节不会叠加
     AudioService.getInstance().playChapterFromSavedProgress(this.book, ch).catch((e: Error) => {
       hilog.error(DOMAIN, TAG, 'selectChapter failed: %{public}s', e.message);
@@ -877,6 +986,7 @@ export struct PlayerPage {
 
   /** 当前播放章节在列表中的索引 */
   private currentChapterIndex(): number {
+    if (this.isSpeechBook()) return this.speechMatchesBook() ? this.speechState.chapterIndex : -1;
     if (!this.book || !this.playerState.currentChapter) return -1;
     return DataService.resolveChapterIndex(
       this.book,
@@ -892,7 +1002,7 @@ export struct PlayerPage {
   }
 
   private formatSleepRemaining(): string {
-    const ms = this.playerState.sleepRemainingMs;
+    const ms = this.isSpeechBook() ? this.speechState.remainingSeconds * 1000 : this.playerState.sleepRemainingMs;
     const totalSec = Math.floor(ms / 1000);
     const m = Math.floor(totalSec / 60);
     const s = totalSec % 60;
@@ -900,10 +1010,19 @@ export struct PlayerPage {
   }
 
   private sleepActive(): boolean {
+    if (this.isSpeechBook()) return this.speechMatchesBook() &&
+      (this.speechState.stopAtChapterEnd || this.speechState.remainingSeconds > 0);
     return this.playerState.sleepMode !== SleepMode.Off;
   }
 
   private sleepLabel(): string {
+    if (this.isSpeechBook()) {
+      if (this.speechState.stopAtChapterEnd) {
+        return this.context?.resourceManager.getStringSync($r('app.string.tts_sleep_chapter').id) ?? '';
+      }
+      return this.sleepActive() ? this.formatSleepRemaining()
+        : this.context?.resourceManager.getStringSync($r('app.string.tts_sleep').id) ?? '';
+    }
     if (this.playerState.sleepMode === SleepMode.Chapters) {
       return this.playerState.sleepChaptersRemaining === 1
         ? this.getUIContext().getHostContext()!.resourceManager.getStringSync($r('app.string.player_sleep_this_chapter').id)
@@ -927,6 +1046,8 @@ export struct PlayerPage {
   }
 
   private sleepBadgeLabel(): ResourceStr {
+    if (this.isSpeechBook()) return this.speechState.stopAtChapterEnd
+      ? $r('app.string.player_sleep_current_badge') : this.formatSleepRemaining();
     if (this.playerState.sleepMode === SleepMode.Chapters) {
       return $r('app.string.player_sleep_chapters_badge', this.playerState.sleepChaptersRemaining);
     }
@@ -956,6 +1077,11 @@ export struct PlayerPage {
   }
 
   private setSleep(minutes: number): void {
+    if (this.isSpeechBook()) {
+      TextToSpeechService.getInstance().setSleep(minutes);
+      this.showSleepSheet = false;
+      return;
+    }
     if (minutes === 0) {
       AudioService.getInstance().cancelSleepTimer();
       this.showToast($r('app.string.player_sleep_cancelled'));
@@ -1178,6 +1304,12 @@ export struct PlayerPage {
   }
 
   private async reloadCurrentChapter(): Promise<void> {
+    if (this.isSpeechBook() && this.book !== null) {
+      if (this.speechMatchesBook()) {
+        await TextToSpeechService.getInstance().start(this.book, this.speechState.chapterIndex, this.speechState.charOffset);
+      }
+      return;
+    }
     const book = this.book;
     if (!book || this.reloadingChapter || this.playerState.isLoading) return;
     const current = this.playerState.currentBook?.id === book.id ? this.playerState.currentChapter : null;
@@ -1253,22 +1385,24 @@ export struct PlayerPage {
         .accessibilityText($r('app.string.content_reload'))
         .onClick((): void => { this.reloadCurrentChapter(); })
         .margin({ right: 8 })
-        .enabled(!this.reloadingChapter && !this.playerState.isLoading && this.book !== null)
-      if (this.sourceVoiceAvailable && !this.isLiveBook()) {
-        Button($r('app.string.player_source_voice_label'))
-          .height(40).fontSize(AppFont.Caption).fontColor(Color.White).backgroundColor(Color.Transparent)
-          .enabled(!this.reloadingChapter && !this.playerState.isLoading && !this.savingSourceVoice)
-          .onClick((): void => {
-            this.sourceVoiceDraft = this.book?.variables?.['__audioSourceVoice'] ?? this.book?.variables?.['custom'] ?? '';
-            this.showSourceVoice = true;
-          })
-          .bindSheet($$this.showSourceVoice, this.buildSourceVoiceSheet(), {
-            height: SheetSize.FIT_CONTENT, preferType: SheetType.BOTTOM, showClose: true,
+        .enabled(!this.reloadingChapter && !this.playbackLoading() && this.book !== null)
+      if (this.isSpeechBook() || (this.sourceVoiceAvailable && !this.isLiveBook())) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.waveform_circle')).fontSize(24).fontColor(['#FFFFFF'])
+        }
+          .width(40).height(40).backgroundColor(Color.Transparent)
+          .accessibilityText($r('app.string.player_source_voice_label'))
+          .margin({ right: 8 })
+          .enabled(this.isSpeechBook() || (!this.reloadingChapter && !this.playerState.isLoading && !this.savingSourceVoice))
+          .onClick((): void => this.openVoiceSheet()).id('player-voice')
+          .bindSheet($$this.showSourceVoice, this.buildPlaybackVoiceSheet(), {
+            height: this.isSpeechBook() ? '82%' : SheetSize.FIT_CONTENT,
+            preferType: SheetType.BOTTOM, showClose: !this.isSpeechBook(),
             backgroundColor: AppMaterial.SheetBackground,
             blurStyle: AppMaterial.PlayerSheetBlur, systemMaterial: AppMaterial.PlayerSheet
           })
       }
-      if (this.book?.sourceUrl) {
+      if (this.book?.sourceUrl && !this.isSpeechBook()) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.arrow_left_arrow_right')).fontSize(24).fontColor(['#FFFFFF'])
         }
@@ -1335,13 +1469,13 @@ export struct PlayerPage {
     Column({ space: 4 }) {
       Row() {
         Column({ space: 4 }) {
-          Text(this.playerState.currentChapter ? this.playerState.currentChapter.title : this.book!.title)
+          Text(this.playbackChapter()?.title ?? this.book!.title)
             .fontSize(20)
             .fontColor('#FFFFFF')
             .fontWeight(FontWeight.Bold)
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(this.book!.author)
+          Text(this.isSpeechBook() ? this.book!.title : this.book!.author)
             .fontSize(AppFont.Body)
             .fontColor('#FFFFFF')
             .maxLines(1)
@@ -1358,6 +1492,10 @@ export struct PlayerPage {
           .onClick(() => this.toggleFavorite())
       }
       .width('100%')
+      if (this.isSpeechBook() && this.speechMatchesBook() && this.speechState.error) {
+        Text(this.speechState.error).fontSize(AppFont.Caption).fontColor('#FFFFFF')
+          .width('100%').margin({ top: AppSpace.Xs })
+      }
     }
     .width('100%')
     .padding({ top: this.isLandscapePlayer() ? 0 : this.isCompactPlayer() ? AppSpace.Md : AppSpace.Xl })
@@ -1366,7 +1504,15 @@ export struct PlayerPage {
   @Builder
   buildProgress() {
     Column({ space: AppSpace.Xxs }) {
-      if (this.isLiveBook()) {
+      if (this.isSpeechBook()) {
+        Progress({ value: this.speechProgress(), total: 100, type: ProgressType.Linear })
+          .color('#FFFFFF').backgroundColor('#33FFFFFF').width('100%')
+        Row() {
+          Text($r('app.string.tts_chapter_progress')).fontSize(AppFont.Caption).fontColor('#FFFFFF')
+          Blank()
+          Text(`${Math.floor(this.speechProgress())}%`).fontSize(AppFont.Caption).fontColor('#FFFFFF')
+        }.width('100%').margin({ top: AppSpace.Xs })
+      } else if (this.isLiveBook()) {
         Text($r('app.string.player_live')).fontSize(AppFont.Body).fontColor('#FFFFFF').height(48)
       } else {
       Slider({
@@ -1415,17 +1561,17 @@ export struct PlayerPage {
   buildControls() {
     Row() {
       Stack({ alignContent: Alignment.Start }) {
-        SymbolGlyph($r('sys.symbol.gobackward_15'))
+        SymbolGlyph(this.isSpeechBook() ? $r('sys.symbol.backward_fill') : $r('sys.symbol.gobackward_15'))
           .fontSize(20)
           .fontColor(['#B3B3B3'])
       }
       .width(44)
       .height(44)
-      .enabled(!this.isLiveBook() && !this.playerState.isLoading && this.playerState.durationMs > 0)
+      .enabled(this.canSkipPlayback())
       .opacity(this.isLiveBook() ? 0.4 : 1)
-      .accessibilityText($r('app.string.player_rewind_15'))
+      .accessibilityText(this.isSpeechBook() ? $r('app.string.tts_previous_segment') : $r('app.string.player_rewind_15'))
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
-      .onClick(() => { AudioService.getInstance().seekBy(-15000); })
+      .onClick((): void => this.skipPlayback(-1))
 
       Blank()
 
@@ -1438,25 +1584,28 @@ export struct PlayerPage {
       Blank()
 
       Stack({ alignContent: Alignment.Center }) {
-        if (this.playerState.isLoading) {
+        if (this.playbackLoading()) {
           LoadingProgress()
             .width(36)
             .height(36)
             .color(AppColor.Brand)
         }
-        SymbolGlyph(this.playerState.isPlaying
+        SymbolGlyph(this.playbackPlaying()
           ? $r('sys.symbol.pause_round_triangle_fill') : $r('sys.symbol.play_round_triangle_fill'))
           .fontSize(this.isCompactPlayer() ? 56 : 64)
-          .fontWeight(this.playerState.isPlaying ? FontWeight.Medium : FontWeight.Normal)
+          .fontWeight(this.playbackPlaying() ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(['#FFFFFF'])
-          .symbolEffect(new ReplaceSymbolEffect(EffectScope.WHOLE), this.playerState.isPlaying ? 1 : 0)
-          .opacity(this.playerState.isLoading ? 0 : 1)
+          .symbolEffect(new ReplaceSymbolEffect(EffectScope.WHOLE), this.playbackPlaying() ? 1 : 0)
+          .opacity(this.playbackLoading() ? 0 : 1)
       }
       .width(this.isCompactPlayer() ? 56 : 64)
       .height(this.isCompactPlayer() ? 56 : 64)
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.92 })
+      .id('player-play-toggle')
+      .accessibilityText(this.playbackPlaying() || this.playbackLoading()
+        ? $r('app.string.tts_pause') : $r('app.string.tts_play'))
       .onClick(() => {
-        if (!this.playerState.isLoading) this.togglePlay();
+        if (this.isSpeechBook() || !this.playerState.isLoading) this.togglePlay();
       })
 
       Blank()
@@ -1470,17 +1619,18 @@ export struct PlayerPage {
       Blank()
 
       Stack({ alignContent: Alignment.End }) {
-        SymbolGlyph($r('sys.symbol.goforward_15'))
+        SymbolGlyph(this.isSpeechBook() ? $r('sys.symbol.backward_fill') : $r('sys.symbol.goforward_15'))
           .fontSize(20)
           .fontColor(['#B3B3B3'])
+          .rotate({ angle: this.isSpeechBook() ? 180 : 0 })
       }
       .width(44)
       .height(44)
-      .enabled(!this.isLiveBook() && !this.playerState.isLoading && this.playerState.durationMs > 0)
+      .enabled(this.canSkipPlayback())
       .opacity(this.isLiveBook() ? 0.4 : 1)
-      .accessibilityText($r('app.string.player_forward_15'))
+      .accessibilityText(this.isSpeechBook() ? $r('app.string.tts_next_segment') : $r('app.string.player_forward_15'))
       .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.9 })
-      .onClick(() => { AudioService.getInstance().seekBy(15000); })
+      .onClick((): void => this.skipPlayback(1))
     }
     .width('calc(100% - 18vp)')
     .justifyContent(FlexAlign.Center)
@@ -1492,10 +1642,10 @@ export struct PlayerPage {
   buildBottomBar() {
     Row() {
       Column() {
-        Text(this.fmtSpeed(this.isLiveBook() ? 1 : this.playerState.speed) + 'x')
+        Text(this.fmtSpeed(this.isLiveBook() ? 1 : this.playbackSpeed()) + 'x')
           .fontSize(AppFont.Body + 1)
           .height(26)
-          .fontColor(this.playerState.speed !== 1.0 ? AppColor.Brand : '#B3B3B3')
+          .fontColor(this.playbackSpeed() !== 1.0 ? AppColor.Brand : '#B3B3B3')
           .fontWeight(FontWeight.Medium)
       }
       .width(56)
@@ -1504,7 +1654,7 @@ export struct PlayerPage {
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
         if (this.isLiveBook()) return;
-        this.speedValue = this.playerState.speed;
+        this.speedValue = this.playbackSpeed();
         this.showSpeedSheet = true;
       })
       .bindSheet($$this.showSpeedSheet, this.buildSpeedSheet(), {
@@ -1551,7 +1701,7 @@ export struct PlayerPage {
       .height(44)
       .accessibilityText(this.sleepLabel())
       .onClick(() => this.openSleepSheet())
-      .bindSheet($$this.showSleepSheet, this.buildSleepSheet(), {
+      .bindSheet($$this.showSleepSheet, this.buildPlaybackSleepSheet(), {
         height: SheetSize.FIT_CONTENT,
         preferType: SheetType.BOTTOM,
         showClose: false,
@@ -1575,6 +1725,16 @@ export struct PlayerPage {
 
       Blank()
 
+      if (this.isSpeechBook()) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.xmark')).fontSize(22).fontColor(['#B3B3B3'])
+        }.width(56).height(44).backgroundColor(Color.Transparent)
+          .accessibilityText($r('app.string.tts_stop')).id('tts-stop')
+          .onClick((): void => {
+            if (this.speechMatchesBook()) TextToSpeechService.getInstance().stop();
+            this.navStack.pop();
+          })
+      } else {
       Column() {
         Stack({ alignContent: Alignment.End }) {
           SymbolGlyph($r('sys.symbol.chevron_left_2'))
@@ -1612,6 +1772,7 @@ export struct PlayerPage {
           this.skipOutroValue = 0;
         }
       }))
+      }
 
       Blank()
 
@@ -1678,7 +1839,7 @@ export struct PlayerPage {
       if (this.chapterGridVisible) {
         ChapterSegmentGrid({
           book: this.book,
-          chapters: this.book?.chapters ?? [], currentId: this.playerState.currentChapter?.id ?? '',
+          chapters: this.book?.chapters ?? [], currentId: this.playbackChapter()?.id ?? '',
           keyword: this.chapterSearchKeyword, descending: this.book?.chaptersDescending ?? false,
           onSelect: (chapter: Chapter): void => { this.selectChapter(chapter); },
           onLongPress: (chapter: Chapter): void => this.handleChapterDownloadLongPress(chapter)
@@ -1732,7 +1893,7 @@ export struct PlayerPage {
             .layoutWeight(1)
 
             if (this.isCurrentChapter(ch)) {
-              if (this.playerState.isLoading) {
+              if (this.playbackLoading()) {
                 LoadingProgress()
                   .width(18).height(18).color(AppColor.Brand)
               } else {
@@ -1741,7 +1902,9 @@ export struct PlayerPage {
                   .fontColor([AppColor.Brand])
               }
             }
-            this.buildChapterDownloadIndicator(ch)
+            if (!this.isSpeechBook()) {
+              this.buildChapterDownloadIndicator(ch)
+            }
           }
           .width('100%')
           .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md, bottom: AppSpace.Md })
@@ -1782,6 +1945,41 @@ export struct PlayerPage {
       .backgroundColor(this.sleepSheetMode === mode ? AppColor.BrandSoft : Color.Transparent)
       .borderRadius(AppRadius.Sm)
       .onClick(() => this.selectSleepMode(mode))
+  }
+
+  @Builder
+  private buildSpeechTimerButton(label: ResourceStr, minutes: number, chapterEnd: boolean = false): void {
+    Button(label).fontSize(AppFont.Caption).fontColor(AppColor.Brand)
+      .backgroundColor($r('sys.color.comp_background_tertiary'))
+      .onClick((): void => {
+        TextToSpeechService.getInstance().setSleep(minutes, chapterEnd);
+        this.showSleepSheet = false;
+      })
+  }
+
+  @Builder
+  private buildPlaybackSleepSheet(): void {
+    if (this.isSpeechBook()) {
+      Column({ space: AppSpace.Lg }) {
+        Text($r('app.string.tts_sleep')).fontSize(AppFont.Title).fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary')).width('100%')
+        Row({ space: AppSpace.Xs }) {
+          this.buildSpeechTimerButton($r('app.string.tts_sleep_off'), 0)
+          this.buildSpeechTimerButton($r('app.string.tts_sleep_15'), 15)
+          this.buildSpeechTimerButton($r('app.string.tts_sleep_30'), 30)
+          this.buildSpeechTimerButton($r('app.string.tts_sleep_60'), 60)
+        }.width('100%').justifyContent(FlexAlign.SpaceBetween)
+        this.buildSpeechTimerButton($r('app.string.tts_sleep_chapter'), 0, true)
+        if (this.speechState.remainingSeconds > 0) {
+          Text($r('app.string.tts_sleep_remaining', Math.ceil(this.speechState.remainingSeconds / 60)))
+            .fontColor(AppColor.Brand).fontSize(AppFont.Body)
+        } else if (this.speechState.stopAtChapterEnd) {
+          Text($r('app.string.tts_sleep_chapter_active')).fontColor(AppColor.Brand).fontSize(AppFont.Body)
+        }
+      }.width('100%').padding(AppSpace.Lg).alignItems(HorizontalAlign.Start)
+    } else {
+      this.buildSleepSheet()
+    }
   }
 
   @Builder
@@ -1987,7 +2185,7 @@ export struct PlayerPage {
     const current = action.startsWith('speed') ? this.speedValue
       : action.startsWith('intro') ? this.skipIntroValue : this.skipOutroValue;
     const min = action.startsWith('speed') ? 0.5 : 0;
-    const max = action.startsWith('speed') ? 3 : 120;
+    const max = action.startsWith('speed') ? (this.isSpeechBook() ? 2 : 3) : 120;
     return action.endsWith('Down') ? current > min : current < max;
   }
 
@@ -2004,8 +2202,8 @@ export struct PlayerPage {
   private adjustValue(action: string): void {
     const delta = action.endsWith('Down') ? -1 : 1;
     if (action.startsWith('speed')) {
-      this.speedValue = Math.min(3, Math.max(0.5, Math.round(this.speedValue * 20 + delta) / 20));
-      AudioService.getInstance().setSpeed(this.speedValue);
+      this.speedValue = Math.min(this.isSpeechBook() ? 2 : 3, Math.max(0.5, Math.round(this.speedValue * 20 + delta) / 20));
+      this.setPlaybackSpeed(this.speedValue);
       return;
     }
     if (action.startsWith('intro')) {
@@ -2157,14 +2355,14 @@ export struct PlayerPage {
 
           Row({ space: AppSpace.Sm }) {
             this.buildAdjustmentButton('speedDown')
-            Slider({ value: this.speedValue, min: 0.5, max: 3.0, step: 0.05 })
+            Slider({ value: this.speedValue, min: 0.5, max: this.isSpeechBook() ? 2 : 3, step: 0.05 })
               .blockColor(AppColor.Brand)
               .trackColor($r('sys.color.comp_divider'))
               .selectedColor(AppColor.Brand)
               .onChange((value: number, mode: SliderChangeMode) => {
                 this.speedValue = Math.round(value * 20) / 20;
                 if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                  AudioService.getInstance().setSpeed(this.speedValue);
+                  this.setPlaybackSpeed(this.speedValue);
                 }
               })
               .layoutWeight(1)
@@ -2179,7 +2377,7 @@ export struct PlayerPage {
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
             Blank()
-            Text('3.0x')
+            Text(this.isSpeechBook() ? '2.0x' : '3.0x')
               .fontSize(AppFont.Caption)
               .fontColor($r('sys.color.font_tertiary'))
           }

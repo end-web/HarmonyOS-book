@@ -31,6 +31,9 @@ const MAX_CONCURRENT: number = 4;
 const MAX_ATTEMPTS: number = 5;
 /** 无 success/error 回调时的兜底释放(ms) */
 const IN_FLIGHT_WATCHDOG_MS: number = 50000;
+const MAX_PENDING: number = 128;
+const MAX_HISTORY: number = 512;
+const MAX_ORIGINS: number = 64;
 
 export class CoverPrefetcher {
   /** 超分读取原始图片，沿用书源图片请求头，不使用列表解码后的缩略图。 */
@@ -62,6 +65,9 @@ export class CoverPrefetcher {
   private static activeCount: number = 0;
   private static successHandlers: Map<string, () => void> = new Map();
   private static errorHandlers: Map<string, (err: cacheDownload.DownloadError) => void> = new Map();
+  private static watchdogs: Map<string, number> = new Map<string, number>();
+  private static polls: Map<string, number> = new Map<string, number>();
+  private static retries: Map<string, number> = new Map<string, number>();
 
   /** 应用启动时调用一次:文件缓存 + 内存缓存(默认内存为 0，Image 难命中)。 */
   static init(): void {
@@ -91,7 +97,12 @@ export class CoverPrefetcher {
     if (!CoverPrefetcher.hasHeader(copied, 'user-agent')) {
       copied['User-Agent'] = COVER_HEADERS['User-Agent'] ?? '';
     }
+    CoverPrefetcher.requestHeaders.delete(url);
     CoverPrefetcher.requestHeaders.set(url, copied);
+    for (const key of CoverPrefetcher.requestHeaders.keys()) {
+      if (CoverPrefetcher.requestHeaders.size <= MAX_HISTORY) break;
+      if (!CoverPrefetcher.isPending(key)) CoverPrefetcher.requestHeaders.delete(key);
+    }
   }
 
   /**
@@ -102,6 +113,7 @@ export class CoverPrefetcher {
     if (!url || !url.startsWith('http')) {
       return;
     }
+    CoverPrefetcher.clearTimer(CoverPrefetcher.retries, url);
     if (CoverPrefetcher.succeeded.has(url)) {
       return;
     }
@@ -124,7 +136,9 @@ export class CoverPrefetcher {
 
     if (highPriority) {
       CoverPrefetcher.pending.unshift(url);
+      if (CoverPrefetcher.pending.length > MAX_PENDING) CoverPrefetcher.pending.pop();
     } else {
+      if (CoverPrefetcher.pending.length >= MAX_PENDING) return;
       CoverPrefetcher.pending.push(url);
     }
     CoverPrefetcher.prewarmOrigin(url);
@@ -146,6 +160,7 @@ export class CoverPrefetcher {
     if (!url || !url.startsWith('http')) {
       return;
     }
+    CoverPrefetcher.clearTimer(CoverPrefetcher.retries, url);
     if (CoverPrefetcher.succeeded.has(url)) {
       return;
     }
@@ -155,6 +170,8 @@ export class CoverPrefetcher {
       CoverPrefetcher.attemptCount.set(url, MAX_ATTEMPTS - 1);
     }
     if (CoverPrefetcher.inFlight.has(url)) {
+      // 先解绑并使旧回调失效，再取消；cancel 也可能同步/延迟回调 error。
+      CoverPrefetcher.detachHandlers(url);
       try {
         cacheDownload.cancel(url);
       } catch (_e) { /* ignore */ }
@@ -165,6 +182,7 @@ export class CoverPrefetcher {
       CoverPrefetcher.pending.splice(pendingIdx, 1);
     }
     CoverPrefetcher.pending.unshift(url);
+    if (CoverPrefetcher.pending.length > MAX_PENDING) CoverPrefetcher.pending.pop();
     CoverPrefetcher.prewarmOrigin(url);
     CoverPrefetcher.pump();
   }
@@ -190,23 +208,25 @@ export class CoverPrefetcher {
     CoverPrefetcher.inFlight.add(url);
     CoverPrefetcher.activeCount++;
     const nextAttempt: number = (CoverPrefetcher.attemptCount.get(url) ?? 0) + 1;
+    CoverPrefetcher.attemptCount.delete(url);
     CoverPrefetcher.attemptCount.set(url, nextAttempt);
+    CoverPrefetcher.trimHistory();
 
     const onSuccess = (): void => {
+      if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
       CoverPrefetcher.detachHandlers(url);
       CoverPrefetcher.succeeded.add(url);
       CoverPrefetcher.releaseSlot(url);
       CoverPrefetcher.pump();
     };
     const onError = (): void => {
+      if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
       CoverPrefetcher.detachHandlers(url);
       CoverPrefetcher.releaseSlot(url);
       const attempts: number = CoverPrefetcher.attemptCount.get(url) ?? 0;
       if (attempts < MAX_ATTEMPTS) {
         const delayMs: number = Math.min(1000 * attempts, 5000);
-        setTimeout((): void => {
-          CoverPrefetcher.prefetch(url, false);
-        }, delayMs);
+        CoverPrefetcher.scheduleRetry(url, delayMs);
       } else {
         hilog.warn(DOMAIN, TAG, 'give up after %{public}d attempts: %{public}s', attempts, url);
       }
@@ -237,31 +257,25 @@ export class CoverPrefetcher {
       }
       cacheDownload.download(url, options);
       if (!PlatformCompat.supports(23)) {
-        CoverPrefetcher.pollDownloadInfo(url, nextAttempt, previousInfo, onSuccess, onError);
+        CoverPrefetcher.pollDownloadInfo(url, previousInfo, onSuccess, onError);
       }
     } catch (e) {
+      if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
       hilog.warn(DOMAIN, TAG, 'download threw %{public}s: %{public}s', url, String(e));
       CoverPrefetcher.detachHandlers(url);
       CoverPrefetcher.releaseSlot(url);
       if (nextAttempt < MAX_ATTEMPTS) {
-        setTimeout((): void => {
-          CoverPrefetcher.prefetch(url, false);
-        }, 1500);
+        CoverPrefetcher.scheduleRetry(url, 1500);
       }
       CoverPrefetcher.pump();
       return;
     }
 
     // 部分 LAZY 命中/系统丢弃场景可能不回调，用看门狗释放槽位并允许再入队
-    setTimeout((): void => {
-      if (!CoverPrefetcher.inFlight.has(url) || CoverPrefetcher.attemptCount.get(url) !== nextAttempt) {
-        return;
-      }
-      if (CoverPrefetcher.succeeded.has(url)) {
-        CoverPrefetcher.releaseSlot(url);
-        CoverPrefetcher.pump();
-        return;
-      }
+    // 缓存命中可能在 download 内完成，完成后不得再挂一个空等 50 秒的闭包。
+    if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
+    const watchdog = setTimeout((): void => {
+      if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
       hilog.warn(DOMAIN, TAG, 'watchdog release %{public}s', url);
       CoverPrefetcher.detachHandlers(url);
       try {
@@ -274,9 +288,12 @@ export class CoverPrefetcher {
       }
       CoverPrefetcher.pump();
     }, IN_FLIGHT_WATCHDOG_MS);
+    CoverPrefetcher.watchdogs.set(url, watchdog);
   }
 
   private static releaseSlot(url: string): void {
+    CoverPrefetcher.clearTimer(CoverPrefetcher.watchdogs, url);
+    CoverPrefetcher.clearTimer(CoverPrefetcher.polls, url);
     if (CoverPrefetcher.inFlight.has(url)) {
       CoverPrefetcher.inFlight.delete(url);
       CoverPrefetcher.activeCount = Math.max(0, CoverPrefetcher.activeCount - 1);
@@ -284,10 +301,12 @@ export class CoverPrefetcher {
   }
 
   /** API 20 没有完成事件，读取下载结果；仍由统一看门狗取消超时任务并释放并发槽位。 */
-  private static pollDownloadInfo(url: string, attempt: number, previousInfo: string,
+  private static pollDownloadInfo(url: string, previousInfo: string,
     onSuccess: () => void, onError: () => void): void {
-    setTimeout((): void => {
-      if (!CoverPrefetcher.inFlight.has(url) || CoverPrefetcher.attemptCount.get(url) !== attempt) return;
+    if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
+    const timer = setTimeout((): void => {
+      if (CoverPrefetcher.successHandlers.get(url) !== onSuccess) return;
+      CoverPrefetcher.polls.delete(url);
       try {
         const info: cacheDownload.DownloadInfo | undefined = cacheDownload.getDownloadInfo(url);
         if (info !== undefined && JSON.stringify(info) !== previousInfo) {
@@ -303,8 +322,9 @@ export class CoverPrefetcher {
       } catch (_e) {
         // 系统暂未提供结果时继续等待，最长等待时间由看门狗限制。
       }
-      CoverPrefetcher.pollDownloadInfo(url, attempt, previousInfo, onSuccess, onError);
+      CoverPrefetcher.pollDownloadInfo(url, previousInfo, onSuccess, onError);
     }, 250);
+    CoverPrefetcher.polls.set(url, timer);
   }
 
   private static detachHandlers(url: string): void {
@@ -316,22 +336,53 @@ export class CoverPrefetcher {
     const successCb: (() => void) | undefined = CoverPrefetcher.successHandlers.get(url);
     const errorCb: ((err: cacheDownload.DownloadError) => void) | undefined =
       CoverPrefetcher.errorHandlers.get(url);
+    // 先移除身份标记，已进入事件队列的旧回调也会被守卫拦住。
+    CoverPrefetcher.successHandlers.delete(url);
+    CoverPrefetcher.errorHandlers.delete(url);
     try {
       if (successCb) {
         cacheDownload.offDownloadSuccess(url, successCb);
-      } else {
-        cacheDownload.offDownloadSuccess(url);
       }
     } catch (_e) { /* ignore */ }
     try {
       if (errorCb) {
         cacheDownload.offDownloadError(url, errorCb);
-      } else {
-        cacheDownload.offDownloadError(url);
       }
     } catch (_e) { /* ignore */ }
-    CoverPrefetcher.successHandlers.delete(url);
-    CoverPrefetcher.errorHandlers.delete(url);
+  }
+
+  private static clearTimer(timers: Map<string, number>, url: string): void {
+    const timer = timers.get(url);
+    if (timer !== undefined) clearTimeout(timer);
+    timers.delete(url);
+  }
+
+  private static scheduleRetry(url: string, delayMs: number): void {
+    CoverPrefetcher.clearTimer(CoverPrefetcher.retries, url);
+    if (CoverPrefetcher.retries.size >= MAX_PENDING) {
+      const oldest = CoverPrefetcher.retries.keys().next();
+      if (!oldest.done) CoverPrefetcher.clearTimer(CoverPrefetcher.retries, oldest.value);
+    }
+    const timer = setTimeout((): void => {
+      if (CoverPrefetcher.retries.get(url) !== timer) return;
+      CoverPrefetcher.retries.delete(url);
+      CoverPrefetcher.prefetch(url, false);
+    }, delayMs);
+    CoverPrefetcher.retries.set(url, timer);
+  }
+
+  private static isPending(url: string): boolean {
+    return CoverPrefetcher.inFlight.has(url) || CoverPrefetcher.retries.has(url) ||
+      CoverPrefetcher.pending.indexOf(url) >= 0;
+  }
+
+  private static trimHistory(): void {
+    for (const url of CoverPrefetcher.attemptCount.keys()) {
+      if (CoverPrefetcher.attemptCount.size <= MAX_HISTORY) break;
+      if (CoverPrefetcher.isPending(url)) continue;
+      CoverPrefetcher.attemptCount.delete(url);
+      CoverPrefetcher.succeeded.delete(url);
+    }
   }
 
   private static prewarmOrigin(url: string): void {
@@ -340,9 +391,15 @@ export class CoverPrefetcher {
       return;
     }
     if (CoverPrefetcher.warmedOrigins.has(origin)) {
+      CoverPrefetcher.warmedOrigins.delete(origin);
+      CoverPrefetcher.warmedOrigins.add(origin);
       return;
     }
     CoverPrefetcher.warmedOrigins.add(origin);
+    if (CoverPrefetcher.warmedOrigins.size > MAX_ORIGINS) {
+      const oldest = CoverPrefetcher.warmedOrigins.values().next();
+      if (!oldest.done) CoverPrefetcher.warmedOrigins.delete(oldest.value);
+    }
     HttpClient.preconnect(origin);
   }
 

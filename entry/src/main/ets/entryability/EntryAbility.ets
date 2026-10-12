@@ -61,9 +61,12 @@ export default class EntryAbility extends UIAbility {
   private startupServicesReady: boolean = false;
   private startupPlaybackPending: boolean = true;
   private isInForeground: boolean = false;
+  private createdAt: number = Date.now();
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     DiagnosticLogService.init(this.context);
+    DiagnosticLogService.info('app.lastExit',
+      `reason=${launchParam.lastExitReason}; message=${launchParam.lastExitMessage ?? ''}`);
     if (PlatformCompat.wearable) {
       WearableRuntime.instance.initialize(this.context);
       return;
@@ -93,6 +96,13 @@ export default class EntryAbility extends UIAbility {
 
     this.registerCallee();
     this.consumeRouteWant(want);
+  }
+
+  onMemoryLevel(level: AbilityConstant.MemoryLevel): void {
+    const detail = `level=${level}; uptimeSec=${Math.max(0, Math.floor((Date.now() - this.createdAt) / 1000))}; ` +
+      `foreground=${this.isInForeground}`;
+    hilog.warn(DOMAIN, TAG, 'Memory pressure: %{public}s', detail);
+    DiagnosticLogService.info('app.memory', detail);
   }
 
   /**
@@ -269,6 +279,7 @@ export default class EntryAbility extends UIAbility {
     const state = AppStorageV2.connect(PlayerState, PLAYER_STATE_KEY, () => new PlayerState())!;
     const audioService = AudioService.getInstance();
     audioService.bind(state, this.context);
+    audioService.setForeground(this.isInForeground);
 
     try {
       // 已经有书就不覆盖(用户已在 App 内播放过)
@@ -393,6 +404,7 @@ export default class EntryAbility extends UIAbility {
   private registerCallee(): void {
     try {
       this.callee.on('play', (_data: rpc.MessageSequence) => {
+        DiagnosticLogService.info('widget.command', 'play');
         this.startupPlaybackPending = false;
         // 乐观更新:立即翻转卡片图标，不等 AVPlayer
         WidgetUpdater.optimisticSetPlaying(true).catch((err: Error) => {
@@ -406,6 +418,7 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('pause', (_data: rpc.MessageSequence) => {
+        DiagnosticLogService.info('widget.command', 'pause');
         this.startupPlaybackPending = false;
         // 乐观更新:立即翻转卡片图标，不等 AVPlayer
         WidgetUpdater.optimisticSetPlaying(false).catch((err: Error) => {
@@ -419,6 +432,7 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('next', (_data: rpc.MessageSequence) => {
+        DiagnosticLogService.info('widget.command', 'next');
         this.startupPlaybackPending = false;
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().playNext();
@@ -428,6 +442,7 @@ export default class EntryAbility extends UIAbility {
         return new AckParcelable();
       });
       this.callee.on('prev', (_data: rpc.MessageSequence) => {
+        DiagnosticLogService.info('widget.command', 'previous');
         this.startupPlaybackPending = false;
         AudioService.getInstance().whenReady().then(() => {
           return AudioService.getInstance().playPrevious();
@@ -455,6 +470,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   async onDestroy(): Promise<void> {
+    DiagnosticLogService.info('app.destroy', `foreground=${this.isInForeground}`);
     if (PlatformCompat.wearable) {
       await WearableRuntime.instance.destroy();
       return;
@@ -537,6 +553,7 @@ export default class EntryAbility extends UIAbility {
    * 避免被系统强杀前丢掉最近 5s tick 之间的进度。
    */
   async onBackground(): Promise<void> {
+    this.isInForeground = false;
     if (PlatformCompat.wearable) {
       await WearableRuntime.instance.background();
       return;
@@ -546,7 +563,6 @@ export default class EntryAbility extends UIAbility {
     AudioService.getInstance().setForeground(false);
     TextToSpeechService.getInstance().setForeground(false);
     MembershipService.instance.background();
-    this.isInForeground = false;
     this.startupPlaybackPending = false;
     try {
       await AudioService.getInstance().flushHistory();
@@ -582,6 +598,7 @@ export default class EntryAbility extends UIAbility {
    * 否则会访问到未初始化的 player 触发崩溃。
    */
   async onForeground(): Promise<void> {
+    this.isInForeground = true;
     if (PlatformCompat.wearable) {
       await WearableRuntime.instance.foreground(this.context);
       return;
@@ -592,7 +609,6 @@ export default class EntryAbility extends UIAbility {
     AudioService.getInstance().setForeground(true);
     emitter.emit('app.reader.foreground');
     TextToSpeechService.getInstance().setForeground(true);
-    this.isInForeground = true;
     // 不阻塞前台恢复；已保存的账号需重新核对系统登录状态。
     AuthService.instance.restore(this.context);
     MembershipService.instance.foreground(this.context);

@@ -176,10 +176,7 @@ export struct ReaderPage {
   private screenOn: ReaderScreenOnService = new ReaderScreenOnService();
   @Local showSpeechSheet: boolean = false;
   @Local speechState: TextToSpeechState = TextToSpeechService.getInstance().state;
-  @Local speechCanResume: boolean = false;
-  private followingSpeech: boolean = false;
-  private speechFollowChapter: number = -1;
-  private readonly speechListener = (): void => { this.followSpeechPosition(); };
+  private openingSpeechPlayer: boolean = false;
   /** 详情页返回栈内阅读页时按所选章节跳转 */
   private readonly jumpChapterHandler: (e: emitter.EventData) => void = (e) => this.onJumpChapterEvent(e);
   @Local chapterListOffsetFromCurrent: number = 0;
@@ -191,7 +188,6 @@ export struct ReaderPage {
   @Local onlineTextPages: OnlineTextPage[] = [];
   @Local onlineTextPageIndex: number = 0;
   @Local continuousRevision: number = 0;
-  @Local continuousFollowOffset: number = -1;
   @Local onlineTextLoading: boolean = false;
   @Local onlineTextTurnPreview: ReaderOnlineTextTurnPreview | null = null;
   private onlineTextTurnSerial: number = 0;
@@ -302,7 +298,6 @@ export struct ReaderPage {
     WindowUtils.addSafeAreaListener(this.safeAreaChangeHandler);
     WindowUtils.addReaderColorListener(this.readerColorListener);
     WindowUtils.refreshAvoidArea();
-    TextToSpeechService.getInstance().addListener(this.speechListener);
     emitter.on(EVT_READER_JUMP_CHAPTER, this.jumpChapterHandler);
     this.screenOn.init(this.context).catch((): void => {});
     this.screenOn.setVisible(true);
@@ -321,7 +316,6 @@ export struct ReaderPage {
     this.completeOnlineTextTurn(this.onlineTextTurnConfirmed);
     this.leaving = true;
     emitter.off(EVT_READER_JUMP_CHAPTER, this.jumpChapterHandler);
-    TextToSpeechService.getInstance().removeListener(this.speechListener);
     WindowUtils.setReaderActive(false);
     this.onlineTextLoadSerial++;
     this.cancelReaderSettingsRefresh();
@@ -1833,50 +1827,40 @@ export struct ReaderPage {
     try {
       await speech.initialize(this.context);
       if (this.leaving) return;
-      this.speechCanResume = speech.hasSavedPosition(this.book);
       this.hideReaderBar();
       this.showSpeechSheet = true;
       speech.refreshVoices();
     } catch (_error) { this.showToast($r('app.string.tts_engine_error')); }
   }
 
-  private startSpeech(restore: boolean): void {
-    if (this.book === null) return;
-    TextToSpeechService.getInstance().start(this.book, this.currentResourceIndex,
-      this.currentOnlineTextCharOffset(), restore);
-    this.speechCanResume = true;
-  }
-
-  private async followSpeechPosition(): Promise<void> {
-    const state = this.speechState;
-    if (this.leaving || !state.active || !state.follow || state.bookId !== this.bookId ||
-      !state.playing || this.followingSpeech || this.onlineTextTurnPreview !== null) return;
-    // 自然段跨页时仍按实际朗读句起点跟随，整段高亮不把页面拉回段首。
-    const readOffset = state.charOffset;
-    if (state.chapterIndex !== this.currentResourceIndex) {
-      if (this.onlineTextLoading || this.speechFollowChapter === state.chapterIndex) return;
-      this.followingSpeech = true;
-      this.speechFollowChapter = state.chapterIndex;
-      try { await this.loadOnlineTextChapter(state.chapterIndex, readOffset, 0, false, false); }
-      finally { this.followingSpeech = false; this.speechFollowChapter = -1; }
-    }
-    if (this.leaving || !state.follow || state.chapterIndex !== this.currentResourceIndex) return;
-    if (this.pageTurnMode === PageTurnMode.Vertical) {
-      this.continuousFollowOffset = readOffset;
-      return;
-    }
-    const page = OnlineTextPaginator.pageIndexForOffset(this.onlineTextPages, readOffset);
-    if (page !== this.onlineTextPageIndex) {
-      this.onlineTextPageIndex = page;
-      this.updateOnlineTextPosition(true);
+  private async openSpeechPlayer(): Promise<void> {
+    const book = this.book;
+    if (!this.isOnlineTextBook() || this.context === null || book === null ||
+      this.onlineTextLoading || this.openingSpeechPlayer) return;
+    this.openingSpeechPlayer = true;
+    try {
+      const speech = TextToSpeechService.getInstance();
+      await speech.initialize(this.context);
+      if (this.leaving) return;
+      this.saveProgress();
+      this.hideReaderBar();
+      SearchCache.put(book);
+      if (speech.state.active && speech.state.bookId === book.id) {
+        if (!speech.state.playing && !speech.state.loading) speech.resume();
+      } else {
+        speech.start(book, this.currentResourceIndex, this.currentOnlineTextCharOffset());
+      }
+      this.navStack.pushPathByName('player', book.id);
+    } catch (_error) {
+      this.showToast($r('app.string.tts_engine_error'));
+    } finally {
+      this.openingSpeechPlayer = false;
     }
   }
 
   @Builder
   private buildSpeechSheet(): void {
-    ReaderSpeechSheet({ state: this.speechState, bookId: this.bookId, canResume: this.speechCanResume,
-      bookTitle: this.book?.title ?? '', cover: this.book?.cover ?? '', chapterTitle: this.currentChapterTitle,
-      onStart: (restore: boolean): void => this.startSpeech(restore),
+    ReaderSpeechSheet({ state: this.speechState,
       onClose: (): void => { this.showSpeechSheet = false; }
     })
   }
@@ -1949,7 +1933,8 @@ export struct ReaderPage {
           if (this.isOnlineTextBook() && this.readerBarVisible) {
             Row() {
               ReaderSpeechFloating({ playing: this.speechState.playing && this.speechState.bookId === this.bookId,
-                onOpen: (): void => { this.openSpeechSheet(); } })
+                onOpen: (): void => { this.openSpeechPlayer(); },
+                onSettings: (): void => { this.openSpeechSheet(); } })
             }
             .width('100%').justifyContent(FlexAlign.End)
             .padding({ right: 16 + this.rightSafeVp }).margin({ bottom: this.bottomSafeVp + 86 })
@@ -2072,7 +2057,7 @@ export struct ReaderPage {
               fontSize: this.fontSize, lineHeight: this.lineHeight, paragraphSpacing: this.paragraphSpacing, palette: this.palette,
               textAlignment: this.textAlignment,
               fontFamily: this.fontFamily, fontWeight: this.fontWeight,
-              bookId: this.bookId, speechState: this.speechState, followOffset: this.continuousFollowOffset,
+              bookId: this.bookId,
               topGestureInset: 0,
               getContent: async (index: number): Promise<string> => {
                 if (this.book === null) throw new Error('Reader book unavailable');
@@ -2091,9 +2076,7 @@ export struct ReaderPage {
               text: this.currentOnlineTextPageContent(),
               source: this.currentOnlineTextPageSource(),
               sourceStart: this.onlineTextPages[this.onlineTextPageIndex]?.startOffset ?? 0,
-              state: this.speechState,
-              highlightEnabled: this.onlineTextTurnPreview === null && this.speechState.bookId === this.bookId &&
-                this.speechState.chapterIndex === this.currentResourceIndex,
+              highlightEnabled: false,
               fontSize: this.fontSize, lineHeight: this.lineHeight, palette: this.palette,
               fontFamily: this.fontFamily, fontWeight: this.fontWeight
             })

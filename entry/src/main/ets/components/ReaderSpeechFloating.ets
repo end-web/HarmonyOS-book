@@ -15,6 +15,7 @@ class SpeechCircleClip implements AttributeModifier<CommonAttribute> {
 export struct ReaderSpeechFloating {
   @Param playing: boolean = false;
   @Event onOpen: () => void = () => {};
+  @Event onSettings: () => void = () => {};
 
   @Builder
   materialContent() {
@@ -48,13 +49,19 @@ export struct ReaderSpeechFloating {
           .width(48).height(48).padding(0).backgroundColor(Color.Transparent)
           .hitTestBehavior(HitTestMode.Transparent)
           .accessibilityText($r('app.string.tts_title')).onClick((): void => this.onOpen())
+          .accessibilityDescription($r('app.string.tts_entry_hint'))
+          .gesture(LongPressGesture({ repeat: false, duration: 500 })
+            .onAction((): void => this.onSettings()))
       } else {
         Button({ type: ButtonType.Circle }) { this.label() }
           .width(48).height(48).padding(0).backgroundColor($r('sys.color.comp_background_primary'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .border({ width: 0.5, color: $r('sys.color.comp_divider') })
           .accessibilityText($r('app.string.tts_title')).onClick((): void => this.onOpen())
+          .accessibilityDescription($r('app.string.tts_entry_hint'))
+          .gesture(LongPressGesture({ repeat: false, duration: 500 })
+            .onAction((): void => this.onSettings()))
       }
-    }.width(48).height(48).attributeModifier(new SpeechCircleClip())
+    }.width(48).height(48).attributeModifier(new SpeechCircleClip()).id('reader-listen')
   }
 }

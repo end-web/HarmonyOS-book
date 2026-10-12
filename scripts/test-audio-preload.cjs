@@ -38,12 +38,16 @@ const stubs = {
   } },
   '@kit.PerformanceAnalysisKit': { hilog: { info() {}, warn() {}, error() {} } },
   '@kit.BackgroundTasksKit': { backgroundTaskManager: { on(name, callback) { backgroundEvents.set(name, callback); },
-    startBackgroundRunning: async (_context, modes) => backgroundModes.push([...modes]),
+    startBackgroundRunning: async (_context, modes) => {
+      backgroundModes.push([...modes]);
+      return { continuousTaskId: backgroundModes.length };
+    },
     updateBackgroundRunning: async (_context, modes) => backgroundModes.push([...modes]),
     stopBackgroundRunning: async () => backgroundModes.push([]) } },
   '@kit.AbilityKit': { wantAgent: { OperationType: { START_ABILITY: 0 },
     WantAgentFlags: { UPDATE_PRESENT_FLAG: 0 }, getWantAgent: async () => ({}) } },
-  'service/DiagnosticLogService': { DiagnosticLogService: { info() {} } },
+  'service/DiagnosticLogService': { DiagnosticLogService: { info() {}, failure() {} } },
+  'utils/PlatformCompat': { PlatformCompat: { supports: () => false } },
   '@kit.BasicServicesKit': { emitter: { emit: event => events.push(event) } },
   '@kit.MediaKit': { media: {} },
   'service/PreferenceService': { PreferenceService: { chapterStep: () => 1 } },
@@ -355,7 +359,7 @@ function load(name) {
   const pausedBook = makeBook('paused-completion');
   const ctx = pausedCache.appContext;
   await background.start(ctx);
-  backgroundEvents.get('continuousTaskCancel')({ id: 1, reason: 1 });
+  backgroundEvents.get('continuousTaskCancel')({ id: background.taskId, reason: 1 });
   const cancelledModes = backgroundModes.length;
   await background.ensure(ctx);
   await background.start(ctx);
@@ -364,12 +368,12 @@ function load(name) {
   await background.start(ctx);
   assert.equal(background.isRunning(), true, 'Widget play can reacquire a cancelled task with existing owners');
   assert.equal(backgroundModes.length, cancelledModes + 1);
-  backgroundEvents.get('continuousTaskSuspend')({ continuousTaskId: 1, suspendReason: 1 });
+  backgroundEvents.get('continuousTaskSuspend')({ continuousTaskId: background.taskId, suspendReason: 1 });
   await background.ensure(ctx);
   assert.equal(backgroundModes.length, cancelledModes + 1);
   background.resumeAfterUserAction();
   await background.start(ctx);
-  assert.equal(backgroundModes.length, cancelledModes + 2);
+  assert.equal(backgroundModes.length, cancelledModes + 3, 'Release the suspended task before requesting a replacement');
   console.log('PASS explicit playback recovers cancelled/suspended background owners without automatic rearming');
   await background.startDataTransfer(ctx);
   pausedCache.preloadAudioChapters(pausedBook, 0, 'https://cdn.invalid/current.mp3');

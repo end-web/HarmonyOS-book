@@ -67,6 +67,12 @@ async function fixture(initialState = 'paused', realUsage = false) {
   const playbackStore = { setPlaying() {}, update() {} };
   const cacheCalls = [];
   const backgroundCalls = [];
+  const background = {
+    resumeAfterUserAction() { backgroundCalls.push('user-resume'); },
+    async start() { backgroundCalls.push('start'); },
+    async stop() { backgroundCalls.push('stop'); },
+    isRunning() { return true; }
+  };
   const mediaSources = [];
   const platformCompat = { supports: () => true };
   const cache = {
@@ -137,11 +143,8 @@ async function fixture(initialState = 'paused', realUsage = false) {
     './ExternalMediaWatcher': { ExternalMediaWatcher: Watcher },
     './AVSessionService': { AVSessionService: { getInstance: () => session } },
     './PlaybackStore': { PlaybackStore: { getInstance: () => playbackStore } },
-    './BackgroundTaskService': { BackgroundTaskService: {
-      resumeAfterUserAction() { backgroundCalls.push('user-resume'); },
-      async start() { backgroundCalls.push('start'); },
-      async stop() { backgroundCalls.push('stop'); }, isRunning() { return true; }
-    } },
+    './BackgroundTaskService': { BackgroundTaskService: background },
+    './DiagnosticLogService': { DiagnosticLogService: { info() {}, failure() {} } },
     './DataService': { DataService: { async upsertCachedBook() {},
       resolveChapterIndex: (book, id) => book.chapters.findIndex(ch => ch.id === id) } },
     './PreferenceService': { PreferenceService: preference },
@@ -178,7 +181,8 @@ async function fixture(initialState = 'paused', realUsage = false) {
   service.initAVSession();
   await service.ensurePlayer();
   return { service, player, state, session, savedPositions, events, preference, cacheCalls,
-    cache, mediaSources, platformCompat, usage, usageTimers, backgroundCalls, advance: ms => { uptime += ms; } };
+    cache, mediaSources, platformCompat, usage, usageTimers, backgroundCalls, background,
+    advance: ms => { uptime += ms; } };
 }
 
 let passed = 0;
@@ -189,6 +193,67 @@ async function check(name, test) {
 }
 
 (async () => {
+  await check('widget play restores a lost background task even while AVPlayer still reports playing', async () => {
+    const f = await fixture('playing');
+    f.background.isRunning = () => false;
+    await f.service.play();
+    assert.ok(f.backgroundCalls.includes('start'), 'A muted playing renderer may never send another playing event');
+    assert.equal(f.player.plays, 0, 'The existing stream must not restart');
+  });
+  await check('background eligibility is acquired before resuming audio', async () => {
+    const f = await fixture('paused');
+    let complete;
+    let acquired = false;
+    f.background.start = () => new Promise(resolve => {
+      complete = () => { acquired = true; resolve(); };
+    });
+    const resume = f.service.play();
+    await flush();
+    assert.equal(f.player.plays, 0, 'Do not play first and request background eligibility afterwards');
+    assert.equal(typeof complete, 'function');
+    complete();
+    await resume;
+    assert.equal(acquired, true);
+    assert.equal(f.player.plays, 1);
+  });
+  await check('pause wins while background eligibility is being acquired', async () => {
+    const f = await fixture('paused');
+    let complete;
+    f.background.start = () => new Promise(resolve => { complete = resolve; });
+    const resume = f.service.play();
+    await flush();
+    await f.service.pause('widget');
+    complete();
+    await resume;
+    assert.equal(f.player.plays, 0);
+    assert.ok(f.backgroundCalls.includes('stop'));
+  });
+  await check('simultaneous widget and lock-screen play share one pending AVPlayer operation', async () => {
+    const f = await fixture('paused');
+    let complete;
+    f.player.play = async () => {
+      f.player.plays++;
+      await new Promise(resolve => { complete = resolve; });
+      f.player.transition('playing');
+    };
+    const first = f.service.play();
+    const second = f.service.play();
+    await flush();
+    assert.equal(f.player.plays, 1);
+    complete();
+    await Promise.all([first, second]);
+  });
+  await check('rejected prepare or play callbacks leave playback stopped without an unhandled rejection', async () => {
+    for (const operation of ['prepare', 'play']) {
+      const f = await fixture('initialized');
+      f.player[operation] = async () => { throw Object.assign(new Error('renderer unavailable'), { code: 5400102 }); };
+      f.player.transition(operation === 'prepare' ? 'initialized' : 'prepared');
+      await flush();
+      assert.equal(f.state.isPlaying, false);
+      assert.equal(f.state.isLoading, false);
+      assert.ok(f.backgroundCalls.includes('stop'));
+    }
+  });
   await check('widget resume re-arms background recovery and restarts the preload window', async () => {
     const f = await fixture('paused');
     f.state.currentBook.chapters = [f.state.currentChapter];
@@ -417,6 +482,7 @@ async function check(name, test) {
     f.service.pendingSeek = 80000;
     f.service.resumeTargetMs = 80000;
     f.player.transition('prepared');
+    await flush();
     assert.equal(f.player.plays, 1);
     assert.equal(f.state.isLive, true);
     assert.equal(f.state.durationMs, 0);
@@ -432,6 +498,7 @@ async function check(name, test) {
     f.state.currentBook.chapters = [f.state.currentChapter];
     assert.deepEqual(f.cacheCalls, []);
     f.player.transition('prepared');
+    await flush();
     assert.equal(f.player.plays, 1);
     assert.deepEqual(f.cacheCalls, []);
     await new Promise(resolve => setTimeout(resolve, 10));

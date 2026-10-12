@@ -84,7 +84,7 @@ function restart() {
   const saved = [];
   const { Harness } = compile(`${helpers}\nexport class Harness {\n${refresh}\n}`, {
     BookUpdateInfo, ShelfUpdateReport,
-    SourceDataService: { getSources: async () => [{ bookSourceUrl: 'source' }] },
+    SourceDataService: { getSourceByUrl: async url => url === 'source' ? { bookSourceUrl: 'source' } : undefined },
     BookSourceService: {
       getBookInfo: async (_source, url) => {
         active++; peak = Math.max(peak, active);

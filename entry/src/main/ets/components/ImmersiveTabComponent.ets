@@ -22,7 +22,7 @@ export struct ImmersiveTabComponent {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .textAlign(TextAlign.Center)
           .width(this.fitContent ? LayoutPolicy.wrapContent : '100%')
-          .constraintSize({ maxWidth: this.fitContent ? 176 : this.itemWidth })
+          .constraintSize({ maxWidth: this.fitContent ? undefined : this.itemWidth })
           .padding({
             left: this.fitContent ? AppSpace.Sm : AppSpace.Xxs,
             right: this.fitContent ? AppSpace.Sm : AppSpace.Xxs
@@ -43,12 +43,14 @@ export struct ImmersiveTabComponent {
     }
     .width(this.fitContent ? LayoutPolicy.wrapContent : this.itemWidth)
     .height(34)
+    .flexShrink(0)
     .borderRadius(AppRadius.Pill)
     .justifyContent(FlexAlign.Center)
     .backgroundColor(Color.Transparent)
-    .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
-    // 历史标签按内容换行，首次测量的尺寸变化不能触发整块材质动画。
-    .animation(this.fitContent ? null : { duration: AppMotion.Base, curve: AppCurve.Spring })
+    // 文字使用稳定的主题色，滚动背景变化时不触发材质子树反色。
+    .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveThin))
+    // 材质尺寸随文字直接布局；动画仅保留在文字和选中指示上。
+    .renderGroup(false)
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
     .onClick(() => this.onTap())
   }

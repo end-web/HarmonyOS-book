@@ -27,6 +27,7 @@ import { BookUsageInput, StatsService } from './StatsService';
 import { getWebViewAudioExtractor } from './builtin/WebViewAudioExtractor';
 import { ExternalMediaWatcher } from './ExternalMediaWatcher';
 import { ChapterProgressPolicy } from './ChapterProgressPolicy';
+import { DiagnosticLogService } from './DiagnosticLogService';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Audio';
@@ -142,9 +143,17 @@ export class AudioService {
   private pauseRequested: boolean = false;
   private pauseSource: string = 'none';
   private foreground: boolean = true;
+  private playerStartPromise: Promise<void> | null = null;
+  private playerStartTarget: media.AVPlayer | null = null;
+  private playerStartGeneration: number = -1;
 
   /** 只记录状态和位置，不记录书名、音频地址或请求凭据。 */
   private tracePlayback(event: string): void {
+    DiagnosticLogService.info('audio.event',
+      `event=${event}; state=${this.player?.state ?? 'none'}; foreground=${this.foreground}; ` +
+      `position=${this.state?.progressMs ?? 0}; generation=${this.playGen}; pause=${this.pauseRequested}; ` +
+      `source=${this.pauseSource}; focus=${this.pausedByFocus}; external=${this.pausedByExternalMedia}; ` +
+      `sleep=${this.sleepPausePending}; loading=${this.state?.isLoading ?? false}; bg=${BackgroundTaskService.isRunning()}`);
     hilog.info(DOMAIN, TAG,
       'playback event=%{public}s state=%{public}s foreground=%{public}s pos=%{public}d gen=%{public}d pause=%{public}s source=%{public}s focus=%{public}s external=%{public}s sleep=%{public}s loading=%{public}s bg=%{public}s',
       event, this.player?.state ?? 'none', String(this.foreground), this.state?.progressMs ?? 0,
@@ -326,8 +335,12 @@ export class AudioService {
         });
       },
       onPause: () => { this.pause('avsession'); },
-      onPlayNext: () => { this.playNext(); },
-      onPlayPrevious: () => { this.playPrevious(); },
+      onPlayNext: () => {
+        this.playNext().catch((error: BusinessError): void => { DiagnosticLogService.failure('audio.next', error); });
+      },
+      onPlayPrevious: () => {
+        this.playPrevious().catch((error: BusinessError): void => { DiagnosticLogService.failure('audio.previous', error); });
+      },
       onFastForward: (ms: number) => { this.seekBy(ms); },
       onRewind: (ms: number) => { this.seekBy(-ms); },
       onSeek: (ms: number) => { this.seek(ms); },
@@ -397,7 +410,10 @@ export class AudioService {
           hilog.warn(DOMAIN, TAG, 'set audioRendererInfo failed: %{public}s',
             e?.message ?? JSON.stringify(err));
         }
-        p.prepare();
+        const generation = this.playGen;
+        p.prepare().catch((error: BusinessError): void => {
+          this.handlePlayerOperationFailure(p, generation, 'prepare', error);
+        });
       } else if (newState === 'prepared') {
         // 此时 player 已进入合法状态,补一次焦点模式 setter(ensurePlayer 阶段不能设)
         this.applyInterruptMode(p);
@@ -433,9 +449,18 @@ export class AudioService {
           try { p.setPlaybackRate(this.state.speed); } catch (_e) { /* 状态异常忽略 */ }
         }
         // 立即设置播放状态，让UI立即响应
-        this.state.isPlaying = !this.sleepPausePending && !this.pauseRequested && !PlaybackCoordinator.speechActive;
-        if (this.state.isPlaying) p.play();
-        else this.state.isLoading = false;
+        this.state.isPlaying = !this.sleepPausePending && !this.pauseRequested && !this.pausedByFocus &&
+          !this.pausedByExternalMedia && !PlaybackCoordinator.speechActive;
+        if (this.state.isPlaying) {
+          const generation = this.playGen;
+          this.playPlayer(p).catch((error: BusinessError): void => {
+            this.handlePlayerOperationFailure(p, generation, 'play', error);
+          });
+        }
+        else {
+          this.state.isLoading = false;
+          this.stopBackgroundIfIdle();
+        }
       } else if (newState === 'playing') {
         if (this.sleepPausePending || this.pauseRequested || PlaybackCoordinator.speechActive) {
           p.pause().catch((err: Error): void => {
@@ -612,6 +637,73 @@ export class AudioService {
     return p;
   }
 
+  /** 卡片、锁屏和自动切章共用：先具备后台资格再出声，等待期间仍以最新暂停/切章为准。 */
+  private playPlayer(player: media.AVPlayer): Promise<void> {
+    const generation = this.playGen;
+    if (this.playerStartPromise && this.playerStartTarget === player && this.playerStartGeneration === generation) {
+      return this.playerStartPromise;
+    }
+    const task: Promise<void> = this.startPlayerWithBackground(player, generation).finally((): void => {
+      if (this.playerStartPromise === task) {
+        this.playerStartPromise = null;
+        this.playerStartTarget = null;
+      }
+    });
+    this.playerStartTarget = player;
+    this.playerStartGeneration = generation;
+    this.playerStartPromise = task;
+    return task;
+  }
+
+  private async startPlayerWithBackground(player: media.AVPlayer, generation: number): Promise<void> {
+    const context = this.context;
+    if (!context || !this.canStartPlayer(player, generation)) return;
+    await AVSessionService.getInstance().init(context);
+    if (!this.canStartPlayer(player, generation)) {
+      this.finishCancelledPlayerStart(player, generation);
+      return;
+    }
+    await BackgroundTaskService.start(context);
+    if (!this.canStartPlayer(player, generation)) {
+      this.finishCancelledPlayerStart(player, generation);
+      return;
+    }
+    // 被系统静音/冻结后播放器可能仍为 playing，用户再次播放也必须补申请后台任务。
+    if (player.state === 'playing') return;
+    try {
+      await player.play();
+    } catch (error) {
+      this.handlePlayerOperationFailure(player, generation, 'play', error);
+    }
+  }
+
+  private finishCancelledPlayerStart(player: media.AVPlayer, generation: number): void {
+    if (this.player !== player || this.playGen !== generation || !this.state) return;
+    this.state.isPlaying = false;
+    this.state.isLoading = false;
+    this.syncPlaybackState();
+    this.stopBackgroundIfIdle();
+  }
+
+  private canStartPlayer(player: media.AVPlayer, generation: number): boolean {
+    return this.player === player && this.playGen === generation && this.state !== null &&
+      !this.pauseRequested && !this.sleepPausePending && !this.pausedByFocus &&
+      !this.pausedByExternalMedia && !PlaybackCoordinator.speechActive;
+  }
+
+  private handlePlayerOperationFailure(player: media.AVPlayer, generation: number,
+    operation: string, error: BusinessError): void {
+    if (this.player !== player || this.playGen !== generation || !this.state) return;
+    DiagnosticLogService.failure(`audio.${operation}`, error);
+    this.tracePlayback(`operation-failed:${operation}:code=${error.code ?? -1}`);
+    this.state.isPlaying = false;
+    this.state.isLoading = false;
+    this.stopTick();
+    PlaybackStore.getInstance().setPlaying(false);
+    this.syncPlaybackState();
+    this.stopBackgroundIfIdle();
+  }
+
   private handleInterrupt(event: audio.InterruptEvent): void {
     this.cancelLiveRecovery();
     this.tracePlayback(`interrupt:type=${event.eventType}:force=${event.forceType}:hint=${event.hintType}:autoResume=${this.autoResume}`);
@@ -673,7 +765,7 @@ export class AudioService {
         if (this.state) {
           this.state.isPlaying = true;
         }
-        await p.play();
+        await this.playPlayer(p);
       } else if (p.state === 'idle' || p.state === 'stopped') {
         await this.resumeFromState();
       }
@@ -699,7 +791,7 @@ export class AudioService {
         if (this.state) {
           this.state.isPlaying = true;
         }
-        await p.play();
+        await this.playPlayer(p);
       } else if (p.state === 'idle' || p.state === 'stopped') {
         // 等待期间系统已经把 renderer 回收,走完整续播路径
         await this.resumeFromState();
@@ -938,7 +1030,7 @@ export class AudioService {
       try {
         p.seek(skipIntroMs, media.SeekMode.SEEK_PREV_SYNC);
         this.state.isPlaying = true;
-        await p.play();
+        await this.playPlayer(p);
       } catch (err) {
         const e = err as Error;
         hilog.error(DOMAIN, TAG, 'replaySameChapterFromStart failed: %{public}s',
@@ -1158,7 +1250,10 @@ export class AudioService {
       }
       throw err as Error;
     } finally {
-      if (myGen === this.playGen) this.isApplying = false;
+      if (myGen === this.playGen) {
+        this.isApplying = false;
+        this.stopBackgroundIfIdle();
+      }
     }
   }
 
@@ -1447,7 +1542,7 @@ export class AudioService {
     if (p.state === 'completed') {
       // completed 状态下需要先 seek + play 才能继续
       p.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
-      await p.play();
+      await this.playPlayer(p);
     } else {
       p.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
     }
@@ -1938,7 +2033,7 @@ export class AudioService {
     const p = this.player;
     if (!p) return;
     if (this.state.isLive) {
-      if (p.state === 'paused' || p.state === 'prepared') await p.play();
+      if (p.state === 'paused' || p.state === 'prepared') await this.playPlayer(p);
       return;
     }
     this.state.progressMs = seekMs;
@@ -1951,7 +2046,7 @@ export class AudioService {
       } else if (p.state === 'paused' || p.state === 'prepared' || p.state === 'completed') {
         p.seek(seekMs, media.SeekMode.SEEK_PREV_SYNC);
         this.state.isPlaying = true;
-        await p.play();
+        await this.playPlayer(p);
       }
     } catch (err) {
       const e = err as Error;
@@ -2053,6 +2148,9 @@ export class AudioService {
       if (!this.state?.isLoading) await this.persistHistory();
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'pause failed: %{public}s', JSON.stringify(err));
+    } finally {
+      // 已由系统暂停的播放器不会再发送 paused，用户暂停仍须释放后台占用。
+      this.stopBackgroundIfIdle();
     }
   }
 
@@ -2088,7 +2186,7 @@ export class AudioService {
         this.state.isPlaying = true;
       }
       try {
-        await this.player.play();
+        await this.playPlayer(this.player);
       } catch (err) {
         if (this.state) this.state.isPlaying = false;
         this.syncPlaybackState();
@@ -2100,7 +2198,9 @@ export class AudioService {
         this.state.progressMs = 0;
         this.state.isPlaying = true;
       }
-      await this.player.play();
+      await this.playPlayer(this.player);
+    } else if (this.player.state === 'playing') {
+      await this.playPlayer(this.player);
     }
   }
 }

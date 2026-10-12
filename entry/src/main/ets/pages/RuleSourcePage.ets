@@ -3,7 +3,9 @@ import lazy { scanBarcode, scanCore } from '@kit.ScanKit';
 import { LocalRuleSource, LocalRuleSourceStatus, LocalRuleSourceType } from '../model/LocalRuleSource';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { BookSourceService } from '../service/BookSourceService';
-import { HttpClient, HttpResponse } from '../service/http/HttpClient';
+import {
+  LocalRuleSourceRemoteImporter, RuleSourceRemoteImportError, RuleSourceRemoteImportFailure
+} from '../service/rulesource/LocalRuleSourceRemoteImporter';
 import { LocalRuleSourceImportParser } from '../service/rulesource/LocalRuleSourceImportParser';
 import { LocalRuleSourceImportService } from '../service/rulesource/LocalRuleSourceImportService';
 import { LocalRuleSourceFileImporter, RuleSourceFileImportResult } from '../service/rulesource/LocalRuleSourceFileImporter';
@@ -720,8 +722,8 @@ export struct RuleSourcePage {
         this.importJson = '';
         this.showImportPanel = false;
       }
-    } catch (_error) {
-      this.showToast($r('app.string.rule_source_operation_failed'));
+    } catch (error) {
+      this.showImportError(error);
     } finally {
       this.isImporting = false;
     }
@@ -799,8 +801,7 @@ export struct RuleSourcePage {
         // 用户取消扫描，不提示错误
       }
     } catch (error) {
-      console.error('[RuleSourcePage] QR scan failed', error);
-      this.showToast('扫描二维码失败');
+      this.showImportError(error);
     } finally {
       this.isImporting = false;
     }
@@ -886,25 +887,33 @@ export struct RuleSourcePage {
   }
 
   private isRemoteImport(input: string): boolean {
-    const value = input.toLowerCase();
-    return value.startsWith('http://') || value.startsWith('https://');
+    return LocalRuleSourceRemoteImporter.isRemote(input);
   }
 
   private async resolveImportContent(input: string): Promise<string> {
-    if (input.length > RULE_SOURCE_IMPORT_MAX_LENGTH) {
-      throw new Error('Rule source import content exceeds limit');
+    return LocalRuleSourceRemoteImporter.resolve(input);
+  }
+
+  private showImportError(error: Object): void {
+    if (!(error instanceof RuleSourceRemoteImportError)) {
+      this.showToast($r('app.string.rule_source_operation_failed'));
+      return;
     }
-    if (!this.isRemoteImport(input)) return input;
-    const response: HttpResponse = await HttpClient.request(input, {
-      method: 'GET',
-      timeout: 20000,
-      retry: 1
-    });
-    if (response.statusCode < 200 || response.statusCode >= 300 ||
-      response.body.length > RULE_SOURCE_IMPORT_MAX_LENGTH) {
-      throw new Error('Rule source import response rejected');
+    if (error.failure === RuleSourceRemoteImportFailure.ADDRESS) {
+      this.showToast($r('app.string.source_import_address_invalid'));
+    } else if (error.failure === RuleSourceRemoteImportFailure.TOO_LARGE) {
+      this.showToast($r('app.string.rule_source_import_file_too_large'));
+    } else if (error.failure === RuleSourceRemoteImportFailure.AUTH) {
+      this.showToast($r('app.string.source_import_auth_required'));
+    } else if (error.failure === RuleSourceRemoteImportFailure.NOT_FOUND) {
+      this.showToast($r('app.string.source_import_not_found'));
+    } else if (error.failure === RuleSourceRemoteImportFailure.HTML) {
+      this.showToast($r('app.string.source_import_html_response'));
+    } else if (error.failure === RuleSourceRemoteImportFailure.FORMAT) {
+      this.showToast($r('app.string.rule_source_import_invalid'));
+    } else {
+      this.showToast($r('app.string.source_import_network_failed'));
     }
-    return response.body;
   }
 
   private async changeEnabled(source: LocalRuleSource, enabled: boolean): Promise<void> {

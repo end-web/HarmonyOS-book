@@ -2,6 +2,7 @@ import lazy { PreferenceService } from './PreferenceService';
 import lazy { AutoBackupService } from './AutoBackupService';
 import { DeveloperMembership } from './membership/DeveloperMembership';
 import lazy { iap } from '@kit.IAPKit';
+import lazy { authentication } from '@kit.AccountKit';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -49,6 +50,7 @@ export class MembershipService {
   private productsAt: number = 0;
   private productsQueryAt: number = 0;
   private queryAt: number = 0;
+  private queryTask: Promise<void> = Promise.resolve();
   private refreshedAt: number = 0;
   private expiryTimer: number = -1;
   private allowSandbox: boolean = false;
@@ -59,6 +61,17 @@ export class MembershipService {
   private displayRestoreStarted: boolean = false;
   private displayRevision: number = 0;
   private displayWriteTask: Promise<void> = Promise.resolve();
+  private purchaseInProgress: boolean = false;
+  private awaitingPurchaseForeground: boolean = false;
+  private purchaseReturnUntil: number = 0;
+  private recoverRequested: boolean = false;
+  private entitlementRevision: number = 0;
+  private confirmationTask: Promise<void> = Promise.resolve();
+  private recoveryTask: Promise<void> | null = null;
+  private finishedOrders: Set<string> = new Set<string>();
+  private verifiedAccountId: string = '';
+  private accountCheckPending: boolean = false;
+  private forceRefreshRequested: boolean = false;
 
   private async restoreDisplay(context: common.UIAbilityContext): Promise<void> {
     if (this.displayRestoreStarted) return;
@@ -84,7 +97,7 @@ export class MembershipService {
 
   /** 共用已验签权益；到期、换号或核验失败时不放行新的会员操作。 */
   async hasCurrentEntitlement(): Promise<boolean> {
-    if (MembershipState.current.developerAccess) return true;
+    if (MembershipState.current.hasAccess) return true;
     const context = this.abilityContext;
     if (!context || !this.supported) return false;
     await this.refresh(context);
@@ -103,20 +116,30 @@ export class MembershipService {
     });
   }
 
-  /** 前台恢复时必须重新核对系统华为账号下的订阅，不使用 App 头像登录状态代替购买凭据。 */
+  /** 回前台先在本机核对账号，未换号且权益仍有效时复用本进程已验签结果。 */
   foreground(context: common.UIAbilityContext): void {
     this.abilityContext = context;
     MembershipState.current.developerAccess = DeveloperMembership.allowed(context.applicationInfo.debug);
     this.inForeground = true;
-    if (this.busy) return;
-    this.sandboxChecked = false;
-    this.productsAt = 0;
+    if (this.purchaseInProgress) {
+      return;
+    }
     const state = MembershipState.current;
-    // 有效快照继续用于徽标和套餐展示；不清零再等待 IAP，避免前台恢复时闪烁。
-    if (!state.active) state.clearEntitlement();
-    state.confirmedInactive = false;
+    const now = Date.now();
+    const returningFromPurchase = this.awaitingPurchaseForeground && state.hasAccess &&
+      now >= state.verifiedAt && now < this.purchaseReturnUntil;
+    this.awaitingPurchaseForeground = false;
+    this.purchaseReturnUntil = 0;
+    // 收银台的前台事件可能晚于购买回调；只消费这一次返回，采用刚验签的购买凭据。
+    if (returningFromPurchase) {
+      this.scheduleRefresh(context);
+      return;
+    }
+    if (this.busy && !this.refreshTask) return;
+    this.accountCheckPending = true;
+    // 本地账号检查期间保留展示，不进入页面 busy；会员操作合并等待这次检查。
     state.revalidating = true;
-    this.refresh(context, true).catch((): void => {});
+    this.refresh(context).catch((): void => {});
   }
 
   async load(context: common.UIAbilityContext, restore: boolean = false): Promise<void> {
@@ -181,12 +204,16 @@ export class MembershipService {
     this.abilityContext = context;
     MembershipState.current.developerAccess = DeveloperMembership.allowed(context.applicationInfo.debug);
     if (MembershipState.current.developerAccess) {
+      this.accountCheckPending = false;
       MembershipState.current.revalidating = false;
       MembershipState.current.confirmedInactive = false;
       this.message = $r('app.string.membership_developer_active');
       return;
     }
     if (!this.supported) {
+      this.entitlementRevision++;
+      this.accountCheckPending = false;
+      this.verifiedAccountId = '';
       MembershipState.current.revalidating = false;
       MembershipState.current.clear();
       MembershipState.current.confirmedInactive = true;
@@ -196,18 +223,26 @@ export class MembershipService {
       return;
     }
     this.restoreDisplay(context);
+    // 已核验结果先返回，确认发货和恢复历史订单不阻塞新的会员操作。
+    if (!force && !this.accountCheckPending && !MembershipState.current.revalidating && this.hasCachedResult()) return;
+    if (recoverUnfinished && this.recoveryTask) return this.recoveryTask;
     if (this.refreshTask) {
+      if (force) this.forceRefreshRequested = true;
+      if (recoverUnfinished) this.recoverRequested = true;
       await this.refreshTask;
-      if (!recoverUnfinished) return;
+      if (recoverUnfinished) await this.confirmationTask;
+      return;
     }
     if (this.busy) return;
-    const age = Date.now() - this.refreshedAt;
-    // 普通入口共用权益自身的有效窗口；过期、换号及强制核验不会命中。
-    if (!force && (MembershipState.current.active ||
-      (this.refreshedAt > 0 && age >= 0 && age < 60000 && MembershipState.current.confirmedInactive))) return;
-    this.busy = true;
-    this.message = $r('app.string.membership_checking');
-    this.refreshTask = this.refreshInner(context, recoverUnfinished).catch(async (error: BusinessError): Promise<void> => {
+    this.recoverRequested = recoverUnfinished;
+    this.forceRefreshRequested = force;
+    const checkingCachedAccount = !force && this.accountCheckPending &&
+      this.verifiedAccountId.length > 0 && this.hasCachedResult();
+    this.busy = !MembershipState.current.hasAccess && !checkingCachedAccount;
+    if (this.busy) this.message = $r('app.string.membership_checking');
+    this.refreshTask = this.refreshCurrentAccount(context).catch(async (error: BusinessError): Promise<void> => {
+      this.entitlementRevision++;
+      this.verifiedAccountId = '';
       // 无有效会员凭据时恢复受限设置；不改变真实购买记录。
       MembershipState.current.clear();
       // 查询失败表示状态未知，不能据此引导用户重新开通。
@@ -219,11 +254,71 @@ export class MembershipService {
       this.expiryTimer = -1;
       this.message = this.errorMessage(error);
     }).finally((): void => {
-      MembershipState.current.revalidating = false;
+      MembershipState.current.revalidating = this.accountCheckPending;
+      this.forceRefreshRequested = false;
       this.busy = false;
       this.refreshTask = null;
     });
-    return this.refreshTask;
+    await this.refreshTask;
+    if (recoverUnfinished) await this.confirmationTask;
+  }
+
+  private hasCachedResult(): boolean {
+    const age = Date.now() - this.refreshedAt;
+    return MembershipState.current.active || (MembershipState.current.confirmedInactive &&
+      this.refreshedAt > 0 && age >= 0 && age < 60000);
+  }
+
+  private async matchesSystemAccount(accountId: string): Promise<boolean> {
+    if (!accountId || !canIUse('SystemCapability.AuthenticationServices.HuaweiID.Auth')) return false;
+    try {
+      const request: authentication.StateRequest = {
+        idType: authentication.IdType.OPEN_ID, idValue: accountId
+      };
+      // API 12 起提供的本地检查，不依赖网络，也不会弹出登录或授权页面。
+      const result = await this.bounded(new authentication.HuaweiIDProvider().getHuaweiIDState(request), 2000);
+      return result.state === authentication.State.AUTHORIZED;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  private async accountForVerification(context: common.UIAbilityContext): Promise<string> {
+    try {
+      await PreferenceService.ensureReady(context);
+      const account = await PreferenceService.getHwAccount();
+      const accountId = account?.openID || this.verifiedAccountId;
+      return await this.matchesSystemAccount(accountId) ? accountId : '';
+    } catch (_error) {
+      // 无可核对的身份仍可使用 IAP；只是下次回前台不能跳过权益查询。
+      return '';
+    }
+  }
+
+  private async refreshCurrentAccount(context: common.UIAbilityContext): Promise<void> {
+    do {
+      const checkAccount = this.accountCheckPending;
+      this.accountCheckPending = false;
+      if (checkAccount && !this.forceRefreshRequested && !this.recoverRequested && this.hasCachedResult() &&
+        await this.matchesSystemAccount(this.verifiedAccountId) && this.hasCachedResult() &&
+        !this.forceRefreshRequested && !this.recoverRequested) {
+        MembershipState.current.revalidating = this.accountCheckPending;
+        this.scheduleRefresh(context);
+        if (context.applicationInfo.debug) {
+          hilog.info(0x0000, 'MembershipService', 'Foreground reused verified entitlement after local account check');
+        }
+      } else {
+        if (checkAccount) {
+          this.sandboxChecked = false;
+          MembershipState.current.confirmedInactive = false;
+        }
+        this.busy = !MembershipState.current.hasAccess;
+        if (this.busy) this.message = $r('app.string.membership_checking');
+        await this.refreshInner(context);
+        this.forceRefreshRequested = false;
+      }
+      // 查询期间又发生前后台切换时，再核对最新账号；所有入口仍共用一个任务。
+    } while (this.accountCheckPending && this.inForeground);
   }
 
   private async checkSandbox(context: common.UIAbilityContext): Promise<void> {
@@ -264,12 +359,9 @@ export class MembershipService {
     const seen = new Set<string>();
     const payloads: string[] = [];
     for (let page = 0; page < 20; page++) {
-      const delay = Math.max(0, this.queryAt + 5100 - Date.now());
-      if (delay > 0) await new Promise<void>((resolve): void => { setTimeout(resolve, delay); });
-      this.queryAt = Date.now();
-      const result = await this.bounded(iap.queryPurchases(context, {
+      const result = await this.queryPage(context, {
         productType: productType, queryType: type, continuationToken: token || undefined
-      }));
+      });
       // 无购买记录时，实机 IAP 可能省略列表或返回 null；仅在查询成功后将空值视为空列表。
       const purchaseDataList: string[] = result.purchaseDataList ?? [];
       if (!Array.isArray(purchaseDataList)) throw new Error('Invalid purchase list');
@@ -290,15 +382,45 @@ export class MembershipService {
     throw new Error('Subscription pagination limit');
   }
 
-  private async refreshInner(context: common.UIAbilityContext, recoverUnfinished: boolean): Promise<void> {
+  private queryPage(context: common.UIAbilityContext, parameter: iap.QueryPurchasesParameter): Promise<iap.QueryPurchaseResult> {
+    // 后台补发与前台核验共用同一队列，按实际调用时间节流，避免计时器同时唤醒时撞限流。
+    const task = this.queryTask.then(async (): Promise<iap.QueryPurchaseResult> => {
+      const delay = Math.max(0, this.queryAt + 5100 - Date.now());
+      if (delay > 0) await new Promise<void>((resolve): void => { setTimeout(resolve, delay); });
+      this.queryAt = Date.now();
+      return this.bounded(iap.queryPurchases(context, parameter));
+    });
+    this.queryTask = task.then((): void => {}, (): void => {});
+    return task;
+  }
+
+  private async refreshInner(context: common.UIAbilityContext): Promise<void> {
+    const accountId = await this.accountForVerification(context);
     await this.checkSandbox(context);
-    const payloads = await this.query(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
-    const lifetimeOrders = await this.queryLifetime(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
+    // 已知终身权益优先查询非消耗型商品。原来每次都先查订阅，终身会员回前台
+    // 会平白等待一次 IAP 频率限制；只有终身订单已不存在时才回查订阅，避免漏掉
+    // 另一台设备上的订阅权益。
+    const knownLifetime = MembershipState.current.productId === LifetimePolicy.product;
+    let payloads: SubscriptionPayload[] = [];
+    let lifetimeOrders: LifetimeOrder[] = [];
+    if (knownLifetime) {
+      lifetimeOrders = await this.queryLifetime(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
+      if (lifetimeOrders.length === 0 || this.recoverRequested) {
+        payloads = await this.query(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
+      }
+    } else {
+      payloads = await this.query(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
+      lifetimeOrders = await this.queryLifetime(context, iap.PurchaseQueryType.CURRENT_ENTITLEMENT);
+    }
+    // 只把核验前后均由系统确认的同一账号绑定到缓存，不能把旧权益绑定到新头像账号。
+    if (accountId && !await this.matchesSystemAccount(accountId)) throw new Error('IAP account changed during verification');
+    this.verifiedAccountId = accountId;
     let latest: SubscriptionStatus | undefined = undefined;
     const orders: SubscriptionOrder[] = [];
     const now = Date.now();
     for (const payload of payloads) {
       const status = SubscriptionPolicy.validate(payload, this.allowSandbox, now);
+      if (status) this.logSubscriptionDates(context, payload, status);
       if (status && SubscriptionPolicy.active(status, now)) {
         if (!latest || status.expiresTime > latest.expiresTime) latest = status;
         if (status.lastPurchaseOrder) orders.push(status.lastPurchaseOrder);
@@ -317,86 +439,183 @@ export class MembershipService {
       state.autoRenew = latest.renewalInfo?.autoRenewStatusCode === '1';
       state.verifiedAt = now;
     }
+    this.entitlementRevision++;
     state.confirmedInactive = !state.active;
+    state.revalidating = this.accountCheckPending;
     this.refreshedAt = now;
     this.message = state.active ? $r('app.string.membership_active') : $r('app.string.membership_inactive');
     this.scheduleRefresh(context);
     await this.persistDisplay(context, state.createDisplaySnapshot());
     if (state.confirmedInactive) await this.resetDefaults(context);
+    const recoverUnfinished = this.recoverRequested;
+    this.recoverRequested = false;
+    this.queueConfirmation(context, orders, lifetimeOrders, recoverUnfinished);
+  }
+
+  private queueConfirmation(context: common.UIAbilityContext, orders: SubscriptionOrder[],
+    lifetimeOrders: LifetimeOrder[], recoverUnfinished: boolean): void {
+    const revision = this.entitlementRevision;
+    // 确认串行执行，不占用页面 busy；迟到的旧账号任务不能覆盖新核验结果。
+    const task = this.confirmationTask.then((): Promise<void> =>
+      this.confirmOrders(context, orders, lifetimeOrders, recoverUnfinished, revision)).catch((): void => {
+      if (revision === this.entitlementRevision) this.confirmationPending = true;
+    });
+    this.confirmationTask = task;
+    if (recoverUnfinished) {
+      this.recoveryTask = task;
+      task.finally((): void => { if (this.recoveryTask === task) this.recoveryTask = null; });
+    }
+  }
+
+  private logSubscriptionDates(context: common.UIAbilityContext, payload: SubscriptionPayload,
+    status: SubscriptionStatus): void {
+    const order = status.lastPurchaseOrder;
+    if (!context.applicationInfo.debug || !order) return;
+    // 仅记录已验签订单的日期和环境，不输出账号、订单号、token 或原始凭据。
+    hilog.info(0x0000, 'MembershipService',
+      'Verified subscription dates: environment=%{public}s product=%{public}s purchased=%{public}s expires=%{public}s now=%{public}s',
+      payload.environment, order.productId, new Date(order.purchaseTime).toISOString(),
+      new Date(status.expiresTime).toISOString(), new Date().toISOString());
+  }
+
+  private async confirmOrders(context: common.UIAbilityContext, orders: SubscriptionOrder[],
+    lifetimeOrders: LifetimeOrder[], recoverUnfinished: boolean, revision: number): Promise<void> {
+    if (revision !== this.entitlementRevision) return;
     this.confirmationPending = false;
-    const finished = new Set<string>();
-    for (const order of orders) await this.finish(context, order, finished);
+    for (const order of orders) {
+      if (revision !== this.entitlementRevision) return;
+      await this.finish(context, order, revision);
+    }
     // 日常核验只确认当前订单；手动恢复及支付结果不确定时再扫描历史未完成订单。
-    if (!recoverUnfinished) return;
+    if (!recoverUnfinished || revision !== this.entitlementRevision) return;
     // 补发货不覆盖 CURRENT_ENTITLEMENT 的最新状态，防止历史凭据恢复已撤销的权益。
     try {
       const unfinished = await this.query(context, iap.PurchaseQueryType.UNFINISHED);
+      if (revision !== this.entitlementRevision) return;
+      const state = MembershipState.current;
       for (const payload of unfinished) {
+        if (revision !== this.entitlementRevision) return;
         const status = SubscriptionPolicy.validate(payload, this.allowSandbox, Date.now());
         if (!state.active || !status || !SubscriptionPolicy.active(status, Date.now()) || !status.lastPurchaseOrder) continue;
         const order = status.lastPurchaseOrder;
         const belongsToCurrent = orders.some((current: SubscriptionOrder): boolean => current.purchaseToken === order.purchaseToken);
-        if (belongsToCurrent) await this.finish(context, order, finished);
+        if (belongsToCurrent) await this.finish(context, order, revision);
       }
+      if (revision !== this.entitlementRevision) return;
       const lifetimeUnfinished = await this.queryLifetime(context, iap.PurchaseQueryType.UNFINISHED);
+      if (revision !== this.entitlementRevision) return;
       for (const order of lifetimeUnfinished) {
+        if (revision !== this.entitlementRevision) return;
         if (state.active && lifetimeOrders.some((current: LifetimeOrder): boolean =>
           current.purchaseToken === order.purchaseToken && current.purchaseOrderId === order.purchaseOrderId)) {
-          await this.finish(context, order, finished);
+          await this.finish(context, order, revision);
         }
       }
     } catch (_error) {
-      this.confirmationPending = true;
+      if (revision === this.entitlementRevision) this.confirmationPending = true;
     }
   }
 
-  private async finish(context: common.UIAbilityContext, order: SubscriptionOrder, finished: Set<string>): Promise<void> {
-    if (order.finishStatus === '1' || finished.has(order.purchaseOrderId)) return;
+  private async finish(context: common.UIAbilityContext, order: SubscriptionOrder, revision: number): Promise<void> {
+    const key = order.productType + ':' + order.purchaseToken + ':' + order.purchaseOrderId;
+    if (order.finishStatus === '1' || this.finishedOrders.has(key)) return;
     try {
       await this.bounded(iap.finishPurchase(context, {
         productType: order.productType === '1' ? iap.ProductType.NONCONSUMABLE : iap.ProductType.AUTORENEWABLE,
         purchaseOrderId: order.purchaseOrderId, purchaseToken: order.purchaseToken
       }));
-      finished.add(order.purchaseOrderId);
+      if (this.finishedOrders.size >= 200) this.finishedOrders.clear();
+      this.finishedOrders.add(key);
     } catch (error) {
       const failure: BusinessError = error;
-      if (failure.code !== iap.IAPErrorCode.PURCHASE_FINISHED) this.confirmationPending = true;
+      if (failure.code === iap.IAPErrorCode.PURCHASE_FINISHED) {
+        if (this.finishedOrders.size >= 200) this.finishedOrders.clear();
+        this.finishedOrders.add(key);
+      } else if (revision === this.entitlementRevision) this.confirmationPending = true;
     }
   }
 
   async purchase(context: common.UIAbilityContext, id: string): Promise<void> {
-    if (this.busy || !this.supported || !this.plans.some((plan: MembershipPlan): boolean => plan.id === id)) return;
-    // 已有月/年会员切换订阅交给华为管理；终身会员允许一次性升级，已拥有时不再购买。
-    await this.refresh(context, true);
-    if (MembershipState.current.active) {
-      if (MembershipState.current.lifetime) return;
-      if (id !== LifetimePolicy.product) { await this.manage(context); return; }
-    }
-    if (Date.now() - this.refreshedAt > 30000 || this.refreshedAt === 0) return;
-    this.busy = true;
+    if (this.purchaseInProgress || this.busy || !this.supported ||
+      !this.plans.some((plan: MembershipPlan): boolean => plan.id === id)) return;
+    this.purchaseInProgress = true;
     let reconcile = false;
     try {
+      // 会员中心刚核验的结果在 30 秒内复用；先等正在执行的查询，避免旧结果覆盖新购买。
+      if (this.refreshTask) await this.refreshTask;
+      const age = Date.now() - this.refreshedAt;
+      await this.refresh(context, this.refreshedAt === 0 || age < 0 || age > 30000);
+      const state = MembershipState.current;
+      if (state.active) {
+        if (state.lifetime) return;
+        if (id !== LifetimePolicy.product) { await this.manageSubscriptions(context); return; }
+      }
+      if ((!state.hasAccess && !state.confirmedInactive) || state.revalidating ||
+        this.refreshedAt === 0 || Date.now() < this.refreshedAt || Date.now() - this.refreshedAt > 30000) return;
+      this.busy = true;
       const result = await this.bounded(iap.createPurchase(context,
         { productType: id === LifetimePolicy.product ? iap.ProductType.NONCONSUMABLE : iap.ProductType.AUTORENEWABLE,
           productId: id }), 180000);
       if (id === LifetimePolicy.product) {
-        LifetimePolicy.validate(await SubscriptionVerifier.verifyLifetime(context, result.purchaseData), this.allowSandbox, Date.now());
+        const order = LifetimePolicy.validate(await SubscriptionVerifier.verifyLifetime(context, result.purchaseData),
+          this.allowSandbox, Date.now());
+        if (!order) throw new Error('Invalid lifetime purchase result');
+        await this.applyPurchase(context, id, 0, false);
+        this.queueConfirmation(context, [order], [order], false);
       } else {
-        SubscriptionPolicy.validate(await SubscriptionVerifier.verify(context, result.purchaseData), this.allowSandbox, Date.now());
+        const payload = await SubscriptionVerifier.verify(context, result.purchaseData);
+        const status = SubscriptionPolicy.validate(payload, this.allowSandbox, Date.now());
+        if (!status || !status.lastPurchaseOrder || status.lastPurchaseOrder.productId !== id ||
+          !SubscriptionPolicy.active(status, Date.now())) {
+          throw new Error('Inactive subscription purchase result');
+        }
+        await this.applyPurchase(context, id, status.expiresTime, status.renewalInfo?.autoRenewStatusCode === '1');
+        this.logSubscriptionDates(context, payload, status);
+        this.queueConfirmation(context, [status.lastPurchaseOrder], [], false);
       }
-      reconcile = true;
     } catch (error) {
       const failure: BusinessError = error;
       this.message = this.errorMessage(failure);
       reconcile = failure.code !== iap.IAPErrorCode.USER_CANCELED;
     } finally {
       this.busy = false;
+      this.purchaseInProgress = false;
+      if (this.expiryTimer === -1) this.scheduleRefresh(context);
     }
+    // 只有支付结果不确定时才扫描当前/未完成订单；成功结果已经即时生效。
     if (reconcile) await this.refresh(context, true, true);
   }
 
+  /** 将已通过 IAP 签名校验的购买结果立即写入内存和展示快照。 */
+  private async applyPurchase(context: common.UIAbilityContext, id: string, expiresAt: number, autoRenew: boolean): Promise<void> {
+    if (this.verifiedAccountId && !await this.matchesSystemAccount(this.verifiedAccountId)) this.verifiedAccountId = '';
+    this.accountCheckPending = false;
+    const now = Date.now();
+    const state = MembershipState.current;
+    state.clear();
+    state.productId = id;
+    state.expiresAt = expiresAt;
+    state.autoRenew = autoRenew;
+    state.verifiedAt = now;
+    state.confirmedInactive = false;
+    state.revalidating = false;
+    this.entitlementRevision++;
+    this.refreshedAt = now;
+    this.purchaseReturnUntil = this.awaitingPurchaseForeground ? now + 30000 : 0;
+    this.message = $r('app.string.membership_active');
+    this.scheduleRefresh(context);
+    this.persistDisplay(context, state.createDisplaySnapshot());
+  }
+
   async manage(context: common.UIAbilityContext): Promise<boolean> {
+    if (this.purchaseInProgress) return false;
+    return this.manageSubscriptions(context);
+  }
+
+  private async manageSubscriptions(context: common.UIAbilityContext): Promise<boolean> {
     if (this.busy || !this.supported) return false;
+    if (this.refreshTask) await this.refreshTask;
+    if (this.busy) return false;
     this.busy = true;
     try {
       await this.bounded(iap.showManagedSubscriptions(context, { windowScreenMode: iap.WindowScreenMode.FULLSCREEN }));
@@ -412,6 +631,8 @@ export class MembershipService {
 
   background(): void {
     this.inForeground = false;
+    this.awaitingPurchaseForeground = this.purchaseInProgress;
+    this.purchaseReturnUntil = 0;
     if (this.expiryTimer !== -1) clearTimeout(this.expiryTimer);
     this.expiryTimer = -1;
   }
@@ -430,7 +651,8 @@ export class MembershipService {
         this.resetDefaults(context);
       }
       this.refresh(context, true);
-    }, state.lifetime ? 240000 : Math.max(1000, Math.min(240000, state.expiresAt - Date.now())));
+    }, Math.max(1000, Math.min(state.verifiedAt + 240000,
+      state.lifetime ? Number.MAX_SAFE_INTEGER : state.expiresAt) - Date.now()));
   }
 
   private async resetDefaults(context: common.UIAbilityContext): Promise<void> {

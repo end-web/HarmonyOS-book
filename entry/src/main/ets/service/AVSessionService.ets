@@ -10,6 +10,8 @@ import { Book, Chapter } from '../model/Book';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_AVSession';
+const MAX_COVER_CACHE_SIZE: number = 8;
+const MAX_COVER_BYTES: number = 4 * 1024 * 1024;
 
 export interface AVSessionCallbacks {
   onPlay: () => void;
@@ -45,6 +47,8 @@ export class AVSessionService {
   private session: avSession.AVSession | null = null;
   private context: common.UIAbilityContext | null = null;
   private coverCache: Map<string, image.PixelMap> = new Map();
+  private coverLoads: Map<string, Promise<image.PixelMap | null>> = new Map<string, Promise<image.PixelMap | null>>();
+  private coverGeneration: number = 0;
   private initPromise: Promise<void> | null = null;
   private currentBook: Book | null = null;
   private currentChapter: Chapter | null = null;
@@ -124,8 +128,8 @@ export class AVSessionService {
   }
 
   init(context: common.UIAbilityContext): Promise<void> {
-    if (this.session) return Promise.resolve();
     if (this.initPromise) return this.initPromise;
+    if (this.session) return Promise.resolve();
     this.context = context;
     this.initPromise = this.doInit(context);
     return this.initPromise;
@@ -148,7 +152,6 @@ export class AVSessionService {
   }
 
   private async ensureReady(): Promise<boolean> {
-    if (this.session) return true;
     if (this.initPromise) {
       await this.initPromise;
     }
@@ -432,9 +435,22 @@ export class AVSessionService {
   }
 
   private async loadCover(cover: string): Promise<image.PixelMap | null> {
-    if (this.coverCache.has(cover)) {
-      return this.coverCache.get(cover)!;
+    const cached = this.coverCache.get(cover);
+    if (cached !== undefined) {
+      this.coverCache.delete(cover);
+      this.coverCache.set(cover, cached);
+      return cached;
     }
+    const pending = this.coverLoads.get(cover);
+    if (pending !== undefined) return pending;
+    const task = this.loadAndCacheCover(cover, this.coverGeneration).finally((): void => {
+      if (this.coverLoads.get(cover) === task) this.coverLoads.delete(cover);
+    });
+    this.coverLoads.set(cover, task);
+    return task;
+  }
+
+  private async loadAndCacheCover(cover: string, generation: number): Promise<image.PixelMap | null> {
     try {
       let pixelMap: image.PixelMap | null = null;
       if (cover.startsWith('http://') || cover.startsWith('https://')) {
@@ -443,22 +459,45 @@ export class AVSessionService {
         pixelMap = await this.loadLocalCover(cover);
       }
       if (pixelMap) {
-        if (this.coverCache.size > 20) {
-          const firstKey: string | undefined = this.coverCache.keys().next().value;
-          if (firstKey !== undefined) {
-            const old = this.coverCache.get(firstKey);
-            old?.release();
-            this.coverCache.delete(firstKey);
-          }
+        // destroy 之后才完成的下载/解码，不能把原生位图写回已经销毁的单例。
+        if (generation !== this.coverGeneration) {
+          await this.releaseCover(pixelMap);
+          return null;
         }
         this.coverCache.set(cover, pixelMap);
+        this.trimCoverCache();
       }
       return pixelMap;
     } catch (err) {
-      const e = err as Error;
-      hilog.error(DOMAIN, TAG, 'loadCover failed: %{public}s',
-        e?.message ?? JSON.stringify(err));
+      this.logMediaCenterWarning('loadCover', err);
       return null;
+    }
+  }
+
+  private trimCoverCache(): void {
+    for (const key of this.coverCache.keys()) {
+      if (this.coverCache.size <= MAX_COVER_CACHE_SIZE) break;
+      const pixelMap = this.coverCache.get(key);
+      // 当前元数据仍引用的位图不得被旧请求完成时淘汰。
+      if (pixelMap === undefined || pixelMap === this.currentMediaImage || key === this.currentBook?.cover) continue;
+      this.coverCache.delete(key);
+      this.releaseCover(pixelMap);
+    }
+  }
+
+  private async releaseCover(pixelMap: image.PixelMap): Promise<void> {
+    try { await pixelMap.release(); }
+    catch (error) { this.logMediaCenterWarning('releaseCover', error); }
+  }
+
+  private async decodeCover(source: image.ImageSource): Promise<image.PixelMap> {
+    try {
+      const options: image.DecodingOptions = { desiredSize: { width: 512, height: 512 } };
+      return await source.createPixelMap(options);
+    } finally {
+      // 损坏图片也必须释放解码器，不能只在 createPixelMap 成功后释放。
+      try { await source.release(); }
+      catch (error) { this.logMediaCenterWarning('releaseImageSource', error); }
     }
   }
 
@@ -467,17 +506,14 @@ export class AVSessionService {
     try {
       const resp = await httpClient.request(url, {
         method: http.RequestMethod.GET,
-        expectDataType: http.HttpDataType.ARRAY_BUFFER
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        connectTimeout: 10000,
+        readTimeout: 15000,
+        maxLimit: MAX_COVER_BYTES
       });
-      if (resp.responseCode === 200 && resp.result) {
-        const buf = resp.result as ArrayBuffer;
-        const source = image.createImageSource(buf);
-        const opts: image.DecodingOptions = {
-          desiredSize: { width: 512, height: 512 }
-        };
-        const pixelMap = await source.createPixelMap(opts);
-        source.release();
-        return pixelMap;
+      if (resp.responseCode === 200 && resp.result instanceof ArrayBuffer &&
+        resp.result.byteLength > 0 && resp.result.byteLength <= MAX_COVER_BYTES) {
+        return await this.decodeCover(image.createImageSource(resp.result));
       }
     } finally {
       httpClient.destroy();
@@ -487,24 +523,16 @@ export class AVSessionService {
 
   private async loadLocalCover(path: string): Promise<image.PixelMap | null> {
     if (!this.context) return null;
-    // 沙箱绝对路径:走 fileIo 读字节再 decode,createImageSource 对沙箱路径不稳定
+    // 沙箱文件保持 fd 到解码结束，避免额外分配整张原图的 ArrayBuffer。
     if (path.startsWith('/')) {
       try {
         const f = await fileIo.open(path, fileIo.OpenMode.READ_ONLY);
         try {
           const stat = await fileIo.stat(f.fd);
-          if (stat.size <= 0) {
+          if (stat.size <= 0 || stat.size > MAX_COVER_BYTES) {
             return null;
           }
-          const buf = new ArrayBuffer(stat.size);
-          await fileIo.read(f.fd, buf);
-          const source = image.createImageSource(buf);
-          const opts: image.DecodingOptions = {
-            desiredSize: { width: 512, height: 512 }
-          };
-          const pixelMap = await source.createPixelMap(opts);
-          source.release();
-          return pixelMap;
+          return await this.decodeCover(image.createImageSource(f.fd));
         } finally {
           await fileIo.close(f);
         }
@@ -518,14 +546,8 @@ export class AVSessionService {
     // rawfile 路径
     try {
       const rawData = await this.context.resourceManager.getRawFileContent(path);
-      const buf = rawData.buffer as ArrayBuffer;
-      const source = image.createImageSource(buf);
-      const opts: image.DecodingOptions = {
-        desiredSize: { width: 512, height: 512 }
-      };
-      const pixelMap = await source.createPixelMap(opts);
-      source.release();
-      return pixelMap;
+      if (rawData.byteLength === 0 || rawData.byteLength > MAX_COVER_BYTES) return null;
+      return await this.decodeCover(image.createImageSource(rawData.buffer));
     } catch (err) {
       const e = err as Error;
       hilog.error(DOMAIN, TAG, 'loadLocalCover rawfile failed: %{public}s',
@@ -559,18 +581,24 @@ export class AVSessionService {
   }
 
   async destroy(): Promise<void> {
-    if (this.session) {
-      try {
-        this.session.off('outputDeviceChange', this.outputDeviceChangeHandler);
-        await this.session.deactivate();
-        await this.session.destroy();
-      } catch (_e) { /* ignore */ }
-      this.session = null;
+    this.metadataSerial++;
+    this.coverGeneration++;
+    this.coverLoads.clear();
+    const session = this.session;
+    this.session = null;
+    if (session) {
+      try { session.off('outputDeviceChange', this.outputDeviceChangeHandler); } catch (_e) {}
+      try { await session.deactivate(); } catch (_e) {}
+      try { await session.destroy(); }
+      catch (error) { this.logMediaCenterWarning('destroy', error); }
     }
-    this.coverCache.forEach((pm) => {
-      pm.release();
+    this.currentMediaImage = undefined;
+    const releases: Promise<void>[] = [];
+    this.coverCache.forEach((pm: image.PixelMap): void => {
+      releases.push(this.releaseCover(pm));
     });
     this.coverCache.clear();
+    await Promise.all(releases);
     // 重置单例状态，让下次 getInstance() 创建全新实例
     this.context = null;
     this.initPromise = null;

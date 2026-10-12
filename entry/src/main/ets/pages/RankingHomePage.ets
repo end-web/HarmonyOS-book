@@ -787,18 +787,20 @@ export struct RankingHomePage {
   @Builder
   private platformTabs() {
     Row({ space: AppSpace.Xs }) {
-      ImmersiveTabComponent({ label: $r('app.string.home_categories'), itemWidth: 56,
+      ImmersiveTabComponent({ label: $r('app.string.home_categories'), fitContent: true,
         selected: this.overview, onTap: (): void => { this.overview = true; } })
       List({ space: AppSpace.Xs, scroller: this.categoryScroller }) {
         LazyForEach(this.platformData, (platform: RankingPlatform) => {
           ListItem() {
-            ImmersiveTabComponent({ label: platform.name,
+            ImmersiveTabComponent({ label: platform.name, fitContent: true,
               selected: !this.overview && this.platformId === platform.id,
               onTap: (): void => this.selectPlatform(platform.id) })
           }
         }, (platform: RankingPlatform): string => platform.id || 'recommendations')
       }.layoutWeight(1).height(34).listDirection(Axis.Horizontal).scrollBar(BarState.Off)
+      // 与书源首页一致，保留两侧渐隐，材质随背景实时绘制。
       .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(24) })
+      .renderGroup(false)
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).cachedCount(1)
       if (this.isSearchCollapsed) {
         Stack() {
@@ -807,7 +809,7 @@ export struct RankingHomePage {
               .fontSize(21).fontColor([$r('sys.color.icon_primary')])
           }.width(42).height(42).borderRadius(AppRadius.Pill)
             .backgroundColor(Color.Transparent)
-            .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
+            .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveThin))
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
             .onClick(() => this.onSearchTap())
         }.width(42).height(42)

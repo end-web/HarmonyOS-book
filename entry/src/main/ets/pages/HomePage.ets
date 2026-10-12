@@ -339,8 +339,11 @@ export struct HomePage {
   @Local homeSourceIndex: number = -1;
   @Local savingHomeSource: boolean = false;
   @Local homeSourceMenuVisible: boolean = false;
+  @Local loadingHomeSources: boolean = false;
   @Local homeSourceKeyword: string = '';
   @Local homeSourceMatchCount: number = 0;
+  private homeSourcesRevision: number = -1;
+  private homeSourceMenuSerial: number = 0;
   private homeSourceMenuData: HomeRecommendationDataSource<LocalRuleSource> = new HomeRecommendationDataSource();
   private homeSourceMenuScroller: Scroller = new Scroller();
   @Local favoriteIds: string[] = [];
@@ -432,6 +435,7 @@ export struct HomePage {
     emitter.off(EVT_HOME_SOURCE_CHANGED, this.sourceChangedHandler);
     emitter.off(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     this.homeGen++;
+    this.homeSourceMenuSerial++;
   }
 
   private async loadFavorites(): Promise<void> {
@@ -560,15 +564,12 @@ export struct HomePage {
     this.categoryBooks = [];
     this.categoryDS.setBooks([]);
     try {
-      const sources: LocalRuleSource[] = await HomeSourceService.getSources();
-      const preferred = await PreferenceService.getHomeSourceUrl();
-      const source = sources.find((item: LocalRuleSource): boolean => item.bookSourceUrl === preferred);
+      const source = await HomeSourceService.getSelectedSource();
       if (generation !== this.homeGen) return;
-      this.homeSources = sources;
       this.rankingMode = source === undefined;
       this.homeResolved = true;
       if (!this.rankingMode) this.onScrollerReady(this.headerScroller);
-      this.homeSourceIndex = sources.findIndex((item: LocalRuleSource): boolean =>
+      this.homeSourceIndex = this.homeSources.findIndex((item: LocalRuleSource): boolean =>
         item.bookSourceUrl === source?.bookSourceUrl);
       if (source === undefined || source.bookSourceUrl !== this.currentSource?.bookSourceUrl) {
         this.updateHomeBlocks([]);
@@ -1092,6 +1093,46 @@ export struct HomePage {
     if (resetPosition) this.homeSourceMenuScroller.scrollTo({ xOffset: 0, yOffset: 0 });
   }
 
+  /** 完整来源列表只用于切源菜单，不进入首页初始化或底栏切换路径。 */
+  private async loadHomeSourceMenu(): Promise<void> {
+    this.filterHomeSources('', false);
+    const revision = SourceDataService.getInvalidationCounter();
+    if (this.homeSourcesRevision === revision || this.loadingHomeSources) return;
+    const serial = ++this.homeSourceMenuSerial;
+    this.loadingHomeSources = true;
+    try {
+      const sources = await HomeSourceService.getSources();
+      if (serial !== this.homeSourceMenuSerial) return;
+      // 查询期间发生导入或删除时，不把过期列表记录为当前版本。
+      if (revision !== SourceDataService.getInvalidationCounter()) {
+        this.homeSources = [];
+        this.filterHomeSources(this.homeSourceKeyword, false);
+        return;
+      }
+      this.homeSources = sources;
+      this.homeSourcesRevision = revision;
+      this.homeSourceIndex = sources.findIndex((source: LocalRuleSource): boolean =>
+        source.bookSourceUrl === this.currentSource?.bookSourceUrl);
+      this.filterHomeSources(this.homeSourceKeyword, false);
+    } catch (_error) {
+      this.showHomeSourceToast($r('app.string.rule_source_operation_failed'));
+    } finally {
+      if (serial === this.homeSourceMenuSerial) {
+        this.loadingHomeSources = false;
+        this.scrollHomeSourceMenuToSelection();
+      }
+    }
+  }
+
+  private scrollHomeSourceMenuToSelection(): void {
+    this.getUIContext().postFrameCallback(new HomeLayoutReadyFrame((): void => {
+      if (!this.homeSourceMenuVisible || this.loadingHomeSources ||
+        this.homeSourceKeyword.length > 0 || this.homeSourceMatchCount === 0) return;
+      this.homeSourceMenuScroller.scrollToIndex(this.rankingMode ? 0 : Math.max(0, this.homeSourceIndex),
+        false, this.rankingMode ? ScrollAlign.START : ScrollAlign.CENTER);
+    }));
+  }
+
   private homeSourceMenuOptions(): CustomPopupOptions {
     const options: CustomPopupOptions = {
       builder: this.buildHomeSourceMenu,
@@ -1102,13 +1143,7 @@ export struct HomePage {
       focusable: true,
       onStateChange: (event): void => {
         this.homeSourceMenuVisible = event.isVisible;
-        if (event.isVisible) {
-          this.getUIContext().postFrameCallback(new HomeLayoutReadyFrame((): void => {
-            if (!this.homeSourceMenuVisible || this.homeSourceKeyword.length > 0 || this.homeSourceMatchCount === 0) return;
-            this.homeSourceMenuScroller.scrollToIndex(this.rankingMode ? 0 : Math.max(0, this.homeSourceIndex),
-              false, this.rankingMode ? ScrollAlign.START : ScrollAlign.CENTER);
-          }));
-        }
+        if (event.isVisible) this.scrollHomeSourceMenuToSelection();
       }
     };
     if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
@@ -1136,7 +1171,11 @@ export struct HomePage {
         .fontColor($r('sys.color.font_primary'))
         .placeholderColor($r('sys.color.font_tertiary'))
         .onChange((value: string): void => this.filterHomeSources(value))
-      if (this.homeSourceMatchCount === 0) {
+      if (this.loadingHomeSources) {
+        Row() {
+          LoadingProgress().width(24).height(24).color(AppColor.Brand)
+        }.width('100%').height(64).justifyContent(FlexAlign.Center)
+      } else if (this.homeSourceMatchCount === 0) {
         Text($r('app.string.rule_source_no_match'))
           .fontSize(14).fontColor($r('sys.color.font_secondary'))
           .width('100%').height(64).textAlign(TextAlign.Center)
@@ -1202,8 +1241,8 @@ export struct HomePage {
         .enabled(!this.savingHomeSource)
         .accessibilityDescription($r('app.string.home_source_setting'))
         .onClick((): void => {
-          if (!this.homeSourceMenuVisible) this.filterHomeSources('', false);
           this.homeSourceMenuVisible = !this.homeSourceMenuVisible;
+          if (this.homeSourceMenuVisible) this.loadHomeSourceMenu();
         })
         .bindPopup(this.homeSourceMenuVisible, this.homeSourceMenuOptions())
     }
@@ -1801,7 +1840,7 @@ export struct HomePage {
     Row({ space: AppSpace.Xs }) {
       ImmersiveTabComponent({
         label: $r('app.string.home_categories'),
-        itemWidth: 56,
+        fitContent: true,
         selected: this.selectedCategoryIndex === CATEGORY_OVERVIEW_INDEX,
         onTap: () => this.showCategoryOverview()
       })
@@ -1809,6 +1848,7 @@ export struct HomePage {
         ListItem() {
           ImmersiveTabComponent({
             label: $r('app.string.home_recommendations'),
+            fitContent: true,
             selected: this.selectedCategoryIndex === -1,
             onTap: () => this.switchCategory(-1)
           })
@@ -1817,6 +1857,7 @@ export struct HomePage {
           ListItem() {
             ImmersiveTabComponent({
               label: cat.name,
+              fitContent: true,
               selected: this.isCategorySelected(cat),
               onTap: () => this.switchCategoryByUrl(cat.url)
             })
@@ -1827,8 +1868,9 @@ export struct HomePage {
       .height(CATEGORY_NAV_HEIGHT)
       .listDirection(Axis.Horizontal)
       .scrollBar(BarState.Off)
-      // 标签在固定分类入口和收起后的搜索按钮旁渐隐，避免胶囊被硬切。
+      // 保留两侧渐隐；滚动中的材质实时绘制，不缓存整条分类栏。
       .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(CATEGORY_NAV_FADE_LENGTH) })
+      .renderGroup(false)
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .cachedCount(1)
 
@@ -1843,7 +1885,7 @@ export struct HomePage {
           .height(COLLAPSED_SEARCH_SIZE)
           .borderRadius(AppRadius.Pill)
           .backgroundColor(Color.Transparent)
-          .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
+          .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveThin))
           .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.94 })
           .onClick(() => this.onSearchTap())
         }

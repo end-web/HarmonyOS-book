@@ -1203,7 +1203,7 @@
     },
     {
       "name": "rule_source_import_hint",
-      "value": "支持选择本地 JSON、粘贴 JSON 或在线导入地址"
+      "value": "支持本地 JSON、粘贴 JSON、HTTP(S) 订阅直链或阅读书源分享链接"
     },
     {
       "name": "rule_source_import_file_action",
@@ -1729,6 +1729,11 @@
     {"name": "talebook_connecting", "value": "正在连接…"},
     {"name": "talebook_connected", "value": "Talebook 已连接，可在发现中浏览书库"},
     {"name": "tts_title", "value": "朗读"},
+    {"name": "tts_settings_title", "value": "朗读设置"},
+    {"name": "tts_entry_hint", "value": "点击开始听书，长按打开朗读设置"},
+    {"name": "tts_chapter_progress", "value": "本章朗读进度"},
+    {"name": "tts_previous_segment", "value": "上一朗读片段"},
+    {"name": "tts_next_segment", "value": "下一朗读片段"},
     {"name": "tts_close", "value": "收起"},
     {"name": "tts_play", "value": "播放"},
     {"name": "tts_pause", "value": "暂停"},
@@ -2032,6 +2037,8 @@
     {"name": "membership_active", "value": "会员已生效"},
     {"name": "membership_inactive", "value": "当前没有生效的会员"},
     {"name": "membership_expires", "value": "有效期至 %s"},
+    {"name": "membership_expiry_renew_on", "value": "有效期至 %d年%d月%d日 · 自动续费已开启"},
+    {"name": "membership_expiry_renew_off", "value": "有效期至 %d年%d月%d日 · 自动续费已关闭"},
     {"name": "membership_renew_on", "value": "自动续费已开启"},
     {"name": "membership_renew_off", "value": "自动续费已关闭，当前有效期内会员权益继续有效"},
     {"name": "membership_benefit", "value": "1. 自动云备份：可开启自动备份，选择每天、每 3 天或每周。非会员可手动云备份。\n2. 全量主题解锁：有效期内解锁全部会员桌面图标及后续新增官方皮肤。默认图标、原有界面配色和阅读器主题保持免费。\n3. 自定义源无限制：会员导入总数不限，非会员最多 8 个。\n4. 搜索并发自定义：默认 3，会员可设置 1–12。\n5. 专属客服：会员可享专属客服支持。"},
