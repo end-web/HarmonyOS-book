@@ -120,6 +120,11 @@ export struct RuleSourceEditPage {
         this.source = loaded;
         this.sourceType = loaded.bookSourceType;
         this.markSaved();
+        if (this.usesNativeEditor()) {
+          this.prepareRawDraft();
+          this.currentTab = 7;
+          if (!loaded.nativeRulesValid) this.rawError = loaded.validationMessage;
+        }
       } else {
         promptAction.showToast({ message: '书源不存在' });
         this.navStack.pop();
@@ -151,7 +156,7 @@ export struct RuleSourceEditPage {
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.source_manage_locked_message') });
       return;
     }
-    if (this.currentTab === 7 && !this.applyRawDraft()) return;
+    if ((this.currentTab === 7 || this.usesNativeEditor()) && !this.applyRawDraft()) return;
     if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
     if (!this.source.bookSourceUrl || this.source.bookSourceUrl.trim().length === 0) {
       promptAction.showToast({ message: '请输入书源地址' });
@@ -182,7 +187,7 @@ export struct RuleSourceEditPage {
   }
 
   private applyRawDraft(): boolean {
-    if (this.rawDraft === this.rawSnapshot) return true;
+    if (this.rawDraft === this.rawSnapshot && !this.usesNativeEditor()) return true;
     const report = LocalRuleSourceImportParser.parse(this.rawDraft);
     if (report.sources.length !== 1 || report.rejectedCount > 0) {
       this.rawError = report.message || this.getUIContext().getHostContext()?.resourceManager
@@ -190,6 +195,11 @@ export struct RuleSourceEditPage {
       return false;
     }
     const parsed = report.sources[0];
+    if ((parsed.engine.length > 0 || parsed.nativeRulesJson.length > 0) && !parsed.nativeRulesValid) {
+      this.rawError = parsed.validationMessage || this.getUIContext().getHostContext()?.resourceManager
+        .getStringSync($r('app.string.rule_source_json_single').id) || 'Invalid source JSON';
+      return false;
+    }
     if (!this.isNewSource && parsed.bookSourceUrl !== this.sourceUrl) {
       this.rawError = this.getUIContext().getHostContext()?.resourceManager
         .getStringSync($r('app.string.rule_source_json_identity').id) || 'Source identity cannot change';
@@ -205,10 +215,21 @@ export struct RuleSourceEditPage {
     return true;
   }
 
+  private usesNativeEditor(): boolean {
+    return this.source.engine.length > 0 || this.source.nativeRulesJson.length > 0;
+  }
+
+  private prepareRawDraft(): void {
+    this.rawDraft = JSON.stringify(JSON.parse(LocalRuleSourceCodec.stringify(this.source)), null, 2);
+    this.rawSnapshot = this.rawDraft;
+    this.rawError = '';
+  }
+
   private selectTab(index: number): void {
     if (index === this.currentTab) return;
     if (this.currentTab === 7 && !this.applyRawDraft()) return;
     if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
+    if (this.usesNativeEditor()) index = 7;
     if (index === 5) {
       const definition: Record<string, Object> = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
       const fields = definition['ruleExplore'];
@@ -217,9 +238,7 @@ export struct RuleSourceEditPage {
       this.exploreSnapshot = this.exploreDraft;
     }
     if (index === 7) {
-      const definition: Object = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
-      this.rawDraft = JSON.stringify(definition, null, 2);
-      this.rawSnapshot = this.rawDraft;
+      this.prepareRawDraft();
     }
     this.currentTab = index;
     this.rawError = '';
@@ -247,7 +266,7 @@ export struct RuleSourceEditPage {
 
   private async exportSource(): Promise<void> {
     if (this.isExporting || this.isSaving) return;
-    if (this.currentTab === 7 && !this.applyRawDraft()) return;
+    if ((this.currentTab === 7 || this.usesNativeEditor()) && !this.applyRawDraft()) return;
     if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
     const context = this.getUIContext().getHostContext();
     if (context === undefined) return;
@@ -344,13 +363,15 @@ export struct RuleSourceEditPage {
             // Tab栏
             Scroll() {
               Row() {
-              this.TabButton('基本', 0)
-              this.TabButton('搜索', 1)
-              this.TabButton('详情', 2)
-              this.TabButton('目录', 3)
-              this.TabButton('正文', 4)
-              this.TabButton($r('app.string.rule_source_explore'), 5)
-              this.TabButton($r('app.string.rule_source_login_tab'), 6)
+              if (!this.usesNativeEditor()) {
+                this.TabButton('基本', 0)
+                this.TabButton('搜索', 1)
+                this.TabButton('详情', 2)
+                this.TabButton('目录', 3)
+                this.TabButton('正文', 4)
+                this.TabButton($r('app.string.rule_source_explore'), 5)
+                this.TabButton($r('app.string.rule_source_login_tab'), 6)
+              }
               this.TabButton($r('app.string.rule_source_json_tab'), 7)
               }
             }

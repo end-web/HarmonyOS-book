@@ -69,6 +69,10 @@
 
 ## 内容分发
 
+新增独立导入格式 `format: "jianting.source", version: 1`，文件根只含 `format/version/source/rules/settings`，不沿用旧 `bookSource*`、`ruleSearch` 或 `jsLib`。`NativeSourceFile` 将稳定身份 `source.id` 与请求基址 `source.baseUrl` 分别适配至内部模型，再经 `LocalRuleDispatcher` 转入 `service/rulesource/native/NativeRuleDispatcher`：ArkTS 负责类型化请求、变量绑定、JSONPath、固定转换算子与系统 MD5；HTML 在 API 22+ 非手表设备尝试由仓颉分词，再交给 ArkTS DOM/CSS。API 20–21、标准 wearable 及原生模块不可加载时走有界 ArkTS 回退。此分支不执行 QuickJS/ArkWeb，旧格式仍保留原兼容路径，旧 JS 定义需显式迁移。原生源沿用加密书源库、来源身份、收藏、搜索/发现、详情、目录、阅读/播放和下载服务，不新增内置站点或服务器依赖。
+
+版本 1 只接受已知阶段、字段与算子；不支持版本、混合旧规则及脚本标记禁止执行。目录保存稳定章节地址，内容解析时绑定一次 `timestamp` 并生成当次签名。原生编辑只使用完整 JSON，导出保留公开协议和管理设置，排除内部派生字段及运行会话。正式契约、CSS/正则子集、分页与预算见 [书源规则指南](docs/BOOK_SOURCE_RULES.md#鸿蒙原生格式-jiantingsource-v1)，可导入样例见 [书音 FM 原生 JSON](docs/examples/shuyinfm-native.json)。仓颉正式 SDK 1.2.0 的 Windows C ABI 校验与离线规则回归已完成；API 26 arm64 真机已验证项目自编应用适配运行时初始化、四次仓颉分词任务成功及播放计时，新策略六次网络起播为 1.213–1.847 秒，另一次预缓存命中起播为 140 ms，仅代表本轮样本。API 20–21、手表及 x86_64 模拟器尚未实测，下载和导出未在本轮验证。
+
 ```text
 用户导入 JSON / HTTP(S) 地址
   -> LocalRuleSourceImportParser

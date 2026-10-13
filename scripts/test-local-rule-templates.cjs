@@ -30,6 +30,8 @@ const stubs = {
   'service/CoverPrefetcher': { CoverPrefetcher: { registerHeaders() {} } },
   [prefix + 'LocalRuleSourceRepository']: { LocalRuleSourceRepository: { isInitialized: () => false } },
   [prefix + 'LocalRuleHttpClient']: { LocalRuleHttpClient: http },
+  // Native dispatch has its own pipeline regression; these fixtures exercise legacy rules.
+  [prefix + 'native/NativeRuleDispatcher']: { NativeRuleDispatcher: {} },
   [prefix + 'LocalRuleQuickJsRuntime']: {
     LocalRuleQuickJsRequest: class {},
     LocalRuleQuickJsRuntime: { execute: async request => ({ success: true,

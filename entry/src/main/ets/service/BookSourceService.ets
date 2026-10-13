@@ -101,6 +101,9 @@ export class BookSourceService {
   }
 
   private static audioTocDefinition(source: LocalRuleSource): string {
+    if (source.engine === 'native-v1') {
+      return JSON.stringify([source.engine, source.nativeBaseUrl, source.nativeRulesJson]);
+    }
     return JSON.stringify([source.ruleBookInfo.init, source.ruleBookInfo.tocUrl,
       source.ruleToc, source.jsLib]);
   }

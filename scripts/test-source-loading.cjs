@@ -1,5 +1,6 @@
 // Real rule services + headless Chromium DOM. No npm dependencies or network requests.
 // DEVECO_HOME=<Release IDE> node scripts/test-source-loading.cjs [--benchmark]
+// Add --native-fingerprint to run catalog invalidation alone without Chromium.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -10,10 +11,11 @@ const ide = process.env.DEVECO_HOME || process.env.DEVECO_PATH;
 if (!ide) throw new Error('Set DEVECO_HOME to the installed Release DevEco Studio');
 const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const root = path.resolve(__dirname, '../entry/src/main/ets');
+const fingerprintOnly = process.argv.includes('--native-fingerprint');
 const browserPath = [process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(p => p && fs.existsSync(p));
-if (!browserPath) throw new Error('Set CHROME_PATH to Chrome/Edge for the DOM regression');
+if (!fingerprintOnly && !browserPath) throw new Error('Set CHROME_PATH to Chrome/Edge for the DOM regression');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const deferred = () => {
   let resolve;
@@ -21,8 +23,8 @@ const deferred = () => {
   return { promise, resolve };
 };
 const normalized = value => JSON.parse(JSON.stringify(value));
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'listenbook-source-loading-'));
-const browser = spawn(browserPath, ['--headless=new', '--disable-gpu', '--no-first-run',
+const temp = fingerprintOnly ? '' : fs.mkdtempSync(path.join(os.tmpdir(), 'listenbook-source-loading-'));
+const browser = fingerprintOnly ? undefined : spawn(browserPath, ['--headless=new', '--disable-gpu', '--no-first-run',
   '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${temp}`, 'about:blank'],
 { windowsHide: true, stdio: 'ignore' });
 let socket;
@@ -89,6 +91,8 @@ const stubs = {
     fetch: async (_source, url) => responseFetch ? responseFetch(url) : ({ ok: true, body: responseHtml, requestUrl: url })
   } },
   'service/rulesource/talebook/TalebookSourceAdapter': { TalebookSourceAdapter: {} },
+  // Native dispatch has its own pipeline regression; this harness covers the legacy DOM host.
+  'service/rulesource/native/NativeRuleDispatcher': { NativeRuleDispatcher: {} },
   'service/rulesource/guangyu/GuangYuSourceAdapter': { GuangYuSourceAdapter: {} },
   'service/rulesource/talebook/TalebookSourceIdentity': { TalebookSourceIdentity: { isSourceUrl: () => false } },
   'service/SourceDataService': { SourceDataService: { getInvalidationCounter: () => sourceRevision } },
@@ -608,8 +612,55 @@ async function testAudioLoad() {
   stubs['service/BookSourceService'] = homeFacade;
   console.log('PASS: playable partial catalog, reentry coalescing, canonical array growth, complete-only persistence and retry');
 }
+async function testNativeFingerprint() {
+  const facade = stubs['service/BookSourceService'];
+  delete stubs['service/BookSourceService'];
+  stubs['service/DataService'] = { DataService: { upsertCachedBook: async () => {} } };
+  stubs['service/DownloadPolicy'] = { DownloadPolicy: {} };
+  stubs['service/rulesource/NativeRuleSourceDispatcher'] = { NativeRuleSourceDispatcher: {
+    isSource: () => false, isSourceUrl: () => false } };
+  stubs['model/TextReading'] = { TextSourceError: Error };
+  const { BookSourceService: service } = load('service/BookSourceService');
+  const { LocalRuleSource } = load('model/LocalRuleSource');
+  const source = LocalRuleSource.descriptor('https://fixture.invalid/', '原生目录');
+  source.engine = 'native-v1';
+  source.nativeBaseUrl = 'https://fixture.invalid/';
+  source.nativeRulesJson = '{"toc":{"response":"html"}}';
+  const chapter = { id: 'native-fingerprint-c0', index: 1, title: '第一章', duration: 0,
+    source: { type: 'url', value: 'https://fixture.invalid/old' } };
+  const book = { id: 'native-fingerprint', title: '测试书', sourceUrl: source.bookSourceUrl,
+    bookUrl: 'https://fixture.invalid/book/1', chapters: [chapter], variables: {}, cover: '' };
+  const originalResolve = service.resolveLocalSource;
+  const originalFetch = service.fetchCurrentAudioToc;
+  let requests = 0;
+  service.resolveLocalSource = async () => source;
+  service.fetchCurrentAudioToc = async () => [{ name: '第一章',
+    url: `https://fixture.invalid/fresh/${++requests}` }];
+  try {
+    await service.prepareAudioChapter(source, book, chapter);
+    await service.prepareAudioChapter(source, book, chapter);
+    assert.equal(requests, 1, 'Unchanged native rules reuse the saved catalog');
+    source.nativeRulesJson = '{"toc":{"response":"json"}}';
+    await service.prepareAudioChapter(source, book, chapter);
+    assert.equal(requests, 2, 'Changed native rules refresh chapter requests');
+    source.nativeBaseUrl = 'https://new.fixture.invalid/';
+    await service.prepareAudioChapter(source, book, chapter);
+    assert.equal(requests, 3, 'Changed native base URL refreshes chapter requests');
+    source.engine = '';
+    await service.prepareAudioChapter(source, book, chapter);
+    assert.equal(requests, 4, 'Changing the rule engine invalidates the old catalog');
+    assert.equal(chapter.id, 'native-fingerprint-c0');
+    assert.equal(chapter.originSourceValue, 'https://fixture.invalid/fresh/4');
+    console.log('PASS: native catalog reuse and refresh after rules, base URL or engine changes');
+  } finally {
+    service.resolveLocalSource = originalResolve;
+    service.fetchCurrentAudioToc = originalFetch;
+    stubs['service/BookSourceService'] = facade;
+  }
+}
 (async () => {
   try {
+    if (fingerprintOnly) { await testNativeFingerprint(); return; }
     await connect();
     await testDom();
     await testLegacySelectors();
@@ -619,16 +670,17 @@ async function testAudioLoad() {
     await testAudioLoad();
     await testImportedDefinitions();
     await testScriptElementObjects();
+    await testNativeFingerprint();
   } finally {
     if (socket) {
       try { await send('Browser.close', {}, undefined); } catch (_) { /* Browser may close before replying. */ }
       socket.close();
     }
-    if (browser.exitCode === null) {
+    if (browser && browser.exitCode === null) {
       const closed = new Promise(resolve => browser.once('exit', resolve));
       browser.kill();
       await Promise.race([closed, delay(2000)]);
     }
-    await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    if (temp) await fs.promises.rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

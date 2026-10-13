@@ -6,6 +6,7 @@
   "author": "ylwang",
   "license": "MIT",
   "dependencies": {
+    "libnative_rulecore.so": "file:./src/main/cpp/types/libnative_rulecore",
     "@devzeng/quickjs": "file:./libs/quickjs.har"
   }
 }

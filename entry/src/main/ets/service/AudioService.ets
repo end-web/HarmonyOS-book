@@ -162,6 +162,14 @@ export class AudioService {
       String(BackgroundTaskService.isRunning()));
   }
 
+  /** 分段计时只记录阶段、耗时与任务代次，不包含来源或音频凭据。 */
+  private tracePlaybackDuration(stage: string, startedAt: number, generation: number, cache: string = 'none'): void {
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    DiagnosticLogService.info('audio.timing', `stage=${stage}; elapsedMs=${elapsedMs}; generation=${generation}; cache=${cache}`);
+    hilog.info(DOMAIN, TAG, 'playback timing=%{public}s elapsedMs=%{public}d gen=%{public}d cache=%{public}s',
+      stage, elapsedMs, generation, cache);
+  }
+
   setForeground(foreground: boolean): void {
     this.foreground = foreground;
     this.tracePlayback(foreground ? 'foreground' : 'background');
@@ -201,6 +209,7 @@ export class AudioService {
    *  正在解析音频 URL（耗时长，比如 WebView 嗅探）的旧任务跑完后会用这个比对，
    *  如果不是最新代次就直接丢弃，不再装载到 AVPlayer，避免"切了新章节但旧的还在响"。 */
   private playGen: number = 0;
+  private playbackLoadStartedAt: number = 0;
   private preloadBuffering: boolean = false;
   /** One automatic retry per user playback request; network timeouts must not restart indefinitely. */
   private autoRetryChapterId: string = '';
@@ -394,6 +403,9 @@ export class AudioService {
     p.on('stateChange', (newState: media.AVPlayerState, reason: media.StateChangeReason) => {
       if (this.player !== p) return;
       this.tracePlayback(`state:${newState}:reason=${reason}`);
+      if (this.playbackLoadStartedAt > 0 && ['initialized', 'prepared', 'playing'].includes(newState)) {
+        this.tracePlaybackDuration(`state:${newState}`, this.playbackLoadStartedAt, this.playGen);
+      }
       if (newState !== 'playing') this.stopTick();
       if (!this.state) return;
       if (newState === 'initialized') {
@@ -1142,6 +1154,7 @@ export class AudioService {
     if (!this.state || !this.context || PlaybackCoordinator.speechActive) return;
     this.stopTick();
     const myGen = ++this.playGen;
+    this.playbackLoadStartedAt = Date.now();
     this.preloadBuffering = false;
     this.cancelLiveRecovery();
     const oldWasLive = this.liveSource || this.state.isLive;
@@ -1168,6 +1181,7 @@ export class AudioService {
       // 注意:idle 也要 reset。退后台被系统回收 audio renderer 后,player.state 会停在 idle
       // 但 fdSrc/url 已失效,此时直接 applySource 设 url 不一定能驱动到 prepared,
       // 必须 reset 一次让状态机回到干净 idle。released 状态没法 reset,跳过即可。
+      const resetStartedAt = Date.now();
       try {
         const cur = this.player;
         if (cur && cur.state !== 'released') {
@@ -1175,6 +1189,7 @@ export class AudioService {
           else await this.resetPlayerForSwitch(cur);
         }
       } catch (_e) { /* ignore */ }
+      finally { this.tracePlaybackDuration('reset', resetStartedAt, myGen); }
       if (myGen !== this.playGen) {
         // 被新 playChapter 抢占，不清 isLoading——新的 doPlayChapter 会自己设
         return;
@@ -1295,9 +1310,11 @@ export class AudioService {
 
   private async resolveAudioUrl(book: Book, chapter: Chapter, forceReload: boolean = false): Promise<AudioResolveResult> {
     const generation = this.playGen;
+    const resolveStartedAt = Date.now();
     const cache = ChapterCacheService.getInstance();
     if (chapter.source.type !== 'url') {
       if (chapter.source.type === 'rawfile') {
+        this.tracePlaybackDuration('resolve-path', resolveStartedAt, generation, 'rawfile');
         const r: AudioResolveResult = { headers: {}, success: true };
         return r;
       }
@@ -1306,6 +1323,7 @@ export class AudioService {
       const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
       if (this.isFileUsable(chapter.source.value)
         && (downloadedPath || cache.isPreloadEnabled())) {
+        this.tracePlaybackDuration('resolve-path', resolveStartedAt, generation, downloadedPath ? 'downloaded-file' : 'local-file');
         const r: AudioResolveResult = { headers: {}, success: true };
         return r;
       }
@@ -1331,6 +1349,7 @@ export class AudioService {
     }
     const downloadedPath = DownloadService.getInstance().getDownloadedFilePath(book.id, chapter);
     if (!forceReload && downloadedPath && this.isFileUsable(downloadedPath)) {
+      this.tracePlaybackDuration('resolve-path', resolveStartedAt, generation, 'downloaded-file');
       chapter.source = { type: 'file', value: downloadedPath };
       const r: AudioResolveResult = { headers: {}, success: true };
       return r;
@@ -1338,6 +1357,7 @@ export class AudioService {
     if (!forceReload && cache.isPreloadEnabled()) {
       const filePath = await cache.waitForAudioFile(book, chapter);
       if (filePath && this.isFileUsable(filePath)) {
+        this.tracePlaybackDuration('resolve-path', resolveStartedAt, generation, 'preload-file');
         hilog.info(DOMAIN, TAG, 'preload file hit chapter=%{public}s', chapter.id);
         chapter.source = { type: 'file', value: filePath };
         const r: AudioResolveResult = { headers: {}, success: true };
@@ -1345,7 +1365,9 @@ export class AudioService {
       }
       const pendingResolve = cache.getPendingAudioResolve(book, chapter);
       if (pendingResolve !== undefined) {
-        await pendingResolve;
+        const pendingStartedAt = Date.now();
+        try { await pendingResolve; }
+        finally { this.tracePlaybackDuration('pending-preload-resolve', pendingStartedAt, generation, 'pending'); }
         if (generation !== this.playGen) {
           const cancelled: AudioResolveResult = { headers: {}, success: false };
           return cancelled;
@@ -1354,12 +1376,14 @@ export class AudioService {
       }
       const cachedUrl = cache.isPreloadEnabled() ? cache.getAudioUrl(chapter.id) : null;
       if (cachedUrl) {
+        this.tracePlaybackDuration('resolve-path', resolveStartedAt, generation, 'preload-url');
         chapter.source = { type: 'url', value: cachedUrl };
         const cachedHeaders = cache.getAudioHeaders(chapter.id);
         const r: AudioResolveResult = { headers: cachedHeaders, success: true };
         return r;
       }
     }
+    this.tracePlaybackDuration('resolve-path', resolveStartedAt, generation, 'network');
     try {
       const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) {
@@ -1367,10 +1391,15 @@ export class AudioService {
         const r: AudioResolveResult = { headers: {}, success: false };
         return r;
       }
-      await BookSourceService.prepareAudioChapter(source, book, chapter);
+      const chapterStartedAt = Date.now();
+      try { await BookSourceService.prepareAudioChapter(source, book, chapter); }
+      finally { this.tracePlaybackDuration('prepareAudioChapter', chapterStartedAt, generation); }
       const pageUrl = chapter.originSourceValue || chapter.source.value;
-      const requestInfo = await this.resolveAudioRequestWithTimeout(
-        source, pageUrl, book.variables, chapter.variables);
+      const requestStartedAt = Date.now();
+      let requestInfo: AudioRequestInfo;
+      try {
+        requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables, chapter.variables);
+      } finally { this.tracePlaybackDuration('resolveAudioRequest', requestStartedAt, generation); }
       const audioUrl = requestInfo.url;
       // 解析失败时书源层会原样回传章节页 URL（如 tingyou://play/...），
       // 必须校验后才算成功，否则假地址会被装进 AVPlayer 并报“音频源不可用”，
@@ -1479,14 +1508,17 @@ export class AudioService {
           return false;
         }
         const mediaSource = media.createMediaSourceWithUrl(src.value, headers);
-        // HLS 保留在线续流；M4A/MP4 等容器可能把索引放在文件尾，
-        // 保留普通网络播放的 Range 寻址，避免离线缓存顺序填充拖慢首播。
-        const indexedContainer = new RegExp('\\.(m4a|m4b|mp4|mov)([?#]|$)', 'i').test(src.value);
-        if (PlatformCompat.supports(23) && !this.liveSource && !DownloadPolicy.isHls(src.value, '') &&
-          !indexedContainer) {
+        // 仅明确的顺序音频启用播放器离线缓存。代理/无后缀地址的最终容器未知，
+        // 与 HLS、尾部索引容器一样保留默认网络 Range 寻址；章节预缓存独立运行。
+        const mediaPath = src.value.split('?')[0].split('#')[0];
+        const sequentialAudio = new RegExp('\\.(mp3|aac|flac|wav|ogg|opus)$', 'i').test(mediaPath);
+        if (PlatformCompat.supports(23) && !this.liveSource && sequentialAudio) {
           mediaSource.enableOfflineCache(true);
         }
-        await p.setMediaSource(mediaSource);
+        const mediaStartedAt = Date.now();
+        const mediaGeneration = this.playGen;
+        try { await p.setMediaSource(mediaSource); }
+        finally { this.tracePlaybackDuration('setMediaSource', mediaStartedAt, mediaGeneration); }
       } else if (src.type === 'file') {
         // 沙箱文件用 fdSrc 播放（AVPlayer 对沙箱绝对路径不接受 file:// 形式）。
         // 缓存文件可能已被系统回收/过期删除，打开失败返回 false，不抛异常。

@@ -1,5 +1,6 @@
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleSourceImportParser } from './LocalRuleSourceImportParser';
+import { NativeSourceFile } from './native/NativeSourceFile';
 
 /** Merge editable fields into the original definition so extension fields survive a round trip. */
 export class LocalRuleSourceCodec {
@@ -13,6 +14,10 @@ export class LocalRuleSourceCodec {
   }
 
   static stringify(source: LocalRuleSource): string {
+    if (source.engine === 'native-v1') {
+      if (!source.nativeRulesValid) return source.rawSourceJson;
+      return NativeSourceFile.stringify(source);
+    }
     const original: Record<string, Object> = source.rawSourceJson.trim().length > 0
       ? JSON.parse(source.rawSourceJson) : {};
     const current: Record<string, Object> = JSON.parse(JSON.stringify(source));
@@ -25,7 +30,8 @@ export class LocalRuleSourceCodec {
     }
     const baseline: Record<string, Object> = JSON.parse(JSON.stringify(baselineSource));
     const result: Record<string, Object> = {};
-    const omitted: string[] = ['rawSourceJson', 'validationStatus', 'validationMessage', 'locked',
+    const omitted: string[] = ['rawSourceJson', 'nativeBaseUrl', 'nativeRulesJson', 'nativeRulesValid', 'nativeSearch',
+      'validationStatus', 'validationMessage', 'locked',
       'loginHeader', 'loginInfo', 'loginResult', 'cookie', 'cookies', 'cookieHeader',
       'token', 'accessToken', 'refreshToken', 'deviceId', 'accountLabel', 'session', 'scriptState'];
     for (const key of Object.keys(original)) {

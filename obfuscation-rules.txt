@@ -14,6 +14,62 @@
 # 这些属性来自外部 JSON（Legado 书源格式）或本地持久化，
 # 通过 JSON.parse / JSON.stringify 访问，混淆器无法静态追踪，必须显式保留。
 -keep-property-name
+  # Native rule schema and Cangjie tokenizer wire format.
+  engine
+  nativeRules
+  nativeRulesJson
+  nativeRulesValid
+  nativeSearch
+  nativeBaseUrl
+  rules
+  baseUrl
+  description
+  settings
+  discoveryEnabled
+  locked
+  pinned
+  order
+  version
+  discover
+  search
+  explore
+  detail
+  toc
+  content
+  format
+  bindings
+  request
+  list
+  fields
+  next
+  maxPages
+  method
+  headers
+  form
+  body
+  name
+  value
+  kind
+  attribute
+  index
+  transforms
+  required
+  op
+  pattern
+  replacement
+  group
+  amount
+  title
+  url
+  tokens
+  type
+  text
+  attributes
+  selfClosing
+  start
+  end
+  error
+  tokenizeHtml
   # Huawei IAP signed JSON payload fields (never obfuscate wire names).
   alg
   typ

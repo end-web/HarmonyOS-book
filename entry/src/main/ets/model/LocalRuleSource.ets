@@ -124,6 +124,12 @@ export class LocalRuleSource implements BookSource {
   concurrentRate: string = '';
   lastUpdateTime: number = 0;
   rawSourceJson: string = '';
+  /** native-v1 definitions are data; they never enter the legacy script runtime. */
+  engine: string = '';
+  nativeBaseUrl: string = '';
+  nativeRulesJson: string = '';
+  nativeRulesValid: boolean = false;
+  nativeSearch: boolean = false;
   @Trace validationStatus: number = LocalRuleSourceStatus.UNCHECKED;
   @Trace validationMessage: string = '';
   ruleSearch: LocalRuleSearchRule = new LocalRuleSearchRule();
@@ -153,10 +159,12 @@ export class LocalRuleSource implements BookSource {
   }
 
   canExecute(): boolean {
-    return this.bookSourceUrl.trim().length > 0;
+    return this.bookSourceUrl.trim().length > 0 &&
+      (!this.engine || (this.engine === 'native-v1' && this.nativeRulesValid));
   }
 
   hasSearchCapability(): boolean {
+    if (this.engine) return this.engine === 'native-v1' && this.nativeRulesValid && this.nativeSearch;
     return this.searchUrl.trim().length > 0 && this.ruleSearch.bookList.trim().length > 0 &&
       this.ruleSearch.name.trim().length > 0 && this.ruleSearch.bookUrl.trim().length > 0;
   }

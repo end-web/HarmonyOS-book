@@ -1,14 +1,132 @@
 # 简听书源规则编写指南
 
-本文面向希望为「简听」编写书源的作者，依据当前项目的导入解析器、请求分析器、规则执行器和页面调用链整理。核对日期：2026-09-22。
+本文面向希望为「简听」编写书源的作者，依据当前项目的导入解析器、请求分析器、规则执行器和页面调用链整理。原生格式核对日期：2026-10-13；旧格式说明保留在编号章节中。
 
-书源文件使用 **UTF-8 JSON**，规则在手机本地执行，不需要部署简听服务端。支持小说正文源和有声书源；与 Legado / Reader 的规则格式有兼容交集，但不是完整兼容实现。
+书源文件使用 **UTF-8 JSON** 作为数据容器，规则在设备本地执行，不需要部署简听服务端。新格式 `jianting.source` 的字段和执行模型由本项目独立定义；JSON 不代表 JavaScript 脚本，也不代表沿用 Legado 字段。旧格式另有 Legado / Reader 兼容交集，但不是完整兼容实现。
 
 与 Legado 系源码的具体语义差异和补齐顺序见 [书源兼容性对照](BOOK_SOURCE_COMPATIBILITY.md)。
 
 文中 `example.com` / `example.org` 均为占位域名。模板展示完整字段关系，**需要按目标站点替换地址、选择器和接口字段后才能获取实际内容**，不是已经联通的在线书源。
 
-## 目录
+## 鸿蒙原生格式 jianting.source v1
+
+新文件根固定为 `"format": "jianting.source"` 和 `"version": 1`，来源信息放在 `source`，规则放在 `rules`，管理选项放在可选的 `settings`。没有 `bookSource*`、`ruleSearch`、`jsLib` 或外层 `engine` 字段。该分支通过 ArkTS 请求与算子、仓颉 HTML 分词和 ArkTS DOM/CSS 完成解析，**不会调用 QuickJS 或 ArkWeb**。已有旧格式继续走兼容链路；整个 App 的旧脚本运行器并未因此删除。
+
+可下载并导入 [书音 FM 原生规则样例](examples/shuyinfm-native.json)，导入后的名称为“书音FM·鸿蒙原生”。样例将原先 JS 的章节 ID 提取、序号加一、MD5 签名改为固定算子，目录保存稳定的章节页面 URL，播放/下载时重新生成签名。2026-10-13 使用 WSL 运行真实 ArkTS 新分发器，完成搜索返回 2 本→《花颜策》详情→370 章目录→签名接口 HTTP 200→音频重定向及 HTTP 206，读取 1024 字节并识别 `audio/mpeg` 与 ID3 头，旧 JS/Web 桥接调用为 0。此结果限于当时的该站点链路，不能证明仓颉 OHOS 库初始化成功；手机播放验证范围见下文。旧 JS 源需要按实际协议迁移；修改格式名称不能自动转换任意脚本。
+
+### 文件与阶段契约
+
+新文件完全使用下表中的独立字段，导入适配器负责映射到 App 现有来源模型，以复用收藏与加密存储。不要在文件根混入旧 `bookSource*`、`searchUrl`、`exploreUrl`、`header`、`rule*`、`jsLib` 或登录规则；公共请求头和发现入口分别在 `rules.headers` 和 `rules.discover`。
+
+| 文件结构 | 字段与行为 |
+| --- | --- |
+| 根对象 | `format: "jianting.source"`、`version: 1`、`source`、`rules`、可选 `settings`；版本由根统一指定，`rules` 不需要版本字段 |
+| `source` | `id: string`、`name: string`、`type: "audio" / "text"`、`baseUrl: string`、可选 `group: string`、`description: string` |
+| `settings` | 可选 `enabled: boolean`、`discoveryEnabled: boolean`（均默认 true）、`locked: boolean`、`pinned: boolean`（均默认 false）、`order: number`（默认 0，安全整数） |
+
+`source.id` 是稳定身份，`source.baseUrl` 是请求和相对地址的基地址，两者独立。当前二者都要求不含账号密码的 HTTP(S) URI；更换请求域名不应随意修改 `id`。书音样例沿用旧源的身份 `https://www.shuyinfm.com`，以便已有收藏继续匹配。`name` 与 `id` 不得为空。未知结构字段和错误类型会明确拒绝；不支持的根版本保留诊断且不会回退旧 JS 引擎。
+
+| 结构 | 字段与行为 |
+| --- | --- |
+| `rules` | `headers: NamedValue[]`；`discover: Discovery[]`；`search`、`explore`、`detail`、`toc`、`content` 阶段 |
+| `Discovery` | `title: string`、`url: string`；地址可用 `{{page}}` / `{{page0}}` 模板 |
+| `Stage` | `format: "html" / "json" / "text"`（默认 `html`）、`bindings: NamedValue[]`、`request: Request`、`list: Value`、`fields: NamedValue[]`、`next: Value`、`maxPages: number`（默认 1，最多 100） |
+| `Request` | `url: Value`、`method: "GET" / "POST"`（默认 GET）、`headers: NamedValue[]`、`form: NamedValue[]`、`body: Value`；表单与正文不能同时使用，GET 不接受二者 |
+| `NamedValue` | `{ "name": "字段名", "value": Value }`；使用数组而非动态对象字段，名称不得重复 |
+| `Value` | `kind`、`value: string`、`attribute: string`（默认 `text`）、`index: number`（默认 0）、`transforms: Transform[]`、`required: boolean`（默认 false） |
+| `Transform` | `op` 决定操作；按操作使用 `pattern`、`replacement`、`group`、`amount`；其他默认字段可省略 |
+
+阶段可以省略，省略表示未声明对应能力。搜索必须提供非空请求 URL、列表规则及 `name` / `bookUrl` 字段。发现使用 `explore` 阶段；没有发现字段规则时复用 `search` 的提取规则，实际请求使用发现分类地址并以 GET 发出。详情和目录的空请求 URL 默认请求传入的书籍或目录 URL。
+
+| 阶段 | `fields[].name` 支持的字段 |
+| --- | --- |
+| `search` / `explore` | `name`、`bookUrl`、`author`、`coverUrl`、`intro`、`kind`、`status`、`lastChapter`、`wordCount`、`updateTime` |
+| `detail` | `name`、`author`、`coverUrl`、`intro`、`kind`、`status`、`lastChapter`、`wordCount`、`updateTime`、`tocUrl` |
+| `toc` | `chapterName`、`chapterUrl`、`isVip`、`isPay`、`isVolume`、`updateTime`、`duration`；章节名称和地址规则必需 |
+| `content` | `title`、`content`、`audioUrl`、`nextContentUrl`；至少声明 `content` 或 `audioUrl`，音频优先读取 `audioUrl` |
+
+`format: "text"` 的响应通过 `response` 变量读取。HTML / JSON 列表分别使用 `list.kind: "css"` / `"json"`，字段规则在各个列表项内执行。`list` 只配置匹配格式的 `kind/value`，不支持选择某一项、属性取值、必填标记或转换步骤；详情和内容阶段不能声明列表。JSON 数组列表应显式写 `$.data.books[*]`，不要用只返回整个数组的 `$.data.books`；每项字段再写 `$.name` 等路径。JSONPath 复用本地有界实现，不执行脚本表达式。
+
+### 取值、变量与签名
+
+| `Value.kind` | 含义 |
+| --- | --- |
+| `literal` | 返回 `value` 中的字面字符串 |
+| `variable` | 读取 `value` 指定的变量名；未定义时返回空字符串 |
+| `template` | 将 `{{变量名}}` 替换成变量值；未绑定变量报错，不接受 `{{page - 1}}`、函数或任意表达式 |
+| `css` | `value` 是选择器，`attribute` 为 `text`、`html` 或属性名；`index` 选择第几个结果；空选择器表示当前列表节点，非列表上下文表示文档根 |
+| `json` | `value` 是 JSONPath，`index` 选择第几个匹配值 |
+
+固定变量为 `key`、`page`（从 1 开始）、`page0`（`page - 1`）、`url`、`bookUrl`、`chapterUrl`、`timestamp`（Unix 秒）。`bindings` 在请求前按数组顺序执行，可引用前面的绑定，不得覆盖固定变量。响应后增加 `response` 和 `responseUrl`。列表项沿用当前阶段变量，每行拥有独立提取上下文。
+
+`timestamp` 在每个实际执行上下文只读取一次，签名文本与请求 URL 引用同一值。不要在目录生成时持久化短时签名；应把 ID/签名绑定放在 `content.bindings`，让播放、续播或下载重新解析时刷新。
+
+| 算子 | 参数与行为 |
+| --- | --- |
+| `trim` | 去除首尾空白 |
+| `replace` | `pattern` 为简单正则，`replacement` 为替换文本，执行全局替换 |
+| `regexGroup` | `pattern` 为简单正则，`group` 为捕获编号（默认 0，即完整匹配）；匹配失败报错 |
+| `add` | 输入必须为整数字符串，增加整数 `amount`；拒绝不安全整数 |
+| `md5` | 使用系统 CryptoArchitectureKit 计算 UTF-8 文本的 MD5 小写十六进制摘要，供旧协议签名兼容 |
+| `urlEncode` | URI 组件编码；POST `form` 已自动编码键值，不要重复编码表单字段 |
+| `base64Decode` | Base64 解码为 UTF-8；编码错误报错 |
+| `resolveUrl` | 相对当前响应/请求基地址补全明确的链接路径，只接受 HTTP(S)；拒绝纯错误文本、HTML/JSON、控制字符等，不把“签名错误”拼成伪音频 URL |
+
+取值后依次执行 `transforms`；`required: true` 在转换后仍为空时报告提取失败。未知字段、未知 `kind` / `op`、类型错误、脚本标记和不支持的版本会标记为不支持并禁止执行，不会退回旧 JS 引擎。
+
+### HTML 与正则边界
+
+HTML 解析提供容错提取所需的 DOM 子集，不是浏览器的完整 HTML5 树构建或页面渲染。CSS 支持标签、`*`、`#id`、`.class`、`[attr]`、`[attr=value]`、后代、`>` 子代和逗号分组；不支持伪类、兄弟组合、CSS 转义、属性操作符或属性匹配标志。旧 `.s-txt.0` 应改为 `value: ".s-txt", index: 0`。`text` 排除 script/style 文本；解析器不会执行网页脚本。
+
+简单正则支持字面字符、字符类、捕获组和锚点。仅允许一个 `*` / `+` 重复项，或者多个由固定非数字分隔符连接的 `\d+`，例如 `(\d+)-(\d+)-(\d+)\.html`；数字之间的分隔符限 `-`、`/`、`.`、`:`、`,`、`_` 或空格。不支持分支、回溯引用、前后断言、量化分组、`?` 可选项和 `{n,m}` 范围。正则模式最多 256 字符，输入最多 4096 字符；超限报错，不截断后悄悄匹配。JSON 字符串中的反斜杠需要写成 `\\`。去除字段尾部空白请使用 `trim`，避免叠加重复匹配。
+
+### 分页和直链
+
+`stage.next` 提取下一页 URL。目录和文本正文自动沿下一页抓取并受 `maxPages` 限制，重复页面和超出页数都报错；下一页请求使用 GET。搜索、发现一次调用只取当前页，由调用方传入后续页码；发现地址带页码模板且本页有结果时保留继续加载入口。不要以 `maxPages` 期待一次搜索自动合并多页。
+
+音频 `content` 没有 `request.url` 时不发出内容请求，可直接把 `chapterUrl` 映射成结果，例如：
+
+```json
+{
+  "format": "text",
+  "fields": [
+    {
+      "name": "audioUrl",
+      "value": { "kind": "variable", "value": "chapterUrl", "required": true }
+    }
+  ]
+}
+```
+
+音频章节 URL 若是接口或 HTML 页面，必须填写 `content.request.url`（例如 `{ "kind": "variable", "value": "chapterUrl" }`），并配置响应提取。文本源的空内容请求 URL 默认请求章节地址。全局 `headers` 用于请求与音频播放；请求、封面和音频跨 `source.baseUrl` 的 origin 时不继承全局 Cookie/Authorization/Proxy-Authorization/Host，Cookie 仍按来源与目标域名管理。`request.headers` 明确配置当前阶段请求所需的头，在全局头裁剪之后合并。
+
+### 执行预算、平台与编辑
+
+| 项目 | 当前限制 |
+| --- | --- |
+| `rules` JSON | 最多 256 × 1024 字符；单个完整来源最多 512 × 1024 字符；发现分类最多 100 项 |
+| 每组绑定/字段/请求头/表单 | 最多 64 项；每个值最多 16 个转换步骤 |
+| 网络 | HTTP(S)，URL 最多 2048 字符；默认请求超时 18 秒，底层限制 3–60 秒，沿用来源请求限流及 Cookie 管理 |
+| 单响应/单个执行值 | 最多 4 × 1024 × 1024 字符 |
+| 目录/正文分页累计响应 | 最多 16 × 1024 × 1024 字符；合并正文最多 8 × 1024 × 1024 字符 |
+| 结果数量 | 搜索最多 50 本；目录最多 20000 章；JSONPath 最多 20000 个结果节点 |
+| HTML | 最多 50000 节点、256 层；CSS 最多 1024 字符、16 组、每组 16 层，每次查询有 1000000 步预算 |
+
+API 20–21 和标准 `wearable` 使用纯 ArkTS 解析；API 22+ 非手表设备尝试通过 taskpool 加载仓颉分词器，输出交给同一 ArkTS DOM/CSS 实现。原生模块不可加载时回退 ArkTS；已返回的分词结果发生结构或预算错误时直接失败。仓颉正式 SDK 1.2.0 的 Windows C ABI 校验已完成；2026-10-13 的 VYG-AL00 真机（API 26、arm64）已明确记录运行时启动及 `Cangjie 1.2.0 tokenizer initialized (C ABI)`。保留版本兼容检查的最终包中，四次 `tokenizeNativeHtml` taskpool 任务均成功返回且未触发回退，耗时为 36、38、20、21 ms，首次包含运行时初始化。该耗时仅代表当前四个页面样本。x86_64 模拟器、API 20–21 和手表尚未完成本轮设备验证。
+
+手机使用项目自行适配的运行时：以正式 v1.2.0 源码固定提交 `52f9e08f985ba42e23581e725e1b11f956f941d6` 和 Release NDK 重编，排除 ROM 命名空间代理分支，使用应用 NDK 的 `libc++_shared.so`（`std::__n1`），依赖符号闭包校验通过。独立 OHOS PC 运行时依赖系统 `libc++.so`（`std::__h`），不能直接用于应用默认命名空间；本适配不代表官方另行发布了手机应用运行时。[官方 1.2.0 发行说明](https://cj-docs.gitcode.com/zh/1.2.0/release-notes/cangjie_1.2_release_notes.html)明确与早期 SDK 编译产物二进制不兼容，升级时应对项目和依赖全量重编，不能混用旧运行时。
+
+音频详情和目录会对 `content.request.url` 中可静态确定的 HTTP(S) 域名提前建立连接，复用现有 HTTP 会话；按域名 30 秒去重，最多保留 32 项。该优化仅在平台支持预连接时生效（API 24+），不提前执行签名绑定或发送内容业务请求。原生 HTTP 日志记录请求准备与网络耗时，播放器日志记录缓存路径、地址解析、装载和播放状态耗时，不记录签名 URL 或请求凭据。
+
+2026-10-13，VYG-AL00 真机（API 26）已展示原生源《她的护卫》491 集详情并播放。旧策略下用户手动点击未缓存章节的五次记录中，总起播耗时为 3.037–12.846 秒，音频地址解析为 120–317 ms，AVPlayer 从 `initialized` 到 `prepared` 为 2.855–12.626 秒：该样本的主要等待发生在系统播放器媒体准备阶段，签名规则解析占比较小。同书首章在 WSL 的网络阶段合计约 1.62 秒，仅供链路对照，不是手机起播时间。
+
+旧策略会对未知媒体格式的代理地址启用 `enableOfflineCache(true)`，设备日志显示该链路的缓存初始化与首包准备占主要等待。现仅对路径明确以 `.mp3`、`.aac`、`.flac`、`.wav`、`.ogg`、`.opus` 结尾的音频启用系统 OfflineCache，未知代理地址不启用。相关 46 项音频回归已通过；新策略六次真机网络播放总起播为 1.213–1.847 秒，地址解析为 121–362 ms，`initialized` 到 `prepared` 为 0.959–1.621 秒，未调用 `JsEnableOfflineCache`；旧策略后续三次总起播和准备阶段分别为 3.037–3.762 秒和 2.855–3.359 秒。该对照支持此次优化有效，但未控制网络波动，不代表固定起播时延。应用的完整音频预缓存仍在播放后独立触发，功能逻辑未变；新版另一次 `preload-file` 缓存命中实测总起播 140 ms、准备阶段 19 ms。样例继续使用已验证的 `SeriesUrl`，接口另一组 `signed_urls` 的首个候选曾返回 HTTP 500。
+
+原生源在现有编辑页使用“完整 JSON”编辑、校验、保存和导出；不会把 `rules` 展平成旧式字段表单。未保存返回确认、来源锁定及已有管理操作继续生效。导出只写 `format`、`version`、`source`、`rules`、`settings`，保留管理设置，不包含运行时 Cookie/Token 会话、内部 `engine`、`nativeRulesJson`、`nativeSearch` 或旧 `bookSource*` 字段。
+
+## 旧格式兼容目录
+
+以下编号章节描述旧 `ruleSearch` / `ruleToc` 等兼容格式；其中 JS、登录脚本和 ArkWeb 能力不适用于 `jianting.source`。
 
 - [1. 先了解内容链路](#1-先了解内容链路)
 - [2. 文件格式与顶层字段](#2-文件格式与顶层字段)

@@ -9,10 +9,12 @@ import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
 import { GuangYuAuthService } from './guangyu/GuangYuAuthService';
 import { GuangYuPanelService } from './guangyu/GuangYuPanelService';
 import { SourceDataService } from '../SourceDataService';
+import { NativeSourceDefinition } from './native/NativeSourceDefinition';
 
 export class LocalRulePanelService {
   static async load(source: LocalRuleSource, login: boolean,
     variables: Record<string, string> = {}): Promise<LocalRulePanel> {
+    if (source.engine === 'native-v1') return login ? new LocalRulePanel() : NativeSourceDefinition.panel(source);
     if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl)) await GuangYuAuthService.syncScriptSession();
     const rule = login ? source.loginUi : source.exploreUrl;
     const value = LocalRuleScriptRuntime.hasScript(rule)
@@ -121,6 +123,12 @@ export class LocalRulePanelService {
 
   static async act(source: LocalRuleSource, control: LocalRuleControl,
     controls: LocalRuleControl[], login: boolean): Promise<LocalRulePanelAction> {
+    if (source.engine === 'native-v1') {
+      const nativeAction = new LocalRulePanelAction();
+      if (login || control.type !== 'category' || !control.url) throw new Error('原生书源不支持此面板动作');
+      nativeAction.browseUrl = control.url;
+      return nativeAction;
+    }
     const isGuangYu = GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl);
     if (isGuangYu) {
       const account = await GuangYuPanelService.accountAction(control.action, controls);

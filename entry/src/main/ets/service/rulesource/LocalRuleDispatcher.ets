@@ -28,6 +28,7 @@ import { TalebookSourceIdentity } from './talebook/TalebookSourceIdentity';
 import { TalebookSourceAdapter } from './talebook/TalebookSourceAdapter';
 import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
 import { GuangYuSourceAdapter } from './guangyu/GuangYuSourceAdapter';
+import { NativeRuleDispatcher } from './native/NativeRuleDispatcher';
 
 class LocalRuleSearchResult implements SearchResult {
   contentType: 'audio' | 'text' = 'text';
@@ -77,6 +78,7 @@ export class LocalRuleDispatcher {
     variables: Record<string, string> = {},
     resultLimit: number = LocalRuleExecutionLimits.MAX_SEARCH_RESULTS): Promise<LocalRuleExploreResult> {
     if (!source.enabledExplore || !source.canExecute()) throw new Error('书源未启用发现');
+    if (source.engine === 'native-v1') return NativeRuleDispatcher.explore(source, address, page, variables, resultLimit);
     if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
       return GuangYuSourceAdapter.explore(source, address, page, variables, resultLimit);
     }
@@ -166,6 +168,7 @@ export class LocalRuleDispatcher {
     variables: Record<string, string> = {}): Promise<BookInfo | null> {
     if (!source.canExecute()) return null;
     try {
+      if (source.engine === 'native-v1') return await NativeRuleDispatcher.detail(source, bookUrl, variables);
       variables['bookUrl'] = bookUrl;
       LocalRuleDispatcher.seedBookVariables(variables, bookUrl);
       await LocalRuleDispatcher.prepareVariables(source, variables, bookUrl);
@@ -225,6 +228,7 @@ export class LocalRuleDispatcher {
     onBatch?: (items: TocItem[]) => void): Promise<TocItem[]> {
     if (!source.canExecute()) return [];
     try {
+      if (source.engine === 'native-v1') return await NativeRuleDispatcher.toc(source, tocUrl, variables, onBatch);
       LocalRuleDispatcher.seedBookVariables(variables, variables['bookUrl'] ?? '');
       await LocalRuleDispatcher.prepareVariables(source, variables, tocUrl);
       const output: TocItem[] = [];
@@ -333,6 +337,7 @@ export class LocalRuleDispatcher {
     const safe = new LocalRuleContentResult();
     if (!source.canExecute()) return safe;
     try {
+      if (source.engine === 'native-v1') return await NativeRuleDispatcher.content(source, chapterUrl, variables);
       await LocalRuleDispatcher.prepareVariables(source, variables, variables['__chapterBaseUrl'] || chapterUrl);
       chapterUrl = await LocalRuleChapterRequest.resolve(chapterUrl, source, variables);
       await LocalRuleDispatcher.prepareVariables(source, variables, chapterUrl);
@@ -363,6 +368,7 @@ export class LocalRuleDispatcher {
   /** 明确的本地音频直链无需先作为正文完整下载；返回 undefined 时继续原解析链。 */
   static resolveDirectAudioRequest(source: LocalRuleSource, chapterUrl: string,
     variables: Record<string, string> = {}): LocalRuleContentResult | undefined {
+    if (source.engine) return undefined;
     if (!LocalRuleDispatcher.isAudioContent(source, variables)) return undefined;
     if (LocalRuleDispatcher.webAudioScript(source, variables)) return undefined;
     try {
@@ -412,6 +418,7 @@ export class LocalRuleDispatcher {
   private static async searchStrict(source: LocalRuleSource, keyword: string,
     page: number, variables: Record<string, string> = {}): Promise<SearchResult[]> {
     if (!source.canExecute()) throw new Error(source.validationMessage || '书源不可执行');
+    if (source.engine === 'native-v1') return NativeRuleDispatcher.search(source, keyword, page, variables);
     if (!source.searchUrl.trim()) throw new Error('书源没有搜索地址');
     await LocalRuleDispatcher.prepareVariables(source, variables, source.bookSourceUrl, keyword, page);
     const searchAddress = await LocalRuleScriptRuntime.resolveAddress(

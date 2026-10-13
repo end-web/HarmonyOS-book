@@ -7,6 +7,8 @@ import {
   LocalRuleSourceStatus,
   LocalRuleTocRule
 } from '../../model/LocalRuleSource';
+import { NativeSourceDefinition } from './native/NativeSourceDefinition';
+import { NativeSourceFile } from './native/NativeSourceFile';
 
 const MAX_SOURCE_COUNT: number = 1000;
 
@@ -31,7 +33,14 @@ export class LocalRuleSourceImportParser {
     const parseCount = Math.min(items.length, MAX_SOURCE_COUNT);
     for (let index = 0; index < parseCount; index++) {
       const item = items[index];
-      const source = LocalRuleSourceImportParser.parseSource(item);
+      let source: LocalRuleSource | undefined;
+      try {
+        source = LocalRuleSourceImportParser.parseSource(item);
+      } catch (error) {
+        report.rejectedCount++;
+        report.message = `第 ${index + 1} 个书源：${error}`;
+        continue;
+      }
       if (source === undefined) {
         report.rejectedCount++;
         continue;
@@ -45,7 +54,7 @@ export class LocalRuleSourceImportParser {
       report.rejectedCount += items.length - MAX_SOURCE_COUNT;
       report.message = `单次最多导入 ${MAX_SOURCE_COUNT} 个书源`;
     }
-    if (report.sources.length === 0) {
+    if (report.sources.length === 0 && !report.message) {
       report.message = report.rejectedCount > 0 ? '没有包含有效名称和地址的书源' : '没有找到书源';
     }
     return report;
@@ -55,6 +64,7 @@ export class LocalRuleSourceImportParser {
     if (Array.isArray(value)) return LocalRuleSourceImportParser.toRecordList(value as Object[]);
     const root = LocalRuleSourceImportParser.asRecord(value);
     if (root === undefined) return [];
+    if (Object.keys(root).includes('format')) return [root];
     const candidates: string[] = ['value', 'data', 'sources', 'bookSources', 'bookSourceList', 'list'];
     for (const key of candidates) {
       const child = root[key];
@@ -73,6 +83,9 @@ export class LocalRuleSourceImportParser {
   }
 
   private static parseSource(record: Record<string, Object>): LocalRuleSource | undefined {
+    if (Object.keys(record).includes('format')) {
+      return NativeSourceFile.parse(JSON.stringify(record));
+    }
     const sourceUrl = LocalRuleSourceImportParser.readString(record, 'bookSourceUrl');
     const sourceName = LocalRuleSourceImportParser.readString(record, 'bookSourceName');
     if (!sourceUrl || !sourceName) return undefined;
@@ -102,6 +115,18 @@ export class LocalRuleSourceImportParser {
     source.concurrentRate = LocalRuleSourceImportParser.readString(record, 'concurrentRate');
     source.lastUpdateTime = LocalRuleSourceImportParser.readNumber(record, 'lastUpdateTime', Date.now());
     source.rawSourceJson = JSON.stringify(record);
+    source.engine = LocalRuleSourceImportParser.readString(record, 'engine');
+    source.nativeRulesJson = LocalRuleSourceImportParser.readJsonString(record, 'nativeRules');
+    if (source.engine || source.nativeRulesJson) {
+      const legacyKeys: string[] = ['searchUrl', 'header', 'ruleSearch', 'ruleExplore', 'ruleBookInfo', 'ruleToc', 'ruleContent'];
+      const mixed = legacyKeys.some((key: string): boolean => {
+        const value = LocalRuleSourceImportParser.readJsonString(record, key);
+        return value.length > 0 && value !== '{}' && value !== '""';
+      });
+      NativeSourceDefinition.configure(source, mixed);
+      source.enabledExplore = LocalRuleSourceImportParser.readBoolean(record, 'enabledExplore', source.exploreUrl.length > 0);
+      return source;
+    }
 
     const compactRuleNames: string[] = [];
     source.ruleSearch = LocalRuleSourceImportParser.parseSearchRule(

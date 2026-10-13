@@ -160,6 +160,8 @@ export struct PlayerPage {
     this.rightSafeVp = WindowUtils.getRightSafeVp();
   };
   private chapterListScroller: Scroller = new Scroller();
+  private chapterPositionTimer: number = -1;
+  private chapterListInteracted: boolean = false;
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
   private chapterDurationHandler = (): void => {
     this.chapterCacheTick = this.chapterCacheTick + 1;
@@ -261,6 +263,7 @@ export struct PlayerPage {
 
   aboutToDisappear(): void {
     this.isLeaving = true;
+    this.cancelChapterPosition();
     WindowUtils.removeSafeAreaListener(this.safeAreaChangeHandler);
     PlayerBackInterceptor.set(null);
     PlayerEntryDecider.setCancelPendingClear(null);
@@ -694,7 +697,7 @@ export struct PlayerPage {
     if (this.isLeaving || hydrated.chapters.length === 0) return;
     this.book = hydrated;
     this.chapterDataSource.setChapters(PreferenceService.orderedChapters(hydrated));
-    this.scrollToCurrentChapter();
+    if (!this.chapterListInteracted) this.scrollToCurrentChapter();
   }
 
   private async tryResumePlay(book: Book): Promise<void> {
@@ -926,6 +929,8 @@ export struct PlayerPage {
 
   /** 打开章节列表,加载全部章节 */
   private openChapterList(): void {
+    this.cancelChapterPosition();
+    this.chapterListInteracted = false;
     this.showChapterList = true;
     this.listOffsetFromCurrent = 0;
     this.chapterSearchKeyword = '';
@@ -934,11 +939,27 @@ export struct PlayerPage {
     if (this.book.chapters.length === 0) {
       this.reloadEmptyChapterList(this.book);
     }
-    this.scrollToCurrentChapter();
+  }
+
+  @Monitor('showChapterList')
+  private onChapterListVisibilityChanged(): void {
+    if (!this.showChapterList) this.cancelChapterPosition();
+  }
+
+  private cancelChapterPosition(): void {
+    if (this.chapterPositionTimer === -1) return;
+    clearTimeout(this.chapterPositionTimer);
+    this.chapterPositionTimer = -1;
+  }
+
+  private interruptChapterPosition(): void {
+    this.chapterListInteracted = true;
+    this.cancelChapterPosition();
   }
 
   /** 按关键词过滤章节列表（关键词为空时还原全部，并滚回当前章节） */
   private applyChapterFilter(keyword: string): void {
+    this.interruptChapterPosition();
     this.chapterSearchKeyword = keyword;
     if (!this.book) return;
     const kw = keyword.trim().toLowerCase();
@@ -950,13 +971,12 @@ export struct PlayerPage {
     const filtered = PreferenceService.orderedChapters(this.book).filter((c) => c.title.toLowerCase().includes(kw));
     this.chapterDataSource.setChapters(filtered);
     // 过滤结果重置滚动到顶部
-    setTimeout(() => {
-      try { this.chapterListScroller.scrollToIndex(0, false, ScrollAlign.START); } catch (_e) { /* ignore */ }
-    }, 50);
+    this.scrollChapterListToIndex(0, ScrollAlign.START);
   }
 
   private scrollToCurrentChapter(): void {
-    if (this.chapterGridVisible) return;
+    this.cancelChapterPosition();
+    if (this.chapterGridVisible || this.chapterSearchKeyword.trim().length > 0) return;
     if (!this.book || !this.playerState.currentChapter) return;
     const idx = this.currentChapterIndex();
     this.scrollChapterListToIndex(this.book ? PreferenceService.chapterDisplayIndex(this.book, idx) : idx);
@@ -966,13 +986,20 @@ export struct PlayerPage {
    * 可靠定位章节列表到指定 index。
    * 两段式延迟:首次等抽屉/列表挂载并完成首屏布局(规避 setTimeout(0) 的挂载竞态),
    * 把目标项拉进 LazyForEach 渲染窗口;二次等目标项真实行高确定后再精确居中,
-   * 修正长列表按平均行高估算导致的 ScrollAlign.CENTER 偏差(原先单次定位时灵时不灵)。
+   * 修正长列表按平均行高估算导致的 ScrollAlign.CENTER 偏差。
+   * 两阶段共用可取消的定时器；用户开始操作后，不再执行剩余定位。
    */
-  private scrollChapterListToIndex(idx: number): void {
-    if (idx < 0) return;
-    setTimeout(() => {
-      try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
-      setTimeout(() => {
+  private scrollChapterListToIndex(idx: number, align: ScrollAlign = ScrollAlign.CENTER): void {
+    this.cancelChapterPosition();
+    if (idx < 0 || !this.showChapterList || this.chapterGridVisible || this.isLeaving) return;
+    this.chapterPositionTimer = setTimeout((): void => {
+      this.chapterPositionTimer = -1;
+      if (!this.showChapterList || this.chapterGridVisible || this.isLeaving) return;
+      try { this.chapterListScroller.scrollToIndex(idx, false, align); } catch (_e) { /* ignore */ }
+      if (align !== ScrollAlign.CENTER) return;
+      this.chapterPositionTimer = setTimeout((): void => {
+        this.chapterPositionTimer = -1;
+        if (!this.showChapterList || this.chapterGridVisible || this.isLeaving) return;
         try { this.chapterListScroller.scrollToIndex(idx, false, ScrollAlign.CENTER); } catch (_e) { /* ignore */ }
       }, 150);
     }, 50);
@@ -1793,8 +1820,13 @@ export struct PlayerPage {
         backgroundColor: AppMaterial.SheetBackground,
         blurStyle: AppMaterial.PlayerSheetBlur,
         systemMaterial: AppMaterial.PlayerSheet,
-        onAppear: () => this.scrollToCurrentChapter(),
-        onDisappear: () => { this.showChapterList = false; }
+        onAppear: () => {
+          if (!this.chapterListInteracted) this.scrollToCurrentChapter();
+        },
+        onDisappear: () => {
+          this.cancelChapterPosition();
+          this.showChapterList = false;
+        }
       })
 
     }
@@ -1814,6 +1846,7 @@ export struct PlayerPage {
         Button($r('app.string.chapter_total_switch', this.book?.chapters.length ?? 0))
           .fontSize(AppFont.Caption).fontColor(AppColor.Brand).backgroundColor(Color.Transparent)
           .onClick((): void => {
+            this.interruptChapterPosition();
             this.chapterGridVisible = !this.chapterGridVisible;
             if (!this.chapterGridVisible) this.applyChapterFilter(this.chapterSearchKeyword);
           })
@@ -1923,6 +1956,16 @@ export struct PlayerPage {
     .scrollBarMargin({ start: LengthMetrics.vp(8), end: LengthMetrics.vp(56) })
     .enableScrollInteraction(true)
     .cachedCount(5)
+    .onTouch((event: TouchEvent): void => {
+      if (event.type === TouchType.Down) this.interruptChapterPosition();
+    })
+    .onWillScroll((_offset: number, _state: ScrollState, source: ScrollSource): void => {
+      if (source === ScrollSource.DRAG || source === ScrollSource.FLING
+        || source === ScrollSource.OTHER_USER_INPUT || source === ScrollSource.SCROLL_BAR
+        || source === ScrollSource.SCROLL_BAR_FLING) {
+        this.interruptChapterPosition();
+      }
+    })
     .onScrollIndex((firstIndex: number, lastIndex: number) => {
       // 用首尾可见 index 与当前章节 index 计算偏离
       // 行高约 64vp(BodyL+Caption+padding),用 (center - idx) * 64 估算

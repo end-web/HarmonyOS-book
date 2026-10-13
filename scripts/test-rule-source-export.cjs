@@ -16,7 +16,9 @@ function load(file) {
   const code = ts.transpileModule(text, {
     compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS }
   }).outputText;
-  vm.runInNewContext(code, { exports, require: name => load(path.resolve(path.dirname(file), name + '.ets')) });
+  vm.runInNewContext(code, { exports, require: name => name === '@kit.ArkTS'
+    ? { url: { URL: { parseURL: (value, base) => new URL(value, base) } } }
+    : load(path.resolve(path.dirname(file), name + '.ets')) });
   return exports;
 }
 const { LocalRuleSourceImportParser: parser } = load(path.join(root, 'service/rulesource/LocalRuleSourceImportParser.ets'));

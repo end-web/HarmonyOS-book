@@ -25,7 +25,7 @@ Apache License 2.0 全文见 `third_party/quickjs/LICENSE-APACHE-2.0`。
 
 ## 许可边界
 
-本项目只引入独立的 QuickJS 和下述 CryptoJS 组件，没有复制或链接轻页应用的 GPL-3.0 书源引擎、页面或业务代码。
+本页所列 QuickJS、CryptoJS、仓颉运行时和 LLVM libc++ 均为独立组件；没有复制或链接轻页应用的 GPL-3.0 书源引擎、页面或业务代码。
 
 ## CryptoJS
 
@@ -37,3 +37,20 @@ Apache License 2.0 全文见 `third_party/quickjs/LICENSE-APACHE-2.0`。
 许可全文与固定版本信息见 `third_party/crypto-js/LICENSE` 和 `third_party/crypto-js/README.md`。仅在受限 QuickJS 中兼容用户导入书源的旧 DES／3DES 协议，不用于应用数据库、账号、Cookie 或传输加密。
 
 运行时子集位于 `entry/src/main/ets/service/rulesource/LocalRuleLegacyCrypto.ets`，提供 DES/TripleDES 的 CBC/ECB 和显式密钥处理，继续遵循 QuickJS 的时间、内存和输出预算；不暴露模块加载、基于密码的密钥派生或原生随机数提供者。
+
+## Cangjie runtime / standard library
+
+- 官方项目：https://cangjie-lang.cn/ ，源码：https://gitcode.com/Cangjie/cangjie_runtime
+- 版本：Cangjie 1.2.0 STS，Windows OHOS SDK 官方包，2026-09-22 发布
+- 许可证：Apache-2.0 with Runtime Library Exception
+- 版权所有：Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+
+`entry/libs/arm64-v8a` 与 `entry/libs/x86_64` 中的核心标准库及 `libboundscheck.so` 来自上述官方 SDK。`libcangjie-runtime.so` 由同版本 v1.2.0 官方源码 commit `52f9e08f985ba42e23581e725e1b11f956f941d6` 使用 HarmonyOS Release 应用 NDK 重编，以匹配应用的 `libc++_shared.so` ABI。构建使用的 securec 头/源码依赖固定于 OpenHarmony-v6.0-Release commit `2ae82839ecaaa7d031e66ccbd2076d671acfd615`。实际打包清单、版本和 SHA256 记录在 `entry/libs/rulecore-build.json`。
+
+运行时唯一代码适配为 `RULECORE_APP_RUNTIME` 下跳过系统 ROM namespace 探测；应用仍使用公开 `dlopen/dlsym`，未引入私有 namespace API。工具链路径、C++ 链接及该适配由 `third_party/rulecore/tools/prepare_app_runtime.py` 可重复生成，构建入口为 `scripts/build-cangjie-app-runtime.ps1`。
+
+许可全文见 `third_party/rulecore/licenses/CANGJIE-LICENSE`，官方随 SDK 提供的第三方软件声明原件见 `third_party/rulecore/licenses/CANGJIE-Open_Source_Software_Notice.docx`。运行时公共头文件 `third_party/rulecore/include/Cangjie.h` 保留上游版权和许可头。仓颉源码、薄层绑定和复现说明位于 `third_party/rulecore/`。
+
+## LLVM libc++ runtime
+
+仓颉 NAPI 薄层及同版本源码重编的运行时共同使用 HarmonyOS Release SDK 26.0.0.105 提供的 `libc++_shared.so`，遵循 Apache License 2.0 with LLVM Exceptions。SDK 原始声明见 `third_party/rulecore/licenses/LLVM-NOTICE`；仓颉与 LLVM 许可材料同时保存在 `entry/src/main/resources/rawfile/third_party/cangjie/` 随 HAP 打包。

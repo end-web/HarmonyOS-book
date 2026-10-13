@@ -15,6 +15,43 @@ export class LocalRuleHttpClient {
   private static cookieJars: Map<string, Record<string, string>> = new Map<string, Record<string, string>>();
   private static hydratedSources: Set<string> = new Set<string>();
 
+  /** Reuse the same HTTP session; only establish a connection, without sending a rule request. */
+  static preconnectNative(origin: string): void {
+    HttpClient.preconnect(origin);
+  }
+
+  /** Execute a typed native rule plan without legacy URL expressions, scripts or Web rendering. */
+  static async fetchNativePlan(source: LocalRuleSource, plan: LocalRuleRequestPlan,
+    variables: Record<string, string> = {}): Promise<LocalRuleFetchResult> {
+    const startedAt = Date.now();
+    LocalRuleDiagnostics.check(variables);
+    if (!new RegExp('^https?://', 'i').test(plan.url) ||
+      plan.url.length > LocalRuleExecutionLimits.MAX_URL_CHARS || new RegExp('[\\r\\n]').test(plan.url)) {
+      throw new Error('原生书源请求地址必须为有效的 HTTP(S) 地址');
+    }
+    if (plan.webView || plan.webJs || plan.bodyJs || plan.inlineBody !== undefined ||
+      Object.keys(plan.session).length > 0) throw new Error('原生请求不接受脚本或网页执行选项');
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(plan.method)) {
+      throw new Error('原生书源请求方法不支持');
+    }
+    plan.timeoutMs = Math.max(LocalRuleExecutionLimits.MIN_TIMEOUT_MS,
+      Math.min(LocalRuleExecutionLimits.MAX_TIMEOUT_MS, source.respondTime));
+    if (source.enabledCookieJar) {
+      await LocalRuleHttpClient.hydrateCookies(source.bookSourceUrl);
+      LocalRuleHttpClient.applyCookies(source, plan);
+    }
+    LocalRuleHttpClient.validateHeaders(plan.headers);
+    const requestStartedAt = Date.now();
+    const result = await LocalRuleHttpClient.executeSourceRequest(source, plan, variables);
+    const elapsedMs = Date.now() - startedAt;
+    console.info(`[NativeRuleHttp] method=${plan.method} status=${result.statusCode} ` +
+      `setupMs=${requestStartedAt - startedAt} requestMs=${Date.now() - requestStartedAt} totalMs=${elapsedMs}`);
+    LocalRuleDiagnostics.check(variables);
+    LocalRuleDiagnostics.record(variables, result.ok ? 'info' : 'error',
+      `${plan.method} HTTP ${result.statusCode} (${result.body.length} 字符，${elapsedMs} ms)`, result.errorMessage);
+    return result;
+  }
+
   /** 显式 @webjs 音频规则复用隔离网页及其 Cookie，不改写保存的请求定义。 */
   static async fetchWebAudio(source: LocalRuleSource, rawAddress: string, script: string,
     variables: Record<string, string> = {}): Promise<LocalRuleFetchResult> {
