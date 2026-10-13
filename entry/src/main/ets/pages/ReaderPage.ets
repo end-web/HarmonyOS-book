@@ -410,6 +410,16 @@ export struct ReaderPage {
       this.book = value;
       this.chapterDataSource.setChapters(PreferenceService.orderedChapters(value));
       SearchCache.put(value);
+      if (BookSourceService.pendingTextBook(value.id) !== undefined) {
+        BookSourceService.loadTextBook(value, (loaded: Book): void => {
+          if (this.leaving || this.book?.id !== loaded.id) return;
+          // 只更新目录，不重载正文或改变当前字符位置。
+          this.book = loaded;
+          this.chapterDataSource.setChapters(PreferenceService.orderedChapters(loaded));
+        }).catch((error: Error): void => {
+          hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'background toc failed: %{public}s', error.message);
+        });
+      }
       const startPosition = await this.resolveStartPosition(value);
       if (this.leaving) return;
       if (this.isOnlineTextBookValue(value)) {

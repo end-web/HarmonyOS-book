@@ -3,8 +3,8 @@
     "bundleName": "com.huan.listenbook",
     "cloudFileSyncEnabled": true,
     "vendor": "ylwang",
-    "versionCode": 1000052,
-    "versionName": "0.1.52",
+    "versionCode": 1000053,
+    "versionName": "0.1.53",
     "buildVersion": "1",
     "icon": "$media:app_icon",
     "alternateIcons": [

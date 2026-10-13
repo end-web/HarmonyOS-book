@@ -89,6 +89,7 @@ const stubs = {
     fetch: async (_source, url) => responseFetch ? responseFetch(url) : ({ ok: true, body: responseHtml, requestUrl: url })
   } },
   'service/rulesource/talebook/TalebookSourceAdapter': { TalebookSourceAdapter: {} },
+  'service/rulesource/guangyu/GuangYuSourceAdapter': { GuangYuSourceAdapter: {} },
   'service/rulesource/talebook/TalebookSourceIdentity': { TalebookSourceIdentity: { isSourceUrl: () => false } },
   'service/SourceDataService': { SourceDataService: { getInvalidationCounter: () => sourceRevision } },
   'service/PreferenceService': { PreferenceService: {} },
@@ -152,7 +153,8 @@ async function testDom() {
   assert.equal(chapters[1023].name, '第 1024 章 & 标题');
   assert.equal(chapters[1023].variables.chapterIndex, '1023');
   assert.equal(optimizedCalls, 33, 'One list call plus 32 bounded batches');
-  assert.equal(batches[0].length, 16, 'First sixteen chapters are delivered immediately');
+  assert.ok(batches[0].length > 0 && batches[0].length <= 16,
+    'First chapters arrive by the size or elapsed-time threshold');
   assert.deepEqual(normalized(batches.flat()), normalized(chapters), 'Batches preserve IDs/order/variables without duplicates');
   console.log(`PASS: ${count} chapters, ${optimizedCalls} DOM bridge calls, ${optimizedMs.toFixed(0)} ms (Chromium fixture)`);
   if (process.argv.includes('--benchmark')) {
@@ -429,7 +431,7 @@ async function testDetailCache() {
   let diskFailure = false;
   vm.runInNewContext(compiled, { exports, SearchCache: { get: () => cached },
     BookCoverPolicy: load('utils/BookCoverPolicy').BookCoverPolicy,
-    BookSourceService: { pendingAudioBook: () => undefined },
+    BookSourceService: { pendingAudioBook: () => undefined, pendingTextBook: () => undefined },
     DataService: { getBookById: async () => {
       reads++;
       if (diskFailure) throw new Error('disk failure');
@@ -460,7 +462,8 @@ async function testAudioLoad() {
     saved.push({ count: book.chapters.length, complete: book.tocComplete });
   } } };
   stubs['service/DownloadPolicy'] = { DownloadPolicy: {} };
-  stubs['service/rulesource/NativeRuleSourceDispatcher'] = { NativeRuleSourceDispatcher: { isSource: () => false } };
+  stubs['service/rulesource/NativeRuleSourceDispatcher'] = { NativeRuleSourceDispatcher: {
+    isSource: () => false, isSourceUrl: () => false } };
   stubs['model/TextReading'] = { TextSourceError: Error };
   const { BookSourceService: service } = load('service/BookSourceService');
   const { SearchCache: cache } = load('utils/SearchCache');
@@ -483,13 +486,17 @@ async function testAudioLoad() {
   const playable = await first.promise;
   const playerChapters = playable.chapters;
   assert.equal(playable.tocComplete, false);
-  assert.equal(playable.chapters.length, 16);
-  assert.equal(playable.chapterCount, 16, 'Word count must not be mistaken for chapter count');
+  assert.ok(playable.chapters.length > 0 && playable.chapters.length <= 16);
+  assert.equal(playable.chapterCount, playable.chapters.length, 'Word count must not be mistaken for chapter count');
   assert.equal(playable.wordCount, '123万字');
   assert.equal(playable.latestChapterTitle, '最新一章');
   assert.equal(playable.updateTime, '2026-09-23');
   assert.equal(saved.length, 0, 'No partial catalog saved');
   assert.equal(cache.get('progressive'), playable, 'Player receives canonical growing book');
+  const refreshToc = service.fetchCurrentAudioToc;
+  service.fetchCurrentAudioToc = async () => { throw new Error('must not fetch the complete catalog again'); };
+  await service.prepareAudioChapter(source, playable, playable.chapters[0]);
+  service.fetchCurrentAudioToc = refreshToc;
   const reentered = service.loadAudioBook(makeBook('progressive'), () => {});
   const completed = await request;
   assert.equal(await reentered, completed, 'Reentry joins the same task');
@@ -547,6 +554,57 @@ async function testAudioLoad() {
   assert.equal(refreshed, 2, 'Changed chapter rules refresh saved requests');
   service.getBookToc = originalToc;
   console.log('PASS: reimported catalog refresh, concurrent coalescing, retained chapter IDs and downloaded files');
+
+  const dispatcher = load('service/rulesource/LocalRuleDispatcher').LocalRuleDispatcher;
+  const originalInfo = dispatcher.getBookInfo;
+  dispatcher.getBookInfo = service.getBookInfo;
+  source.canExecute = () => true;
+  const textBook = id => ({ ...makeBook(id), contentType: 'text' });
+  const firstText = deferred();
+  const releaseText = deferred();
+  let tocRequests = 0;
+  service.getBookToc = async (_source, _url, _vars, _name, append) => {
+    tocRequests++;
+    append([{ name: '第一章', url: 'https://fixture.invalid/text/1', variables: { token: 'one' } }]);
+    await releaseText.promise;
+    append([{ name: '第二章', url: 'https://fixture.invalid/text/2', variables: { token: 'two' } }]);
+    return [];
+  };
+  const textRequest = service.loadTextBook(textBook('text-progressive'), book => {
+    if (book.chapters.length) firstText.resolve(book);
+  });
+  const partialText = await firstText.promise;
+  assert.equal(partialText.tocComplete, false);
+  assert.equal(partialText.chapters.length, 1);
+  const canonicalText = cache.get('text-progressive');
+  const readerChapters = canonicalText.chapters;
+  const observed = [];
+  const readerRequest = service.loadTextBook(textBook('text-progressive'), book => observed.push(book));
+  assert.equal(tocRequests, 1, 'Opening the reader reuses the ongoing text catalog');
+  assert.equal(observed[0].chapters[0].variables.token, 'one');
+  releaseText.resolve();
+  const fullText = await textRequest;
+  assert.equal(await readerRequest, fullText);
+  assert.equal(fullText.chapters, readerChapters, 'Chapter array keeps growing after early navigation');
+  assert.equal(fullText.chapters.length, 2);
+  assert.equal(fullText.tocComplete, true);
+  assert.equal(observed.at(-1).chapters.length, 2);
+  assert.notEqual(observed[0], observed.at(-1), 'Reader receives new V2 render references');
+  assert.equal(partialText.chapters.length, 1, 'Earlier UI snapshot stays stable');
+  assert.equal(service.pendingTextBook(fullText.id), undefined);
+  const savedCount = saved.length;
+  service.getBookToc = async (_source, _url, _vars, _name, append) => {
+    append([{ name: '已加载章节', url: 'https://fixture.invalid/text/1' }]);
+    throw new Error('later text page failed');
+  };
+  await assert.rejects(service.loadTextBook(textBook('text-failure')), /later text page failed/);
+  assert.equal(cache.get('text-failure').chapters.length, 1);
+  assert.equal(cache.get('text-failure').tocComplete, false);
+  assert.equal(saved.length, savedCount, 'Failed partial text catalog cannot replace persisted TOC');
+  assert.equal(service.pendingTextBook('text-failure'), undefined);
+  service.getBookToc = originalToc;
+  dispatcher.getBookInfo = originalInfo;
+  console.log('PASS: progressive text catalog, immediate reader handoff, coalescing, updates and failure retention');
   stubs['service/BookSourceService'] = homeFacade;
   console.log('PASS: playable partial catalog, reentry coalescing, canonical array growth, complete-only persistence and retry');
 }

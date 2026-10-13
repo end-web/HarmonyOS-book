@@ -54,25 +54,36 @@ function historyHarness() {
 
 (async () => {
   for (const contentType of ['audio', 'text']) {
-    const page = new Detail(); page.book = { contentType };
+    const page = new Detail(); page.book = { contentType, chapters: [] };
     for (const stage of ['deferEntry', 'loadingDetail', 'loadingToc']) {
       page[stage] = true;
       assert.equal(page.primaryCtaLabel(), 'app.string.book_detail_loading_chapters');
       page.openPrimaryAction(); assert.equal(page.calls.length, 0);
       page[stage] = false;
     }
+    page.openPrimaryAction(); assert.equal(page.calls.length, 0, 'Empty catalogs never navigate');
+    const chapter = { id: 'chapter' }; page.book.chapters.push(chapter);
+    page.loadingToc = true;
     const suffix = contentType === 'text' ? 'read' : 'listen';
     assert.equal(page.primaryCtaLabel(), `app.string.book_detail_start_${suffix}`);
-    const chapter = { id: 'chapter' }; page.openPrimaryAction(chapter);
+    page.openPrimaryAction(chapter);
     assert.equal(page.calls[0][0], contentType === 'text' ? 'read' : 'play');
     assert.equal(page.calls[0][1], chapter);
+    page.loadingDetail = true; page.openPrimaryAction(chapter);
+    assert.equal(page.calls.length, 2, 'Metadata refresh must not block existing chapters');
+    page.loadingDetail = false;
+    page.deferEntry = true; page.openPrimaryAction(chapter);
+    assert.equal(page.calls.length, 2, 'Transition guard is retained');
+    page.deferEntry = false;
+    page.loadingToc = false; page.tocFailed = true; page.openPrimaryAction(chapter);
+    assert.equal(page.calls.length, 3, 'A later catalog failure keeps loaded chapters usable');
     page.lastHistory = {}; page.textReadingProgress = {};
     assert.equal(page.primaryCtaLabel(), `app.string.book_detail_continue_${suffix}`);
-    page.isStartingPlay = true; page.openPrimaryAction(); assert.equal(page.calls.length, 1);
+    page.isStartingPlay = true; page.openPrimaryAction(); assert.equal(page.calls.length, 3);
     page.isStartingPlay = false; page.book = null; page.openPrimaryAction();
-    assert.equal(page.calls.length, 1);
+    assert.equal(page.calls.length, 3);
   }
-  console.log('PASS detail: chapter loading blocks reading/listening, completion restores actions, duplicate clicks blocked');
+  console.log('PASS detail: first chapters immediately read/play, background loading and later failure retain actions, empty/transition/duplicate guards');
 
   const h = historyHarness();
   const transition = h.page.historyTransition(1, true)[0];

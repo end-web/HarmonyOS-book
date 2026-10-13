@@ -3,7 +3,7 @@ import { BookCoverPolicy } from '../utils/BookCoverPolicy';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
-import { promptAction, CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
+import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import { common, ApplicationStateChangeCallback } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import {
@@ -143,6 +143,7 @@ export struct FavoritePage {
   @Local viewMode: number = 0; // 0=网格，1=列表
   @Local shelfFilter: number = 0; // 0=全部, 1=有声书, 2=电子书
   @Local shelfStatusFilter: number = 0; // 0=全部, 1=连载中, 2=已完结
+  @Local statusFilterMenuVisible: boolean = false;
   @Local shelfKeyword: string = '';
   @Local showShelfSearch: boolean = false;
   @Local shelfSearchAnimating: boolean = false;
@@ -284,6 +285,7 @@ export struct FavoritePage {
 
   @Monitor('visible')
   onVisibleChange(): void {
+    if (!this.visible) this.statusFilterMenuVisible = false;
     if (this.visible) {
       this.loadFavorites();
     } else if (!this.removingBook) {
@@ -790,28 +792,54 @@ export struct FavoritePage {
 
   private showStatusFilter(): void {
     if (this.removingBook || this.showBatchDelete) return;
-    this.getUIContext().getPromptAction().showActionMenu({
-      title: $r('app.string.shelf_status_filter'),
-      buttons: [this.statusFilterButton(0), this.statusFilterButton(1), this.statusFilterButton(2)]
-    }).then((result): void => {
-      if (!this.alive || this.removingBook || this.showBatchDelete) return;
-      const value = result.index;
-      if (value < 0 || value > 2) return;
-      this.statusFilterRevision++;
-      this.shelfStatusFilter = value;
-      this.selectedBookIds = new Set();
-      this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
-      this.listScroller.scrollToIndex(0);
-      this.statusSaveTask = this.statusSaveTask.then((): Promise<void> =>
-        PreferenceService.setShelfStatusFilter(value)).catch((): void => {
-        if (this.alive) this.getUIContext().getPromptAction().showToast({ message: $r('app.string.shelf_filter_save_failed') });
-      });
-    }).catch((): void => {});
+    this.statusFilterMenuVisible = !this.statusFilterMenuVisible;
   }
 
-  private statusFilterButton(index: number): promptAction.Button {
-    return { text: this.statusFilterLabel(index),
-      color: index === this.shelfStatusFilter ? AppColor.Brand : $r('sys.color.font_primary') };
+  private selectStatusFilter(value: number): void {
+    this.statusFilterMenuVisible = false;
+    if (!this.alive || this.removingBook || this.showBatchDelete) return;
+    if (value < 0 || value > 2) return;
+    this.statusFilterRevision++;
+    this.shelfStatusFilter = value;
+    this.selectedBookIds = new Set();
+    this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
+    this.listScroller.scrollToIndex(0);
+    this.statusSaveTask = this.statusSaveTask.then((): Promise<void> =>
+      PreferenceService.setShelfStatusFilter(value)).catch((): void => {
+      if (this.alive) this.getUIContext().getPromptAction().showToast({ message: $r('app.string.shelf_filter_save_failed') });
+    });
+  }
+
+  private statusFilterMenuOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      builder: this.buildStatusFilterMenu,
+      placement: Placement.BottomRight,
+      popupColor: Color.Transparent,
+      radius: AppRadius.Xl,
+      enableArrow: false,
+      focusable: true,
+      onStateChange: (event): void => {
+        this.statusFilterMenuVisible = event.isVisible;
+      }
+    };
+    if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    else options.backgroundBlurStyle = AppMaterial.SheetBlur;
+    return options;
+  }
+
+  @LocalBuilder
+  buildStatusFilterMenu() {
+    Column({ space: 2 }) {
+      ForEach([0, 1, 2], (index: number) => {
+        Text(this.statusFilterLabel(index))
+          .fontSize(16)
+          .fontColor(index === this.shelfStatusFilter ? AppColor.Brand : $r('sys.color.font_primary'))
+          .width('100%').height(48).padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+          .borderRadius(AppRadius.Xl - AppSpace.Xs)
+          .backgroundColor(index === this.shelfStatusFilter ? AppColor.BrandSoft : Color.Transparent)
+          .onClick((): void => this.selectStatusFilter(index))
+      }, (index: number): string => index.toString())
+    }.width(200).padding(AppSpace.Xs)
   }
 
   private selectShelfFilter(index: number): void {
@@ -1627,6 +1655,7 @@ export struct FavoritePage {
       ImmersiveCircleButton({ icon: $r('sys.symbol.funnel'), label: $r('app.string.shelf_status_filter'),
         onPress: (): void => this.showStatusFilter() })
         .enabled(!this.removingBook && !this.showBatchDelete)
+        .bindPopup(this.statusFilterMenuVisible, this.statusFilterMenuOptions())
       ImmersiveCircleButton({ icon: $r('sys.symbol.arrow_clockwise'), label: $r('app.string.shelf_updates_title'),
         onPress: (): void => { this.showUpdates = true; } })
         .enabled(!this.isManaging && !this.removingBook)

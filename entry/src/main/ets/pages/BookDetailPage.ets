@@ -457,10 +457,10 @@ export struct BookDetailPage {
   private async loadTextBook(book: Book): Promise<void> {
     const startedAt = Date.now();
     const generation = ++this.tocGeneration;
-    this.loadingToc = book.chapters.length === 0;
+    this.loadingToc = book.tocComplete === false || book.chapters.length === 0;
     this.tocFailed = false;
     try {
-      const sourceBook = book.chapters.length > 0 ? book : await BookSourceService.loadTextBook(book,
+      const sourceBook = !this.loadingToc ? book : await BookSourceService.loadTextBook(book,
         (partial: Book): void => {
           if (!this.detailActive || generation !== this.tocGeneration) return;
           this.book = this.copyBookForRender(partial);
@@ -550,7 +550,8 @@ export struct BookDetailPage {
 
   private async findBookById(id: string): Promise<Book | null> {
     const cached = SearchCache.get(id);
-    if (cached && BookSourceService.pendingAudioBook(id) !== undefined) return cached;
+    if (cached && (BookSourceService.pendingAudioBook(id) !== undefined ||
+      BookSourceService.pendingTextBook(id) !== undefined)) return cached;
     if (cached && cached.chapters.length > 0 && !this.needsAudioTocLoad(cached)) return cached;
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     if (cached) {
@@ -787,7 +788,7 @@ export struct BookDetailPage {
   }
 
   private openPrimaryAction(chapter?: Chapter): void {
-    if (this.chaptersLoading() || !this.book || this.isStartingPlay) return;
+    if (this.chaptersLoading() || !this.book || this.book.chapters.length === 0 || this.isStartingPlay) return;
     if (this.book?.contentType === 'text') {
       this.openTextReader(chapter);
       return;
@@ -797,6 +798,8 @@ export struct BookDetailPage {
 
   private openTextReader(chapter?: Chapter): void {
     if (!this.book) return;
+    const loadingBook = SearchCache.get(this.bookId);
+    if (loadingBook && BookSourceService.pendingTextBook(this.bookId) !== undefined) this.book = loadingBook;
     let resourceIndex = -1;
     if (chapter) {
       resourceIndex = DataService.resolveChapterIndex(this.book, chapter.id, chapter.title);
@@ -1389,7 +1392,7 @@ export struct BookDetailPage {
   }
 
   private chaptersLoading(): boolean {
-    return this.deferEntry || this.loadingDetail || this.loadingToc;
+    return this.deferEntry || ((this.loadingDetail || this.loadingToc) && (this.book?.chapters.length ?? 0) === 0);
   }
 
   @Builder
@@ -1416,8 +1419,8 @@ export struct BookDetailPage {
       bottom: WindowUtils.getBottomSafeVp() + 12
     })
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.97 })
-    .enabled(!this.chaptersLoading() && this.book !== null && !this.isStartingPlay)
-    .opacity(this.chaptersLoading() || this.isStartingPlay ? 0.6 : 1)
+    .enabled(!this.chaptersLoading() && (this.book?.chapters.length ?? 0) > 0 && !this.isStartingPlay)
+    .opacity(this.chaptersLoading() || (this.book?.chapters.length ?? 0) === 0 || this.isStartingPlay ? 0.6 : 1)
     .onClick((): void => { this.openPrimaryAction(); })
   }
 

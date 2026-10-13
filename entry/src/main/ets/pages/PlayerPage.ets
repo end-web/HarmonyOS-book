@@ -439,7 +439,7 @@ export struct PlayerPage {
     this.chapterDataSource.setChapters(PreferenceService.orderedChapters(b));
     const pendingToc = BookSourceService.pendingAudioBook(b.id);
     if (pendingToc !== undefined) {
-      pendingToc.then((loaded: Book): void => {
+      BookSourceService.loadAudioBook(b, (loaded: Book): void => {
         if (this.isLeaving || this.book?.id !== loaded.id) return;
         this.book = this.cloneBookWithChapters(loaded, loaded.chapters, loaded.intro, loaded.variables);
         this.chapterDataSource.setChapters(PreferenceService.orderedChapters(loaded));
@@ -608,7 +608,7 @@ export struct PlayerPage {
 
   private needsChapterHydration(book: Book): boolean {
     if (book.tocComplete === false) {
-      return book.chapters.length === 0 || BookSourceService.pendingAudioBook(book.id) === undefined;
+      return book.chapters.length === 0;
     }
     return book.chapters.length === 0 || (book.chapters.length === 1 && book.chapterCount > 1);
   }
