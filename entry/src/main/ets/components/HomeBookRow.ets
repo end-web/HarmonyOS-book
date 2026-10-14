@@ -1,10 +1,12 @@
 import { SearchResult } from '../model/BookSource';
 import { AppColor, AppRadius, AppSpace, AppFont } from '../theme/Theme';
 import { CoverImage } from './CoverImage';
+import { BOOK_COVER_ASPECT_RATIO, CoverAspectRatio } from '../utils/CoverAspectRatio';
 import { OneShotCoverState, OneShotTransitionCoordinator, OneShotTransitionIds } from '../utils/OneShotTransition';
 
-const FEATURED_ROW_HEIGHT: number = 72;
-const FEATURED_COVER_SIZE: number = 60;
+export const FEATURED_ROW_HEIGHT: number = 84;
+export const FEATURED_COVER_HEIGHT: number = 72;
+export const FEATURED_COVER_WIDTH: number = FEATURED_COVER_HEIGHT * BOOK_COVER_ASPECT_RATIO;
 
 /** 每个行组件独立持有封面节点，重复书籍也只从实际点击的这一行转场。 */
 @ComponentV2
@@ -20,7 +22,32 @@ export struct HomeBookRow {
   @Event onOpen: (result: SearchResult, nodeId: string, radius: number) => void = () => {};
   @Event onFavorite: (result: SearchResult) => void = () => {};
   @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
+  @Local coverRatio: number = BOOK_COVER_ASPECT_RATIO;
   private nodeId: string = OneShotTransitionIds.nextSourceId('home-row');
+
+  aboutToAppear(): void {
+    this.coverRatio = CoverAspectRatio.get(this.result.coverUrl, BOOK_COVER_ASPECT_RATIO);
+  }
+
+  @Monitor('result')
+  onResultChanged(): void {
+    this.coverRatio = CoverAspectRatio.get(this.result.coverUrl, BOOK_COVER_ASPECT_RATIO);
+  }
+
+  private coverWidth(): number {
+    return CoverAspectRatio.fittedWidth(this.coverRatio, 72,
+      this.featured ? FEATURED_COVER_HEIGHT : 96);
+  }
+
+  private coverHeight(): number {
+    return this.coverWidth() / this.coverRatio;
+  }
+
+  private rememberCoverSize(url: string, width: number, height: number): void {
+    if (url !== this.result.coverUrl) return;
+    CoverAspectRatio.remember(url, width, height);
+    this.coverRatio = CoverAspectRatio.get(url, BOOK_COVER_ASPECT_RATIO);
+  }
 
   build() {
     if (this.featured) {
@@ -38,23 +65,27 @@ export struct HomeBookRow {
           if (r.coverUrl && r.coverUrl.startsWith('http')) {
             CoverImage({
               url: r.coverUrl,
-              imgWidth: FEATURED_COVER_SIZE,
-              imgHeight: FEATURED_COVER_SIZE,
+              imgWidth: this.coverWidth(),
+              imgHeight: this.coverHeight(),
               useFixedHeight: true,
+              imageFit: ImageFit.Contain,
               radius: AppRadius.Sm,
-              decodeW: 180,
-              decodeH: 180,
-              highPriority: true
+              decodeW: 162,
+              decodeH: 216,
+              highPriority: true,
+              onImageSize: (url: string, width: number, height: number): void =>
+                this.rememberCoverSize(url, width, height)
             })
           } else {
-            Image($r('app.media.app_icon_legacy'))
-              .width(FEATURED_COVER_SIZE)
-              .height(FEATURED_COVER_SIZE)
-              .borderRadius(AppRadius.Sm)
-              .objectFit(ImageFit.Cover)
+            CoverImage({
+              imgWidth: this.coverWidth(),
+              imgHeight: this.coverHeight(),
+              useFixedHeight: true,
+              radius: AppRadius.Sm
+            })
           }
         }
-        .width(FEATURED_COVER_SIZE).height(FEATURED_COVER_SIZE)
+        .width(this.coverWidth()).height(this.coverHeight())
         .id(this.nodeId)
         .opacity(this.coverState.hiddenSourceId === this.nodeId ? 0 : 1)
 
@@ -105,7 +136,7 @@ export struct HomeBookRow {
       if (showDivider) {
         Divider()
           .color(AppColor.Divider)
-          .margin({ left: FEATURED_COVER_SIZE + AppSpace.Sm })
+          .margin({ left: this.coverWidth() + AppSpace.Sm })
       }
     }
     .width('100%')
@@ -119,13 +150,16 @@ export struct HomeBookRow {
         if (r.coverUrl && r.coverUrl.startsWith('http')) {
           CoverImage({
             url: r.coverUrl,
-            imgWidth: 72,
-            imgHeight: 72,
+            imgWidth: this.coverWidth(),
+            imgHeight: this.coverHeight(),
             useFixedHeight: true,
+            imageFit: ImageFit.Contain,
             radius: AppRadius.Sm,
             decodeW: 216,
-            decodeH: 216,
-            highPriority: true
+            decodeH: 288,
+            highPriority: true,
+            onImageSize: (url: string, width: number, height: number): void =>
+              this.rememberCoverSize(url, width, height)
           })
         } else {
           Stack() {
@@ -133,10 +167,10 @@ export struct HomeBookRow {
             Text(r.name ? r.name.substring(0, 1) : '?')
               .fontSize(24).fontColor($r('sys.color.font_on_primary')).fontWeight(FontWeight.Bold)
           }
-          .width(72).height(72).borderRadius(AppRadius.Sm).clip(true)
+          .width(this.coverWidth()).height(this.coverHeight()).borderRadius(AppRadius.Sm).clip(true)
         }
       }
-      .width(72).height(72)
+      .width(this.coverWidth()).height(this.coverHeight())
       .id(this.nodeId)
       .opacity(this.coverState.hiddenSourceId === this.nodeId ? 0 : 1)
 

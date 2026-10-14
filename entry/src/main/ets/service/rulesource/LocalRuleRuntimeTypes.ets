@@ -60,12 +60,39 @@ export class LocalRuleFetchResult {
   }
 }
 
+export class LocalRuleInteraction {
+  offset: number = 0;
+  label: string = '';
+  url: string = '';
+  title: string = '';
+}
+
+export class LocalRuleReaderActionResult {
+  url: string = '';
+  html: string = '';
+  value: string = '';
+  message: string = '';
+}
+
+export class LocalRuleVoice {
+  id: string = '';
+  name: string = '';
+}
+
 export class LocalRuleContentResult {
   title: string = '';
   content: string = '';
   audioUrl: string = '';
   nextContentUrl: string = '';
   requestHeaders: Record<string, string> = {};
+  /** Lossless upstream content, including image and source-provided interaction markers. */
+  richContent: string = '';
+  imageUrls: string[] = [];
+  videoUrl: string = '';
+  mediaType: string = 'text';
+  hasInteractions: boolean = false;
+  interactions: LocalRuleInteraction[] = [];
+  variables: Record<string, string> = {};
 }
 
 export class LocalRuleExecutionLimits {

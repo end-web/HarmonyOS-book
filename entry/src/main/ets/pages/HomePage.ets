@@ -12,13 +12,13 @@ import { Book, Chapter } from '../model/Book';
 import { SearchResult, HomeBlockSection } from '../model/BookSource';
 import { SearchCache } from '../utils/SearchCache';
 import { BookCard } from '../components/BookCard';
-import { HomeBookRow } from '../components/HomeBookRow';
+import { HomeBookRow, FEATURED_ROW_HEIGHT, FEATURED_COVER_WIDTH, FEATURED_COVER_HEIGHT } from '../components/HomeBookRow';
+import { BOOK_COVER_ASPECT_RATIO } from '../utils/CoverAspectRatio';
 import { OneShotCoverState, OneShotTransitionCoordinator } from '../utils/OneShotTransition';
 import { CoverImage } from '../components/CoverImage';
 import { RankingPosterBackground } from '../components/RankingPosterBackground';
-import {
-  HomeCoverCarousel, homeCoverPerspective, homeCoverCarouselHeight, homeCoverSize, homeCoverSideDistance
-} from '../components/HomeCoverCarousel';
+import { HomeCoverCarousel, homeCoverCarouselHeight } from '../components/HomeCoverCarousel';
+import { BookPosterSkeleton } from '../components/BookPosterCarousel';
 import { HomeCategoryCard } from '../components/HomeCategoryCard';
 import { HomeCategoryBookRow, HomeCategoryRowDataSource } from '../utils/HomeCategoryRowDataSource';
 import { HomeCategoryOverviewRow, HomeCategoryOverviewDataSource } from '../utils/HomeCategoryOverviewDataSource';
@@ -98,8 +98,6 @@ const HOME_CONTENT_TRANSITION_DURATION: number = 360;
 const HOME_CAROUSEL_SCROLL_FADE_DISTANCE: number = 64;
 const COLLAPSED_SEARCH_SIZE: number = 42;
 const FEATURED_PAGE_SIZE: number = 3;
-const FEATURED_ROW_HEIGHT: number = 72;
-const FEATURED_COVER_SIZE: number = 60;
 const FEATURED_NEXT_PEEK: number = 32;
 const HOME_COVER_CARD_SIZE: number = 128;
 const HOME_FIRST_BLOCK_TITLE_OFFSET: number = AppSpace.Xxs;
@@ -112,27 +110,10 @@ const CATEGORY_CARD_COLORS: string[] = ['#B84332', '#287EA2', '#6750AB', '#24827
 struct HomeLoadingSkeleton {
   @Param showCarousel: boolean = true;
   @Param showRecommendations: boolean = true;
-  @Param contentWidth: number = 360;
-  @Param landscape: boolean = false;
   @Local pulsing: boolean = false;
 
   onDidBuild(): void {
     if (!this.pulsing) this.pulsing = true;
-  }
-
-  @Computed
-  get coverContentWidth(): number {
-    return this.contentWidth - AppSpace.Md * 2;
-  }
-
-  @Computed
-  get coverSize(): number {
-    return homeCoverSize(this.coverContentWidth);
-  }
-
-  @Computed
-  get sideDistancePx(): number {
-    return this.getUIContext().vp2px(homeCoverSideDistance(this.coverContentWidth));
   }
 
   @Builder
@@ -140,7 +121,7 @@ struct HomeLoadingSkeleton {
     Column({ space: 6 }) {
       Row()
         .width('100%')
-        .aspectRatio(0.75)
+        .aspectRatio(BOOK_COVER_ASPECT_RATIO)
         .borderRadius(AppRadius.Sm)
         .backgroundColor(AppColor.Divider)
       Row()
@@ -163,8 +144,8 @@ struct HomeLoadingSkeleton {
     Column() {
       Row({ space: AppSpace.Sm }) {
         Row()
-          .width(FEATURED_COVER_SIZE)
-          .height(FEATURED_COVER_SIZE)
+          .width(FEATURED_COVER_WIDTH)
+          .height(FEATURED_COVER_HEIGHT)
           .borderRadius(AppRadius.Sm)
           .backgroundColor(AppColor.Divider)
         Column({ space: AppSpace.Xs }) {
@@ -189,7 +170,7 @@ struct HomeLoadingSkeleton {
       if (showDivider) {
         Divider()
           .color(AppColor.Divider)
-          .margin({ left: FEATURED_COVER_SIZE + AppSpace.Sm })
+          .margin({ left: FEATURED_COVER_WIDTH + AppSpace.Sm })
       }
     }
     .width('100%')
@@ -267,39 +248,7 @@ struct HomeLoadingSkeleton {
     Column() {
       Column({ space: AppSpace.Xs }) {
         if (this.showCarousel) {
-          if (this.landscape) {
-            Row({ space: 16 }) {
-              Row().width(81).height(108).borderRadius(AppRadius.Sm)
-                .backgroundColor(AppColor.Divider)
-              Column({ space: 10 }) {
-                Row().width('65%').height(20).borderRadius(AppRadius.Xs)
-                  .backgroundColor(AppColor.Divider)
-                Row().width('35%').height(12).borderRadius(AppRadius.Xs)
-                  .backgroundColor(AppColor.Divider)
-                Row().width('90%').height(12).borderRadius(AppRadius.Xs)
-                  .backgroundColor(AppColor.Divider)
-                Row().width('75%').height(12).borderRadius(AppRadius.Xs)
-                  .backgroundColor(AppColor.Divider)
-              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-            }
-            .width('100%').height(homeCoverCarouselHeight(this.coverContentWidth, true))
-            .padding({ left: AppSpace.Md + 12, right: AppSpace.Md + 12, bottom: 12 })
-          } else {
-          Stack() {
-            Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
-              .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(this.coverSize), -1, -this.sideDistancePx))
-              .backgroundColor(AppColor.Divider).opacity(0.55)
-            Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
-              .scale({ centerX: 0, centerY: 0, x: 1, y: 1 })
-              .transform3D(homeCoverPerspective(this.getUIContext().vp2px(this.coverSize), 1, this.sideDistancePx))
-              .backgroundColor(AppColor.Divider).opacity(0.55)
-            Row().width(this.coverSize).height(this.coverSize).borderRadius(AppRadius.Md)
-              .backgroundColor(AppColor.Divider)
-          }
-          .width('100%').height(homeCoverCarouselHeight(this.coverContentWidth))
-          .padding({ left: AppSpace.Md, right: AppSpace.Md })
-          }
+          BookPosterSkeleton()
         }
         if (this.showRecommendations) {
           this.skeletonFeaturedSection()
@@ -976,17 +925,12 @@ export struct HomePage {
   }
 
   @Computed
-  get landscapeCarousel(): boolean {
-    return this.viewportWidth > this.contentHeight;
-  }
-
-  @Computed
   get carouselFullHeight(): number {
     if (this.loadingHome && this.homeBlocks.length === 0) {
-      return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2, this.landscapeCarousel);
+      return homeCoverCarouselHeight();
     }
     if (this.carouselBooks.length === 0) return 0;
-    return homeCoverCarouselHeight(this.contentWidth - AppSpace.Md * 2, this.landscapeCarousel);
+    return homeCoverCarouselHeight();
   }
 
   @Computed
@@ -1478,7 +1422,7 @@ export struct HomePage {
         if (recommendations) {
           if (this.loadingHome && this.homeBlocks.length === 0) {
             ListItem() {
-              HomeLoadingSkeleton({ showCarousel: false, contentWidth: this.contentWidth })
+              HomeLoadingSkeleton({ showCarousel: false })
             }
           } else if (this.homeBlocks.length > 0) {
             LazyForEach(this.homeBlockDataSource, (block: HomeBlockSection, idx: number) => {
@@ -1591,6 +1535,9 @@ export struct HomePage {
                     BookCard({
                       book: book,
                       indexHint: row.startIndex + columnIndex,
+                      useOriginalCoverRatio: true,
+                      coverImageFit: ImageFit.Contain,
+                      coverRadius: AppRadius.Sm,
                       showSourceBadge: false,
                       onTap: () => this.openBook(book)
                     })
@@ -1770,6 +1717,9 @@ export struct HomePage {
         book: this.homeBookFromResult(r),
         cardWidth: HOME_COVER_CARD_SIZE,
         indexHint: indexHint,
+        useOriginalCoverRatio: true,
+        coverImageFit: ImageFit.Contain,
+        coverRadius: AppRadius.Sm,
         showSourceBadge: false,
         onTap: () => {
           const book = this.homeBookFromResult(r);
@@ -1800,14 +1750,11 @@ export struct HomePage {
           Column() {
             if (this.loadingHome && this.homeBlocks.length === 0) {
               HomeLoadingSkeleton({
-                showRecommendations: false,
-                contentWidth: this.contentWidth,
-                landscape: this.landscapeCarousel
+                showRecommendations: false
               })
             } else {
               HomeCoverCarousel({
                 books: this.carouselBooks,
-                landscape: this.landscapeCarousel,
                 active: this.visible && this.selectedCategoryIndex === -1 && !this.carouselTransitioning &&
                   !this.isSearchCollapsed && !this.openingCarouselBook,
                 onCoverChange: (cover: string): void => { this.carouselCover = cover; },
@@ -1815,7 +1762,6 @@ export struct HomePage {
                   this.openCarouselBook(book, nodeId, radius).catch((_error: Error): void => {});
                 }
               })
-                .padding({ left: AppSpace.Md, right: AppSpace.Md })
             }
           }
           .width('100%').height(this.carouselFullHeight)

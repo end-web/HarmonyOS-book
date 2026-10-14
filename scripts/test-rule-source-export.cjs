@@ -9,6 +9,7 @@ const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-l
 const root = path.resolve(__dirname, '../entry/src/main/ets');
 const modules = new Map();
 function load(file) {
+  if (!fs.existsSync(file) && file.endsWith('.ets')) file = file.slice(0, -4) + '.ts';
   if (modules.has(file)) return modules.get(file);
   const exports = {};
   modules.set(file, exports);
@@ -32,6 +33,12 @@ const definition = {
 };
 const input = JSON.stringify([definition]);
 let sources = parser.parse(input).sources;
+for (const key of ['enabled','enabledExplore','isLocked','isPinned','validationStatus','validationMessage']) {
+  sources[0]['__ob_' + key] = sources[0][key];
+  delete sources[0][key];
+  Object.defineProperty(sources[0],key,{enumerable:false,
+    get() { return this['__ob_' + key]; }, set(value) { this['__ob_' + key] = value; }});
+}
 const before = codec.exportBatch(sources);
 assert.equal(before, input, 'unchanged definitions keep their fields and value types');
 for (let cycle = 0; cycle < 5; cycle++) {
@@ -53,6 +60,7 @@ assert.deepEqual(edited.header, definition.header);
 const restored = parser.parse(JSON.stringify(edited)).sources[0];
 assert.equal(restored.ruleSearch.name, '');
 assert.equal(restored.ruleSearch.author, '$.author');
+sources[0].enabledExplore = false;
 sources[0].exploreUrl = '/explore';
 assert.equal(parser.parse(codec.stringify(sources[0])).sources[0].enabledExplore, false,
   'adding discovery must preserve its disabled state');

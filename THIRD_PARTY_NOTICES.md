@@ -25,7 +25,16 @@ Apache License 2.0 全文见 `third_party/quickjs/LICENSE-APACHE-2.0`。
 
 ## 许可边界
 
-本页所列 QuickJS、CryptoJS、仓颉运行时和 LLVM libc++ 均为独立组件；没有复制或链接轻页应用的 GPL-3.0 书源引擎、页面或业务代码。
+本页所列 QuickJS、CryptoJS、仓颉运行时和 LLVM libc++ 保留各自许可证。本应用已迁入轻页 GPL-3.0 书源引擎，组合应用分发需遵循相应 GPL 条款并提供对应源码；不能将包含该引擎的应用整体声明为 MIT。页面没有从轻页迁入。
+
+## 轻页 / legado-harmony 书源核心
+
+- 上游：https://github.com/wip3l/legado-harmony
+- 组织 Fork：https://github.com/hos-book/legado-harmony
+- 固定提交：`bf691dc124c3a145d444e8e78bb64933c2f6ef97`
+- 许可证：GPL-3.0，全文见 `third_party/light-source/LICENSE`
+
+迁入位置：`entry/src/main/ets/service/rulesource/light/upstream/`。原版权头保留；修改和适配由 `scripts/sync-light-source.cjs` 记录，版本和文件校验值见 `third_party/light-source/upstream.json`，维护流程见 `docs/LIGHT_SOURCE_SYNC.md`。
 
 ## CryptoJS
 

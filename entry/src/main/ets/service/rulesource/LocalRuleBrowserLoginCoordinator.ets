@@ -83,7 +83,8 @@ export class LocalRuleBrowserLoginCoordinator {
     if (pending !== undefined) LocalRuleBrowserLoginCoordinator.cancel(pending.route.requestId, '网页登录页面已关闭');
   }
 
-  static request(sourceUrl: string, sourceName: string, address: string, browserHtml: string = ''): Promise<string> {
+  static request(sourceUrl: string, sourceName: string, address: string, browserHtml: string = '',
+    injectJs: string = ''): Promise<string> {
     const route = RuleSourceLoginRouteParams.of(sourceUrl, sourceName || sourceUrl, address);
     if (!route.isValid()) return Promise.reject(new Error('等待网页登录仅支持有效的 HTTPS 地址'));
     const scope = LocalRuleBrowserLoginCoordinator.sourceScope(route.sourceUrl);
@@ -94,6 +95,7 @@ export class LocalRuleBrowserLoginCoordinator {
       return Promise.reject(new Error('网页登录内容超过输入大小限制'));
     }
     route.initialHtml = browserHtml;
+    route.injectJs = injectJs;
     if (LocalRuleBrowserLoginCoordinator.pending !== undefined) {
       return Promise.reject(new Error('已有等待中的网页登录，请先完成或取消'));
     }

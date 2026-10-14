@@ -3,7 +3,7 @@ import { LocalRuleSourceSession } from '../../../model/LocalRuleSource';
 import { JsonObj } from '../../builtin/JsonValue';
 import { HttpClient, HttpRequestOptions, HttpResponse } from '../../http/HttpClient';
 import { LocalRuleSourceRepository } from '../LocalRuleSourceRepository';
-import { LocalRuleHttpClient } from '../LocalRuleHttpClient';
+import { LightSourceCookies as LocalRuleHttpClient } from '../light/LightSourceCookies';
 import { GuangYuApiClient } from './GuangYuApiClient';
 import { GUANG_YU_SOURCE_URL } from './GuangYuSourceIdentity';
 

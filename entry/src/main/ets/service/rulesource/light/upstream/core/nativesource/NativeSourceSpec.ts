@@ -1,0 +1,391 @@
+/**
+ * 原生书源的定义格式：解析、校验，以及与书源表字段之间的打包/还原。
+ *
+ * 原生书源不新增数据库列：完整定义以 JSON 存进 jsLib 字段（以 "nativeSource" 键开头作为标记），
+ * 其余列只保留名称、分组、请求头等列表与请求层需要的信息。这样备份、云同步、导入导出都沿用现有通道。
+ *
+ * 本文件不依赖系统 API，可直接在 Node 回归脚本中加载。
+ */
+
+import { NativeExpr } from './NativeExpr';
+import type { NativeValue } from './NativeExpr';
+
+export interface NativeVarSpec {
+  key: string;
+  label?: string;
+  options?: string[];
+  default?: string;
+  /** 是否在发现页显示为筛选项。 */
+  filter?: boolean;
+}
+
+/** 听书音色：id 是传给接口的值，name 是显示名。 */
+export interface NativeVoiceSpec {
+  id: string;
+  name: string;
+}
+
+export interface NativeRequestSpec {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: NativeValue;
+  /** 用内置浏览器加载并取渲染后的页面，用于必须执行网页自身脚本的站点。 */
+  webView?: boolean;
+}
+
+export interface NativeLoginCheckSpec extends NativeRequestSpec {
+  /** 求值为真表示已登录。 */
+  ok: string;
+  /** 可选：账号显示名。 */
+  name?: string;
+}
+
+export interface NativeLoginSpec {
+  /** 登录页地址，在应用内置浏览器中打开。 */
+  url: string;
+  /** 登录成功后应当存在的 Cookie 名，用于判断登录状态。 */
+  cookies?: string[];
+  check?: NativeLoginCheckSpec;
+}
+
+export interface NativeStageSpec extends NativeRequestSpec {
+  let?: Record<string, NativeValue>;
+  /** 求值结果非空时视为接口报错，文本即错误信息。 */
+  fail?: string;
+  list?: string;
+  fields?: Record<string, NativeValue>;
+}
+
+export interface NativeMenuSpec {
+  title: string;
+  url?: string;
+  when?: string;
+  /** 只在这个分类的请求上附加的请求头，例如个人书架需要的登录凭据。 */
+  headers?: Record<string, string>;
+}
+
+export interface NativeDynamicMenuSpec extends NativeRequestSpec {
+  list: string;
+  title: string;
+  target: string;
+}
+
+export interface NativeExploreSpec extends NativeStageSpec {
+  menus?: NativeMenuSpec[];
+  dynamicMenus?: NativeDynamicMenuSpec;
+}
+
+export interface NativeDetailSpec extends NativeStageSpec {
+  /** 存入书籍变量，后续阶段通过 book.vars.名称 读取。 */
+  keep?: Record<string, NativeValue>;
+}
+
+export interface NativeTocSpec extends NativeStageSpec {
+  nextUrl?: string;
+  reverse?: boolean;
+}
+
+export interface NativeFetchSpec extends NativeRequestSpec {
+  when?: string;
+}
+
+export interface NativeReplaceSpec {
+  pattern: string;
+  with?: string;
+  flags?: string;
+}
+
+/** 段评与章末评论入口：书源只给数据和地址，气泡与卡片由应用绘制。 */
+export interface NativeCommentsSpec {
+  when?: string;
+  /** 评论数统计接口，结果绑定为 stats。 */
+  stats?: NativeRequestSpec;
+  /** 每段评论数：键（或下标）是正文行号，值是条数。 */
+  counts?: string;
+  /** 段评页地址，可用 para.index / para.text / para.count。 */
+  paragraphUrl?: string;
+  /** 整章评论页地址，可用 total。 */
+  chapterUrl?: string;
+  max?: number;
+}
+
+/** 正文末尾的链接按钮，点击后在应用内打开网页（例如视频播放页）。 */
+export interface NativeLinkSpec {
+  label: string;
+  url: string;
+  when?: string;
+}
+
+export interface NativeContentSpec extends NativeStageSpec {
+  comments?: NativeCommentsSpec;
+  links?: NativeLinkSpec[];
+  fetch?: Record<string, NativeFetchSpec>;
+  text?: string;
+  images?: string;
+  audio?: string;
+  /** 视频类书籍这一集的播放页地址，应用直接打开它而不进入阅读器。 */
+  video?: string;
+  nextUrl?: string;
+  replace?: NativeReplaceSpec[];
+}
+
+export interface NativeSourceDefinition {
+  nativeSource: number;
+  name: string;
+  url: string;
+  group?: string;
+  comment?: string;
+  /** text | audio | comic | video */
+  type?: string;
+  enabled?: boolean;
+  enabledExplore?: boolean;
+  rate?: string;
+  headers?: Record<string, string>;
+  vars?: NativeVarSpec[];
+  /** 函数库：用 fn 定义的纯计算函数，供表达式调用。 */
+  lib?: string;
+  login?: NativeLoginSpec;
+  /** 可选的听书音色。用户在听书页选中的 id 存在书籍变量里，规则通过 book.vars.custom 读取。 */
+  voices?: NativeVoiceSpec[];
+  let?: Record<string, NativeValue>;
+  search?: NativeStageSpec;
+  explore?: NativeExploreSpec;
+  detail?: NativeDetailSpec;
+  toc?: NativeTocSpec;
+  content?: NativeContentSpec;
+}
+
+export class NativeSourceSpec {
+  static readonly FORMAT: string = 'native';
+  static readonly VERSION: number = 1;
+  static readonly SEARCH_MARKER: string = 'native:search';
+  static readonly EXPLORE_MARKER: string = 'native:explore';
+
+  private static unpackCache: Map<string, NativeSourceDefinition> = new Map();
+
+  /** jsLib 字段里存的是不是原生书源定义。 */
+  static isPacked(jsLib: string): boolean {
+    return /^\s*\{\s*"nativeSource"\s*:/.test(jsLib || '');
+  }
+
+  /** 导入的 JSON 对象是不是原生书源。 */
+  static isDefinitionObject(value: NativeValue): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return value['sourceFormat'] === NativeSourceSpec.FORMAT || typeof value['nativeSource'] === 'number';
+  }
+
+  /** 从导入对象整理出定义；不合法时抛出带原因的错误。 */
+  static fromObject(value: NativeValue): NativeSourceDefinition {
+    if (!NativeSourceSpec.isDefinitionObject(value)) throw new Error('不是原生书源：缺少 "sourceFormat": "native"');
+    const raw = value as Record<string, NativeValue>;
+    const version = Number(raw['version'] || raw['nativeSource'] || NativeSourceSpec.VERSION);
+    if (version > NativeSourceSpec.VERSION) {
+      throw new Error(`该原生书源需要更新版本的应用（格式版本 ${version}）`);
+    }
+    const definition: Record<string, NativeValue> = { nativeSource: NativeSourceSpec.VERSION };
+    for (const key of Object.keys(raw)) {
+      if (key === 'sourceFormat' || key === 'version' || key === 'nativeSource') continue;
+      definition[key] = raw[key];
+    }
+    definition['name'] = String(raw['name'] || '').trim();
+    definition['url'] = String(raw['url'] || '').trim();
+    const errors = NativeSourceSpec.validate(definition as NativeSourceDefinition);
+    if (errors.length > 0) throw new Error(errors.slice(0, 5).join('；'));
+    return definition as NativeSourceDefinition;
+  }
+
+  /** 导出给用户的对象：把内部标记换回 sourceFormat/version。 */
+  static toExportObject(definition: NativeSourceDefinition): Record<string, NativeValue> {
+    const out: Record<string, NativeValue> = {
+      sourceFormat: NativeSourceSpec.FORMAT,
+      version: definition.nativeSource || NativeSourceSpec.VERSION
+    };
+    const raw = definition as NativeValue as Record<string, NativeValue>;
+    for (const key of Object.keys(raw)) {
+      if (key !== 'nativeSource') out[key] = raw[key];
+    }
+    return out;
+  }
+
+  static pack(definition: NativeSourceDefinition): string {
+    const ordered: Record<string, NativeValue> = { nativeSource: definition.nativeSource || NativeSourceSpec.VERSION };
+    const raw = definition as NativeValue as Record<string, NativeValue>;
+    for (const key of Object.keys(raw)) {
+      if (key !== 'nativeSource') ordered[key] = raw[key];
+    }
+    return JSON.stringify(ordered);
+  }
+
+  static unpack(jsLib: string): NativeSourceDefinition | null {
+    if (!NativeSourceSpec.isPacked(jsLib)) return null;
+    const cached = NativeSourceSpec.unpackCache.get(jsLib);
+    if (cached) return cached;
+    try {
+      const parsed = JSON.parse(jsLib) as NativeSourceDefinition;
+      if (NativeSourceSpec.unpackCache.size >= 64) NativeSourceSpec.unpackCache.clear();
+      NativeSourceSpec.unpackCache.set(jsLib, parsed);
+      return parsed;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  static bookSourceType(definition: NativeSourceDefinition): number {
+    const type = String(definition.type || 'text').toLowerCase();
+    if (type === 'audio') return 1;
+    if (type === 'comic' || type === 'image') return 2;
+    return 0;
+  }
+
+  static validate(definition: NativeSourceDefinition): string[] {
+    const errors: string[] = [];
+    if (!definition.name) errors.push('缺少书源名称 name');
+    if (!/^https?:\/\//i.test(definition.url || '')) errors.push('书源地址 url 必须以 http:// 或 https:// 开头');
+    if (!definition.search && !definition.explore) errors.push('至少需要 search 或 explore 其中之一');
+    const type = String(definition.type || 'text').toLowerCase();
+    if (['text', 'audio', 'comic', 'image', 'video'].indexOf(type) < 0) {
+      errors.push('type 只能是 text、audio、comic 或 video');
+    }
+
+    const keys: Set<string> = new Set();
+    for (const item of definition.vars || []) {
+      if (!item || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(item.key || '')) {
+        errors.push('vars 里的 key 只能用字母、数字和下划线');
+        continue;
+      }
+      if (keys.has(item.key)) errors.push(`vars 里的 key 重复：${item.key}`);
+      keys.add(item.key);
+      if (item.options !== undefined && !Array.isArray(item.options)) errors.push(`vars.${item.key}.options 必须是数组`);
+    }
+
+    if (definition.lib !== undefined && typeof definition.lib !== 'string') {
+      errors.push('lib 必须是字符串');
+    } else if (definition.lib) {
+      const problem = NativeExpr.checkLibrary(definition.lib);
+      if (problem) errors.push(`lib：${problem}`);
+    }
+    if (definition.voices !== undefined) {
+      if (!Array.isArray(definition.voices)) {
+        errors.push('voices 必须是数组');
+      } else if (definition.voices.some((voice: NativeVoiceSpec): boolean =>
+        !voice || String(voice.id === undefined ? '' : voice.id) === '' || !voice.name)) {
+        errors.push('voices 的每一项都需要 id 和 name');
+      }
+    }
+    NativeSourceSpec.checkValues(definition.let, 'let', errors);
+    NativeSourceSpec.checkValues(definition.headers, 'headers', errors);
+    if (definition.login !== undefined) {
+      const login = definition.login;
+      if (!login || typeof login !== 'object' || !/^https?:\/\//i.test(String(login.url || ''))) {
+        errors.push('login.url 必须是以 http:// 或 https:// 开头的登录页地址');
+      } else {
+        if (login.cookies !== undefined && !Array.isArray(login.cookies)) errors.push('login.cookies 必须是数组');
+        if (login.check) {
+          if (!login.check.url || !login.check.ok) errors.push('login.check 需要 url 和 ok');
+          NativeSourceSpec.checkValues(login.check, 'login.check', errors);
+        }
+      }
+    }
+    const stages: Array<[string, NativeStageSpec | undefined]> = [
+      ['search', definition.search], ['explore', definition.explore], ['detail', definition.detail],
+      ['toc', definition.toc], ['content', definition.content]
+    ];
+    for (const entry of stages) {
+      if (entry[1] === undefined) continue;
+      if (!entry[1] || typeof entry[1] !== 'object' || Array.isArray(entry[1])) {
+        errors.push(`${entry[0]} 必须是对象`);
+        continue;
+      }
+      NativeSourceSpec.checkValues(entry[1], entry[0], errors);
+    }
+    if (definition.search) {
+      if (!definition.search.url) errors.push('search 缺少 url');
+      NativeSourceSpec.requireBookFields(definition.search, 'search', errors);
+    }
+    if (definition.explore) {
+      const explore = definition.explore;
+      if ((!explore.menus || explore.menus.length === 0) && !explore.dynamicMenus) {
+        errors.push('explore 需要 menus 或 dynamicMenus');
+      }
+      if (explore.menus !== undefined && !Array.isArray(explore.menus)) errors.push('explore.menus 必须是数组');
+      if (explore.dynamicMenus && (!explore.dynamicMenus.url || !explore.dynamicMenus.list ||
+        !explore.dynamicMenus.title || !explore.dynamicMenus.target)) {
+        errors.push('explore.dynamicMenus 需要 url、list、title 和 target');
+      }
+      NativeSourceSpec.requireBookFields(explore, 'explore', errors);
+    }
+    if (definition.toc) {
+      const fields = definition.toc.fields || {};
+      if (!definition.toc.list) errors.push('toc 缺少 list');
+      if (!fields['title']) errors.push('toc.fields 缺少 title');
+      if (!fields['url']) errors.push('toc.fields 缺少 url');
+    }
+    if (definition.content) {
+      const content = definition.content;
+      if (!content.text && !content.images && !content.audio && !content.video) {
+        errors.push('content 需要 text、images、audio 或 video 之一');
+      }
+      if (content.replace !== undefined && !Array.isArray(content.replace)) errors.push('content.replace 必须是数组');
+      if (content.links !== undefined) {
+        if (!Array.isArray(content.links)) {
+          errors.push('content.links 必须是数组');
+        } else if (content.links.some((link: NativeLinkSpec): boolean => !link || !link.label || !link.url)) {
+          errors.push('content.links 的每一项都需要 label 和 url');
+        }
+      }
+      if (content.comments) {
+        if (!content.comments.paragraphUrl && !content.comments.chapterUrl) {
+          errors.push('content.comments 需要 paragraphUrl 或 chapterUrl');
+        }
+        if (content.comments.paragraphUrl && !content.comments.counts) {
+          errors.push('content.comments 使用 paragraphUrl 时需要 counts');
+        }
+      }
+      for (const rule of Array.isArray(content.replace) ? content.replace : []) {
+        try {
+          new RegExp(rule.pattern || '', rule.flags === undefined ? 'g' : rule.flags);
+        } catch (e) {
+          errors.push(`content.replace 的正则写法不正确：${rule.pattern}`);
+        }
+      }
+    }
+    return errors;
+  }
+
+  private static requireBookFields(stage: NativeStageSpec, name: string, errors: string[]): void {
+    const fields = stage.fields || {};
+    if (!stage.list) errors.push(`${name} 缺少 list`);
+    if (!fields['name']) errors.push(`${name}.fields 缺少 name`);
+    if (!fields['bookUrl']) errors.push(`${name}.fields 缺少 bookUrl`);
+  }
+
+  /** 递归检查每个字符串值：表达式和模板的语法，以及是否混入了脚本。 */
+  private static checkValues(value: NativeValue, path: string, errors: string[]): void {
+    if (errors.length >= 20 || value === null || value === undefined) return;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      let problem = '';
+      if (text.startsWith('=')) {
+        problem = NativeExpr.check(text.substring(1));
+      } else if (/^@?js\s*:|<js>|@js\s*:/i.test(text)) {
+        problem = '原生书源不支持脚本，请改用 = 表达式';
+      } else if (text.indexOf('{{') >= 0) {
+        problem = NativeExpr.checkTemplate(text);
+      }
+      if (problem) errors.push(`${path}：${problem}`);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) NativeSourceSpec.checkValues(value[i], `${path}[${i}]`, errors);
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const key of Object.keys(value)) {
+        // replace 的 pattern/with 是正则与替换文本，不按规则语法检查。
+        if (/\.replace\[\d+\]$/.test(path)) continue;
+        NativeSourceSpec.checkValues(value[key], `${path}.${key}`, errors);
+      }
+    }
+  }
+}

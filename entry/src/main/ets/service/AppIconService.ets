@@ -27,9 +27,9 @@ export class AppIconService {
     return PlatformCompat.supports(26);
   }
 
-  /** 主题图标会员策略；页面、切换服务和失效回调统一遵循，v0.1.52 邀测包临时开放。 */
+  /** 当前免费版本开放全部图标，仍保留系统能力检查。 */
   get membershipRequired(): boolean {
-    return true;
+    return false;
   }
 
   getOptions(): AppIconOption[] {

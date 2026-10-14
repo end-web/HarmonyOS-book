@@ -13,6 +13,10 @@ export class BookCoverPolicy {
   static merge(incoming: Book, existing: Book): void {
     if (incoming.id !== existing.id || incoming.sourceUrl !== existing.sourceUrl ||
       incoming.bookUrl !== existing.bookUrl || !existing.cover.trim()) return;
+    // Fresh imported audio discovery carries the selected edition's cover. Older detail
+    // caches may contain the novel cover from before the upstream Book context was bridged.
+    if (incoming.contentType === 'audio' && incoming.variables?.['__lightBook'] &&
+      incoming.cover.trim() && incoming.cover !== existing.cover) return;
     if (!incoming.cover.trim() || (existing.coverFromDetail === true && incoming.coverFromDetail !== true)) {
       const thumbnail = incoming.cover;
       incoming.cover = existing.cover;

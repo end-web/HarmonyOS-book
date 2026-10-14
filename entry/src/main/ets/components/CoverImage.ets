@@ -3,8 +3,8 @@ import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { CoverAspectRatio } from '../utils/CoverAspectRatio';
 
 /**
- * 网络封面图：失败自动延迟重试，直到出图或达到上限。
- * 解决首进首页封面半截停住、之后再不加载的问题。
+ * 网络封面图：占位始终保留，完整出图后显示；失败只后台重试一次。
+ * 短期复用失败结果，避免列表重建时反复请求和闪动。
  */
 @ComponentV2
 export struct CoverImage {
@@ -13,6 +13,8 @@ export struct CoverImage {
   @Param imgHeight: Length = 0;
   @Param useFixedHeight: boolean = false;
   @Param aspectRatioValue: number = 0.75;
+  @Param useOriginalRatio: boolean = false;
+  @Param maxOriginalHeight: number = 0;
   @Param radius: number = AppRadius.Md;
   @Param imageFit: ImageFit = ImageFit.Cover;
   @Param decodeW: number = 300;
@@ -24,8 +26,23 @@ export struct CoverImage {
   @Local showImage: boolean = true;
   @Local giveUp: boolean = false;
   @Local retryCount: number = 0;
+  @Local imageReady: boolean = false;
+  @Local originalRatio: number = 0.75;
 
-  private static readonly MAX_UI_RETRY: number = 6;
+  private displayRatio(): number {
+    return this.useOriginalRatio ? this.originalRatio : this.aspectRatioValue;
+  }
+
+  private displayWidth(): Length {
+    if (this.useOriginalRatio && this.maxOriginalHeight > 0 && typeof this.imgWidth === 'number') {
+      return CoverAspectRatio.fittedWidth(this.originalRatio, this.imgWidth, this.maxOriginalHeight);
+    }
+    return this.imgWidth;
+  }
+
+  private static readonly MAX_UI_RETRY: number = 1;
+  private static readonly FAILURE_COOLDOWN_MS: number = 5 * 60 * 1000;
+  private static failedUntil: Map<string, number> = new Map<string, number>();
   private retryTimer: number = -1;
   private appeared: boolean = false;
 
@@ -46,10 +63,13 @@ export struct CoverImage {
 
   private resetCover(): void {
     this.cancelRetry();
+    this.originalRatio = CoverAspectRatio.get(this.url, this.aspectRatioValue);
     this.showImage = true;
-    this.giveUp = false;
+    this.imageReady = false;
+    this.giveUp = (CoverImage.failedUntil.get(this.url) ?? 0) > Date.now();
     this.retryCount = 0;
-    if (this.url.startsWith('http')) {
+    if (this.url.startsWith('http') && !this.giveUp) {
+      CoverImage.failedUntil.delete(this.url);
       CoverPrefetcher.prefetch(this.url, this.highPriority);
     }
   }
@@ -62,11 +82,18 @@ export struct CoverImage {
   private scheduleRetry(): void {
     if (!this.appeared || this.retryTimer >= 0) return;
     if (this.retryCount >= CoverImage.MAX_UI_RETRY) {
+      CoverImage.failedUntil.delete(this.url);
+      CoverImage.failedUntil.set(this.url, Date.now() + CoverImage.FAILURE_COOLDOWN_MS);
+      for (const key of CoverImage.failedUntil.keys()) {
+        if (CoverImage.failedUntil.size <= 512) break;
+        CoverImage.failedUntil.delete(key);
+      }
       this.giveUp = true;
       return;
     }
     this.retryCount = this.retryCount + 1;
     this.showImage = false;
+    this.imageReady = false;
     CoverPrefetcher.retry(this.url);
     const delayMs: number = Math.min(800 * this.retryCount, 5000);
     const url = this.url;
@@ -78,71 +105,87 @@ export struct CoverImage {
   }
 
   @Builder
-  private networkImage() {
+  private networkImage(url: string) {
     if (this.useFixedHeight) {
-      Image(this.url)
+      Image(url)
         .width(this.imgWidth)
         .height(this.imgHeight)
         .borderRadius(this.radius)
         .clip(true)
         .objectFit(this.imageFit)
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
-        .alt($r('app.media.book_cover_placeholder'))
+        .opacity(this.imageReady ? 1 : 0)
         .onComplete((event) => {
           // 数据加载阶段为原图尺寸；不能用 sourceSize 缩略解码后的尺寸覆盖它。
-          if (!this.appeared || event?.loadingStatus !== 0) return;
-          CoverAspectRatio.remember(this.url, event.width, event.height);
-          this.onImageSize(this.url, event.width, event.height);
-          this.onImageReady(this.url);
+          if (!this.appeared || this.url !== url) return;
+          if (event?.loadingStatus === 0) {
+            CoverAspectRatio.remember(url, event.width, event.height);
+            this.onImageSize(url, event.width, event.height);
+          } else if (event?.loadingStatus === 1) {
+            this.cancelRetry();
+            CoverImage.failedUntil.delete(url);
+            this.imageReady = true;
+            this.onImageReady(url);
+          }
         })
         .onError(() => {
-          this.scheduleRetry();
+          if (this.url === url) this.scheduleRetry();
         })
     } else {
-      Image(this.url)
-        .width(this.imgWidth)
-        .aspectRatio(this.aspectRatioValue)
+      Image(url)
+        .width(this.displayWidth())
+        .aspectRatio(this.displayRatio())
         .borderRadius(this.radius)
         .clip(true)
         .objectFit(this.imageFit)
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
-        .alt($r('app.media.book_cover_placeholder'))
+        .opacity(this.imageReady ? 1 : 0)
         .onComplete((event) => {
-          if (!this.appeared || event?.loadingStatus !== 0) return;
-          CoverAspectRatio.remember(this.url, event.width, event.height);
-          this.onImageSize(this.url, event.width, event.height);
-          this.onImageReady(this.url);
+          if (!this.appeared || this.url !== url) return;
+          if (event?.loadingStatus === 0) {
+            CoverAspectRatio.remember(url, event.width, event.height);
+            this.originalRatio = CoverAspectRatio.get(url, this.aspectRatioValue);
+            this.onImageSize(url, event.width, event.height);
+          } else if (event?.loadingStatus === 1) {
+            this.cancelRetry();
+            CoverImage.failedUntil.delete(url);
+            this.imageReady = true;
+            this.onImageReady(url);
+          }
         })
         .onError(() => {
-          this.scheduleRetry();
+          if (this.url === url) this.scheduleRetry();
         })
     }
   }
 
   @Builder
   private placeholderImage() {
+    // 占位素材是方图，必须填满封面框；不能跟随真实封面的 Contain 留白。
     if (this.useFixedHeight) {
       Image($r('app.media.book_cover_placeholder'))
         .width(this.imgWidth)
         .height(this.imgHeight)
         .borderRadius(this.radius)
         .clip(true)
-        .objectFit(this.imageFit)
+        .objectFit(ImageFit.Cover)
     } else {
       Image($r('app.media.book_cover_placeholder'))
-        .width(this.imgWidth)
-        .aspectRatio(this.aspectRatioValue)
+        .width(this.displayWidth())
+        .aspectRatio(this.displayRatio())
         .borderRadius(this.radius)
         .clip(true)
-        .objectFit(this.imageFit)
+        .objectFit(ImageFit.Cover)
     }
   }
 
   build() {
-    if (this.url.startsWith('http') && this.showImage && !this.giveUp) {
-      this.networkImage()
-    } else {
+    Stack() {
       this.placeholderImage()
+      if (this.url.startsWith('http') && this.showImage && !this.giveUp) {
+        this.networkImage(this.url)
+      }
     }
+    .width(this.displayWidth())
   }
 }

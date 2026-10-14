@@ -18,12 +18,32 @@ export struct BookCard {
   @Param cardWidth: number = 110;
   @Param indexHint: number = 0;
   @Param coverAspectRatio: number = 1;
+  @Param useOriginalCoverRatio: boolean = false;
+  @Param coverImageFit: ImageFit = ImageFit.Cover;
+  @Param coverRadius: number = AppRadius.Md;
   @Param showSourceBadge: boolean = true;
   @Event onTap: (id: string) => void = () => {};
 
   @Local coverState: OneShotCoverState = OneShotTransitionCoordinator.getInstance().coverState;
   @Local imageLoadFailed: boolean = false;
   @Local appeared: boolean = false;
+  @Local originalCoverRatio: number = 0.75;
+
+  private displayCoverRatio(): number {
+    return this.useOriginalCoverRatio ? this.originalCoverRatio : this.coverAspectRatio;
+  }
+
+  private rememberCoverSize(url: string, width: number, height: number): void {
+    if (url !== this.book.cover) return;
+    CoverAspectRatio.remember(url, width, height);
+    this.originalCoverRatio = CoverAspectRatio.get(url, 0.75);
+  }
+
+  @Monitor('book')
+  onBookChanged(): void {
+    this.originalCoverRatio = CoverAspectRatio.get(this.book.cover, 0.75);
+    this.imageLoadFailed = false;
+  }
 
   private static shownIds: Set<string> = new Set();
   private static transitionIdSeed: number = 0;
@@ -33,6 +53,7 @@ export struct BookCard {
 
   aboutToAppear(): void {
     this.disposed = false;
+    this.originalCoverRatio = CoverAspectRatio.get(this.book.cover, 0.75);
     if (this.transitionNodeId.length === 0) {
       BookCard.transitionIdSeed = BookCard.transitionIdSeed + 1;
       this.transitionNodeId = OneShotTransitionIds.sourceCover(this.book.id) + '-' +
@@ -76,7 +97,7 @@ export struct BookCard {
     const bookId = this.book.id;
     try {
       await OneShotTransitionCoordinator.getInstance().captureAsync(
-        this.getUIContext(), bookId, this.transitionNodeId, AppRadius.Md);
+        this.getUIContext(), bookId, this.transitionNodeId, this.coverRadius);
       if (!this.disposed && this.book.id === bookId) {
         this.onTap(bookId);
       }
@@ -92,40 +113,44 @@ export struct BookCard {
           CoverImage({
             url: this.book.cover,
             imgWidth: '100%',
-            aspectRatioValue: this.coverAspectRatio,
-            radius: AppRadius.Md,
+            aspectRatioValue: this.displayCoverRatio(),
+            imageFit: this.coverImageFit,
+            radius: this.coverRadius,
             decodeW: 300,
             decodeH: this.coverAspectRatio < 1 ? 400 : 300,
-            highPriority: this.indexHint < 24
+            highPriority: this.indexHint < 24,
+            onImageSize: (url: string, width: number, height: number): void =>
+              this.rememberCoverSize(url, width, height)
           })
         } else if (this.book.cover && this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image('file://' + this.book.cover.replace(/^file:\/\//, ''))
             .width('100%')
-            .aspectRatio(this.coverAspectRatio)
-            .borderRadius(AppRadius.Md)
-            .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: this.coverAspectRatio < 1 ? 400 : 300 })
+            .aspectRatio(this.displayCoverRatio())
+            .borderRadius(this.coverRadius)
+            .objectFit(this.coverImageFit)
+            .sourceSize(this.coverImageFit === ImageFit.Contain ? undefined :
+              { width: 300, height: this.coverAspectRatio < 1 ? 400 : 300 })
             .onComplete((event) => {
-              if (event?.loadingStatus === 0) CoverAspectRatio.remember(this.book.cover, event.width, event.height);
+              if (event?.loadingStatus === 0) this.rememberCoverSize(this.book.cover, event.width, event.height);
             })
             .onError(() => { this.imageLoadFailed = true; })
         } else if (this.book.cover && !this.book.cover.startsWith('http') && !this.isLocalFile(this.book.cover) && !this.imageLoadFailed) {
           Image($rawfile(this.book.cover))
             .width('100%')
-            .aspectRatio(this.coverAspectRatio)
-            .borderRadius(AppRadius.Md)
-            .objectFit(ImageFit.Cover)
+            .aspectRatio(this.displayCoverRatio())
+            .borderRadius(this.coverRadius)
+            .objectFit(this.coverImageFit)
             .onComplete((event) => {
-              if (event?.loadingStatus === 0) CoverAspectRatio.remember(this.book.cover, event.width, event.height);
+              if (event?.loadingStatus === 0) this.rememberCoverSize(this.book.cover, event.width, event.height);
             })
             .onError(() => { this.imageLoadFailed = true; })
         } else {
-          // 无封面:用 app 图标占位(替代旧的绿色书形/品牌色占位)
-          Image($r('app.media.app_icon_legacy'))
-            .width('100%')
-            .aspectRatio(this.coverAspectRatio)
-            .borderRadius(AppRadius.Md)
-            .objectFit(ImageFit.Cover)
+          CoverImage({
+            imgWidth: '100%',
+            aspectRatioValue: this.displayCoverRatio(),
+            radius: this.coverRadius,
+            imageFit: this.coverImageFit
+          })
         }
 
         if (this.showSourceBadge && this.sourceName()) {
@@ -136,13 +161,13 @@ export struct BookCard {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
             .backgroundColor('#99000000')
-            .borderRadius({ topRight: AppRadius.Sm, bottomLeft: AppRadius.Md })
+            .borderRadius({ topRight: AppRadius.Sm, bottomLeft: this.coverRadius })
             .constraintSize({ maxWidth: '80%' })
         }
       }
       .width('100%')
-      .aspectRatio(this.coverAspectRatio)
-      .borderRadius(AppRadius.Md)
+      .aspectRatio(this.displayCoverRatio())
+      .borderRadius(this.coverRadius)
       .clip(true)
       .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
       .id(this.transitionNodeId)

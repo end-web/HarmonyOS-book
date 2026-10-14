@@ -72,6 +72,12 @@ mocks['./OnlineTextPaginator'] = mocks['../service/text/OnlineTextPaginator'];
 const { TextReadingProgressService: progress } = compile('service/text/TextReadingProgressService');
 mocks['../service/text/TextReadingProgressService'] = { TextReadingProgressService: progress };
 mocks['../service/text/ReaderFontService'] = { ReaderFontService: { register: () => 'ReaderFont_Custom' } };
+mocks['../service/text/TextToSpeechService'] = { TextToSpeechService: {
+  getInstance: () => ({ state: { playing: false } })
+} };
+mocks['../service/ReadingSessionService'] = {
+  SessionLocation: { text: () => ({}) }, ReadingSessionService: { checkpoint() {} }
+};
 let systemBottomVp = 0;
 mocks['../utils/WindowUtils'] = { WindowUtils: { getSystemBottomVp: () => systemBottomVp } };
 let source = fs.readFileSync(path.join(root, 'pages/ReaderPage.ets'), 'utf8');

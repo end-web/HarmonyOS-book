@@ -7,6 +7,7 @@ export class RuleSourceLoginRouteParams {
   isMainAccount: boolean = false;
   requestId: string = '';
   initialHtml: string = '';
+  injectJs: string = '';
 
   static of(sourceUrl: string, displayName: string, loginUrl: string): RuleSourceLoginRouteParams {
     const params = new RuleSourceLoginRouteParams();

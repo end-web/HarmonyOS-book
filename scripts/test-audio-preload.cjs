@@ -71,7 +71,8 @@ function load(name) {
   if (modules.has(name)) return modules.get(name).exports;
   const module = { exports: {} };
   modules.set(name, module);
-  const filename = path.join(root, name + '.ets');
+  const filename = ['.ets', '.ts'].map(ext => path.join(root, name + ext)).find(fs.existsSync);
+  if (!filename) throw new Error(`Module not found: ${name}`);
   const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
   }).outputText;
@@ -249,18 +250,23 @@ function load(name) {
   const takeoverChapter = takeoverBook.chapters[1];
   let completeResolve;
   let calls = 0;
-  sourceService.resolveAudioRequest = () => {
+  let observedRequest;
+  sourceService.resolveAudioRequest = (_source, _url, _variables, _chapterVariables, request) => {
+    observedRequest = request;
     calls++;
     return new Promise(resolve => { completeResolve = resolve; });
   };
   takeover.preloadAudioChapters(takeoverBook, 0);
   await settle();
+  assert.equal(observedRequest.priority, 0, 'Preload enters the source limiter with background priority');
   const pending = takeover.getPendingAudioResolve(takeoverBook, takeoverChapter);
   assert.ok(pending);
   assert.equal(takeover.getPendingAudioResolve({ ...takeoverBook, sourceUrl: 'other' }, takeoverChapter), undefined);
   assert.equal(takeover.getPendingAudioResolve(takeoverBook,
     { ...takeoverChapter, source: { type: 'url', value: 'https://changed.invalid' } }), undefined);
   takeover.suspendPreload(takeoverChapter.id);
+  assert.equal(observedRequest.priority, 2, 'Foreground takeover promotes the original pending request');
+  assert.equal(observedRequest.isCancelled(), false);
   assert.equal(await takeover.waitForAudioFile(takeoverBook, takeoverChapter), null);
   assert.equal(takeover.getPendingAudioResolve(takeoverBook, takeoverChapter), pending);
   const beforeTakeover = transfers.length;
@@ -281,6 +287,7 @@ function load(name) {
     if (action === 'clear') invalid.clearChapter(invalidBook.chapters[1].id);
     if (action === 'switch') invalid.suspendPreload(invalidBook.chapters[2].id);
     if (action === 'disable') invalid.setPreloadCount(0);
+    assert.equal(observedRequest.isCancelled(), true, `${action} cancels the source request before quota admission`);
     assert.equal(invalid.getPendingAudioResolve(invalidBook, invalidBook.chapters[1]), undefined);
     completeResolve({ url: 'https://cdn.invalid/stale.mp3', headers: {} });
     await settle();

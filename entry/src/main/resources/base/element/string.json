@@ -1,5 +1,7 @@
 {
   "string": [
+    {"name": "light_source_save_settings", "value": "保存书源设置"},
+    {"name": "light_source_web_login", "value": "网页登录"},
     {"name": "player_source_voice_label", "value": "音色"},
     {"name": "player_source_voice_title", "value": "书源音色"},
     {"name": "player_source_voice_hint", "value": "填写书源提供的音色代码，留空恢复默认。仅影响在线取音频，已下载音频保留原音色。"},
@@ -1209,8 +1211,8 @@
       "name": "rule_source_import_file_action",
       "value": "选择本地 JSON（可多选）"
     },
-    {"name": "rule_source_import_files_hint", "value": "每次最多 10 个文件，单个 10 MiB、合计 30 MiB，最多处理 1000 个书源。无效、超限或锁定的内容会跳过。"},
-    {"name": "rule_source_import_files_oversized", "value": "%d 个文件超过单文件 10 MiB 限制，请拆分后重试。"},
+    {"name": "rule_source_import_files_hint", "value": "每次最多 10 个文件，单个 25 MiB、合计 250 MiB。无效、超限或锁定的内容会跳过。"},
+    {"name": "rule_source_import_files_oversized", "value": "%d 个文件超过单文件 25 MiB 限制，请拆分后重试。"},
     {"name": "rule_source_import_files_budget", "value": "%d 个文件超过本批 30 MiB 总量限制，请分批导入。"},
     {"name": "rule_source_import_files_invalid", "value": "%d 个文件为空、格式无效或未包含可导入书源，请检查 JSON 内容。"},
     {"name": "rule_source_import_files_read_failed", "value": "%d 个文件读取失败，请重新选择文件或保存到本地后重试。"},
@@ -1223,7 +1225,7 @@
     },
     {
       "name": "rule_source_import_file_too_large",
-      "value": "JSON 文件不能超过 10 MiB"
+      "value": "JSON 文件不能超过 25 MiB"
     },
     {
       "name": "rule_source_import_file_failed",
@@ -2021,6 +2023,7 @@
     {"name": "log_operation_failed", "value": "操作失败，请稍后重试"},
     {"name": "log_storage_failed", "value": "日志文件读写异常，当前记录可能尚未完整保存"},
     {"name": "import_pick_failed", "value": "未能选择文件，请重试；详情可在“我的—日志管理”查看"},
+    {"name": "features_free_access", "value": "全部功能免费开放"},
     {"name": "membership_developer_active", "value": "开发者调试豁免已启用"},
     {"name": "membership_entry_desc", "value": "专属主题 · 更多会员权益"},
     {"name": "membership_card_title", "value": "简听阅读会员"},
@@ -2041,7 +2044,7 @@
     {"name": "membership_expiry_renew_off", "value": "有效期至 %d年%d月%d日 · 自动续费已关闭"},
     {"name": "membership_renew_on", "value": "自动续费已开启"},
     {"name": "membership_renew_off", "value": "自动续费已关闭，当前有效期内会员权益继续有效"},
-    {"name": "membership_benefit", "value": "1. 自动云备份：可开启自动备份，选择每天、每 3 天或每周。非会员可手动云备份。\n2. 全量主题解锁：有效期内解锁全部会员桌面图标及后续新增官方皮肤。默认图标、原有界面配色和阅读器主题保持免费。\n3. 自定义源无限制：会员导入总数不限，非会员最多 8 个。\n4. 搜索并发自定义：默认 3，会员可设置 1–12。\n5. 专属客服：会员可享专属客服支持。"},
+    {"name": "membership_benefit", "value": "1. 自动云备份：可开启自动备份，选择每天、每 3 天或每周。非会员可手动云备份。\n2. 全量主题解锁：有效期内解锁全部会员桌面图标及后续新增官方皮肤。默认图标、原有界面配色和阅读器主题保持免费。\n3. 自定义源无限制：会员导入总数不限，非会员最多 8 个。\n4. 搜索并发自定义：默认 3，可设置 1–12。\n5. 专属客服：会员可享专属客服支持。"},
     {"name": "membership_month", "value": "月度会员"},
     {"name": "membership_year", "value": "年度会员"},
     {"name": "membership_month_period", "value": "每 1 个月自动续费"},
@@ -2066,7 +2069,7 @@
     {"name": "membership_verification_failed", "value": "会员状态未能核验，请稍后恢复购买；已扣款请勿重复购买"},
     {"name": "auto_backup_membership_required", "value": "自动云备份和周期设置为会员专享，非会员可使用手动云备份。"},
     {"name": "rule_source_membership_limit", "value": "非会员最多导入 8 个自定义源，超限批次未写入。可减少新增数量或开通会员；已有源仍可使用和更新。"},
-    {"name": "rule_source_membership_hint", "value": "非会员最多 8 个自定义源，会员不限总数；已有源更新不占新名额。"},
+    {"name": "rule_source_membership_hint", "value": "书源导入不限总数；已有源更新会保留启用状态。"},
     {"name": "rule_source_save_failed", "value": "保存失败"},
     {"name": "membership_lifetime", "value": "终身会员"},
     {"name": "membership_lifetime_period", "value": "一次购买，终身有效"},
@@ -2110,7 +2113,7 @@
     {"name": "shelf_filter_save_failed", "value": "筛选已生效，但保存失败，请重新选择"},
     {"name": "settings_loading", "value": "正在读取本地设置…"},
     {"name": "settings_load_failed", "value": "本地设置读取失败，请重试"},
-    {"name": "settings_search_loading", "value": "正在读取搜索设置并核验会员…"},
+    {"name": "settings_search_loading", "value": "正在读取搜索设置…"},
     {"name": "settings_search_load_failed", "value": "搜索设置读取失败，请重试"},
     {"name": "book_detail_loading_chapters", "value": "加载章节中"},
     {"name": "app_icon_waveberry", "value": "莓果酒红"},

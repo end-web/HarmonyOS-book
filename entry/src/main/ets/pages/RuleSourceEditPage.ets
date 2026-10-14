@@ -3,7 +3,6 @@ import { LocalRuleSource, LocalRuleSearchRule, LocalRuleBookInfoRule, LocalRuleT
 import { LocalRuleSourceRepository, SourceLimitError } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleSourceCodec } from '../service/rulesource/LocalRuleSourceCodec';
 import { LocalRuleSourceImportParser } from '../service/rulesource/LocalRuleSourceImportParser';
-import { LocalRuleScriptRuntime } from '../service/rulesource/LocalRuleScriptRuntime';
 import { SourceDataService } from '../service/SourceDataService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -27,7 +26,7 @@ function FormFieldBuilder(params: FormFieldParams) {
       .fontColor($r('sys.color.font_secondary'))
       .width('100%')
 
-    if (params.multiline || params.value.includes('\n') || LocalRuleScriptRuntime.hasScript(params.value)) {
+    if (params.multiline || params.value.includes('\n') || new RegExp('(@?js:|<js>)', 'i').test(params.value)) {
       TextArea({ text: params.value, placeholder: params.placeholder || params.label })
         .width('100%')
         .height(144)

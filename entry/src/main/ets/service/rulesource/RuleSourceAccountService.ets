@@ -29,8 +29,7 @@ export class RuleSourceAuthResult {
 /** 给账号页面提供稳定契约，凭据处理仍由各专用源自己的服务负责。 */
 export class RuleSourceAccountService {
   static supports(sourceUrl: string | undefined): boolean {
-    return GuangYuSourceIdentity.isSourceUrl(sourceUrl) ||
-      ShuShanSourceIdentity.isSourceUrl(sourceUrl);
+    return false;
   }
 
   static usesWebLogin(sourceUrl: string | undefined): boolean {

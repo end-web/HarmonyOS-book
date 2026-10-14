@@ -9,12 +9,10 @@ import { ChapterTitleFormatter } from '../utils/ChapterTitleFormatter';
 import { DownloadPolicy } from './DownloadPolicy';
 import { LocalRuleContentResult } from './rulesource/LocalRuleRuntimeTypes';
 import { LocalRuleDispatcher } from './rulesource/LocalRuleDispatcher';
-import { NativeRuleSourceDispatcher } from './rulesource/NativeRuleSourceDispatcher';
+import { LightSourceRequest } from './rulesource/light/LightSourceRequestPolicy';
 import { LocalRuleSourceRepository } from './rulesource/LocalRuleSourceRepository';
 import { LocalRulePanelService } from './rulesource/LocalRulePanelService';
 import { LocalRuleDiagnostics } from './rulesource/LocalRuleDiagnostics';
-import { TalebookSourceIdentity } from './rulesource/talebook/TalebookSourceIdentity';
-import { TalebookSourceAdapter } from './rulesource/talebook/TalebookSourceAdapter';
 import { SearchCache } from '../utils/SearchCache';
 
 class BookCatalogLoad {
@@ -44,40 +42,6 @@ export interface AudioRequestInfo {
 
 const HEALTH_MAX_BOOK_CANDIDATES: number = 3;
 const HEALTH_MAX_CHAPTER_CANDIDATES: number = 3;
-const NATIVE_SOURCE_HEALTH_FALLBACK_KEYWORDS: string[] = ['斗破苍穹', '凡人修仙传'];
-
-class LocalSourceSearchProbe {
-  results: SearchResult[] = [];
-  errors: string[] = [];
-}
-
-class NativeContentHealthOutcome {
-  contentType: 'audio' | 'text' = 'text';
-  bookName: string = '';
-  errorMessage: string = '';
-}
-
-export class NativeRuleSourceHealthPolicy {
-  static assertSearchCoverage(results: SearchResult[], errors: string[]): void {
-    const hasText = NativeRuleSourceHealthPolicy.hasContentType(results, 'text');
-    const hasAudio = NativeRuleSourceHealthPolicy.hasContentType(results, 'audio');
-    if (hasText && hasAudio) return;
-    if (errors.length > 0) throw new Error(errors.join('；'));
-
-    const missing: string[] = [];
-    if (!hasText) missing.push('小说');
-    if (!hasAudio) missing.push('听书');
-    throw new Error(`${missing.join('、')}搜索未返回可验证书籍，严格测试不通过`);
-  }
-
-  private static hasContentType(results: SearchResult[], contentType: 'audio' | 'text'): boolean {
-    for (const result of results) {
-      if (result.contentType === contentType) return true;
-    }
-    return false;
-  }
-}
-
 export class BookSourceService {
   private static audioLoads: Map<string, BookCatalogLoad> = new Map();
   private static textLoads: Map<string, BookCatalogLoad> = new Map();
@@ -101,21 +65,19 @@ export class BookSourceService {
   }
 
   private static audioTocDefinition(source: LocalRuleSource): string {
-    if (source.engine === 'native-v1') {
-      return JSON.stringify([source.engine, source.nativeBaseUrl, source.nativeRulesJson]);
-    }
-    return JSON.stringify([source.ruleBookInfo.init, source.ruleBookInfo.tocUrl,
-      source.ruleToc, source.jsLib]);
+    // Invalidate catalogs produced by the removed rule engine even when the source is unchanged.
+    return JSON.stringify(['light-source-toc-v1', source.rawSourceJson, source.variable]);
   }
 
   /** Reimported rules must use fresh chapter requests while retaining saved chapter identities. */
   static async prepareAudioChapter(source: BookSource, book: Book, chapter: Chapter): Promise<void> {
-    if (!book.bookUrl || NativeRuleSourceDispatcher.isSource(source)) return;
+    if (!book.bookUrl) return;
     const localSource = await BookSourceService.resolveLocalSource(source);
     if (localSource === undefined) return;
     const definition = BookSourceService.audioTocDefinition(localSource);
     const revision = BookSourceService.audioTocRevision.get(book.sourceUrl) ?? 0;
-    if (book.variables?.['__audioTocDefinition'] === definition) return;
+    if (book.variables?.['__audioTocDefinition'] === definition &&
+      chapter.variables?.['__genericTocFallback'] !== 'true') return;
     const key = `${book.id}:${revision}:${definition}`;
     let pending = BookSourceService.audioTocRefreshes.get(key);
     if (pending === undefined) {
@@ -226,7 +188,9 @@ export class BookSourceService {
     let tocUrl = book.bookUrl;
     if (info !== null) {
       tocUrl = info.tocUrl || tocUrl;
-      if (info.name.trim()) book.title = info.name;
+      // Audio discovery may use an edition title while detail returns the original novel title.
+      // Keep the selected edition's display name; parsed metadata still drives the rule chain.
+      if (!book.title.trim() && info.name.trim()) book.title = info.name;
       if (info.author.trim()) book.author = info.author;
       BookCoverPolicy.setDetail(book, info.coverUrl);
       if (info.intro.trim()) book.intro = info.intro;
@@ -288,9 +252,6 @@ export class BookSourceService {
 
   static async searchBooks(source: BookSource, keyword: string, page: number = 1): Promise<SearchResult[]> {
     if (source instanceof LocalRuleSource && !source.isSearchEnabled()) return [];
-    if (NativeRuleSourceDispatcher.isSource(source)) {
-      return NativeRuleSourceDispatcher.search(source, keyword, page);
-    }
     const localSource = await BookSourceService.resolveLocalSource(source);
     return localSource === undefined ? [] : LocalRuleDispatcher.search(localSource, keyword, page);
   }
@@ -321,19 +282,7 @@ export class BookSourceService {
 
     try {
       BookSourceService.requireSearchCapability(source);
-      if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) {
-        const results = await TalebookSourceAdapter.search(source, cleanKeyword);
-        if (results.length === 0) {
-          health.message = '搜索请求正常，当前关键词暂无匹配；可使用发现/阅读测试验证书库';
-        } else {
-          await BookSourceService.validateCandidate(source, results[0], source.isAudio() ? 'audio' : 'text');
-          health.message = `搜索、详情、目录与内容解析正常：${results[0].name}`;
-        }
-      } else if (NativeRuleSourceDispatcher.isSource(source)) {
-        health.message = await BookSourceService.testNativeRuleSource(source, cleanKeyword);
-      } else {
-        health.message = await BookSourceService.testRuleSource(source, cleanKeyword);
-      }
+      health.message = await BookSourceService.testRuleSource(source, cleanKeyword);
       health.status = LocalRuleSourceStatus.READY;
     } catch (error) {
       health.status = LocalRuleSourceStatus.FAILED;
@@ -367,9 +316,7 @@ export class BookSourceService {
     try {
       BookSourceService.checkHealthCancellation(isCancelled);
       BookSourceService.requireSearchCapability(source);
-      const results = NativeRuleSourceDispatcher.isSource(source)
-        ? await NativeRuleSourceDispatcher.searchForHealthCheck(source, cleanKeyword, 1)
-        : await LocalRuleDispatcher.searchForHealthCheck(source, cleanKeyword, 1);
+      const results = await LocalRuleDispatcher.searchForHealthCheck(source, cleanKeyword, 1);
       health.status = LocalRuleSourceStatus.READY;
       health.message = results.length > 0 ? `搜索正常，共 ${results.length} 条` :
         '搜索请求正常，当前关键词暂无匹配';
@@ -383,8 +330,7 @@ export class BookSourceService {
   }
 
   private static requireSearchCapability(source: LocalRuleSource): void {
-    if (!NativeRuleSourceDispatcher.isSource(source) &&
-      !TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl) && !source.hasSearchCapability()) {
+    if (!source.hasSearchCapability()) {
       throw new Error('未配置完整搜索规则');
     }
   }
@@ -413,8 +359,8 @@ export class BookSourceService {
     }
 
     const contentType: 'audio' | 'text' = results[0].contentType ?? (source.isAudio() ? 'audio' : 'text');
-    const bookName = await BookSourceService.validateCandidates(
-      source, results, contentType, false);
+    await BookSourceService.validateCandidate(source, results[0], contentType);
+    const bookName: string = results[0].name;
     return contentType === 'audio'
       ? `搜索、详情、目录与音频解析正常：${bookName}`
       : `搜索、详情、目录与正文解析正常：${bookName}`;
@@ -480,93 +426,6 @@ export class BookSourceService {
     if (isCancelled()) throw new Error('书源校验已取消');
   }
 
-  private static async testNativeRuleSource(source: LocalRuleSource, keyword: string): Promise<string> {
-    const probe = await BookSourceService.probeNativeRuleSourceSearch(source, keyword);
-    NativeRuleSourceHealthPolicy.assertSearchCoverage(probe.results, probe.errors);
-    if (NativeRuleSourceDispatcher.usesSingleContentHealthCheck(source.bookSourceUrl)) {
-      const audioOutcome = await BookSourceService.validateNativeContentType(
-        source, probe.results, 'audio');
-      if (audioOutcome.errorMessage.length > 0) throw new Error(audioOutcome.errorMessage);
-      return `小说与听书搜索正常；听书详情、目录与音频解析正常：${audioOutcome.bookName}`;
-    }
-    const textOutcome = await BookSourceService.validateNativeContentType(
-      source, probe.results, 'text');
-    const audioOutcome = await BookSourceService.validateNativeContentType(
-      source, probe.results, 'audio');
-    const errors: string[] = [];
-    if (textOutcome.errorMessage.length > 0) errors.push(textOutcome.errorMessage);
-    if (audioOutcome.errorMessage.length > 0) errors.push(audioOutcome.errorMessage);
-    if (errors.length > 0) throw new Error(errors.join('；'));
-    return `小说正文正常：${textOutcome.bookName}；听书音频正常：${audioOutcome.bookName}`;
-  }
-
-  private static async validateNativeContentType(source: LocalRuleSource, results: SearchResult[],
-    contentType: 'audio' | 'text'): Promise<NativeContentHealthOutcome> {
-    const outcome = new NativeContentHealthOutcome();
-    outcome.contentType = contentType;
-    try {
-      outcome.bookName = await BookSourceService.validateCandidates(
-        source, results, contentType, true);
-    } catch (error) {
-      const label = contentType === 'audio' ? '听书' : '小说';
-      const message = error instanceof Error ? error.message : String(error);
-      outcome.errorMessage = `${label}验证失败：${message}`;
-    }
-    return outcome;
-  }
-
-  private static async probeNativeRuleSourceSearch(source: LocalRuleSource,
-    keyword: string): Promise<LocalSourceSearchProbe> {
-    const probe = new LocalSourceSearchProbe();
-    const keywords: string[] = [];
-    BookSourceService.appendUnique(keywords, keyword);
-    for (const fallback of NATIVE_SOURCE_HEALTH_FALLBACK_KEYWORDS) {
-      BookSourceService.appendUnique(keywords, fallback);
-    }
-    const seen = new Set<string>();
-    for (const currentKeyword of keywords) {
-      try {
-        const results = await NativeRuleSourceDispatcher.searchForHealthCheck(
-          source, currentKeyword, 1);
-        for (const result of results) {
-          if (seen.has(result.bookUrl)) continue;
-          seen.add(result.bookUrl);
-          probe.results.push(result);
-        }
-        if (BookSourceService.hasContentType(probe.results, 'text') &&
-          BookSourceService.hasContentType(probe.results, 'audio')) break;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.length > 0 && !probe.errors.includes(message)) probe.errors.push(message);
-      }
-    }
-    return probe;
-  }
-
-  private static async validateCandidates(source: LocalRuleSource, results: SearchResult[],
-    contentType: 'audio' | 'text', requireResultType: boolean): Promise<string> {
-    let attempted = 0;
-    let lastError = '';
-    for (const result of results) {
-      if (requireResultType && result.contentType !== contentType) continue;
-      if (attempted >= HEALTH_MAX_BOOK_CANDIDATES) break;
-      attempted++;
-      try {
-        await BookSourceService.validateCandidate(source, result, contentType);
-        return result.name;
-      } catch (error) {
-        if (error instanceof Error && NativeRuleSourceDispatcher.isNonRetryableHealthError(
-          source.bookSourceUrl, error)) {
-          throw error;
-        }
-        lastError = error instanceof Error ? error.message : String(error);
-      }
-    }
-    const label = contentType === 'audio' ? '听书' : '小说';
-    if (attempted === 0) throw new Error(`${label}搜索未返回可验证的书籍`);
-    throw new Error(`${label}全链路验证失败：${lastError || '未解析出有效内容'}`);
-  }
-
   private static async validateCandidate(source: LocalRuleSource, result: SearchResult,
     contentType: 'audio' | 'text', isCancelled: () => boolean = (): boolean => false,
     publicOnly: boolean = false): Promise<void> {
@@ -608,17 +467,11 @@ export class BookSourceService {
           }
         } else {
           const scopedVariables = BookSourceService.mergeVariables(variables, chapter.variables);
-          const content = NativeRuleSourceDispatcher.isSource(source)
-            ? await NativeRuleSourceDispatcher.resolveContent(source.bookSourceUrl, chapter.url)
-            : await LocalRuleDispatcher.resolveContent(source, chapter.url, scopedVariables);
+          const content = await LocalRuleDispatcher.resolveContent(source, chapter.url, scopedVariables);
           if (content.content.trim().length === 0) throw new Error('章节正文为空');
         }
         return;
       } catch (error) {
-        if (error instanceof Error && NativeRuleSourceDispatcher.isNonRetryableHealthError(
-          source.bookSourceUrl, error)) {
-          throw error;
-        }
         lastError = error instanceof Error ? error.message : String(error);
       }
     }
@@ -661,9 +514,6 @@ export class BookSourceService {
 
   static async getBookInfo(source: BookSource, bookUrl: string,
     _variables?: Record<string, string>): Promise<BookInfo | null> {
-    if (NativeRuleSourceDispatcher.isSource(source)) {
-      return NativeRuleSourceDispatcher.getBookInfo(source.bookSourceUrl, bookUrl);
-    }
     const localSource = await BookSourceService.resolveLocalSource(source);
     return localSource === undefined ? null : LocalRuleDispatcher.getBookInfo(
       localSource, bookUrl, BookSourceService.copyVariables(_variables));
@@ -685,26 +535,15 @@ export class BookSourceService {
       }
       if (added.length > 0 && onBatch !== undefined) onBatch(added);
     };
-    let items: TocItem[] = [];
-    if (NativeRuleSourceDispatcher.isSource(source)) {
-      items = await NativeRuleSourceDispatcher.getBookToc(source.bookSourceUrl, tocUrl);
-    } else {
-      const localSource = await BookSourceService.resolveLocalSource(source);
-      if (localSource !== undefined) {
-        items = await LocalRuleDispatcher.getBookToc(
-          localSource, tocUrl, BookSourceService.copyVariables(_variables), onBatch === undefined ? undefined : append);
-      }
-    }
+    const localSource = await BookSourceService.resolveLocalSource(source);
+    const items: TocItem[] = localSource === undefined ? [] : await LocalRuleDispatcher.getBookToc(
+      localSource, tocUrl, BookSourceService.copyVariables(_variables), onBatch === undefined ? undefined : append);
     append(items);
     return unique;
   }
 
   static async getAudioUrl(source: BookSource, chapterUrl: string,
     _variables?: Record<string, string>): Promise<string> {
-    if (NativeRuleSourceDispatcher.isSource(source)) {
-      return NativeRuleSourceDispatcher.getAudioUrl(source.bookSourceUrl, chapterUrl,
-        _variables?.['__audioSourceVoice'] ?? _variables?.['custom'] ?? '');
-    }
     const localSource = await BookSourceService.resolveLocalSource(source);
     return localSource === undefined
       ? chapterUrl : LocalRuleDispatcher.getAudioUrl(
@@ -712,17 +551,8 @@ export class BookSourceService {
   }
 
   static async resolveAudioRequest(source: BookSource, chapterUrl: string,
-    variables?: Record<string, string>, chapterVariables?: Record<string, string>): Promise<AudioRequestInfo> {
-    if (NativeRuleSourceDispatcher.isSource(source)) {
-      const resolved = await NativeRuleSourceDispatcher.resolveContent(
-        source.bookSourceUrl, chapterUrl, variables?.['__audioSourceVoice'] ?? variables?.['custom'] ?? '');
-      const info: AudioRequestInfo = {
-        url: resolved.audioUrl,
-        headers: resolved.requestHeaders,
-        resolved: DownloadPolicy.isHttpUrl(resolved.audioUrl)
-      };
-      return info;
-    }
+    variables?: Record<string, string>, chapterVariables?: Record<string, string>,
+    request?: LightSourceRequest): Promise<AudioRequestInfo> {
     const localSource = await BookSourceService.resolveLocalSource(source);
     if (localSource !== undefined) {
       const scopedVariables = BookSourceService.mergeVariables(
@@ -731,7 +561,7 @@ export class BookSourceService {
         scopedVariables['custom'] = variables['__audioSourceVoice'];
       }
       const result: LocalRuleContentResult = await LocalRuleDispatcher.resolveContent(
-        localSource, chapterUrl, scopedVariables);
+        localSource, chapterUrl, scopedVariables, request);
       const localUrl = result.audioUrl;
       if (!DownloadPolicy.isHttpUrl(localUrl)) throw new Error('书源未返回可播放的音频地址');
       const localHeaders = Object.keys(result.requestHeaders).length > 0
@@ -778,17 +608,14 @@ export class BookSourceService {
   private static async fetchTextBook(task: BookCatalogLoad, metadataOnly: boolean = false): Promise<Book> {
     const book = task.book;
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
-    const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
-    if (localSource === undefined || (!usesNativeAdapter && !localSource.isText() && book.contentType !== 'text') ||
+    if (localSource === undefined || (!localSource.isText() && book.contentType !== 'text') ||
       !localSource.canExecute()) {
       throw new TextSourceError('SOURCE_NOT_FOUND', '本地书源不可用或已被删除');
     }
 
     const variables = BookSourceService.copyVariables(book.variables);
     variables['__bookContentType'] = 'text';
-    const info = usesNativeAdapter
-      ? await NativeRuleSourceDispatcher.getBookInfo(book.sourceUrl, book.bookUrl)
-      : await LocalRuleDispatcher.getBookInfo(localSource, book.bookUrl, variables);
+    const info = await LocalRuleDispatcher.getBookInfo(localSource, book.bookUrl, variables);
     let tocUrl = book.bookUrl;
     let resolvedVariables = variables;
     if (info !== null) {
@@ -843,21 +670,27 @@ export class BookSourceService {
       return TextChapterContent.of(title, content, chapterUrl);
     }
     const localSource = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
-    const usesNativeAdapter = NativeRuleSourceDispatcher.isSourceUrl(book.sourceUrl);
-    if (localSource === undefined || (!usesNativeAdapter && !localSource.isText() && book.contentType !== 'text') ||
+    if (localSource === undefined || (!localSource.isText() && book.contentType !== 'text') ||
       !localSource.canExecute()) {
       throw new TextSourceError('SOURCE_NOT_FOUND', '本地书源不可用或已被删除');
     }
     const scopedVariables = BookSourceService.mergeVariables(
       BookSourceService.copyVariables(book.variables), chapterVariables);
     scopedVariables['__bookContentType'] = 'text';
-    const result = usesNativeAdapter
-      ? await NativeRuleSourceDispatcher.resolveContent(book.sourceUrl, chapterUrl)
-      : await LocalRuleDispatcher.resolveContent(localSource, chapterUrl, scopedVariables);
+    const result = await LocalRuleDispatcher.resolveContent(localSource, chapterUrl, scopedVariables);
     if (result.content.trim().length === 0) {
       throw new TextSourceError('EMPTY_CONTENT', '章节正文为空');
     }
     return TextChapterContent.of(result.title || title, result.content, chapterUrl);
+  }
+
+  /** Lossless rule output for media and paragraph actions; existing reader/player contracts remain intact. */
+  static async getSourceChapterContent(book: Book, chapterUrl: string,
+    chapterVariables?: Record<string, string>): Promise<LocalRuleContentResult> {
+    const source = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
+    if (source === undefined || !source.canExecute()) throw new Error('本地书源不可用或已被删除');
+    return LocalRuleDispatcher.resolveContent(source,chapterUrl,
+      BookSourceService.mergeVariables(BookSourceService.copyVariables(book.variables),chapterVariables));
   }
 
   static async getExploreBooksByUrl(source: BookSource, categoryUrl: string,

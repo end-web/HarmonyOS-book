@@ -26,11 +26,11 @@ const pcmFormat = { audioType: 'pcm', sampleRate: 16000, sampleBit: 16, audioCha
 const model = load('model/TextToSpeechState.ets');
 const { SpeechTextHighlighter } = load('service/text/SpeechTextHighlighter.ets');
 const { CustomTtsConfig } = load('model/CustomTtsConfig.ets');
-const { LocalRuleTemplate } = load('service/rulesource/LocalRuleTemplate.ets');
+const { CustomTtsTemplate: LocalRuleTemplate } = load('service/text/CustomTtsTemplate.ets');
 const { CustomTtsConfigParser } = load('service/text/CustomTtsConfigParser.ets', {
   '@kit.NetworkKit': { http: {} },
   '../../model/CustomTtsConfig': { CustomTtsConfig },
-  '../rulesource/LocalRuleTemplate': { LocalRuleTemplate },
+  './CustomTtsTemplate': { CustomTtsTemplate: LocalRuleTemplate },
   '../rulesource/LocalRuleQuickJsRuntime': {}
 });
 const settle = async () => { for (let i = 0; i < 45; i++) await Promise.resolve(); };

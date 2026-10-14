@@ -1762,14 +1762,8 @@ export struct FavoritePage {
           .borderRadius(AppRadius.Md)
           .clip(true)
         } else if (book.cover && book.cover.startsWith('http')) {
-          Image(book.cover)
-            .width('100%')
-            .aspectRatio(BOOKSHELF_COVER_RATIO)
-            .borderRadius(AppRadius.Md)
-            .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: 400 })
-            .alt($r('app.media.app_icon_legacy'))
-            .draggable(false)
+          CoverImage({ url: book.cover, imgWidth: '100%', aspectRatioValue: BOOKSHELF_COVER_RATIO,
+            radius: AppRadius.Md, decodeW: 300, decodeH: 400 })
             .hitTestBehavior(HitTestMode.Transparent)
         } else if (book.cover && (book.cover.startsWith('/data/') || book.cover.startsWith('file://'))) {
           Image('file://' + book.cover.replace(/^file:\/\//, ''))
@@ -1902,13 +1896,8 @@ export struct FavoritePage {
     Row({ space: AppSpace.Md }) {
       Stack({ alignContent: Alignment.TopStart }) {
         if (book.cover && book.cover.startsWith('http')) {
-          Image(book.cover)
-            .width(72)
-            .height(100)
-            .borderRadius(AppRadius.Sm)
-            .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 300, height: 400 })
-            .draggable(false)
+          CoverImage({ url: book.cover, imgWidth: 72, imgHeight: 100, useFixedHeight: true,
+            radius: AppRadius.Sm, decodeW: 300, decodeH: 400 })
             .hitTestBehavior(HitTestMode.Transparent)
         } else if (book.cover && (book.cover.startsWith('/data/') || book.cover.startsWith('file://'))) {
           Image('file://' + book.cover.replace(/^file:\/\//, ''))

@@ -22,9 +22,9 @@ export class RuleSourceFileImportResult {
 /** 文件串行读取，后台解析，限制整批输入和同时驻留内存的数据。 */
 export class LocalRuleSourceFileImporter {
   static readonly MAX_FILES: number = 10;
-  static readonly MAX_FILE_BYTES: number = 10 * 1024 * 1024;
-  static readonly MAX_TOTAL_BYTES: number = 30 * 1024 * 1024;
-  static readonly MAX_SOURCES: number = 1000;
+  static readonly MAX_FILE_BYTES: number = 25 * 1024 * 1024;
+  static readonly MAX_TOTAL_BYTES: number = 250 * 1024 * 1024;
+  static readonly MAX_SOURCES: number = Number.MAX_SAFE_INTEGER;
 
   static async importFiles(uris: string[], progress: (current: number, total: number) => void):
     Promise<RuleSourceFileImportResult> {

@@ -36,6 +36,9 @@ async function fixture(initialState = 'paused', realUsage = false) {
   const events = new Map();
   const usage = [];
   const usageTimers = new Map();
+  const preloadTimers = new Map();
+  let preloadTime = 0;
+  let preloadTimerId = 1000000;
   let uptime = 0;
   let timerId = 0;
   const savedPositions = [];
@@ -91,6 +94,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
     getPendingAudioResolve() { return undefined; },
     waitForAudioFile: async () => null,
     getAudioUrl: () => null,
+    getAudioFilePath: () => null,
     getAudioHeaders: () => ({}),
     setPlayingFile() {}
   };
@@ -160,7 +164,14 @@ async function fixture(initialState = 'paused', realUsage = false) {
   }).outputText, { module: downloadPolicy, exports: downloadPolicy.exports });
   modules['./DownloadPolicy'] = downloadPolicy.exports;
   vm.runInNewContext(code, {
-    module, exports: module.exports, console, setTimeout, clearTimeout,
+    module, exports: module.exports, console,
+    setTimeout(callback, delay, ...args) {
+      if (delay !== 8000) return setTimeout(callback, delay, ...args);
+      const id = ++preloadTimerId;
+      preloadTimers.set(id, { callback, due: preloadTime + delay });
+      return id;
+    },
+    clearTimeout(id) { if (!preloadTimers.delete(id)) clearTimeout(id); },
     setInterval: realUsage ? callback => { const id = ++timerId; usageTimers.set(id, callback); return id; } : setInterval,
     clearInterval: realUsage ? id => usageTimers.delete(id) : clearInterval,
     require(name) {
@@ -172,6 +183,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   }, { filename: source });
   const service = module.exports.AudioService.getInstance();
   service.state = state;
+  service.playerSourceGeneration = service.playGen;
   service.context = {};
   service.persistHistory = async () => { savedPositions.push(state.progressMs); };
   service.syncPlaybackState = () => {};
@@ -184,6 +196,15 @@ async function fixture(initialState = 'paused', realUsage = false) {
   await service.ensurePlayer();
   return { service, player, state, session, savedPositions, events, preference, cacheCalls,
     cache, mediaSources, platformCompat, usage, usageTimers, backgroundCalls, background,
+    preloadTimers,
+    advancePreload(ms) {
+      preloadTime += ms;
+      for (const [id, timer] of preloadTimers) {
+        if (timer.due > preloadTime) continue;
+        preloadTimers.delete(id);
+        timer.callback();
+      }
+    },
     advance: ms => { uptime += ms; } };
 }
 
@@ -314,11 +335,82 @@ async function check(name, test) {
       assert.ok(f.backgroundCalls.includes('stop'));
     }
   });
+  await check('old prepared, time and error callbacks cannot mutate a chapter while reset is pending', async () => {
+    const f = await fixture('initialized');
+    let finishReset;
+    f.player.reset = () => new Promise(resolve => { finishReset = resolve; });
+    const chapter = { id: 'new-chapter', source: { type: 'rawfile', value: 'new.mp3' } };
+    const book = { id: 'new-book', chapters: [chapter] };
+    f.service.resolveAudioUrl = async () => ({ success: true, headers: {} });
+    f.service.syncCastMediaSource = () => {};
+    f.service.applySource = async () => true;
+    const switching = f.service.doPlayChapter(book, chapter, 9000);
+    assert.equal(f.service.playerSourceGeneration, -1);
+    f.player.transition('prepared');
+    f.player.emit('timeUpdate', 1);
+    f.player.emit('error', { code: 5400102, message: 'old source' });
+    await flush();
+    assert.equal(f.player.plays, 0);
+    assert.equal(f.state.progressMs, 42000);
+    assert.equal(f.state.durationMs, 180000);
+    f.player.state = 'idle';
+    finishReset();
+    await switching;
+    assert.equal(f.state.currentChapter, chapter);
+    assert.equal(f.state.progressMs, 9000);
+    assert.equal(f.state.isLoading, true);
+  });
+  await check('a start waiting for background eligibility cannot play a newly reset player', async () => {
+    const f = await fixture('initialized');
+    let ready;
+    f.background.start = () => new Promise(resolve => { ready = resolve; });
+    f.player.transition('prepared');
+    await flush();
+    assert.equal(typeof ready, 'function');
+    f.service.playGen++;
+    f.service.playerSourceGeneration = -1;
+    f.player.state = 'idle';
+    f.state.isLoading = true;
+    ready();
+    await flush();
+    assert.equal(f.player.plays, 0);
+    assert.equal(f.state.isLoading, true, 'Cancelled old start must preserve the new loading indicator');
+  });
+  await check('a newly assigned source still prepares and plays after invalidating the old source', async () => {
+    const f = await fixture('paused');
+    f.player.reset = async () => { f.player.transition('idle'); };
+    f.player.setMediaSource = async () => { f.player.transition('initialized'); };
+    f.player.prepare = async () => { f.player.transition('prepared'); };
+    f.service.resolveAudioUrl = async () => ({ success: true, headers: {} });
+    f.service.syncCastMediaSource = () => {};
+    const chapter = { id: 'new', source: { type: 'url', value: 'https://cdn.invalid/new.m4a' } };
+    const book = { id: 'new-book', chapters: [chapter] };
+    await f.service.doPlayChapter(book, chapter, 0);
+    await flush();
+    assert.equal(f.service.playerSourceGeneration, f.service.playGen);
+    assert.equal(f.state.currentChapter, chapter);
+    assert.equal(f.player.plays, 1);
+    assert.equal(f.state.isLoading, false);
+    assert.equal(f.state.isPlaying, true);
+    assert.equal(f.cacheCalls.includes('next'), false, 'New source must not preload during the selection window');
+    f.service.cancelPreloadStart();
+  });
+  await check('queued state events must agree with the current AVPlayer state', async () => {
+    const f = await fixture('paused');
+    f.events.get('stateChange')('prepared', 1);
+    await flush();
+    assert.equal(f.player.plays, 0);
+    assert.equal(f.state.durationMs, 180000);
+    f.player.state = 'idle';
+    await f.service.playPlayer(f.player);
+    assert.equal(f.player.plays, 0, 'Idle is not a legal play state');
+  });
   await check('widget resume re-arms background recovery and restarts the preload window', async () => {
     const f = await fixture('paused');
     f.state.currentBook.chapters = [f.state.currentChapter];
     await f.service.play();
     await new Promise(resolve => setTimeout(resolve, 10));
+    f.advancePreload(8000);
     assert.equal(f.backgroundCalls[0], 'user-resume');
     assert.ok(f.backgroundCalls.includes('start'));
     assert.ok(f.cacheCalls.includes('next'));
@@ -344,6 +436,7 @@ async function check(name, test) {
     assert.equal(f.backgroundCalls.includes('stop'), false, 'Do not release while resolving an uncached chapter');
     finish(); await flush();
     await new Promise(resolve => setTimeout(resolve, 10));
+    f.advancePreload(8000);
     assert.equal(f.state.isPlaying, true);
     assert.equal(f.backgroundCalls.includes('stop'), false);
     assert.ok(f.cacheCalls.includes('next'), 'New chapter schedules the next preload window');
@@ -554,7 +647,7 @@ async function check(name, test) {
     assert.deepEqual(f.player.seeks, []);
     assert.deepEqual(f.cacheCalls, []);
   });
-  await check('preload starts after playing and obsolete tasks do not start', async () => {
+  await check('preload waits for eight stable seconds and obsolete tasks do not start', async () => {
     const f = await fixture('initialized');
     f.state.currentBook.chapters = [f.state.currentChapter];
     assert.deepEqual(f.cacheCalls, []);
@@ -562,13 +655,28 @@ async function check(name, test) {
     await flush();
     assert.equal(f.player.plays, 1);
     assert.deepEqual(f.cacheCalls, []);
-    await new Promise(resolve => setTimeout(resolve, 10));
+    f.advancePreload(7999);
+    assert.deepEqual(f.cacheCalls, []);
+    f.advancePreload(1);
     assert.deepEqual(f.cacheCalls, ['resume', 'next']);
     f.cacheCalls.length = 0;
     f.service.triggerPreload(f.state.currentBook, f.state.currentChapter);
     f.service.playGen++;
-    await new Promise(resolve => setTimeout(resolve, 10));
+    f.advancePreload(8000);
     assert.deepEqual(f.cacheCalls, []);
+  });
+  await check('repeated preload events share one timer and pause retains the finite cache queue', async () => {
+    const f = await fixture('playing');
+    f.state.currentBook.chapters = [f.state.currentChapter];
+    f.service.triggerPreload(f.state.currentBook, f.state.currentChapter);
+    f.advancePreload(4000);
+    f.service.triggerPreload(f.state.currentBook, f.state.currentChapter);
+    assert.equal(f.preloadTimers.size, 1);
+    f.advancePreload(4000);
+    assert.deepEqual(f.cacheCalls, []);
+    await f.service.pause();
+    assert.equal(f.preloadTimers.size, 0);
+    assert.ok(f.cacheCalls.includes('next'));
   });
   await check('foreground reuses pending resolution with headers and falls back after failure', async () => {
     for (const success of [true, false]) {
@@ -632,6 +740,8 @@ async function check(name, test) {
     f.cacheCalls.length = 0;
     f.player.emit('bufferingUpdate', 2, 0);
     await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(f.cacheCalls, [], 'Buffer recovery also waits for stable playback');
+    f.advancePreload(8000);
     assert.deepEqual(f.cacheCalls, ['resume', 'next', 'current']);
     f.cacheCalls.length = 0;
     await f.service.pause();

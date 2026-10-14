@@ -24,8 +24,9 @@ import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
 import { WebEngineGate } from '../service/WebEngineGate';
 import { AppColor, HomeTheme } from '../theme/Theme';
-import { LocalRuleWebRuntimeHost } from '../service/rulesource/LocalRuleWebRuntime';
-import { LocalRuleBrowserRuntimeHost } from '../service/rulesource/LocalRuleBrowserRuntime';
+import { WebBookFetchRuntimeHost } from '../service/rulesource/light/WebBookFetchRuntimeHost';
+import { BookSourceAudioWebRuntimeHost } from '../service/rulesource/light/BookSourceAudioWebRuntimeHost';
+import { RuleSourceImportWebHost } from '../service/rulesource/light/RuleSourceImportWebHost';
 
 /**
  * 全局事件:点击某本书时调,统一收口路由策略。
@@ -434,11 +435,11 @@ export struct MainPage {
       if (this.gate.needAudioExtractor) {
         WebViewAudioExtractorHost()
       }
-      if (this.gate.needRuleParser) {
-        LocalRuleWebRuntimeHost()
-      }
+
       if (this.gate.needRuleBrowser) {
-        LocalRuleBrowserRuntimeHost()
+        WebBookFetchRuntimeHost()
+        BookSourceAudioWebRuntimeHost()
+        RuleSourceImportWebHost()
       }
     }
     .width('100%')

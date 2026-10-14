@@ -1,7 +1,6 @@
 import { BookInfo, SearchResult, TocItem } from '../../model/BookSource';
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleDispatcher } from './LocalRuleDispatcher';
-import { NativeRuleSourceDispatcher } from './NativeRuleSourceDispatcher';
 import { LocalRuleDiagnostics } from './LocalRuleDiagnostics';
 import { LocalRulePanelService } from './LocalRulePanelService';
 
@@ -119,9 +118,7 @@ export class LocalRuleDebugService {
     if (!keyword.trim()) throw new Error('请输入搜索关键词');
     variables['__debugStage'] = 'search';
     LocalRuleDiagnostics.check(variables);
-    const books = NativeRuleSourceDispatcher.isSource(source)
-      ? await NativeRuleSourceDispatcher.searchForHealthCheck(source, keyword)
-      : await LocalRuleDispatcher.searchForHealthCheck(source, keyword, 1, variables);
+    const books = await LocalRuleDispatcher.searchForHealthCheck(source, keyword, 1, variables);
     if (books.length === 0) throw new Error('搜索请求完成，但未提取到书籍');
     LocalRuleDiagnostics.record(variables, 'success', `搜索解析出 ${books.length} 本书`);
     return books;
@@ -131,9 +128,7 @@ export class LocalRuleDebugService {
     variables: Record<string, string>): Promise<BookInfo> {
     variables['__debugStage'] = 'detail';
     LocalRuleDiagnostics.check(variables);
-    const info = NativeRuleSourceDispatcher.isSource(source)
-      ? await NativeRuleSourceDispatcher.getBookInfo(source.bookSourceUrl, address)
-      : await LocalRuleDispatcher.getBookInfo(source, address, variables);
+    const info = await LocalRuleDispatcher.getBookInfo(source, address, variables);
     if (info === null || (!info.name && !info.tocUrl)) throw new Error('详情没有解析出有效数据');
     LocalRuleDebugService.merge(variables, info.variables);
     LocalRuleDiagnostics.record(variables, 'success', '详情解析完成', info.name);
@@ -144,9 +139,7 @@ export class LocalRuleDebugService {
     variables: Record<string, string>): Promise<TocItem[]> {
     variables['__debugStage'] = 'toc';
     LocalRuleDiagnostics.check(variables);
-    const chapters = NativeRuleSourceDispatcher.isSource(source)
-      ? await NativeRuleSourceDispatcher.getBookToc(source.bookSourceUrl, address)
-      : await LocalRuleDispatcher.getBookToc(source, address, variables);
+    const chapters = await LocalRuleDispatcher.getBookToc(source, address, variables);
     if (chapters.length === 0) throw new Error('目录没有解析出章节');
     LocalRuleDiagnostics.record(variables, 'success', `目录解析出 ${chapters.length} 章`);
     return chapters;
@@ -156,9 +149,7 @@ export class LocalRuleDebugService {
     variables: Record<string, string>, audio: boolean): Promise<string> {
     variables['__debugStage'] = 'content';
     LocalRuleDiagnostics.check(variables);
-    const content = NativeRuleSourceDispatcher.isSource(source)
-      ? await NativeRuleSourceDispatcher.resolveContent(source.bookSourceUrl, address)
-      : await LocalRuleDispatcher.resolveContent(source, address, variables);
+    const content = await LocalRuleDispatcher.resolveContent(source, address, variables);
     if (audio ? !content.audioUrl : !content.content.trim()) {
       throw new Error(audio ? '未解析出音频地址' : '未解析出正文');
     }

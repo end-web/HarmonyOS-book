@@ -2,7 +2,7 @@ import { buffer, util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { LocalRuleSourceSession } from '../../../model/LocalRuleSource';
 import { HttpClient, HttpRequestOptions, HttpResponse } from '../../http/HttpClient';
-import { LocalRuleHttpClient } from '../LocalRuleHttpClient';
+import { LightSourceCookies as LocalRuleHttpClient } from '../light/LightSourceCookies';
 import { LocalRuleSourceRepository } from '../LocalRuleSourceRepository';
 import { GuangYuSettings } from './GuangYuSettings';
 import {

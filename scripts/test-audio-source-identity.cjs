@@ -1,0 +1,76 @@
+// Verify real audio catalog orchestration when a source uses different edition/novel metadata.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ts = require(path.join(process.env.DEVECO_HOME,
+  'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
+const root = path.resolve(__dirname, '../entry/src/main/ets');
+function compile(file, dependencies = {}) {
+  const exports = {};
+  const code = ts.transpileModule(fs.readFileSync(path.join(root, file), 'utf8'), {
+    compilerOptions: {target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}
+  }).outputText;
+  vm.runInNewContext(code, {exports,console,Map,Set,Promise,Date,
+    require:name => dependencies[name] || {}});
+  return exports;
+}
+const {BookCoverPolicy} = compile('utils/BookCoverPolicy.ets');
+const {ChapterTitleFormatter} = compile('utils/ChapterTitleFormatter.ets');
+const source = {rawSourceJson:'fixture',variable:'{}'};
+const saved = [];
+const {BookSourceService: service} = compile('service/BookSourceService.ets', {
+  '../utils/BookCoverPolicy':{BookCoverPolicy},
+  '../utils/ChapterTitleFormatter':{ChapterTitleFormatter},
+  './rulesource/LocalRuleSourceRepository':{LocalRuleSourceRepository:{getByUrl:async () => source}},
+  '../utils/SearchCache':{SearchCache:{put() {}}},
+  './DataService':{DataService:{upsertCachedBook:async book => saved.push(book)}}
+});
+const preview = {id:'audio-fixture',title:'有声版名称',author:'作者',cover:'https://fixture/audio.jpg',
+  category:'有声书',intro:'',contentType:'audio',bookUrl:'https://fixture/detail?id=123',
+  sourceUrl:'https://fixture',variables:{__lightBook:'{}'},tags:[],chapters:[],chapterCount:0};
+service.getBookInfo = async (_source, url) => {
+  assert.equal(url,preview.bookUrl);
+  return {name:'原著名称',author:'作者',coverUrl:preview.cover,intro:'详情简介',kind:'',wordCount:'',
+    lastChapter:'',tocUrl:'https://fixture/toc?id=123',variables:{bookId:'123'}};
+};
+service.getBookToc = async (_source,url,variables,_name,onBatch) => {
+  assert.equal(url,'https://fixture/toc?id=123');
+  assert.equal(variables.bookId,'123');
+  const chapters = [{name:'第一章',url:'https://fixture/chapter?id=456'}];
+  onBatch(chapters);
+  return chapters;
+};
+async function run() {
+  const cached = {...preview,cover:'https://fixture/novel.jpg',coverFromDetail:true};
+  BookCoverPolicy.merge(preview,cached);
+  assert.equal(preview.cover,'https://fixture/audio.jpg','old detail cache cannot override fresh audio edition');
+  const updates = [];
+  const loaded = await service.loadAudioBook(preview,book => updates.push([book.title,book.cover]));
+  assert.equal(loaded.title,preview.title);
+  assert.equal(loaded.cover,preview.cover);
+  assert.equal(loaded.chapters.length,1);
+  assert.equal(loaded.tocComplete,true);
+  assert.ok(updates.every(([title,cover]) => title === preview.title && cover === preview.cover));
+  assert.equal(saved[0].title,preview.title,'persisted book keeps selected audio edition name');
+  const unnamed = await service.loadAudioBook({...preview,id:'unnamed',title:''},() => {});
+  assert.equal(unnamed.title,'原著名称','detail still fills missing titles');
+  const text = {...preview,contentType:'text',cover:'https://fixture/search.jpg'};
+  BookCoverPolicy.merge(text,cached);
+  assert.equal(text.cover,cached.cover,'text detail cover priority is preserved');
+  service.resolveLocalSource = async () => source;
+  const chapter = {id:'old-chapter',index:1,title:'第一章',duration:90,
+    source:{type:'url',value:'https://fixture/old-page.html'},
+    originSourceValue:'https://fixture/old-page.html',variables:{__genericTocFallback:'true'}};
+  const legacy = {...preview,chapters:[chapter],variables:{__audioTocDefinition:JSON.stringify([source.rawSourceJson,source.variable])}};
+  await service.prepareAudioChapter(source,legacy,chapter);
+  assert.equal(chapter.id,'old-chapter','migration preserves chapter identity and progress key');
+  assert.equal(chapter.originSourceValue,'https://fixture/chapter?id=456');
+  assert.equal(chapter.variables.__genericTocFallback,undefined,'obsolete fallback metadata is removed');
+  assert.equal(JSON.parse(legacy.variables.__audioTocDefinition)[0],'light-source-toc-v1');
+  const writes = saved.length;
+  await service.prepareAudioChapter(source,legacy,chapter);
+  assert.equal(saved.length,writes,'current catalogs are reused without another migration');
+  console.log('PASS: audio edition identity, old cover cache, detail/toc variables, updates and persistence');
+}
+run().catch(error => {console.error(error);process.exitCode=1;});

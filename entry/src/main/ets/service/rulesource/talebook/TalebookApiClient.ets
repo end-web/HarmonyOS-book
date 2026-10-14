@@ -1,8 +1,8 @@
 import { LocalRuleSource } from '../../../model/LocalRuleSource';
-import { LocalRuleHttpClient } from '../LocalRuleHttpClient';
+import { LightSourceCookies as LocalRuleHttpClient } from '../light/LightSourceCookies';
 import { LocalRuleFetchResult, LocalRuleRequestPlan } from '../LocalRuleRuntimeTypes';
 import { LocalRuleSourceRepository } from '../LocalRuleSourceRepository';
-import { LocalRuleUrlAnalyzer } from '../LocalRuleUrlAnalyzer';
+import { LightSourceUrl as LocalRuleUrlAnalyzer } from '../light/LightSourceUrl';
 import { TalebookSourceIdentity } from './TalebookSourceIdentity';
 
 export class TalebookResponse {

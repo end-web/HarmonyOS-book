@@ -7,7 +7,7 @@ import { AppColor, AppRadius, AppSpace, AppFont, AppMaterial } from '../theme/Th
 import { Book, Chapter } from '../model/Book';
 import { PlayerState, PLAYER_STATE_KEY } from '../model/PlayerState';
 import { BookSourceService } from '../service/BookSourceService';
-import { LocalRuleMetadataText } from '../service/rulesource/LocalRuleMetadataText';
+import { BookMetadataText as LocalRuleMetadataText } from '../utils/BookMetadataText';
 import { DataService } from '../service/DataService';
 import { PreferenceService, PlayHistoryItem } from '../service/PreferenceService';
 import { AudioService } from '../service/AudioService';
@@ -562,7 +562,14 @@ export struct BookDetailPage {
         cached.chapters = stored.chapters;
         cached.tocComplete = stored.tocComplete;
         cached.chapterCount = Math.max(cached.chapterCount, stored.chapterCount, stored.chapters.length);
-        cached.variables = stored.variables ?? cached.variables;
+        const restoredVariables: Record<string, string> = {};
+        if (stored.variables !== undefined) {
+          for (const key of Object.keys(stored.variables)) restoredVariables[key] = stored.variables[key];
+        }
+        if (cached.variables !== undefined) {
+          for (const key of Object.keys(cached.variables)) restoredVariables[key] = cached.variables[key];
+        }
+        cached.variables = restoredVariables;
         cached.wordCount = cached.wordCount || stored.wordCount;
         cached.latestChapterTitle = cached.latestChapterTitle || stored.latestChapterTitle;
         cached.updateTime = cached.updateTime || stored.updateTime;

@@ -1,6 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import { CustomTtsConfig } from '../../model/CustomTtsConfig';
-import { LocalRuleTemplate } from '../rulesource/LocalRuleTemplate';
+import { CustomTtsTemplate as LocalRuleTemplate } from './CustomTtsTemplate';
 import { LocalRuleQuickJsRequest, LocalRuleQuickJsRuntime } from '../rulesource/LocalRuleQuickJsRuntime';
 
 /** JSON 字典仅透传给系统 HTTP API，不作动态属性访问。 */

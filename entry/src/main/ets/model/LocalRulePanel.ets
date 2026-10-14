@@ -25,6 +25,9 @@ export class LocalRulePanelAction {
   searchKeyword: string = '';
   refresh: boolean = false;
   browserUrl: string = '';
+  browserHtml: string = '';
+  browserInjectJs: string = '';
+  refreshLogin: boolean = false;
   browseUrl: string = '';
 }
 

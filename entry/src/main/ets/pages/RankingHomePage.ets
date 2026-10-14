@@ -15,6 +15,7 @@ import { BookMatchService, RankingMatch, RankingMatchProgress } from '../service
 import { DataService } from '../service/DataService';
 import { SourceDataService } from '../service/SourceDataService';
 import { BookSource } from '../model/BookSource';
+import { BookPosterCarousel, BookPosterItem, BOOK_POSTER_HEIGHT, BOOK_POSTER_DECK_HEIGHT, BOOK_POSTER_COVER_WIDTH } from '../components/BookPosterCarousel';
 
 /** 使用本机时区展示真实获取时间，避免系统区域设置改变年月日顺序或省略秒。 */
 function rankingUpdateTime(timestamp: number): Resource {
@@ -26,10 +27,10 @@ function rankingUpdateTime(timestamp: number): Resource {
 }
 
 // 轮播、骨架、导航收起范围和正文占位共用同一高度。
-const RANKING_POSTER_HEIGHT: number = 232;
-const RANKING_DECK_HEIGHT: number = 208;
+const RANKING_POSTER_HEIGHT: number = BOOK_POSTER_HEIGHT;
+const RANKING_DECK_HEIGHT: number = BOOK_POSTER_DECK_HEIGHT;
 // 折叠与展开共用封面尺寸，窗口增加的宽度分配给介绍，避免图片随窗口放大。
-const RANKING_COVER_WIDTH: number = 120;
+const RANKING_COVER_WIDTH: number = BOOK_POSTER_COVER_WIDTH;
 const RANKING_SEARCH_HEIGHT: number = 56;
 // 榜单区块：每列上下两本，列横向排列，最多六本；一屏一列，右侧露出下一列提示可滑动。
 const RANKING_SECTION_COLUMN_SIZE: number = 2;
@@ -55,7 +56,7 @@ struct RankingBookRow {
         .fontColor(this.book.rank <= 3 ? AppColor.Brand : $r('sys.color.font_tertiary')).width(34)
       CoverImage({ url: this.book.coverUrl, imgWidth: 58,
         imgHeight: this.book.platformId === 'qidian' ? 58 / 0.75 : 78, useFixedHeight: true,
-        radius: 7, imageFit: ImageFit.Contain, decodeW: 174, decodeH: 234 })
+        radius: AppRadius.Sm, imageFit: ImageFit.Contain, decodeW: 174, decodeH: 234 })
       Column({ space: 7 }) {
         Text(this.book.title).fontSize(16).fontWeight(FontWeight.Medium)
           .fontColor($r('sys.color.font_primary')).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -144,7 +145,7 @@ struct RankingSection {
               Column({ space: 9 }) {
                 Stack({ alignContent: Alignment.BottomStart }) {
                   CoverImage({ url: book.coverUrl, imgWidth: 152, imgHeight: 152, useFixedHeight: true,
-                    radius: 12, imageFit: ImageFit.Contain, decodeW: 456, decodeH: 456 })
+                    radius: AppRadius.Sm, imageFit: ImageFit.Contain, decodeW: 456, decodeH: 456 })
                   Text(book.rank.toString().padStart(2, '0')).fontSize(30).fontWeight(FontWeight.Bold)
                     .fontColor(Color.White).textShadow({ radius: 10, color: '#66000000', offsetY: 2 })
                     .margin({ left: 10, bottom: 7 })
@@ -173,261 +174,6 @@ class RankingPosterItem {
   book: RankingBook;
   constructor(book: RankingBook) {
     this.book = book;
-  }
-}
-
-@ComponentV2
-struct RankingPosterIntroduction {
-  @Require @Param item: RankingPosterItem;
-  @Event onChoose: (book: RankingBook) => void = () => {};
-  build() {
-    Column({ space: 9 }) {
-      Text(this.item.book.title).fontSize(23).fontWeight(FontWeight.Bold).maxLines(2)
-        .fontColor($r('sys.color.font_primary')).textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(this.item.book.author || this.item.book.narrator).fontSize(12).maxLines(1)
-        .fontColor($r('sys.color.font_secondary')).textOverflow({ overflow: TextOverflow.Ellipsis })
-      if (this.item.book.intro.trim().length > 0) {
-        Text(this.item.book.intro).fontSize(12).lineHeight(19).maxLines(4)
-          .fontColor($r('sys.color.font_secondary')).textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-    }.width('100%').alignItems(HorizontalAlign.Start).onClick(() => this.onChoose(this.item.book))
-  }
-}
-
-@ComponentV2
-struct RankingPoster {
-  @Param items: RankingPosterItem[] = [];
-  @Param autoPlay: boolean = false;
-  @Event onChoose: (book: RankingBook) => void = () => {};
-  @Event onCoverChange: (cover: string) => void = () => {};
-  @Event onVerticalScroll: (offset: number) => void = () => {};
-  @Event onVerticalFling: (velocity: number) => void = () => {};
-  @Local current: number = 0;
-  @Local dragX: number = 0;
-  @Local turning: boolean = false;
-  @Local returningIndex: number = -1;
-  @Local returnProgress: number = 0;
-  @Local deckWidth: number = RANKING_COVER_WIDTH;
-  private exitX: number = 0;
-  private dragging: boolean = false;
-  private touching: boolean = false;
-  private verticalTouch: boolean = false;
-  private touchX: number = 0;
-  private deckLeft: number = 0;
-  private deckTop: number = 0;
-  private canDragCover: boolean = false;
-  private lastTouchY: number = 0;
-  private touchY: number = 0;
-  private touchStarted: number = 0;
-  private lastSwipe: number = 0;
-  private alive: boolean = false;
-  private revision: number = 0;
-  private timer: number = -1;
-
-  aboutToAppear(): void { this.alive = true; this.schedule(); }
-  aboutToDisappear(): void { this.alive = false; this.revision++; this.stopTimer(); }
-
-  @Monitor('items')
-  resetDeck(): void {
-    this.revision++;
-    this.current = 0;
-    this.dragX = 0;
-    this.turning = false;
-    this.returningIndex = -1;
-    this.returnProgress = 0;
-    this.dragging = false;
-    this.touching = false;
-    this.onCoverChange(this.items[0]?.book.coverUrl ?? '');
-    this.schedule();
-  }
-
-  @Monitor('autoPlay')
-  updatePlayback(): void { this.schedule(); }
-
-  private stopTimer(): void {
-    if (this.timer >= 0) clearTimeout(this.timer);
-    this.timer = -1;
-  }
-
-  private schedule(): void {
-    this.stopTimer();
-    if (!this.alive || !this.autoPlay || this.items.length < 2 || this.touching || this.dragging || this.turning) return;
-    this.timer = setTimeout((): void => { this.timer = -1; this.turn(-1); }, 5000);
-  }
-
-  private depth(index: number): number {
-    return (index - this.current + this.items.length) % Math.max(1, this.items.length);
-  }
-
-  private travel(): number { return this.deckWidth + 24; }
-  private progress(): number { return Math.min(1, Math.abs(this.dragX) / this.travel()); }
-  private layer(index: number): number { return Math.min(2, Math.max(0, this.depth(index) - this.progress())); }
-  private returnLayer(): number { return Math.min(2, this.items.length - 1); }
-  private cardX(index: number): number {
-    if (index === this.returningIndex) return this.exitX * (1 - this.returnProgress) + this.returnLayer() * 13 * this.returnProgress;
-    return this.depth(index) === 0 ? this.dragX : this.layer(index) * 13;
-  }
-  private cardY(index: number): number {
-    if (index === this.returningIndex) return -12 + (12 - this.returnLayer() * 10) * this.returnProgress;
-    return this.depth(index) === 0 ? -this.progress() * 12 : -this.layer(index) * 10;
-  }
-  private cardAngle(index: number): number {
-    if (index === this.returningIndex) return this.exitX / 14 * (1 - this.returnProgress) + this.returnLayer() * 5 * this.returnProgress;
-    return this.depth(index) === 0 ? this.dragX / 14 : this.layer(index) * 5;
-  }
-  private cardScale(index: number): number {
-    if (index === this.returningIndex) return 0.92 + (0.08 - this.returnLayer() * 0.07) * this.returnProgress;
-    return this.depth(index) === 0 ? 1 - this.progress() * 0.08 : 1 - this.layer(index) * 0.07;
-  }
-
-  private turn(direction: number): void {
-    if (!this.alive || this.turning || this.items.length < 2) return;
-    this.stopTimer();
-    this.dragging = false;
-    this.turning = true;
-    this.exitX = direction * this.travel();
-    const revision = this.revision;
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut,
-      onFinish: (): void => {
-        if (!this.alive || revision !== this.revision) return;
-        // 出牌后再降低层级，保留封面实体，沿侧边收回队尾。
-        this.returningIndex = this.current;
-        this.returnProgress = 0;
-        this.current = (this.current + 1) % this.items.length;
-        this.dragX = 0;
-        this.onCoverChange(this.items[this.current].book.coverUrl);
-        this.getUIContext().animateTo({ duration: 300, curve: Curve.EaseInOut,
-          onFinish: (): void => {
-            if (!this.alive || revision !== this.revision) return;
-            this.returningIndex = -1;
-            this.turning = false;
-            this.schedule();
-          }
-        }, (): void => { this.returnProgress = 1; });
-      }
-    }, (): void => { this.dragX = this.exitX; });
-  }
-
-  private rebound(): void {
-    this.dragging = false;
-    this.turning = true;
-    const revision = this.revision;
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut,
-      onFinish: (): void => {
-        if (!this.alive || revision !== this.revision) return;
-        this.turning = false;
-        this.schedule();
-      }
-    }, (): void => { this.dragX = 0; });
-  }
-
-  private handleTouch(event: TouchEvent): void {
-    const point = event.changedTouches[0];
-    if (event.type === TouchType.Down) {
-      if (point === undefined) return;
-      this.touching = true;
-      this.verticalTouch = false;
-      this.touchX = point.windowX;
-      this.touchY = point.windowY;
-      this.lastTouchY = point.windowY;
-      this.canDragCover = !this.turning && this.items.length > 1 &&
-        point.windowX >= this.deckLeft - 12 && point.windowX <= this.deckLeft + this.deckWidth + 30 &&
-        point.windowY >= this.deckTop - 12 && point.windowY <= this.deckTop + RANKING_DECK_HEIGHT + 12;
-      this.touchStarted = Date.now();
-      this.stopTimer();
-      return;
-    }
-    if (!this.touching) return;
-    if (event.type === TouchType.Move && point !== undefined) {
-      const dx = point.windowX - this.touchX;
-      const dy = point.windowY - this.touchY;
-      if (!this.dragging && !this.verticalTouch) {
-        if (Math.abs(dy) > 8 && Math.abs(dy) > Math.abs(dx)) this.verticalTouch = true;
-        else if (this.canDragCover && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) this.dragging = true;
-      }
-      if (this.verticalTouch) this.onVerticalScroll(this.lastTouchY - point.windowY);
-      this.lastTouchY = point.windowY;
-      if (this.dragging) this.dragX = Math.max(-this.travel(), Math.min(this.travel(), dx));
-      return;
-    }
-    if (event.type !== TouchType.Up && event.type !== TouchType.Cancel) return;
-    this.touching = false;
-    if (this.verticalTouch) {
-      this.lastSwipe = Date.now();
-      const velocity = (this.lastTouchY - this.touchY) * 1000 / Math.max(1, Date.now() - this.touchStarted);
-      if (event.type === TouchType.Up && Math.abs(velocity) > 80) {
-        this.onVerticalFling(Math.max(-1600, Math.min(1600, velocity)));
-      }
-      this.schedule();
-      return;
-    }
-    if (!this.dragging) { this.schedule(); return; }
-    this.lastSwipe = Date.now();
-    const speed = Math.abs(this.dragX) * 1000 / Math.max(1, Date.now() - this.touchStarted);
-    if (event.type === TouchType.Up && (Math.abs(this.dragX) >= 48 || speed >= 650)) {
-      this.turn(this.dragX < 0 ? -1 : 1);
-    } else { this.rebound(); }
-  }
-
-  private choose(): void {
-    if (!this.turning && !this.dragging && Date.now() - this.lastSwipe > 350 && this.items[this.current] !== undefined) {
-      this.onChoose(this.items[this.current].book);
-    }
-  }
-
-
-  build() {
-    Column() {
-      Row({ space: 16 }) {
-        if (this.items[this.current] !== undefined) {
-          RankingPosterIntroduction({ item: this.items[this.current],
-            onChoose: (): void => this.choose() }).layoutWeight(1)
-        }
-        Stack({ alignContent: Alignment.Center }) {
-          ForEach(this.items, (item: RankingPosterItem, index: number) => {
-            Column() {
-              CoverImage({ url: item.book.coverUrl, imgWidth: '100%',
-                aspectRatioValue: item.book.contentType === 'text' ? 0.75 : 1,
-                radius: 10, imageFit: ImageFit.Contain, decodeW: 480, decodeH: 640 })
-            }.width('100%')
-
-            .scale({ x: this.cardScale(index), y: this.cardScale(index) })
-            .rotate({ angle: this.cardAngle(index),
-              centerX: '50%', centerY: '85%' })
-            .translate({ x: this.cardX(index), y: this.cardY(index) })
-            .zIndex(this.items.length - this.depth(index))
-            .hitTestBehavior(HitTestMode.None)
-            .accessibilityLevel('no')
-          }, (item: RankingPosterItem): string => item.book.id)
-        }.width(RANKING_COVER_WIDTH).height(RANKING_DECK_HEIGHT)
-        .onAreaChange((_old: Area, area: Area): void => {
-          this.deckWidth = Number(area.width);
-          this.deckLeft = Number(area.globalPosition.x);
-          this.deckTop = Number(area.globalPosition.y);
-        })
-        // 覆盖右侧整叠牌及周围留白，不延伸到左侧介绍。
-        .responseRegion({ x: -12, y: -12, width: this.deckWidth + 42, height: RANKING_DECK_HEIGHT + 24 })
-        .accessibilityGroup(true).accessibilityText(this.items[this.current]?.book.title ?? '')
-      }.width('100%').layoutWeight(1).padding({ left: 24, right: 42, top: 8 })
-      Row({ space: 5 }) {
-        ForEach(this.items, (indicatorItem: RankingPosterItem, index: number) => {
-          Row().width(index === this.current ? 16 : 5).height(5).borderRadius(3)
-            .id('ranking-poster-dot-' + indicatorItem.book.id)
-            .backgroundColor(index === this.current ? $r('sys.color.font_secondary') : AppColor.Divider)
-        }, (item: RankingPosterItem): string => item.book.id)
-      }.height(16).justifyContent(FlexAlign.Center)
-    }.height(RANKING_POSTER_HEIGHT).width('100%').clip(true)
-    .onTouch((event: TouchEvent): void => this.handleTouch(event))
-    .onTouchTestDone((_event: BaseGestureEvent, recognizers: GestureRecognizer[]): void => {
-      // 在本次触摸识别前排除外层 Tabs 横滑；不能只停止 Touch 冒泡。
-      // 作用域是整个轮播区，右侧切牌仍由 handleTouch 驱动，纵向滚动不拦截。
-      for (const recognizer of recognizers) {
-        if (recognizer instanceof PanRecognizer && recognizer.isBuiltIn() &&
-          recognizer.getDirection() === PanDirection.Horizontal) {
-          recognizer.preventBegin();
-        }
-      }
-    })
   }
 }
 
@@ -483,6 +229,14 @@ export struct RankingHomePage {
   private matchData: HomeRecommendationDataSource<RankingMatch> = new HomeRecommendationDataSource<RankingMatch>();
   private platformData: HomeRecommendationDataSource<RankingPlatform> = new HomeRecommendationDataSource<RankingPlatform>();
   @Local posterItems: RankingPosterItem[] = [];
+
+  @Computed
+  get posterDeckItems(): BookPosterItem[] {
+    return this.posterItems.map((item: RankingPosterItem): BookPosterItem => new BookPosterItem(
+      item.book.id, item.book.title, item.book.author || item.book.narrator, item.book.intro,
+      item.book.coverUrl, item.book.contentType === 'text' ? 0.75 : 1));
+  }
+
   private categoryScroller: Scroller = new Scroller();
   private posterIdentity: string = '';
   private posterPlatformId: string = '';
@@ -761,9 +515,12 @@ export struct RankingHomePage {
   @Builder
   private heroContent() {
     if (this.posterCount > 0) {
-      RankingPoster({ items: this.posterItems,
+      BookPosterCarousel({ items: this.posterDeckItems,
         autoPlay: this.visible && this.posterVisible && this.activeBoard === undefined && !this.boardTransitioning && !this.showSheet,
-        onChoose: (book: RankingBook): void => this.openMatch(book),
+        onChoose: (item: BookPosterItem): void => {
+          const poster = this.posterItems.find((entry: RankingPosterItem): boolean => entry.book.id === item.id);
+          if (poster !== undefined) this.openMatch(poster.book);
+        },
         onCoverChange: (cover: string): void => { this.posterCover = cover; },
         onVerticalScroll: (offset: number): void => this.scrollFromPoster(offset),
         onVerticalFling: (velocity: number): void => this.flingFromPoster(velocity) })
@@ -777,7 +534,7 @@ export struct RankingHomePage {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         Stack() {
           Row().width(RANKING_COVER_WIDTH).height(RANKING_COVER_WIDTH / 0.75)
-            .borderRadius(10).backgroundColor(AppColor.Divider)
+            .borderRadius(AppRadius.Sm).backgroundColor(AppColor.Divider)
         }.width(RANKING_COVER_WIDTH).height(RANKING_DECK_HEIGHT)
       }.height(RANKING_POSTER_HEIGHT).width('100%')
         .padding({ left: 24, right: 42, top: 8, bottom: 16 })
@@ -862,7 +619,7 @@ export struct RankingHomePage {
         Row({ space: 14 }) {
           CoverImage({ url: this.selectedBook.coverUrl, imgWidth: 54,
             imgHeight: this.selectedBook.platformId === 'qidian' ? 72 : 70, useFixedHeight: true,
-            radius: 7, imageFit: ImageFit.Contain })
+            radius: AppRadius.Sm, imageFit: ImageFit.Contain })
           Column({ space: 7 }) {
             Text(this.selectedBook.title).fontSize(18).fontWeight(FontWeight.Bold).maxLines(2)
               .width('100%').fontColor($r('sys.color.font_primary'))

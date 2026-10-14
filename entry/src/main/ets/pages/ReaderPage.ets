@@ -155,6 +155,7 @@ export struct ReaderPage {
   @Local readerKitReady: boolean = false;
   @Local jumpingResourceIndex: number = -1;
   @Local readerBarVisible: boolean = false;
+  private readerBarChapterTarget: number = -1;
   @Local pageLabelWidthVp: number = 0;
   @Local showChapterSheet: boolean = false;
   @Local chapterSegmented: boolean = false;
@@ -1318,7 +1319,8 @@ export struct ReaderPage {
   private handleReaderKitPageShow(info: readerCore.PageDataInfo): void {
     const currentBook = this.book;
     if (currentBook === null) return;
-    if (!this.showChapterSheet && !this.showSettingsSheet &&
+    const keepReaderBar = info.resourceIndex === this.readerBarChapterTarget && info.pageOffset === 0;
+    if (!keepReaderBar && !this.showChapterSheet && !this.showSettingsSheet &&
       (info.resourceIndex !== this.currentResourceIndex || info.startDomPos !== this.readerKitDomPos ||
         info.pageOffset !== this.readerKitPageOffset)) {
       this.hideReaderBar();
@@ -1389,18 +1391,20 @@ export struct ReaderPage {
   }
 
   /** 跳到指定章节：EPUB 走 ReaderKit，在线文本走分页加载。 */
-  private async jumpToResourceIndex(resourceIndex: number): Promise<void> {
+  private async jumpToResourceIndex(resourceIndex: number, keepReaderBar: boolean = false): Promise<void> {
     if (this.jumpingResourceIndex >= 0) return;
     const currentBook = this.book;
     if (currentBook === null) return;
     if (resourceIndex < 0 || resourceIndex >= currentBook.chapters.length) return;
     this.showChapterSheet = false;
-    this.hideReaderBar();
+    if (!keepReaderBar) this.hideReaderBar();
     if (this.isOnlineTextBook()) {
       await this.loadOnlineTextChapter(resourceIndex, 0, 0, false, false);
       return;
     }
     if (!this.readerKitReady || this.readerKitController === null) return;
+    // ReaderKit 的首屏回调可能晚于 startPlay 返回；底栏切章期间不按普通翻页收栏。
+    this.readerBarChapterTarget = keepReaderBar ? resourceIndex : -1;
     this.jumpingResourceIndex = resourceIndex;
     try {
       await this.readerKitController.startPlay(resourceIndex, '');
@@ -1412,6 +1416,7 @@ export struct ReaderPage {
         currentBook.id, resourceIndex, '', 0, 0, this.currentChapterTitle);
       this.saveProgress();
     } catch (e) {
+      this.readerBarChapterTarget = -1;
       hilog.error(READER_LOG_DOMAIN, READER_LOG_TAG, 'chapter jump failed: %{public}s',
         e instanceof Error ? e.message : String(e));
     } finally {
@@ -1586,11 +1591,25 @@ export struct ReaderPage {
   }
 
   @Builder
-  readerTabStyle(icon: Resource, label: Resource) {
-    Stack({ alignContent: Alignment.Center }) {
-      SymbolGlyph(icon).fontSize(24).fontColor([this.palette.primary])
+  readerTabStyle(icon: Resource, label: Resource, enabled: boolean = true) {
+    Column({ space: 2 }) {
+      SymbolGlyph(icon).fontSize(22).fontColor([this.palette.primary])
         .accessibilityText(label)
-    }.width('100%').height(48)
+      Text(label).fontSize(AppFont.Caption).fontColor(this.palette.primary).maxLines(1)
+    }.width('100%').height(48).justifyContent(FlexAlign.Center)
+      .opacity(enabled ? 1 : 0.35).enabled(enabled)
+  }
+
+  private adjacentChapterIndex(forward: boolean): number {
+    return this.currentResourceIndex + (forward ? 1 : -1) *
+      (this.book !== null ? PreferenceService.chapterStep(this.book) : 1);
+  }
+
+  private canSwitchChapter(forward: boolean): boolean {
+    const target = this.adjacentChapterIndex(forward);
+    return this.book !== null && !this.loading && !this.onlineTextLoading &&
+      !this.reloadingChapter && this.jumpingResourceIndex < 0 && !this.leaving &&
+      (this.isOnlineTextBook() || this.readerKitReady) && target >= 0 && target < this.book.chapters.length;
   }
 
   /** 横屏隐藏状态栏时仍保护页眉两端，挖孔避让不包含另一侧的屏幕圆角。 */
@@ -1676,9 +1695,13 @@ export struct ReaderPage {
     // HdsTabs 保持稳定布局，显隐只作用于外层，避免浮动栏布局与属性动画互相干扰。
     Stack({ alignContent: Alignment.Bottom }) {
       HdsTabs() {
+        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.backward_end_fill'),
+          $r('app.string.reader_previous_chapter'), this.canSwitchChapter(false)))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.list_bullet'), $r('app.string.reader_chapters')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.textformat'), $r('app.string.reader_font_tab')))
+        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.forward_end_fill'),
+          $r('app.string.reader_next_chapter'), this.canSwitchChapter(true)))
       }
       .width('100%')
       .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM)
@@ -1709,6 +1732,7 @@ export struct ReaderPage {
   }
 
   private hideReaderBar(): void {
+    this.readerBarChapterTarget = -1;
     this.readerBarVisible = false;
     this.syncReaderStatusBar();
   }
@@ -1820,11 +1844,14 @@ export struct ReaderPage {
   }
 
   private handleReaderTabClick(index: number): void {
-    if (index === 0) {
-      this.openChapterSheet();
+    if (index === 0 || index === 4) {
+      const forward = index === 4;
+      if (this.canSwitchChapter(forward)) this.jumpToResourceIndex(this.adjacentChapterIndex(forward), true);
     } else if (index === 1) {
-      this.openSettingsSheet();
+      this.openChapterSheet();
     } else if (index === 2) {
+      this.openSettingsSheet();
+    } else if (index === 3) {
       this.openSettingsSheet(true);
     }
   }
@@ -2168,14 +2195,10 @@ export struct ReaderPage {
       if (this.onlineTextLoading) {
         Column({ space: AppSpace.Sm }) {
           LoadingProgress()
-            .width(30)
-            .height(30)
+            .width(48)
+            .height(48)
             .color(AppColor.Brand)
-          Text(this.chapterTitle(this.jumpingResourceIndex))
-            .fontSize(AppFont.Caption)
-            .fontColor(this.palette.secondary)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          this.buildLoadingHints(this.chapterTitle(this.jumpingResourceIndex))
         }
         .width('100%')
         .height('100%')
@@ -2488,22 +2511,32 @@ export struct ReaderPage {
   }
 
   @Builder
+  buildLoadingHints(chapterTitle: string) {
+    Column({ space: AppSpace.Sm }) {
+      Text($r('app.string.reader_loading'))
+        .fontSize(AppFont.BodyL)
+        .fontColor(Color.White)
+      if (chapterTitle) {
+        Text(chapterTitle)
+          .fontSize(AppFont.BodyL)
+          .fontColor(Color.White)
+          .maxLines(2)
+          .textAlign(TextAlign.Center)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+    }
+    // 只反色加载圈下方的提示文字，适配实际底色和自定义图片。
+    .blendMode(BlendMode.DIFFERENCE, BlendApplyType.OFFSCREEN)
+  }
+
+  @Builder
   buildLoadingState() {
     Column({ space: AppSpace.Sm }) {
       LoadingProgress()
-        .width(32)
-        .height(32)
+        .width(48)
+        .height(48)
         .color(AppColor.Brand)
-      Text($r('app.string.reader_loading'))
-        .fontSize(AppFont.Body)
-        .fontColor(this.palette.secondary)
-      if (this.currentChapterTitle) {
-        Text(this.currentChapterTitle)
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
+      this.buildLoadingHints(this.currentChapterTitle)
     }
     .width('100%')
     .height('100%')

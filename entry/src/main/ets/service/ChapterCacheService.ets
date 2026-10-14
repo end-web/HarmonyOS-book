@@ -13,6 +13,7 @@ import { StorageMigrationService } from './StorageMigrationService';
 import { AudioDownloadTransport } from './AudioDownloadTransport';
 import { BackgroundTaskService } from './BackgroundTaskService';
 import { DiagnosticLogService } from './DiagnosticLogService';
+import { LightSourceRequest } from './rulesource/light/LightSourceRequestPolicy';
 
 const DOMAIN = 0x0001;
 const TAG = 'ChapterCache';
@@ -30,6 +31,7 @@ const PRELOAD_FAILURE_COOLDOWN_MS = 30000;
 const PRELOAD_RESOLVE_TIMEOUT_MS = 15000;
 
 class PendingAudioResolve {
+  request: LightSourceRequest = new LightSourceRequest(0);
   bookId: string = '';
   sourceUrl: string = '';
   chapter: Chapter;
@@ -107,6 +109,10 @@ export class ChapterCacheService {
     this.queue.clear();
     this.preloadGen++;
     if (!keepChapterId) this.clearGen++;
+    for (const task of this.audioResolves.values()) {
+      if (task.chapter.id === keepChapterId) task.request.promote();
+      else task.request.cancel();
+    }
     for (const id of this.activeDownloads.keys()) {
       if (id !== keepChapterId) {
         this.activeDownloads.get(id)?.cancel();
@@ -261,7 +267,7 @@ export class ChapterCacheService {
   /** 切章接手已经开始的解析，只等待地址，不等待整章下载。 */
   getPendingAudioResolve(book: Book, chapter: Chapter): Promise<void> | undefined {
     const task = this.audioResolves.get(chapter.id);
-    if (!task || task.bookId !== book.id || task.sourceUrl !== book.sourceUrl ||
+    if (!task || task.request.isCancelled() || task.bookId !== book.id || task.sourceUrl !== book.sourceUrl ||
       (task.chapter.originSourceValue || task.chapter.source.value) !==
       (chapter.originSourceValue || chapter.source.value) ||
       !this.isResolveCurrent(chapter.id, task.clearGen, task.preloadGen)) return undefined;
@@ -470,7 +476,7 @@ export class ChapterCacheService {
       task.sourceUrl = book.sourceUrl;
       task.clearGen = myClearGen;
       task.preloadGen = myPreloadGen;
-      task.promise = this.resolvePreloadAudio(book, chapter, myClearGen, myPreloadGen);
+      task.promise = this.resolvePreloadAudio(book, chapter, myClearGen, myPreloadGen, task.request);
       this.audioResolves.set(chapter.id, task);
       try {
         await task.promise;
@@ -485,24 +491,28 @@ export class ChapterCacheService {
   }
 
   private async resolvePreloadAudio(book: Book, chapter: Chapter,
-    myClearGen: number, myPreloadGen: number): Promise<void> {
+    myClearGen: number, myPreloadGen: number, request: LightSourceRequest): Promise<void> {
     const taskKey = 'audio_' + chapter.id;
     this.pendingTasks.add(taskKey);
     let timerId: number = -1;
     let expired: boolean = false;
+    request.cancelCheck = (): boolean => expired || !this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen);
     try {
       const source = await this.findSource(book.sourceUrl);
       if (!this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return;
       if (!source) throw new Error('预加载书源不可用');
       const timeoutMs = BookSourceService.getAudioResolveTimeoutMs(source, PRELOAD_RESOLVE_TIMEOUT_MS);
       const timeout = new Promise<AudioRequestInfo | null>((_resolve, reject): void => {
-        timerId = setTimeout((): void => reject(new Error('预解析音频地址超时')), timeoutMs);
+        timerId = setTimeout((): void => {
+          request.cancel();
+          reject(new Error('预解析音频地址超时'));
+        }, timeoutMs);
       });
       const resolve = async (): Promise<AudioRequestInfo | null> => {
         await BookSourceService.prepareAudioChapter(source, book, chapter);
         if (expired || !this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return null;
         return BookSourceService.resolveAudioRequest(source, chapter.originSourceValue || chapter.source.value,
-          book.variables, chapter.variables);
+          book.variables, chapter.variables, request);
       };
       const requestInfo = await Promise.race([resolve(), timeout]);
       if (requestInfo === null || !this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return;
@@ -518,6 +528,7 @@ export class ChapterCacheService {
       hilog.warn(DOMAIN, TAG, 'resolve preload failed [%{public}s]: %{public}s', chapter.title, message);
     } finally {
       expired = true;
+      request.cancel();
       if (timerId >= 0) clearTimeout(timerId);
       this.pendingTasks.delete(taskKey);
       this.invalidatedResolves.delete(chapter.id);

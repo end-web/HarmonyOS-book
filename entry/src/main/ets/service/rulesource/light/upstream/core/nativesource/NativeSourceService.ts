@@ -1,0 +1,437 @@
+/**
+ * 原生书源接入层：把执行器接到应用的请求层、选择器引擎和数据模型上。
+ * 原生书源只经过这里，不进入任何脚本引擎。
+ */
+
+import { Book, BookChapter, BookSource, SearchBook } from '../../model/data/Book';
+import { HttpClient } from '../http/HttpClient';
+import { digestHashHex } from '../http/DigestHash';
+import { AnalyzeUrl } from '../rule/AnalyzeUrl';
+import { AnalyzeRule } from '../rule/AnalyzeRule';
+import { JsonPathEvaluator } from '../rule/JsonPathEvaluator';
+import { RuleExecutionTarget, RuleValue, RuleValueKind } from '../rule/RuleValue';
+import { BookTypeSupport } from '../book/BookTypeSupport';
+import { BookUrlResolver } from '../book/BookUrlResolver';
+import { BookFieldSanitizer } from '../../utils/BookFieldSanitizer';
+import type { NativeValue } from './NativeExpr';
+import { NativeSourceRunner } from './NativeSourceRunner';
+import type {
+  NativeBookInput, NativeBookRecord, NativeContentResult, NativeMenuEntry, NativeRequest, NativeResponse,
+  NativeRunnerHost
+} from './NativeSourceRunner';
+import { NativeSourceSpec } from './NativeSourceSpec';
+import { NativeSourceCrypto } from './NativeSourceCrypto';
+import { CookieStore } from '../http/CookieStore';
+import { ReaderActionMarker } from '../book/ReaderActionMarker';
+import type { NativeLoginSpec, NativeSourceDefinition, NativeVarSpec, NativeVoiceSpec } from './NativeSourceSpec';
+import type { NativeLoginState } from './NativeSourceRunner';
+
+export interface NativeFilterGroup {
+  title: string;
+  options: string[];
+  selected: string;
+}
+
+/** 听书页音色列表里的一项。 */
+export interface NativeVoiceOption {
+  id: string;
+  name: string;
+}
+
+/** 书源设置页里的一项变量。 */
+export interface NativeVarItem {
+  key: string;
+  label: string;
+  options: string[];
+  value: string;
+}
+
+class NativeHost implements NativeRunnerHost {
+  private source: BookSource;
+  private http: HttpClient;
+  private cancelled: () => boolean;
+  private maxResponseBytes: number;
+
+  constructor(source: BookSource, http: HttpClient, cancelled: () => boolean, maxResponseBytes: number) {
+    this.source = source;
+    this.http = http;
+    this.cancelled = cancelled;
+    this.maxResponseBytes = maxResponseBytes;
+  }
+
+  async fetch(request: NativeRequest): Promise<NativeResponse> {
+    if (this.cancelled()) return { ok: false, status: 0, body: '', url: request.url, error: '已取消' };
+    // 沿用书源请求层：限流、Cookie、书源请求头、编码探测和验证处理都在 AnalyzeUrl 里。
+    const options: Record<string, Object> = {};
+    if (request.method !== 'GET') options['method'] = request.method;
+    if (request.body) options['body'] = request.body;
+    if (Object.keys(request.headers).length > 0) options['headers'] = request.headers;
+    if (request.webView) options['webView'] = true;
+    const url = Object.keys(options).length > 0 ? `${request.url},${JSON.stringify(options)}` : request.url;
+    const analyzeUrl = new AnalyzeUrl(this.source, this.http).setCancelCheck(this.cancelled);
+    const response = await analyzeUrl.fetch(url, this.maxResponseBytes > 0 ? this.maxResponseBytes : undefined);
+    return {
+      ok: response.success,
+      status: response.statusCode,
+      body: response.body || '',
+      url: BookUrlResolver.effectiveBase(response, request.url, this.source.bookSourceUrl),
+      error: response.error || ''
+    };
+  }
+
+  jsonPath(root: NativeValue, path: string): NativeValue[] {
+    return JsonPathEvaluator.evaluate(root as Object, path);
+  }
+
+  select(content: string, rule: string, baseUrl: string, list: boolean): string[] {
+    const analyzer = new AnalyzeRule(content, baseUrl);
+    if (list) return analyzer.getStringList(rule);
+    const value = analyzer.getString(rule);
+    return value ? [value] : [];
+  }
+
+  selectItems(content: string, rule: string, baseUrl: string): NativeValue[] {
+    const values = new AnalyzeRule(content, baseUrl).execute(rule, RuleExecutionTarget.ELEMENTS);
+    return values.map((value: RuleValue): NativeValue => {
+      if (value.kind === RuleValueKind.JSON) {
+        if (value.objectValue !== null && value.objectValue !== undefined) return value.objectValue;
+        try {
+          return JSON.parse(value.asString());
+        } catch (e) {
+          return value.asString();
+        }
+      }
+      return value.asString();
+    });
+  }
+
+  digest(algorithm: string, text: string): string {
+    return digestHashHex(algorithm, text);
+  }
+
+  crypto(name: string, args: NativeValue[]): NativeValue {
+    return NativeSourceCrypto.run(name, args as Object[]);
+  }
+
+  cookie(url: string, name: string): string {
+    return CookieStore.forSource(this.source.bookSourceUrl).getCookieValue(url, name);
+  }
+}
+
+export class NativeSourceService {
+  /** 该书源是否为原生书源。 */
+  static isNative(source: BookSource | null | undefined): boolean {
+    return !!source && NativeSourceSpec.isPacked(source.jsLib || '');
+  }
+
+  static definitionOf(source: BookSource): NativeSourceDefinition {
+    const definition = NativeSourceSpec.unpack(source.jsLib || '');
+    if (!definition) throw new Error('原生书源定义已损坏，请重新导入');
+    return definition;
+  }
+
+  /** 把定义写进书源记录。existing 传入时保留排序、置顶、已选变量等本地状态。 */
+  static toBookSource(definition: NativeSourceDefinition, existing: BookSource | null = null): BookSource {
+    const source = existing ? Object.assign(new BookSource(), existing) : new BookSource();
+    source.bookSourceUrl = definition.url;
+    source.bookSourceName = definition.name;
+    source.bookSourceGroup = definition.group || '';
+    source.bookSourceComment = definition.comment || '';
+    source.bookSourceType = NativeSourceSpec.bookSourceType(definition);
+    source.concurrentRate = definition.rate || '';
+    source.header = definition.headers && Object.keys(definition.headers).length > 0 ?
+      JSON.stringify(definition.headers) : '';
+    source.jsLib = NativeSourceSpec.pack(definition);
+    source.searchUrl = definition.search ? NativeSourceSpec.SEARCH_MARKER : '';
+    source.exploreUrl = definition.explore ? NativeSourceSpec.EXPLORE_MARKER : '';
+    // 登录页地址放进 loginUrl，列表上的登录状态角标和 Cookie 同步沿用现有逻辑。
+    source.loginUrl = definition.login ? definition.login.url : '';
+    source.loginUi = '';
+    source.loginCheckJs = '';
+    source.rawSourceJson = '';
+    source.bookUrlPattern = '';
+    if (!existing) {
+      source.enabled = definition.enabled !== false;
+      source.enabledExplore = definition.enabledExplore !== false;
+    }
+    source.lastUpdateTime = Date.now();
+    return source;
+  }
+
+  /** 导入用：把 JSON 对象转成书源记录，不合法时抛出带原因的错误。 */
+  static importObject(value: Object, existing: BookSource | null = null): BookSource {
+    return NativeSourceService.toBookSource(NativeSourceSpec.fromObject(value), existing);
+  }
+
+  /** 导出用：还原成带 sourceFormat 的定义对象。 */
+  static exportObject(source: BookSource): Object {
+    return NativeSourceSpec.toExportObject(NativeSourceService.definitionOf(source)) as Object;
+  }
+
+  static storedVars(source: BookSource): Record<string, NativeValue> {
+    try {
+      const parsed = JSON.parse(source.variable || '{}') as Object;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, NativeValue>;
+    } catch (e) {
+    }
+    return {};
+  }
+
+  /** 书源设置页用：全部变量及其当前值。 */
+  static varItems(source: BookSource): NativeVarItem[] {
+    const definition = NativeSourceSpec.unpack(source.jsLib || '');
+    if (!definition) return [];
+    const current = NativeSourceRunner.resolveVars(definition, NativeSourceService.storedVars(source));
+    return (definition.vars || []).map((item: NativeVarSpec): NativeVarItem => ({
+      key: item.key,
+      label: item.label || item.key,
+      options: Array.isArray(item.options) ? item.options.map((option: string): string => String(option)) : [],
+      value: current[item.key] || ''
+    }));
+  }
+
+  /** 把设置页里的值合并进书源变量 JSON。 */
+  static variableWithValues(source: BookSource, items: NativeVarItem[]): string {
+    const stored = NativeSourceService.storedVars(source);
+    for (const item of items) stored[item.key] = item.value;
+    return JSON.stringify(stored);
+  }
+
+  /** 书源声明的听书音色；不是原生书源或没有声明时返回空列表。 */
+  static voices(source: BookSource | null): NativeVoiceOption[] {
+    const definition = source ? NativeSourceSpec.unpack(source.jsLib || '') : null;
+    if (!definition || !Array.isArray(definition.voices)) return [];
+    return definition.voices.map((voice: NativeVoiceSpec): NativeVoiceOption =>
+      ({ id: String(voice.id), name: String(voice.name) }));
+  }
+
+  static loginSpec(source: BookSource): NativeLoginSpec | null {
+    const definition = NativeSourceSpec.unpack(source.jsLib || '');
+    return definition && definition.login ? definition.login : null;
+  }
+
+  /** 按声明的 Cookie 名判断是否已登录；没有声明时只要该站点有 Cookie 就算。 */
+  static hasLoginCookies(source: BookSource): boolean {
+    const login = NativeSourceService.loginSpec(source);
+    if (!login) return false;
+    const names = Array.isArray(login.cookies) ? login.cookies : [];
+    if (names.length === 0) return !!CookieStore.forSource(source.bookSourceUrl).getCookie(login.url);
+    return names.every((name: string): boolean => !!CookieStore.forSource(source.bookSourceUrl).getCookieValue(login.url, String(name)));
+  }
+
+  static logout(source: BookSource): void {
+    const login = NativeSourceService.loginSpec(source);
+    if (!login) return;
+    const origin = /^https?:\/\/[^/?#]+/i.exec(login.url);
+    CookieStore.forSource(source.bookSourceUrl).removeCookie(login.url);
+    if (origin) {
+      CookieStore.forSource(source.bookSourceUrl).removeCookie(origin[0]);
+      CookieStore.forSource(source.bookSourceUrl).removeCookie(`${origin[0]}/`);
+    }
+    CookieStore.forSource(source.bookSourceUrl).saveAsync();
+  }
+
+  static async checkLogin(source: BookSource, http: HttpClient): Promise<NativeLoginState> {
+    return await NativeSourceService.runner(source, http, (): boolean => false).checkLogin();
+  }
+
+  /** 发现页的筛选项：定义里标了 filter 且带选项的变量。 */
+  static filters(source: BookSource): NativeFilterGroup[] {
+    const definition = NativeSourceSpec.unpack(source.jsLib || '');
+    if (!definition) return [];
+    const current = NativeSourceRunner.resolveVars(definition, NativeSourceService.storedVars(source));
+    return (definition.vars || [])
+      .filter((item: NativeVarSpec): boolean => item.filter === true && Array.isArray(item.options) &&
+        item.options.length > 0)
+      .map((item: NativeVarSpec): NativeFilterGroup => ({
+        title: item.label || item.key,
+        options: (item.options as string[]).map((option: string): string => String(option)),
+        selected: current[item.key] || ''
+      }));
+  }
+
+  /** 修改一个变量，返回新的书源变量 JSON；没有变化或选项不合法时返回空串。 */
+  static variableAfterSelect(source: BookSource, title: string, selection: string): string {
+    const definition = NativeSourceSpec.unpack(source.jsLib || '');
+    if (!definition) return '';
+    const target = (definition.vars || []).find((item: NativeVarSpec): boolean => (item.label || item.key) === title);
+    if (!target) return '';
+    if (Array.isArray(target.options) && target.options.length > 0 &&
+      target.options.map((option: string): string => String(option)).indexOf(selection) < 0) {
+      return '';
+    }
+    const stored = NativeSourceService.storedVars(source);
+    if (String(stored[target.key] === undefined ? '' : stored[target.key]) === selection) return '';
+    stored[target.key] = selection;
+    return JSON.stringify(stored);
+  }
+
+  private static runner(source: BookSource, http: HttpClient, cancelled: () => boolean,
+    maxResponseBytes: number = 0): NativeSourceRunner {
+    const host = new NativeHost(source, http, cancelled, maxResponseBytes);
+    return new NativeSourceRunner(NativeSourceService.definitionOf(source), host,
+      NativeSourceService.storedVars(source)).setCancelCheck(cancelled);
+  }
+
+  private static typeBits(type: string, source: BookSource): number {
+    return BookTypeSupport.typeFromTab(type) || BookTypeSupport.typeFromSource(source) || BookTypeSupport.TEXT;
+  }
+
+  /** 视频没有专门的类型位，记在书籍变量的 tab 里；其余类型由类型位推出。 */
+  private static typeName(bits: number, source: BookSource, variable: string = ''): string {
+    if (variable && BookUrlResolver.getVariableJson(variable, 'tab') === 'video') return 'video';
+    const value = Number(bits) || BookTypeSupport.typeFromSource(source);
+    if ((value & BookTypeSupport.AUDIO) !== 0) return 'audio';
+    if ((value & BookTypeSupport.IMAGE) !== 0) return 'comic';
+    return 'text';
+  }
+
+  private static toSearchBook(source: BookSource, record: NativeBookRecord): SearchBook {
+    const book = new SearchBook();
+    book.name = BookFieldSanitizer.clean(record.name);
+    book.author = BookFieldSanitizer.clean(record.author);
+    book.kind = BookFieldSanitizer.clean(record.kind);
+    book.status = BookFieldSanitizer.clean(record.status);
+    book.intro = BookFieldSanitizer.clean(record.intro);
+    book.coverUrl = record.coverUrl;
+    book.wordCount = BookFieldSanitizer.clean(record.wordCount);
+    book.latestChapterTitle = BookFieldSanitizer.clean(record.lastChapter);
+    book.updateTime = BookFieldSanitizer.clean(record.updateTime);
+    book.bookUrl = record.bookUrl;
+    book.tocUrl = record.tocUrl;
+    book.origin = source.bookSourceUrl;
+    book.originName = source.bookSourceName;
+    book.type = NativeSourceService.typeBits(record.type, source);
+    // 媒体类型同时写进书籍变量，加入书架后各处的类型判定都读得到。
+    book.variable = BookUrlResolver.setVariableJson('', 'tab',
+      record.type === 'video' ? 'video' : NativeSourceService.typeName(book.type, source));
+    book.bookSourceComment = source.bookSourceComment;
+    book.customOrder = source.customOrder;
+    book.weight = source.weight;
+    return book;
+  }
+
+  private static bookInput(source: BookSource, book: Book): NativeBookInput {
+    let vars: Record<string, NativeValue> = {};
+    try {
+      const parsed = JSON.parse(book.variable || '{}') as Object;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) vars = parsed as Record<string, NativeValue>;
+    } catch (e) {
+    }
+    return {
+      bookUrl: book.bookUrl,
+      tocUrl: book.tocUrl,
+      name: book.name,
+      author: book.author,
+      kind: book.kind,
+      type: NativeSourceService.typeName(book.type, source, book.variable),
+      vars: vars
+    };
+  }
+
+  static async search(source: BookSource, http: HttpClient, keyword: string, cancelled: () => boolean,
+    maxResponseBytes: number = 0, page: number = 1): Promise<SearchBook[]> {
+    const records = await NativeSourceService.runner(source, http, cancelled, maxResponseBytes).search(keyword, page);
+    return records.map((record: NativeBookRecord): SearchBook => NativeSourceService.toSearchBook(source, record));
+  }
+
+  static async exploreMenus(source: BookSource, http: HttpClient): Promise<NativeMenuEntry[]> {
+    return await NativeSourceService.runner(source, http, (): boolean => false).exploreMenus();
+  }
+
+  static async explore(source: BookSource, http: HttpClient, target: string, page: number): Promise<SearchBook[]> {
+    const records = await NativeSourceService.runner(source, http, (): boolean => false).explore(target, page);
+    return records.map((record: NativeBookRecord): SearchBook => NativeSourceService.toSearchBook(source, record));
+  }
+
+  static async getBookInfo(source: BookSource, http: HttpClient, book: Book): Promise<Book> {
+    book.origin = source.bookSourceUrl;
+    book.originName = source.bookSourceName;
+    const record = await NativeSourceService.runner(source, http, (): boolean => false)
+      .detail(NativeSourceService.bookInput(source, book));
+    book.name = BookFieldSanitizer.prefer(record.name, book.name);
+    book.author = BookFieldSanitizer.prefer(record.author, book.author);
+    book.kind = BookFieldSanitizer.prefer(record.kind, book.kind);
+    book.status = BookFieldSanitizer.prefer(record.status, book.status);
+    book.intro = BookFieldSanitizer.prefer(record.intro, book.intro);
+    book.wordCount = BookFieldSanitizer.prefer(record.wordCount, book.wordCount);
+    book.latestChapterTitle = BookFieldSanitizer.prefer(record.lastChapter, book.latestChapterTitle);
+    book.updateTime = BookFieldSanitizer.prefer(record.updateTime, book.updateTime);
+    book.coverUrl = book.coverUrl || record.coverUrl;
+    book.tocUrl = record.tocUrl || book.tocUrl || book.bookUrl;
+    if (record.type) book.type = NativeSourceService.typeBits(record.type, source);
+    else if (!Number(book.type)) book.type = NativeSourceService.typeBits('', source);
+    // 详情给出了类型就以它为准；没给时保留搜索或发现阶段已经定下的类型。
+    let variable = BookUrlResolver.setVariableJson(book.variable, 'tab', record.type === 'video' ? 'video' :
+      NativeSourceService.typeName(book.type, source, record.type ? '' : book.variable));
+    for (const key of Object.keys(record.keep)) {
+      variable = BookUrlResolver.setVariableJson(variable, key, record.keep[key]);
+    }
+    book.variable = variable;
+    return book;
+  }
+
+  static async getChapterList(source: BookSource, http: HttpClient, book: Book,
+    limit: number = 0): Promise<BookChapter[]> {
+    const records = await NativeSourceService.runner(source, http, (): boolean => false)
+      .toc(NativeSourceService.bookInput(source, book), limit);
+    const chapters: BookChapter[] = [];
+    let pendingVolume = '';
+    for (const record of records) {
+      // 分卷标题不占章节位置，记到它后面第一章上，由目录在该章上方显示。
+      if (record.isVolume) {
+        pendingVolume = record.title;
+        continue;
+      }
+      if (!record.url) continue;
+      const chapter = new BookChapter();
+      chapter.title = record.title;
+      chapter.url = record.url;
+      chapter.bookUrl = book.bookUrl;
+      chapter.index = chapters.length;
+      chapter.isVip = record.isVip;
+      chapter.isPay = record.isPay;
+      chapter.variable = BookUrlResolver.setVariableJson(chapter.variable, 'baseUrl', record.url);
+      if (record.tag) chapter.variable = BookUrlResolver.setVariableJson(chapter.variable, 'updateTime', record.tag);
+      if (pendingVolume) {
+        chapter.variable = BookUrlResolver.setVariableJson(chapter.variable, 'volume', pendingVolume);
+        pendingVolume = '';
+      }
+      chapters.push(chapter);
+    }
+    return chapters;
+  }
+
+  static async getContent(source: BookSource, http: HttpClient, book: Book, chapter: BookChapter,
+    cancelled: () => boolean): Promise<NativeContentResult> {
+    const result = await NativeSourceService.runner(source, http, cancelled).content(
+      NativeSourceService.bookInput(source, book), { url: chapter.url, title: chapter.title, index: chapter.index });
+    if (result.kind === 'text') result.text = NativeSourceService.withCommentMarkers(result);
+    return result;
+  }
+
+  /**
+   * 把段评和章末评论入口写成阅读器的交互标记。标签沿用阅读器已有的约定：
+   * 以数字结尾的显示为带条数的气泡，含「本章说」的显示为章末入口。
+   */
+  private static withCommentMarkers(result: NativeContentResult): string {
+    if (result.paragraphComments.length === 0 && !result.chapterCommentUrl && result.links.length === 0) {
+      return result.text;
+    }
+    const lines = result.text.split('\n');
+    for (const comment of result.paragraphComments) {
+      if (comment.line < 0 || comment.line >= lines.length) continue;
+      lines[comment.line] += ReaderActionMarker.create(`段评 ${comment.count > 99 ? '99+' : comment.count}`,
+        comment.url, '段评');
+    }
+    for (const link of result.links) {
+      const button = ReaderActionMarker.create(link.label, link.url, link.label);
+      if (button) lines.push('', button);
+    }
+    if (result.chapterCommentUrl) {
+      const tail = ReaderActionMarker.create('本章说', result.chapterCommentUrl, '本章说');
+      if (tail) lines.push('', tail);
+    }
+    return lines.join('\n');
+  }
+}

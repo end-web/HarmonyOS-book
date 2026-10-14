@@ -17,8 +17,7 @@ import {
 import { LocalRuleSourceRepository, SourceLimitError } from '../service/rulesource/LocalRuleSourceRepository';
 import { LocalRuleSourceCodec } from '../service/rulesource/LocalRuleSourceCodec';
 import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
-import { LocalRuleHttpClient } from '../service/rulesource/LocalRuleHttpClient';
-import { NativeRuleSourceDispatcher } from '../service/rulesource/NativeRuleSourceDispatcher';
+import { LightSourceCookies as LocalRuleHttpClient } from '../service/rulesource/light/LightSourceCookies';
 import {
   RuleSourceAccountService,
   RuleSourceAccountState
@@ -988,6 +987,9 @@ export struct RuleSourcePage {
   }
 
   private canOpenSourceLogin(source: LocalRuleSource): boolean {
+    if (source.engine === 'light' || source.engine === 'light-native') {
+      return source.loginUrl.trim().length > 0 || source.loginUi.trim().length > 0;
+    }
     if (TalebookSourceIdentity.isSourceUrl(source.bookSourceUrl)) return true;
     if (RuleSourceChildService.supports(source.bookSourceUrl)) return false;
     return source.loginUrl.trim().toLowerCase().startsWith('https://');
@@ -1026,9 +1028,7 @@ export struct RuleSourcePage {
   }
 
   private openLoginEntry(source: LocalRuleSource): void {
-    if (RuleSourceAccountService.supports(source.bookSourceUrl)) {
-      this.openMainAccount(source);
-    } else if (source.loginUi.length > 0) {
+    if (source.engine === 'light' || source.engine === 'light-native' || source.loginUi.length > 0) {
       this.navStack.pushPathByName('ruleSourceLoginPanel', source.bookSourceUrl);
     } else {
       this.openSourceLogin(source);
@@ -1271,9 +1271,6 @@ export struct RuleSourcePage {
   }
 
   private sourceTypeLabel(source: LocalRuleSource): ResourceStr {
-    if (NativeRuleSourceDispatcher.isSourceUrl(source.bookSourceUrl)) {
-      return $r('app.string.rule_source_type_mixed');
-    }
     if (source.bookSourceType === LocalRuleSourceType.AUDIO) {
       return $r('app.string.rule_source_type_audio');
     }

@@ -96,6 +96,8 @@ export struct RuleSourcePanelPage {
       if (result.message) this.getUIContext().getPromptAction().showToast({ message: result.message });
       if (result.browserUrl) {
         const route = RuleSourceLoginRouteParams.of(source.bookSourceUrl, source.bookSourceName, result.browserUrl);
+        route.initialHtml = result.browserHtml;
+        route.injectJs = result.browserInjectJs;
         if (!route.isValid()) {
           throw new Error(this.getUIContext().getHostContext()?.resourceManager
             .getStringSync($r('app.string.rule_source_login_https_only').id) ?? 'Invalid HTTPS URL');
@@ -115,7 +117,7 @@ export struct RuleSourcePanelPage {
         route.title = control.title;
         route.moreUrl = result.browseUrl;
         this.navStack.pushPathByName('blockMore', route);
-      } else if (result.refresh && !this.settingsPanel) {
+      } else if (result.refresh && (!this.settingsPanel || result.refreshLogin)) {
         await this.load();
       }
     } catch (error) {
@@ -131,8 +133,12 @@ export struct RuleSourcePanelPage {
       range: control.options,
       selected: Math.max(0, control.optionValues.indexOf(control.value)),
       onAccept: (result: TextPickerResult) => {
-        const label = typeof result.value === 'string' ? result.value : (result.value?.[0] ?? '');
-        control.value = control.optionValues[control.options.indexOf(label)] ?? label;
+        const index = typeof result.index === 'number' ? result.index : (result.index?.[0] ?? -1);
+        if (index < 0 || index >= control.optionValues.length) return;
+        control.value = control.optionValues[index];
+        if (control.id === 'light-native-var:mode') {
+          console.info(`[RuleSourcePanel] accepted mode index=${index} value=${control.value}`);
+        }
         if (control.action) this.runAction(control);
       }
     });

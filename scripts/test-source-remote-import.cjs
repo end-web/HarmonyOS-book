@@ -7,6 +7,13 @@ const ts = require(path.join(process.env.DEVECO_HOME,
   'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const root = path.join(__dirname, '../entry/src/main/ets');
 let calls = [], responses = [];
+let browserResponses = [], systemResponses = [];
+async function fallback(channel, address, queue) {
+  calls.push({channel,address});
+  const value = queue.shift();
+  if (typeof value !== 'string') throw new Error('fallback unavailable');
+  return value;
+}
 async function request(channel, address, options) {
   calls.push({ channel, address, options });
   const next = responses.shift();
@@ -15,6 +22,10 @@ async function request(channel, address, options) {
   return next;
 }
 const mocks = {
+  './LocalRuleSourceDownloadService': {LocalRuleSourceDownloadService:{
+    browser: address => fallback('web',address,browserResponses),
+    system: address => fallback('download',address,systemResponses)}},
+  './light/upstream/core/http/RawHttpTextClient': {RawHttpTextClient:{get:async () => {throw Error('raw unavailable');}}},
   '@kit.ArkTS': { buffer: Buffer, url: { URL: { parseURL: input => {
     const parsed = new URL(input);
     Object.defineProperty(parsed, 'params', { value: parsed.searchParams });
@@ -27,7 +38,8 @@ const mocks = {
 };
 const cache = new Map();
 function load(relative) {
-  const file = path.join(root, relative);
+  let file = path.join(root, relative);
+  if (!fs.existsSync(file) && file.endsWith('.ets')) file = file.slice(0, -4) + '.ts';
   if (cache.has(file)) return cache.get(file);
   const module = { exports: {} };
   const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
@@ -50,7 +62,7 @@ const body = JSON.stringify({ value: [
     ruleSearch: { bookList: '$.books', name: '$.name', bookUrl: '$.url' } }
 ] });
 const subscription = 'https://subscription.example/sources?key=fixture%2Bvalue%26part&edition=2';
-function reset(...values) { calls = []; responses = values; }
+function reset(...values) { calls = []; responses = values; browserResponses=[];systemResponses=[]; }
 const response = (body, statusCode = 200) => ({ body, statusCode, headers: {} });
 async function rejected(values, expected, count = values.length) {
   reset(...values);
@@ -60,7 +72,7 @@ async function rejected(values, expected, count = values.length) {
     assert.ok(!error.message.includes(subscription));
     return true;
   });
-  assert.equal(calls.length, count);
+  assert.equal(calls.filter(c => ['rcp','http'].includes(c.channel)).length, count);
 }
 async function main() {
   reset();
@@ -104,8 +116,8 @@ async function main() {
     assert.deepEqual(calls.map(c => c.channel), ['rcp', 'http']);
     assert.ok(calls.every(c => c.address === subscription));
   }
-  for (const code of [401, 403]) await rejected([response('', code)], failure.AUTH);
-  for (const code of [404, 410]) await rejected([response('', code)], failure.NOT_FOUND);
+  for (const code of [401, 403]) await rejected([response('', code),response('',code)], failure.AUTH);
+  for (const code of [404, 410]) await rejected([response('', code),response('',code)], failure.NOT_FOUND);
   await rejected([response('<html>login</html>'), response('<html>login</html>')], failure.HTML);
   await rejected([response('{broken'), response('plain text')], failure.FORMAT);
   await rejected([new Error('offline'), new Error('offline')], failure.NETWORK);
@@ -114,6 +126,14 @@ async function main() {
   await assert.rejects(importer.resolve(oversized), e => e.failure === failure.TOO_LARGE);
   assert.equal(calls.length, 0);
   await rejected([response(oversized)], failure.TOO_LARGE);
+  reset(response('',403),response('<html>challenge</html>'));
+  browserResponses.push(body);
+  assert.equal(await importer.resolve(subscription),body);
+  assert.deepEqual(calls.map(c => c.channel),['rcp','http','web']);
+  reset(new Error('transport'),new Error('transport'));
+  systemResponses.push(body);
+  assert.equal(await importer.resolve(subscription),body);
+  assert.deepEqual(calls.map(c => c.channel),['rcp','http','web','download']);
   console.log('PASS remote subscription import: sharing, parser handoff, fallback, errors, byte limits');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

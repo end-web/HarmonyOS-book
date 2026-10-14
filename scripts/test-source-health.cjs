@@ -40,10 +40,6 @@ const { BookSourceService: service } = compile('service/BookSourceService.ets', 
   '../model/LocalRuleSource': model,
   './DownloadPolicy': compile('service/DownloadPolicy.ets'),
   './rulesource/LocalRuleDispatcher': { LocalRuleDispatcher: dispatcher },
-  './rulesource/NativeRuleSourceDispatcher': { NativeRuleSourceDispatcher: {
-    isSource: () => false, isNonRetryableHealthError: () => false
-  } },
-  './rulesource/talebook/TalebookSourceIdentity': { TalebookSourceIdentity: { isSourceUrl: () => false } },
   './rulesource/LocalRulePanelService': { LocalRulePanelService: {
     load: async () => ({ entries: [{ url: 'https://fixture/discover' }] })
   } },

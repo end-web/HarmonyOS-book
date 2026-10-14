@@ -1,29 +1,18 @@
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { AppIconOption, AppIconService } from '../service/AppIconService';
-import { sendableContextManager } from '@kit.AbilityKit';
-import { MembershipService } from '../service/MembershipService';
-import { MembershipState } from '../model/MembershipState';
 
-/** 主题会员页内的图标选择区，保留原文件名，不再注册独立路由。 */
+/** 免费主题页内的图标选择区，保留系统能力与切换状态保护。 */
 @ComponentV2
 export struct AppIconPage {
-  @Event onMembershipRequired: () => void = () => {};
   @Local current: string = '';
   @Local loading: boolean = true;
   @Local switching: boolean = false;
   @Local loadFailed: boolean = false;
-  @Local membership: MembershipService = MembershipService.instance;
-  @Local memberState: MembershipState = MembershipState.current;
   private service: AppIconService = AppIconService.instance;
   private options: AppIconOption[] = this.service.getOptions();
 
   aboutToAppear(): void {
     this.loadCurrent();
-  }
-
-  @Monitor('membership.busy')
-  private onMembershipUpdated(): void {
-    if (this.service.membershipRequired && !this.membership.busy && !this.switching) this.loadCurrent();
   }
 
   private async loadCurrent(): Promise<void> {
@@ -40,24 +29,9 @@ export struct AppIconPage {
 
   private async selectIcon(option: AppIconOption): Promise<void> {
     if (this.switching || !this.service.supported || this.loading || this.loadFailed ||
-      (this.service.membershipRequired && this.membership.busy) || this.current === option.name) return;
+      this.current === option.name) return;
     this.switching = true;
     try {
-      // 切换图标复用仍有效的已验签权益；未知或过期时才合并查询。
-      if (this.service.membershipRequired && option.name !== '' && !this.memberState.hasAccess) {
-        const host = this.getUIContext().getHostContext();
-        if (!host) return;
-        const context = sendableContextManager.convertToUIAbilityContext(sendableContextManager.convertFromContext(host));
-        await this.membership.refresh(context);
-        if (!this.memberState.hasAccess) {
-          if (this.memberState.confirmedInactive) {
-            this.onMembershipRequired();
-          } else {
-            this.getUIContext().getPromptAction().showToast({ message: this.membership.message });
-          }
-          return;
-        }
-      }
       this.current = await this.service.select(option.name);
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.app_icon_changed') });
     } catch (_error) {
@@ -77,7 +51,7 @@ export struct AppIconPage {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('sys.color.font_primary'))
         Blank()
-        if (this.loading || this.switching || (this.service.membershipRequired && this.membership.busy)) {
+        if (this.loading || this.switching) {
           LoadingProgress().width(24).height(24).color(AppColor.Brand)
         }
       }
@@ -125,8 +99,7 @@ export struct AppIconPage {
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                 if (option.name !== '') {
-                  Text(this.service.membershipRequired ? $r('app.string.membership_icon_exclusive') :
-                    $r('app.string.app_icon_invite_free')).fontSize(AppFont.Caption)
+                  Text($r('app.string.app_icon_invite_free')).fontSize(AppFont.Caption)
                     .fontColor($r('sys.color.font_secondary'))
                 }
               }
@@ -138,7 +111,7 @@ export struct AppIconPage {
             .borderRadius(AppRadius.Lg)
             .backgroundColor($r('sys.color.comp_background_primary'))
             .enabled(this.service.supported && !this.switching &&
-              !this.loading && !this.loadFailed && (!this.service.membershipRequired || !this.membership.busy))
+              !this.loading && !this.loadFailed)
             .accessibilityText(option.label)
             .onClick(() => this.selectIcon(option))
           }

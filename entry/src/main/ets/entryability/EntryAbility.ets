@@ -143,6 +143,9 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, 'initServicesCore: PreferenceService ready, elapsed=%{public}dms', Date.now() - startTime);
 
     // 本地规则是旁路能力：后台预热，但不阻塞下载和播放器状态恢复。
+    AppStorage.setOrCreate('appCacheDir', this.context.cacheDir);
+    AppStorage.setOrCreate('lightSourceSaveLabel', this.context.resourceManager.getStringSync($r('app.string.light_source_save_settings').id));
+    AppStorage.setOrCreate('lightSourceLoginLabel', this.context.resourceManager.getStringSync($r('app.string.light_source_web_login').id));
     LocalRuleSourceRepository.init(this.context).catch((e: Error): void => {
       hilog.warn(DOMAIN, TAG, 'LocalRuleSourceRepository init failed: %{public}s', JSON.stringify(e));
     });

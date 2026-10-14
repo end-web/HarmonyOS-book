@@ -60,8 +60,7 @@ export class RuleSourceChildService {
   ];
 
   static supports(sourceUrl: string | undefined): boolean {
-    return GuangYuSourceIdentity.isSourceUrl(sourceUrl) ||
-      ShuShanSourceIdentity.isSourceUrl(sourceUrl);
+    return false;
   }
 
   static catalog(sourceUrl: string): RuleSourceChild[] {

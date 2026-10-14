@@ -30,13 +30,12 @@ export function parseImportFile(content: string): string[] {
   else if (Array.isArray(root.bookSourceList)) items = root.bookSourceList;
   else if (Array.isArray(root.list)) items = root.list;
   else items = [root];
-  const count = Math.min(items.length, 1000);
+  const count = items.length;
   let rejected = items.length - count;
   for (let index = 0; index < count; index++) {
     const item = items[index];
     if (item === null || typeof item !== 'object' || Array.isArray(item)) { rejected++; continue; }
     const raw = JSON.stringify(item);
-    if (buffer.byteLength(raw, 'utf-8') > 512 * 1024) { rejected++; continue; }
     entries.push(raw);
   }
   entries[0] = String(rejected);

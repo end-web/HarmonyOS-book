@@ -1,12 +1,14 @@
 import { webview } from '@kit.ArkWeb';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
 import { LocalRuleSourceRepository } from '../service/rulesource/LocalRuleSourceRepository';
-import { LocalRuleHttpClient } from '../service/rulesource/LocalRuleHttpClient';
+import { LightSourceCookies as LocalRuleHttpClient } from '../service/rulesource/light/LightSourceCookies';
+import { LightPersistedCookieRecord } from '../service/rulesource/light/LightSourceCookies';
 import { LocalRuleTlsTrustStore } from '../service/rulesource/LocalRuleTlsTrustStore';
 import { LocalRuleBrowserLoginCoordinator } from '../service/rulesource/LocalRuleBrowserLoginCoordinator';
 import { LocalRuleExecutionLimits } from '../service/rulesource/LocalRuleRuntimeTypes';
 import { LocalRuleWebSession } from '../service/rulesource/LocalRuleWebSession';
 import { LocalRulePanelService } from '../service/rulesource/LocalRulePanelService';
+import { LightSourceBridge } from '../service/rulesource/light/LightSourceBridge';
 import { RuleSourceAccountService } from '../service/rulesource/RuleSourceAccountService';
 import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
@@ -27,6 +29,7 @@ class RuleSourceLoginHtmlSnapshot {
 
 @ComponentV2
 export struct RuleSourceLoginPage {
+  private storedCookieRecords: LightPersistedCookieRecord[] = [];
   @Param navStack: NavPathStack = new NavPathStack();
   @Param route: RuleSourceLoginRouteParams = new RuleSourceLoginRouteParams();
   @Local ready: boolean = false;
@@ -43,6 +46,7 @@ export struct RuleSourceLoginPage {
   private cancellationTask: Promise<void> | undefined = undefined;
   private requestCancelled: boolean = false;
   private initialDocumentServed: boolean = false;
+  private loginScriptInjected: boolean = false;
   private storedCookies: RuleSourceWebCookieSnapshot[] = [];
   private cookiesRestored: boolean = false;
 
@@ -89,6 +93,7 @@ export struct RuleSourceLoginPage {
         return;
       }
       const loginUrls = this.loginUrls();
+      this.storedCookieRecords = await LocalRuleHttpClient.getStoredCookieRecords(this.route.sourceUrl);
       for (const loginUrl of loginUrls) {
         const cookieHeader = await LocalRuleHttpClient.getStoredCookieHeader(
           this.route.sourceUrl, loginUrl);
@@ -117,12 +122,17 @@ export struct RuleSourceLoginPage {
       this.releaseWebCookies();
       this.controller.clearSslCache();
       this.controller.setCustomUserAgent(RULE_LOGIN_USER_AGENT);
+      for (const record of this.storedCookieRecords) {
+        webview.WebCookieManager.configCookieSync(record.url, record.cookie, true, true);
+      }
       for (const snapshot of this.storedCookies) {
-        this.injectCookies(snapshot.url, snapshot.cookieHeader);
+        if (!this.storedCookieRecords.some(record => LocalRuleHttpClient.requestOrigin(record.url) ===
+          LocalRuleHttpClient.requestOrigin(snapshot.url))) this.injectCookies(snapshot.url, snapshot.cookieHeader);
         this.rememberUrl(snapshot.url);
       }
       this.cookiesRestored = true;
       this.storedCookies = [];
+      this.storedCookieRecords = [];
       this.controller.loadUrl(this.route.loginUrl);
     } catch (_error) {
       this.cookiesRestored = false;
@@ -248,7 +258,7 @@ export struct RuleSourceLoginPage {
     try {
       const awaitingScript = this.route.requestId.length > 0;
       await this.persistSnapshotsStrict(snapshots);
-      if (!awaitingScript && this.cookieHeaders(snapshots).length === 0) {
+      if (!awaitingScript && this.route.isMainAccount && this.cookieHeaders(snapshots).length === 0) {
         this.showToast($r('app.string.rule_source_login_no_session'));
         return;
       }
@@ -267,7 +277,7 @@ export struct RuleSourceLoginPage {
         }
       } else if (!awaitingScript) {
         const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
-        if (source !== undefined && source.loginCheckJs.trim()) {
+        if (source !== undefined) {
           const content = await this.readBoundedPageHtml();
           await LocalRulePanelService.checkLogin(source, content, {}, this.currentUrl);
         } else {
@@ -408,6 +418,9 @@ export struct RuleSourceLoginPage {
         await RuleSourceAccountService.logout(this.route.sourceUrl);
       }
       const loginUrls = this.loginUrls();
+      const source = await LocalRuleSourceRepository.get(this.route.sourceUrl);
+      if (source !== undefined && !this.route.isMainAccount) await LightSourceBridge.clearLogin(source);
+      if (!this.route.isMainAccount) await LocalRuleSourceRepository.setLoginStatus(this.route.sourceUrl, 'signedOut');
       for (const loginUrl of loginUrls) {
         await LocalRuleHttpClient.clearCookies(this.route.sourceUrl, loginUrl);
       }
@@ -536,6 +549,11 @@ export struct RuleSourceLoginPage {
             })
             .onPageEnd((event): void => {
               this.loading = false;
+              if (!this.loginScriptInjected && this.route.injectJs.length > 0 &&
+                event?.url === this.route.loginUrl) {
+                this.loginScriptInjected = true;
+                this.controller.runJavaScript(this.route.injectJs).catch((): void => {});
+              }
               if (event?.url) {
                 this.currentUrl = event.url;
                 this.currentOrigin = LocalRuleHttpClient.requestOrigin(event.url);

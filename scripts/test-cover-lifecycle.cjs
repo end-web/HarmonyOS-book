@@ -62,7 +62,7 @@ function prefetchFixture(api = 26) {
   return { service, success, failure, timers, downloads, complete, runTimer, cacheDownload };
 }
 
-test('repeated cancellation detaches old listeners and ignores already queued callbacks', () => {
+test('repeated image errors share the current download and its listeners', () => {
   const f = prefetchFixture();
   const url = 'https://cover.test/book.jpg';
   f.service.prefetch(url);
@@ -71,10 +71,10 @@ test('repeated cancellation detaches old listeners and ignores already queued ca
   for (let i = 0; i < 20; i++) f.service.retry(url);
   assert.equal(f.success.get(url).size, 1);
   assert.equal(f.failure.get(url).size, 1);
+  assert.equal(f.downloads.length, 1, 'image errors must not restart an in-flight download');
+  assert.equal([...f.success.get(url)][0], oldSuccess);
   oldSuccess(); oldFailure();
-  assert.equal(f.service.inFlight.size, 1, 'stale callbacks must not finish the replacement');
-  assert.equal(f.success.get(url).size, 1);
-  f.complete(url);
+  assert.equal(f.service.inFlight.size, 0);
   assert.equal(f.success.size + f.failure.size + f.timers.size, 0);
 });
 
@@ -115,6 +115,8 @@ test('synchronous cache hits leave no watchdog and failures stop at the retry li
   f.service.prefetch('https://cover.test/offline.jpg');
   for (let i = 0; i < 4; i++) f.runTimer(1500);
   assert.equal(f.downloads.length, 5);
+  for (let i = 0; i < 20; i++) f.service.retry('https://cover.test/offline.jpg');
+  assert.equal(f.downloads.length, 5, 'image errors cannot bypass the prefetch retry limit');
   assert.equal(f.timers.size + f.success.size + f.failure.size + f.service.inFlight.size, 0);
 });
 

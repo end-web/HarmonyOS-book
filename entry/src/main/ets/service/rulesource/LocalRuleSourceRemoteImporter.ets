@@ -1,5 +1,7 @@
 import { buffer, url } from '@kit.ArkTS';
 import { HttpClient, HttpRequestOptions, HttpResponse } from '../http/HttpClient';
+import { LocalRuleSourceDownloadService } from './LocalRuleSourceDownloadService';
+import { RawHttpTextClient } from './light/upstream/core/http/RawHttpTextClient';
 
 export enum RuleSourceRemoteImportFailure {
   ADDRESS,
@@ -23,7 +25,7 @@ export class RuleSourceRemoteImportError extends Error {
 
 /** Subscription downloads feed the ordinary imported-source parser and encrypted repository. */
 export class LocalRuleSourceRemoteImporter {
-  static readonly MAX_BYTES: number = 10 * 1024 * 1024;
+  static readonly MAX_BYTES: number = 25 * 1024 * 1024;
 
   static isRemote(input: string): boolean {
     return new RegExp('^(https?://|legado://|yuedu://)', 'i').test(input.trim());
@@ -91,11 +93,25 @@ export class LocalRuleSourceRemoteImporter {
       } catch (error) {
         if (error instanceof RuleSourceRemoteImportError) {
           failure = error;
-          if (error.failure === RuleSourceRemoteImportFailure.TOO_LARGE ||
-              error.failure === RuleSourceRemoteImportFailure.AUTH ||
-              error.failure === RuleSourceRemoteImportFailure.NOT_FOUND) throw error;
+          if (error.failure === RuleSourceRemoteImportFailure.TOO_LARGE) throw error;
         }
       }
+    }
+    const candidates: string[] = [address];
+    if (address.startsWith('http://')) candidates.push(`https://${address.substring(7)}`);
+    if (address.startsWith('http://')) {
+      try {
+        const raw = await RawHttpTextClient.get(address, LocalRuleSourceRemoteImporter.MAX_BYTES, 20000);
+        return LocalRuleSourceRemoteImporter.parseBody(raw);
+      } catch (_error) {}
+    }
+    for (const candidate of candidates) {
+      try { return LocalRuleSourceRemoteImporter.parseBody(await LocalRuleSourceDownloadService.browser(candidate)); }
+      catch (_error) {}
+    }
+    for (const candidate of candidates) {
+      try { return LocalRuleSourceRemoteImporter.parseBody(await LocalRuleSourceDownloadService.system(candidate)); }
+      catch (_error) {}
     }
     throw failure;
   }
@@ -110,11 +126,14 @@ export class LocalRuleSourceRemoteImporter {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw new RuleSourceRemoteImportError(RuleSourceRemoteImportFailure.NETWORK);
     }
-    if (response.body.length > LocalRuleSourceRemoteImporter.MAX_BYTES ||
-        buffer.byteLength(response.body, 'utf-8') > LocalRuleSourceRemoteImporter.MAX_BYTES) {
+    return LocalRuleSourceRemoteImporter.parseBody(response.body);
+  }
+  private static parseBody(body: string): string {
+    if (body.length > LocalRuleSourceRemoteImporter.MAX_BYTES ||
+        buffer.byteLength(body, 'utf-8') > LocalRuleSourceRemoteImporter.MAX_BYTES) {
       throw new RuleSourceRemoteImportError(RuleSourceRemoteImportFailure.TOO_LARGE);
     }
-    const text = response.body.trim();
+    const text = body.replace(/^\uFEFF/, '').trim();
     if (text.startsWith('<')) {
       throw new RuleSourceRemoteImportError(RuleSourceRemoteImportFailure.HTML);
     }

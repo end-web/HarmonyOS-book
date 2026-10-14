@@ -153,38 +153,10 @@ export class CoverPrefetcher {
   }
 
   /**
-   * Image onError 时调用：清掉「永久失败」计数门槛内的状态并重新入队。
-   * 允许用户停留首页时持续补齐未出图封面。
+   * Image onError 时补齐缓存：复用在途下载并遵守统一重试上限。
    */
   static retry(url: string): void {
-    if (!url || !url.startsWith('http')) {
-      return;
-    }
-    CoverPrefetcher.clearTimer(CoverPrefetcher.retries, url);
-    if (CoverPrefetcher.succeeded.has(url)) {
-      return;
-    }
-    const attempts: number = CoverPrefetcher.attemptCount.get(url) ?? 0;
-    if (attempts >= MAX_ATTEMPTS) {
-      // 放宽一次：Image 侧主动重试说明仍需要，重置到 MAX-1 再试
-      CoverPrefetcher.attemptCount.set(url, MAX_ATTEMPTS - 1);
-    }
-    if (CoverPrefetcher.inFlight.has(url)) {
-      // 先解绑并使旧回调失效，再取消；cancel 也可能同步/延迟回调 error。
-      CoverPrefetcher.detachHandlers(url);
-      try {
-        cacheDownload.cancel(url);
-      } catch (_e) { /* ignore */ }
-      CoverPrefetcher.releaseSlot(url);
-    }
-    const pendingIdx: number = CoverPrefetcher.pending.indexOf(url);
-    if (pendingIdx >= 0) {
-      CoverPrefetcher.pending.splice(pendingIdx, 1);
-    }
-    CoverPrefetcher.pending.unshift(url);
-    if (CoverPrefetcher.pending.length > MAX_PENDING) CoverPrefetcher.pending.pop();
-    CoverPrefetcher.prewarmOrigin(url);
-    CoverPrefetcher.pump();
+    CoverPrefetcher.prefetch(url, true);
   }
 
   private static pump(): void {

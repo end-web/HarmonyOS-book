@@ -1,0 +1,509 @@
+export class Book {
+  bookUrl: string = '';
+  tocUrl: string = '';
+  origin: string = 'local';
+  originName: string = '';
+  name: string = '';
+  author: string = '';
+  kind: string = '';
+  /** Source-provided publication status, e.g. 连载中/完本. */
+  status: string = '';
+  customTag: string = '';
+  coverUrl: string = '';
+  customCoverUrl: string = '';
+  intro: string = '';
+  customIntro: string = '';
+  charset: string = '';
+  type: number = 0;
+  group: number = 0;
+  isPinned: boolean = false;
+  latestChapterTitle: string = '';
+  /** Source-provided publication/update label from BookInfoRule.updateTime. */
+  updateTime: string = '';
+  latestChapterTime: number = 0;
+  lastCheckTime: number = 0;
+  lastCheckCount: number = 0;
+  totalChapterNum: number = 0;
+  durChapterTitle: string = '';
+  durChapterIndex: number = 0;
+  durChapterPos: number = 0;
+  durChapterTime: number = 0;
+  wordCount: string = '';
+  canUpdate: boolean = true;
+  order: number = 0;
+  originOrder: number = 0;
+  variable: string = '';
+  readConfig: ReadConfig | null = null;
+  syncTime: number = 0;
+  /** App-owned identity. It must not be stored in the source-controlled variable JSON. */
+  identityKey: string = '';
+  /** Temporary search/explore read state, stored in its own database column. */
+  pendingAddToShelf: boolean = false;
+  /** Private shelf member: only listed under the bookshelf's private scope. */
+  isPrivate: boolean = false;
+  /** Last explicit local bookshelf add/keep time, used to reject stale cloud tombstones. */
+  shelfModifiedTime: number = 0;
+
+  constructor() {
+    this.latestChapterTime = Date.now();
+    this.lastCheckTime = Date.now();
+    this.durChapterTime = Date.now();
+  }
+
+  private _variableMap: Record<string, string> | null = null;
+  private _variableMapRaw: string = '';
+
+  get variableMap(): Record<string, string> {
+    // Source rules still assign `book.variable` directly in a number of paths. Tie the cache to the
+    // exact raw value so a later putVariable() can never resurrect an older variable snapshot.
+    if (!this._variableMap || this._variableMapRaw !== this.variable) {
+      try {
+        this._variableMap = JSON.parse(this.variable || '{}') as Record<string, string>;
+      } catch (e) {
+        this._variableMap = {};
+      }
+      this._variableMapRaw = this.variable;
+    }
+    return this._variableMap;
+  }
+
+  getVariable(key: string): string {
+    return this.variableMap[key] || '';
+  }
+
+  putVariable(key: string, value: string): void {
+    this.variableMap[key] = value;
+    this.variable = JSON.stringify(this.variableMap);
+    this._variableMapRaw = this.variable;
+  }
+
+  replaceVariable(raw: string): void {
+    this.variable = raw || '{}';
+    this._variableMap = null;
+    this._variableMapRaw = '';
+  }
+
+  getRealAuthor(): string {
+    return this.author.replace(/[?？]/g, '');
+  }
+
+  getUnreadChapterNum(): number {
+    if (!Book.hasStartedReading(this)) {
+      return Math.max(this.totalChapterNum, 0);
+    }
+    return Math.max(this.totalChapterNum - this.durChapterIndex - 1, 0);
+  }
+
+  static hasStartedReading(book: Book | null): boolean {
+    if (!book) {
+      return false;
+    }
+    const started = book.getVariable('readStarted');
+    return started === '1' || started === 'true' || book.durChapterIndex > 0 || book.durChapterPos > 0;
+  }
+
+  hasStartedReading(): boolean {
+    return Book.hasStartedReading(this);
+  }
+
+  getDisplayCover(): string {
+    if (this.customCoverUrl && this.customCoverUrl.length > 0) {
+      const covers = this.parseCustomCovers(this.customCoverUrl);
+      if (covers.length > 0) {
+        return covers[Math.floor(Date.now() / 4000) % covers.length];
+      }
+      return this.customCoverUrl;
+    }
+    return this.coverUrl;
+  }
+
+  private parseCustomCovers(raw: string): string[] {
+    const value = raw.trim();
+    if (!value.startsWith('{') && !value.startsWith('[')) {
+      return [value];
+    }
+    try {
+      const parsed = JSON.parse(value) as Record<string, Object> | string[];
+      const values = Array.isArray(parsed) ? parsed as string[] : (parsed['covers'] as string[] || []);
+      const covers: string[] = [];
+      for (const cover of values) {
+        const item = (cover || '').trim();
+        if (item && !covers.includes(item)) {
+          covers.push(item);
+        }
+      }
+      return covers;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  getDisplayIntro(): string {
+    if (this.customIntro && this.customIntro.length > 0) {
+      return this.customIntro;
+    }
+    return this.intro;
+  }
+
+  getReverseToc(): boolean {
+    return this.readConfig?.reverseToc ?? false;
+  }
+
+  setReverseToc(reverseToc: boolean): void {
+    if (!this.readConfig) {
+      this.readConfig = new ReadConfig();
+    }
+    this.readConfig.reverseToc = reverseToc;
+  }
+
+  getUseReplaceRule(): boolean {
+    return this.readConfig?.useReplaceRule ?? true;
+  }
+
+  setUseReplaceRule(useReplaceRule: boolean): void {
+    if (!this.readConfig) {
+      this.readConfig = new ReadConfig();
+    }
+    this.readConfig.useReplaceRule = useReplaceRule;
+  }
+
+  getReSegment(): boolean {
+    return this.readConfig?.reSegment ?? false;
+  }
+
+  setReSegment(reSegment: boolean): void {
+    if (!this.readConfig) {
+      this.readConfig = new ReadConfig();
+    }
+    this.readConfig.reSegment = reSegment;
+  }
+
+  getPageAnim(): number {
+    return this.readConfig?.pageAnim ?? 0;
+  }
+
+  setPageAnim(pageAnim: number): void {
+    if (!this.readConfig) {
+      this.readConfig = new ReadConfig();
+    }
+    this.readConfig.pageAnim = pageAnim;
+  }
+
+  getImageStyle(): string {
+    return this.readConfig?.imageStyle ?? 'DEFAULT';
+  }
+
+  setImageStyle(imageStyle: string): void {
+    if (!this.readConfig) {
+      this.readConfig = new ReadConfig();
+    }
+    this.readConfig.imageStyle = imageStyle;
+  }
+}
+
+export class ReadConfig {
+  reverseToc: boolean = false;
+  pageAnim: number = 0;
+  reSegment: boolean = false;
+  imageStyle: string = 'DEFAULT';
+  useReplaceRule: boolean = true;
+  delTag: number = 0;
+  ttsEngine: string = '';
+  splitLongChapter: boolean = true;
+  readSimulating: boolean = false;
+  startDate: string = '';
+  startChapter: number = 0;
+  dailyChapters: number = 3;
+}
+
+export class BookChapter {
+  url: string = '';
+  title: string = '';
+  bookUrl: string = '';
+  index: number = 0;
+  isVip: boolean = false;
+  isPay: boolean = false;
+  resourceUrl: string = '';
+  tag: string = '';
+  start: number = 0;
+  end: number = 0;
+  variable: string = '';
+  cacheDate: number = 0;
+
+  /**
+   * 该章是某一卷的第一章时返回卷名，否则返回空串。
+   * 卷名记在 variable 里而不单独占一个章节位置，章节序号和阅读进度不受分卷影响。
+   */
+  static volumeTitleOf(chapter: BookChapter): string {
+    const variable = chapter ? chapter.variable : '';
+    if (!variable || variable.indexOf('"volume"') < 0) return '';
+    try {
+      const parsed = JSON.parse(variable) as Record<string, Object>;
+      return String(parsed['volume'] || '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  getDisplayTitle(replaceRules: ReplaceRule[], useReplace: boolean): string {
+    if (!useReplace || !replaceRules || replaceRules.length === 0) {
+      return this.title;
+    }
+    let title = this.title;
+    for (const rule of replaceRules) {
+      if (rule.isRegex) {
+        try {
+          const regex = new RegExp(rule.pattern, rule.replacement);
+          title = title.replace(regex, rule.replacement);
+        } catch (e) {
+          // 忽略无效的正则表达式
+        }
+      } else {
+        title = title.split(rule.pattern).join(rule.replacement);
+      }
+    }
+    return title;
+  }
+}
+
+export class BookSource {
+  static readonly VALIDATION_UNCHECKED: number = 0;
+  static readonly VALIDATION_PASSED: number = 1;
+  static readonly VALIDATION_FAILED: number = 2;
+  static readonly VALIDATION_NO_RESULTS: number = 3;
+  static readonly VALIDATION_NEEDS_VERIFICATION: number = 4;
+  static readonly VALIDATION_TEMPORARY_ERROR: number = 5;
+
+  bookSourceUrl: string = '';
+  bookSourceName: string = '';
+  bookSourceType: number = 0;
+  bookSourceGroup: string = '';
+  bookSourceComment: string = '';
+  loginUrl: string = '';
+  loginUi: string = '';
+  loginCheckJs: string = '';
+  loginHeader: string = '';
+  loginInfo: string = '';
+  /** Original imported source object. Keeps unknown/future Legado fields losslessly. */
+  rawSourceJson: string = '';
+  bookUrlPattern: string = '';
+  searchUrl: string = '';
+  exploreUrl: string = '';
+  jsLib: string = '';
+  /** 规则格式：'native' 为原生书源，空串为兼容书源。由 jsLib 内容推导，不单独落库。 */
+  sourceFormat: string = '';
+  header: string = '';
+  bookListRule: BookListRule = new BookListRule();
+  searchRule: SearchRule = new SearchRule();
+  exploreRule: ExploreRule = new ExploreRule();
+  bookInfoRule: BookInfoRule = new BookInfoRule();
+  tocRule: TocRule = new TocRule();
+  contentRule: ContentRule = new ContentRule();
+  variableComment: string = '';
+  variable: string = '';
+  lastUpdateTime: number = 0;
+  respondTime: number = 180000;
+  customOrder: number = 0;
+  customButton: boolean = false;
+  eventListener: boolean = false;
+  isPinned: boolean = false;
+  enabled: boolean = true;
+  enabledExplore: boolean = true;
+  isLocked: boolean = false;
+  validationStatus: number = 0;
+  weight: number = 0;
+  concurrentRate: string = '';
+  enabledCookieJar: boolean = true;
+
+  getSearchRule(): SearchRule {
+    return this.searchRule;
+  }
+
+  getExploreRule(): ExploreRule {
+    return this.exploreRule;
+  }
+
+  getBookInfoRule(): BookInfoRule {
+    return this.bookInfoRule;
+  }
+
+  getTocRule(): TocRule {
+    return this.tocRule;
+  }
+
+  getContentRule(): ContentRule {
+    return this.contentRule;
+  }
+}
+
+export class BookListRule {
+  bookList: string = '';
+  name: string = '';
+  author: string = '';
+  coverUrl: string = '';
+  intro: string = '';
+  kind: string = '';
+  status: string = '';
+  updateTime: string = '';
+  lastChapter: string = '';
+  bookUrl: string = '';
+  wordCount: string = '';
+}
+
+export class SearchRule {
+  bookList: string = '';
+  name: string = '';
+  author: string = '';
+  coverUrl: string = '';
+  intro: string = '';
+  kind: string = '';
+  status: string = '';
+  updateTime: string = '';
+  lastChapter: string = '';
+  bookUrl: string = '';
+  wordCount: string = '';
+}
+
+export class ExploreRule {
+  bookList: string = '';
+  name: string = '';
+  author: string = '';
+  coverUrl: string = '';
+  intro: string = '';
+  kind: string = '';
+  status: string = '';
+  updateTime: string = '';
+  lastChapter: string = '';
+  bookUrl: string = '';
+  wordCount: string = '';
+}
+
+export class BookInfoRule {
+  init: string = '';
+  name: string = '';
+  author: string = '';
+  coverUrl: string = '';
+  intro: string = '';
+  kind: string = '';
+  status: string = '';
+  lastChapter: string = '';
+  wordCount: string = '';
+  updateTime: string = '';
+  tocUrl: string = '';
+}
+
+export class TocRule {
+  chapterList: string = '';
+  chapterName: string = '';
+  chapterUrl: string = '';
+  nextTocUrl: string = '';
+  isVip: string = '';
+  isPay: string = '';
+  updateTime: string = '';
+  chapterListAddition: string = '';
+}
+
+export class ContentRule {
+  content: string = '';
+  title: string = '';
+  images: string = '';
+  /** Network URL matched by WebView-backed audio sources (for example `.*\\.(mp3|m4a).*`). */
+  sourceRegex: string = '';
+  /** Dedicated media-address rule of an audio source; preferred over `content` when present. */
+  audioUrl: string = '';
+  nextContentUrl: string = '';
+  replaceRegex: string = '';
+  imageDecode: string = '';
+  imageStyle: string = '';
+  payAction: string = '';
+}
+
+export class ReplaceRule {
+  id: number = 0;
+  pattern: string = '';
+  replacement: string = '';
+  isRegex: boolean = false;
+  isEnabled: boolean = true;
+  name: string = '';
+  group: string = '';
+  order: number = 0;
+}
+
+export class BookGroup {
+  groupId: number = 0;
+  groupName: string = '';
+  order: number = 0;
+  show: boolean = true;
+  enableRefresh: boolean = true;
+
+  static readonly ID_ALL: number = -2147483648;
+  static readonly ID_LOCAL: number = -2147483647;
+  static readonly ID_AUDIO: number = -2147483646;
+  static readonly ID_NET_NONE: number = -2147483645;
+  static readonly ID_LOCAL_NONE: number = -2147483644;
+  static readonly ID_ERROR: number = -2147483643;
+}
+
+export class Bookmark {
+  id: number = 0;
+  bookUrl: string = '';
+  bookName: string = '';
+  bookAuthor: string = '';
+  chapterIndex: number = 0;
+  chapterName: string = '';
+  pageIndex: number = 0;
+  startPos: number = 0;
+  endPos: number = 0;
+  content: string = '';
+  createTime: number = 0;
+}
+
+export class SearchBook {
+  bookUrl: string = '';
+  origin: string = '';
+  originName: string = '';
+  type: number = 0;
+  name: string = '';
+  author: string = '';
+  kind: string = '';
+  status: string = '';
+  coverUrl: string = '';
+  intro: string = '';
+  latestChapterTitle: string = '';
+  wordCount: string = '';
+  updateTime: string = '';
+  tocUrl: string = '';
+  variable: string = '';
+  bookSourceComment: string = '';
+  customOrder: number = 0;
+  weight: number = 0;
+  /** Transient search-list metadata; never participates in source rule execution or persistence. */
+  aggregationKey: string = '';
+  aggregationCount: number = 1;
+  /** novel / comic / audio, resolved once when the result is parsed; empty until then. */
+  mediaCategory: string = '';
+}
+
+export class SearchKeyword {
+  keyword: string = '';
+  usage: number = 0;
+  lastUseTime: number = 0;
+}
+
+export class HttpTTS {
+  id: number = 0;
+  name: string = '';
+  url: string = '';
+  contentType: string = '';
+  concurrentRate: string = '';
+  loginUrl: string = '';
+  loginUi: string = '';
+  loginCheckJs: string = '';
+  header: string = '';
+  jsLib: string = '';
+  jsEngine: string = '';
+  enabledCookieJar: boolean = false;
+  customOrder: number = 0;
+  lastUpdateTime: number = 0;
+  enabled: boolean = true;
+}

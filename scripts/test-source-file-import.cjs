@@ -48,6 +48,7 @@ const mocks = {
 };
 const cache = new Map();
 function load(file) {
+  if (!fs.existsSync(file) && file.endsWith('.ets')) file = file.slice(0,-4)+'.ts';
   if (cache.has(file)) return cache.get(file);
   const module = { exports: {} };
   const source = fs.readFileSync(file, 'utf8').replace(/^@Concurrent\s*$/gm, '');
@@ -88,13 +89,13 @@ async function run(uris = [...files.keys()]) {
   assert.equal(result.skippedFiles, 1);
   reset(Array.from({ length: 6 }, (_, i) => [String(i),
     JSON.stringify(source(i)) + ' '.repeat(importer.MAX_FILE_BYTES - Buffer.byteLength(JSON.stringify(source(i))))]));
-  result = await run(); assert.equal(result.imported, 3); assert.equal(result.skippedFiles, 3);
-  assert.equal(result.budgetFiles, 3);
+  result = await run(); assert.equal(result.imported, 6); assert.equal(result.skippedFiles, 0);
+  assert.equal(result.budgetFiles, 0);
   reset([['a', JSON.stringify(Array.from({ length: 600 }, (_, i) => source(i)))],
     ['b', JSON.stringify(Array.from({ length: 600 }, (_, i) => source(i + 600)))],
     ['c', JSON.stringify(source('last'))]]);
-  result = await run(); assert.equal(result.imported, 1000);
-  assert.equal(result.skippedSources, 200); assert.equal(result.skippedFiles, 1); assert.ok(yields > 100);
+  result = await run(); assert.equal(result.imported, 1201);
+  assert.equal(result.skippedSources, 0); assert.equal(result.skippedFiles, 0); assert.ok(yields > 100);
   reset([['fail', JSON.stringify(source('write-failure'))], ['ok', JSON.stringify(source('ok'))]]);
   result = await run(); assert.equal(result.imported, 1); assert.equal(result.skippedFiles, 1);
   console.log('PASS multi-file import: limits, short reads, serial handles, malformed/unreadable files, locked sources, write failure isolation, yielding and model methods');

@@ -124,7 +124,7 @@ export class LocalRuleSource implements BookSource {
   concurrentRate: string = '';
   lastUpdateTime: number = 0;
   rawSourceJson: string = '';
-  /** native-v1 definitions are data; they never enter the legacy script runtime. */
+  /** light / light-native 使用轻页核心；历史格式仅保留数据。 */
   engine: string = '';
   nativeBaseUrl: string = '';
   nativeRulesJson: string = '';
@@ -160,13 +160,13 @@ export class LocalRuleSource implements BookSource {
 
   canExecute(): boolean {
     return this.bookSourceUrl.trim().length > 0 &&
-      (!this.engine || (this.engine === 'native-v1' && this.nativeRulesValid));
+      (!this.engine || this.engine === 'light' || this.engine === 'light-native');
   }
 
   hasSearchCapability(): boolean {
-    if (this.engine) return this.engine === 'native-v1' && this.nativeRulesValid && this.nativeSearch;
-    return this.searchUrl.trim().length > 0 && this.ruleSearch.bookList.trim().length > 0 &&
-      this.ruleSearch.name.trim().length > 0 && this.ruleSearch.bookUrl.trim().length > 0;
+    if (this.engine === 'light-native') return this.nativeSearch;
+    if (this.engine && this.engine !== 'light') return false;
+    return this.searchUrl.trim().length > 0;
   }
 }
 

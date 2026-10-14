@@ -1,0 +1,158 @@
+# 轻页书源引擎同步
+
+简听通过 `LocalRuleDispatcher → light/LightSourceBridge → LightSourceCore` 调用轻页的书源核心。页面仍由简听维护。轻页兼容源和轻页 `sourceFormat: native` 源走此链路；原简听规则核心、`jianting.source` 引擎及按域名分流的专用内容适配器已删除；历史定义保留为数据，停用格式不执行。
+
+## 固定版本与维护边界
+
+当前上游：`wip3l/legado-harmony`，提交 `bf691dc124c3a145d444e8e78bb64933c2f6ef97`。精确版本及每个文件的原始/适配 SHA256 见 `third_party/light-source/upstream.json`。
+
+- `light/upstream/`：递归迁入的规则、解析、网络、媒体和交互核心；导入方法从上游原方法抽取。勿直接修改，适配变更写入同步脚本。
+- `light/LightSource*.ts`、`LightSource*.ets`：简听 JSON 模型边界、平台接口和有界 QuickJS 桥接。
+- `upstream/model/data/AppDatabase.ts`：本地数据库桥接，明确排除同步覆盖。
+- `scripts/sync-light-source.cjs`：检查本地改动、执行适配、更新版本清单，不修改页面。
+
+## 更新流程
+
+先在 `D:\legado-harmony` 查看上游差异并将组织 Fork 更新到需要的提交，再在简听运行：
+
+```powershell
+node scripts/sync-light-source.cjs D:\legado-harmony
+node scripts/test-light-source-engine.cjs
+node scripts/test-rule-source-export.cjs
+```
+
+指定真实原生源文件可执行 `node scripts/test-light-source-engine.cjs <源文件路径>`，使用该文件原规则核验分类、模式、持久化及阅读链路；加 `--live-menu` 请求公开分类接口，加 `--live-audio` 请求听书分类、发现及前三本详情并核对书籍 ID 和封面，其他链路使用离线响应。
+
+测试需设置 `DEVECO_HOME` 为 Release DevEco Studio。同步前工作区上游引擎文件必须与旧清单一致，参考仓库相关源码必须干净；检查失败不会覆盖本地引擎。上游方法或依赖变化需先调整脚本，再同步。随后执行 ArkTS 检查、Release SDK 增量构建，以及设备导入→测试→搜索→详情→阅读/播放验证。对比通过后提交升级；Git 提交可用于回退。此流程是维护工具，没有启用自动拉取、自动发布或后台更新。
+
+## 能力与验证边界
+
+迁入核心覆盖 CSS/JSONPath/XPath、正则与替换、规则组合、脚本宿主动作回放、搜索/发现/详情/目录/正文，以及图片标记、图片请求选项/解码、音频/视频地址和段评动作标记。正文输出保留 `richContent`，同时提供 `imageUrls`、`videoUrl`、`interactions` 等结构数据；没有新增漫画、视频或段评页面。轻页原生源的 `vars` 设置、模式/频道切换、静态/动态发现分类和登录声明由 `LocalRulePanelService → LightSourceBridge` 连接到既有面板；设置保存到加密脚本状态，并使首页内容缓存失效、通知首页刷新。选项操作只更新当前变量，避免其他控件的旧值阻止模式切换。
+
+脚本使用简听 taskpool 的独立有界 QuickJS，保留时间、堆、栈、输入和输出限制；数据库与 Cookie 仍按简听加密及按源隔离。普通 HTTP 与脚本任务各自持有执行上下文，可以并行执行；Cookie 内存按导入源隔离，错误按任务隔离，不再整项持有全局队列或 Web 租约。仅实际网页抓取、音频嗅探使用全局隐私 Web 会话，完成或失败后回收 Cookie 并释放。变量和脚本缓存按实际修改项合并，数据库只在状态或 Cookie 有变化时写回；同源短状态事务串行，网络请求不进入该队列。
+
+搜索/发现结果的书籍元数据通过桥接快照保留，详情、目录及正文恢复同一个上游 Book 上下文；详情以点击地址为准，完成后更新快照和规范地址。上游原生详情会优先保留发现封面，但标题可替换为接口返回的原著名称。简听听书展示保留用户点击的有声版名称，缺失时才用详情补齐；规则解析仍返回原始详情名称，不修改上游规则。新听书发现结果不受旧详情封面缓存覆盖，恢复目录时保留新结果的变量。
+
+规则源码与声明字段统一使用轻页核心。平台适配保留独立有界 QuickJS、加密存储及按源隔离 Cookie；HTTP Set-Cookie 的 Domain、Path、Secure、HttpOnly、SameSite 和绝对过期时间按源持久化，Max-Age 转绝对时间防止重启延长寿命。ArkWeb 只能读取 Cookie header，未知网页登录 Cookie 的原始属性不能完整反向枚举，采用 origin/Path=/ 恢复；不能据此宣称浏览器会话完全等价。
+
+TextDecoder 使用系统编码器的数据桥，支持系统编码（含 GBK）与连续字节流；登录 HTML 编解码仅调用固定 DOM 表达式，书源任意脚本仍在 QuickJS 内。WebView/webJs 与媒体嗅探使用迁入核心和隐藏宿主。时间、内存、回放和输出预算仍有效；任意 DOM 和平台对象不对书源开放。网页登录保持 HTTPS-only。Node 回归不能代替原生 QuickJS、真实账号、人机验证、受保护图片和媒体嗅探实机测试。
+
+## 许可证
+
+迁入代码遵循 GPL-3.0，全文见 `third_party/light-source/LICENSE`，组合应用分发需遵循相应 GPL 条款并提供对应源码。原独立组件的版权和许可证继续保留；详见 `THIRD_PARTY_NOTICES.md`。
+
+## 本次验证（2026-10-14）
+
+- `test-light-source-engine.cjs`：通用 HTML/JSON、搜索/详情/目录/正文、媒体/段评标记、阶段脚本回放、登录状态及 Cookie 删除/替换通过。Node VM 代替设备 QuickJS。
+- 用户提供的番茄原生源：六个模式选项、单变量修改、保存后重载、分页发现、详情、目录、正文及本章说标记通过离线响应回归；公开分类接口实测解析出 179 个分类入口。
+- `test-rule-source-export.cjs`：原始字段与扩展字段保留、五次往返稳定、编辑及敏感会话字段排除通过。
+- `test-source-health.cjs` 与 `test-text-to-speech.cjs` 通过，后者包括 28 项既有朗读回归。
+- 模式修正版 Release SDK 增量 debug HAP 构建并覆盖安装完成，用户确认模式切换已生效。`@Trace` 控件通过普通数据快照序列化，避免 `__ob_value` 导致选项值丢失；导出同样显式读取观察属性。
+- 听书公开接口复现相同书籍 ID 对应不同的有声版/原著名称和封面；补齐桥接上下文后，三本公开听书的详情 ID 与发现一致，详情封面保留发现封面。`test-audio-source-identity.cjs` 验证展示名称、旧封面缓存、目录变量、逐批更新及持久化。修正版已通过 ArkTS 检查及 Release SDK 增量 debug HAP 构建，覆盖安装到手机并强制停止后冷启动，用户反馈已测试。登录与媒体嗅探仍待专项实机验证。
+
+## 导入、解析与登录补齐（2026-10-14）
+
+本轮已接入之前识别出的链路差距，保留简听页面和其他业务：
+
+| 能力 | 当前实现 |
+| --- | --- |
+| 登录入口 | 统一解析 loginUrl/loginUi；脚本式 loginUrl 无控件时生成入口，使用轻页入口解析方法。独立主账号不变。 |
+| 等待网页登录 | 等待页面完成返回 HTML 后继续同一脚本；脚本任务不占 Web 租约，实际网页登录由既有登录协调器独立持有。支持连续等待和取消，人工交互不占脚本时间预算。 |
+| 登录校验/退出 | 网页完成调用规则校验；原生 login.check 执行声明接口，无 check 则判断声明 Cookie；退出清理 Cookie、登录头/信息及待续状态。 |
+| Cookie 语义 | 迁入删除墓碑、空值替换和过期 JWT 过滤；隐私容器读写一致。属性记录与 header 分开落盘，已删/过期记录不回流。 |
+| 订阅取数 | 应用 HTTP、系统 HTTP、原始 HTTP、ArkWeb 页面/下载、系统下载依次兜底；临时文件退出时清理。 |
+| 导入容量 | 单文件/订阅 25 MiB，最多 10 文件/250 MiB；移除 1000 源数量截断及旧单源 512 KiB 限制；保留锁定保护，当前免费版本不限制书源总数。 |
+| 编码与 HTML | GBK 等系统编码、streaming TextDecoder 和固定 HTML 编解码桥；仍使用有界 QuickJS。 |
+
+专项回归覆盖连续网页等待、取消、原生校验成功/失败、Cookie 声明判断、路径/过期恢复、注销不复活、GBK/流式解码、真实定义的模式和解析、订阅兜底及 1201 源导入。真实账号、验证码与媒体嗅探仍需相同账号和源条件下的实机专项验证，不以源码迁入或模拟响应替代。
+
+平台依据：本任务已读取 ArkTS/ArkUI 和 SDK 指引；实现及结论来自两侧代码与已安装 Release SDK：
+
+- https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkts/hmos-arkts-knowledge-retriever/SKILL.md
+- https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkui/hmos-arkui-knowledge-retriever/SKILL.md
+- https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/sdk/hmos-one-sdk-skill/SKILL.md
+
+本轮落地验证：引擎/真实番茄定义回归、订阅取数回归、多文件导入回归全部通过；ETS 静态检查后使用 Release IDE CLI 完整增量构建成功。HAP 元数据 apiReleaseType=Release、min API=20、target API=26，已覆盖安装到设备 62T0225B13006276 并冷启动成功，现有数据保留。此处仅记录构建、安装和启动证据，不代表真实账号专项登录或手表验证。
+
+本轮手机 smoke：现有番茄源的听书首页加载成功，点击《我丈夫的情人》后详情保持同名，作者/简介及 297 集目录信息正常展示。未使用真实账号执行验证码登录。
+
+## 听书分类返回正文（2026-10-14）
+
+使用用户提供的番茄原生源，公开接口复现：全部分类样本返回 audio；都市、穿越、现代言情的发现记录按听书模式解析为 audio，详情却返回原著 book_type=3，规则映射为 text，且 content.url 的普通分支保留 tab=novel，导致无音频地址。同一章节改为 tab=audio 时服务返回 content_type=audio 和有效音频/代理地址。此差异由当前 JSON 的两处规则触发，未证明轻页实机能播放相同样本。
+
+修正版仅调整 detail.fields.type（听书模式明确采用 audio，包括旧缓存上下文）和 content.url（audio 使用 tab=audio，video 和 text 维持原分支），原文件不覆盖、不提交用户源定义。两边导入相同修正版即可使用相同声明；不在应用核心注入站点地址或 URL 改写。公开接口回归覆盖全部/都市/穿越/现代言情的发现→详情→目录→正文，四类均返回 audioUrl；新增 --live-audio-categories 可对指定源执行该验证。实际播放器和完整音频文件下载需另行验证。
+
+修正版已通过 hdc 写入简听自己的 filesDir，再由原有 viewData 文件导入入口重新导入同 URL 书源，未改 App 解析核心。手机随后位于另一个源的阅读页，停止继续点按；本轮尚未获得修正版在 AVPlayer 实际播放的证据。
+
+## 有听网音频与旧目录迁移（2026-10-14）
+
+《无敌剑域》的设备日志暴露两处接入差距：音频规则核心返回结果后，简听遗漏了轻页 AudioBook 页的 JSON/HTML 地址提取与书源媒体请求头；旧引擎生成的 `__genericTocFallback` 网页目录又被当作当前定义缓存复用，将 HTML 交给 JSON 音频规则。
+
+同步脚本现在从同一固定上游提交的 `AudioBook.ets` 提取七个通用解析/请求头方法到 `upstream/LightAudioSupport.ts`，不迁入页面。`LightSourceCore` 使用原方法还原 JSON/Unicode 地址、保留源声明 Referer/User-Agent 和显式媒体请求头，同时保留跨站凭据隔离。目录签名加入轻页引擎版本，旧定义目录和带 fallback 标记的章节在播放前按当前源规则刷新；保留章节 ID，原进度及下载身份不重建。不添加域名专用适配、不修改用户定义。
+
+主机定向验证：引擎回归覆盖 BOM/Unicode、嵌套媒体值、显式请求头与跨站凭据隔离；目录迁移回归覆盖旧网页地址更新、ID 保留及新目录复用。使用手机保存的 www.ting15.com 源定义和《无敌剑域》2117 号书公开接口，解析 3977 个有效章节，前两集音频 Range 请求均为 HTTP 206 / audio/x-m4a，携带声明 Referer。这些请求结果不替代手机实际播放验证。
+
+设备验证：修正版 debug HAP 覆盖安装并冷启动后，设备 62T0225B13006276 日志在 14:38:57 确认刷新 3977 章，14:39:01 确认《无敌剑域》第1集进入 playing，时长 951740ms；用户暂停时进度为 1561ms。此次旧目录迁移耗时约 15 秒，新签名目录后续直接复用。未将其他书的播放证据计入本书，也未声称本轮完成音频导出或手表验证。
+
+本轮在线技术参考：已读取 [ArkTS 语法指南](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-native-flow/references/lang-syntax/SKILL.md)、[ArkUI V2 观察](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkui/hmos-arkui-knowledge-retriever/references/knowledges/02-state-management/v2/arkts-new-observedV2-and-trace.md) 和 [hilog 指引](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-studio-hilog/SKILL.md)。运行结果来自实际设备日志及本机 Release SDK 编译，不以指南存在代替验证。
+
+## 解析接入与业务调度边界（2026-10-14）
+
+本轮保留固定上游版本、原有播放器、预加载、下载与目录迁移策略，只调整解析适配层：普通 HTTP 不初始化或清空 ArkWeb Cookie，会话只在实际 Web 请求期间申请；有界 QuickJS 的阶段请求使用独立执行实例，不再由上游页面级脚本队列串行阻塞。请求显式携带书源 Cookie 作用域，网页登录返回值更新已有 Cookie 时保留已知 Domain/Path 等属性。未变更的运行状态不重复落盘；历史脚本缓存字段的首次清理仍属于实际变更。
+
+引擎回归新增并通过：慢脚本不阻塞另一解析任务、同域名不同源 Cookie 隔离、同源并发变量修改合并、任务错误隔离、无变更状态不写入、实际 HttpClient 请求头及 Set-Cookie 路径处理、Web 会话独占及失败释放。测试中的网络/ArkWeb/QuickJS 平台接口使用模拟实现，不作为手机起播耗时证据。
+
+修正版已通过 Release SDK 增量 debug HAP 构建，产物元数据为 apiReleaseType=Release、min API=20、target API=26。已覆盖安装到手机 62T0225B13006276，未卸载或清理应用数据；强制停止后启动 EntryAbility 成功。本轮尚未测得点击章节到开始播放的实机耗时，不能据此认定已恢复到 1.85 秒。
+
+在线语法依据：本轮已读取 [ArkTS 语法规范](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-native-flow/references/lang-syntax/SKILL.md) 及其规则参考，保留项目 ArkUI V2 和 API 20 基线。
+
+## 起播分段计时（2026-10-14）
+
+仅补充解析适配层诊断，不改变播放器、缓存、预加载或书源限流策略。每次 content 解析分配数字编号；复制的源对象继承编号，HTTP、限流及脚本执行显式关联该编号，不使用全局当前任务。日志不包含地址、书名、脚本内容、响应内容或凭据。
+
+计时覆盖 JSON 桥序列化/反序列化、源定义解析、状态读取、Cookie 恢复/回写、状态事务等待/写回、书源限流等待、HTTP 总耗时、响应 Cookie/字符解码、规则处理、媒体地址提取，以及阶段脚本构建和回放、QuickJS 往返与原生执行时间。QuickJS 往返包含调度、上下文创建/释放、执行和结果传输，不能直接当作纯队列等待。嵌套阶段不可重复求和。
+
+普通 HTTP 记录 API 11 起提供的 performanceTiming 累计里程碑（毫秒）：DNS 完成、TCP 完成、TLS 完成、首次发送、首字节、响应完成、重定向完成及 SDK 总耗时；这些值不可相加。流式 API 不返回该对象，保持原有限流和响应大小保护，仅补响应头/首块数据/传输完成计时。技术依据为本机 Release SDK 的 @ohos.net.http.d.ts 和已读取的 [hilog 技能](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-studio-hilog/SKILL.md) 及其 references/hilog.md。
+
+引擎回归通过；MCP 静态检查因 LSP 未初始化不可用，MCP 构建因本机 ohpm 批处理递归失败，改用 Release IDE CLI 增量 debug 构建成功（1 分 14 秒）。已覆盖安装手机 62T0225B13006276 并启动，用户随后手动切章，进程 32457 的 17:33:18～17:34:16 日志得到以下结果：
+
+| 播放代次 | 解析编号 | 书源限流等待 | HTTP 总耗时 | 地址解析总耗时 | 装载到 playing |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 611ms | 401ms | 1019ms | 2464ms |
+| 2 | 3 | 834ms | 251ms | 1098ms | 3119ms |
+| 3 | 5 | 0ms | 312ms | 323ms | 2077ms |
+| 4 | 7 | 0ms | 205ms | 220ms | 1841ms |
+| 5 | 9 | 586ms | 290ms | 894ms | 2159ms |
+| 6 | 11 | 836ms | 294ms | 1143ms | 2711ms |
+
+六次均记录 cache=network，目录准备 0～1ms。HTTP 之外的地址解析处理仅数毫秒至约 20ms；本批未出现 QuickJS 阶段调用。播放器 initialized→prepared 为 835～1877ms，prepared→playing 为 65～570ms。源定义/状态读取及 Cookie 回写均不是本批秒级耗时来源。不能据此把所有书源的脚本成本视为零。
+
+播放后独立解析编号 6（未计入上述手动播放）总计 4271ms，其中限流等待 3857ms、HTTP 353ms、状态读取 54ms；这是后台解析任务，不是一次 4.27 秒的点击起播。按源共享的 concurrentRate 窗口同时约束详情、目录、播放与预加载请求，能够解释未缓存章节解析时间随前序请求变化。本批未复现先前约 5～6 秒的手动起播，因此不能倒推出旧样本的精确分段；已确认应优先检查限流窗口的请求竞争，而非直接认定首次初始化或规则解析慢。
+
+## 播放优先的请求调度（2026-10-14）
+
+在用户授权后调整请求调度：AudioService 给正在播放的地址解析传高优先级请求上下文；ChapterCacheService 给预加载传低优先级上下文。上下文通过 BookSourceService、LocalRuleDispatcher 和 LightSourceBridge 显式传入解析任务，不写入书源定义、变量或数据库。源对象复制时继承同一上下文。
+
+适配后的限流器继续使用上游 concurrentRate 解析与时间戳窗口，仅增加按源等待队列，选择优先级最高的有效任务，同级 FIFO。入队、取消、晋升和离队会唤醒等待者，不依赖轮询先后抢额度。已发出的请求仍占用窗口，不返还或额外发放额度。切章取消其他预加载的待发请求；接手目标章节时提升原预加载上下文并复用原 Promise。超时、清理缓存、关闭预加载、旧播放代次失效时，等待者退出且不消耗额度；HTTP 发送及重试前再次检查取消，脚本回放沿用取消检查。已发送的 HTTP 不强行回滚。
+
+回归通过：引擎新增手动播放优先、同级 FIFO、频率窗口不变、在途任务晋升、取消、限流等待上限及不同源互不阻塞；真实缓存服务回归验证上下文传递、晋升后不重复解析、切章/清理/关闭后的失效、超时、下载和缓存复用；46 项播放控制与听书元数据回归通过。MCP LSP 仍不可用，使用此前已确认可用的 Release IDE CLI 编译成功（1 分 26 秒）。产物 apiReleaseType=Release、min API=20、target API=26，已覆盖安装同一手机并启动。
+
+手机进程 45144 的日志确认播放 priority=2、预加载 priority=0，未缓存章节代次 2 地址解析 283ms、起播 2042ms，代次 3 地址解析 350ms、起播 2607ms。此样本不构成所有请求稳定降到 1.85 秒的证据。代次 1 限流等待仅 7ms，HTTP 却耗时 4924ms，SDK 首字节时间 4909ms，总起播 6728ms，说明接口首字节等待本身也是秒级波动来源。代次 6 在先前请求已消耗窗口后仍等待 1752ms，属于保留频率限制后的剩余等待。不能再把所有慢起播都归因于限流，也不能宣称此次改动消除了接口响应或播放器缓冲耗时。
+
+测试期间还记录一次切章中的非终止 play/idle 状态错误（5400102），同一代次随后进入 playing；本轮未调整 AVPlayer 状态机，不将该记录描述为无错误的全链路验证。未执行本轮音频导出或专项账号登录实机验证。
+
+## 快速选章与播放器回调隔离（2026-10-14）
+
+用户继续切章后，17:46:57～17:47:39 的六次完整网络起播为 3271、3539、3090、2617、4895、3459ms；另一次被下一次点击打断，不作为完整样本。后台解析在 17:47:23.042 消耗书源额度，前台于 17:47:23.600 进入解析后仍等待 2429ms。优先级只能调整待发任务，不能收回已经消耗的限流额度。另有一次旧 prepared 回调与新 reset 交错，发生 play/idle 5400102，随后恢复。
+
+AudioService 现在将音源归属代次与播放请求代次分开：切章先使旧音源失效，实际装载新音源时才绑定新代次；状态回调还需与 AVPlayer 当前状态一致。旧准备、进度、缓冲和错误回调在重置/解析期间不再改写新任务；准备/播放失败回调保留原代次，异步申请媒体会话及后台资格后再次检查音源归属和合法播放状态。异步文件打开或取元数据结束时也检查任务是否仍有效。朗读抢占保留已装载音源的暂停续播能力。
+
+正常播放的预加载改为稳定播放 8 秒后启动；切章、重新缓冲、释放和清理时取消延迟任务，缓冲结束重新计时。暂停时继续保留原有限缓存队列，预加载数量、完整文件复用、下载与书源 concurrentRate 不变。因此连续选章期间较少提前占用额度，但稳定播放后已经发出的后台请求仍可能使之后的点击等待，不能承诺消除所有限流。新增 prepare-call、avsession-ready、background-ready、player-play 计时，分别定位媒体准备与起播前置操作，不记录媒体地址或凭据。
+
+主机验证：51 项播放控制回归通过，新增覆盖旧 prepared/进度/错误在 reset 期间到达、后台资格等待中切章、过期状态事件、正确装载新音源后的正常起播，以及 8 秒稳定窗口和定时器取消；缓存/预加载和音频来源身份回归通过。平台事件为模拟实现，实机耗时须使用新安装版本重新采样。
+
+Release IDE 增量 debug 构建成功（53.920 秒），HAP 元数据 apiReleaseType=Release、min API=20、target API=26；已覆盖安装手机 62T0225B13006276 并通过 start_app 启动，当前进程 62919。此处只确认构建、安装与启动，尚未采集该版本的实机切章起播样本。
+
+随后手机进程 62919 的 18:02:57～18:03:12 日志记录四次完整网络起播，分别为 1720、1417、3921、1528ms。对应书源限流等待 0、5、2024、0ms，HTTP 125、138、145、120ms，prepare() 调用 978、1124、1131、1226ms，play() 调用 565、68、586、77ms；媒体会话为 0～1ms，后台资格申请为 5～7ms。无明显限流的三次为 1.42～1.72 秒；3.92 秒样本受到前一手动章节已发请求的剩余 3 秒窗口约束。另一次准备中被切章打断，不记作完整起播；首个完整文件缓存起播 708ms，不计入网络样本。连续选章期间没有后台解析抢先发送，预加载在用户 18:03:14 暂停时按原策略启动。本批未记录 play/idle 5400102；不据此承诺所有书源均达到 1.85 秒。
+
+本轮已读取 [ArkTS 语法规范](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-native-flow/references/lang-syntax/SKILL.md) 及其规则参考、[ArkUI V2 观察指导](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkui/hmos-arkui-knowledge-retriever/references/knowledges/02-state-management/v2/arkts-new-observedV2-and-trace.md)、[hilog 技能](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-studio-hilog/SKILL.md) 和 references/hilog.md；MCP 静态检查仍提示 LSP 未初始化，使用已验证的 Release IDE CLI 编译。

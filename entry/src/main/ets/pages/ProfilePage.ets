@@ -7,9 +7,6 @@ import { AuthService } from '../service/AuthService';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { CommunityGroupService } from '../service/CommunityGroupService';
 import { AccountAvatar } from '../components/AccountAvatar';
-import { MembershipSubscriptionPage } from './MembershipSubscriptionPage';
-import { MembershipBadge } from '../components/MembershipBadge';
-import { MembershipState } from '../model/MembershipState';
 
 class ProfileItem {
   icon: Resource;
@@ -55,9 +52,6 @@ export struct ProfilePage {
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   @Local medalService: MedalService = MedalService.instance;
   @Local auth: AuthService = AuthService.instance;
-  @Local membership: MembershipState = MembershipState.current;
-
-  @Local showMembership: boolean = false;
 
   private scrollScroller: Scroller = new Scroller();
 
@@ -216,13 +210,10 @@ export struct ProfilePage {
               $r('app.string.hw_auth_login_title'))
               .fontSize(20)
               .fontWeight(FontWeight.Medium)
-              .fontColor(this.auth.isLoggedIn ? this.membership.nameColor : $r('sys.color.font_primary'))
+              .fontColor($r('sys.color.font_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .flexShrink(1)
-            if (this.membership.displayActive) {
-              MembershipBadge({ productId: this.membership.displayProductId, badgeWidth: 20 })
-            }
           }.width('100%').alignItems(VerticalAlign.Center)
           if (!this.auth.isLoggedIn) {
             Text($r('app.string.hw_auth_login_desc'))
@@ -258,25 +249,7 @@ export struct ProfilePage {
       .onClick(() => {
         this.navStack.pushPathByName('account', '');
       })
-      Divider().strokeWidth(0.5).color($r('sys.color.comp_divider')).margin({ left: 20, right: 20 })
-      Row({ space: 12 }) {
-        Text($r('app.string.membership_entry_desc')).fontSize(12)
-          .fontColor($r('sys.color.font_secondary')).layoutWeight(1).maxLines(2)
-        Button($r('app.string.membership_subscription_title'))
-          .height(28).fontSize(12).padding({ left: 10, right: 10 }).backgroundColor('#D5B887').fontColor('#55432C')
-          .fontWeight(FontWeight.Medium).onClick((): void => { this.showMembership = true; })
-      }.width('100%').padding({ left: 20, right: 20, top: 8, bottom: 8 })
     }.width('100%').backgroundColor($r('sys.color.comp_background_primary')).borderRadius(AppRadius.Lg)
-    .bindSheet($$this.showMembership, this.membershipSheet(), {
-      height: '90%', preferType: SheetType.BOTTOM, showClose: false, dragBar: false,
-      backgroundColor: '#EFEDE7'
-    })
-  }
-
-  @Builder
-  membershipSheet() {
-    MembershipSubscriptionPage({ navStack: this.navStack, inSheet: true,
-      onClose: (): void => { this.showMembership = false; } })
   }
 
   @Builder

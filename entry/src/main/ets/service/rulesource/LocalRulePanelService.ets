@@ -1,215 +1,34 @@
+import { emitter } from '@kit.BasicServicesKit';
 import { LocalRuleSource } from '../../model/LocalRuleSource';
 import { LocalRuleControl, LocalRulePanel, LocalRulePanelAction } from '../../model/LocalRulePanel';
-import { LocalRuleScriptState } from '../../model/LocalRuleScriptState';
 import { LocalRuleSourceRepository } from './LocalRuleSourceRepository';
-import { LocalRuleScriptRuntime } from './LocalRuleScriptRuntime';
-import { LocalRuleJsonLiteral } from './LocalRuleJsonLiteral';
-import { LocalRuleTemplate } from './LocalRuleTemplate';
-import { GuangYuSourceIdentity } from './guangyu/GuangYuSourceIdentity';
-import { GuangYuAuthService } from './guangyu/GuangYuAuthService';
-import { GuangYuPanelService } from './guangyu/GuangYuPanelService';
 import { SourceDataService } from '../SourceDataService';
-import { NativeSourceDefinition } from './native/NativeSourceDefinition';
+import { EVT_HOME_SOURCE_CHANGED } from '../PreferenceService';
+import { LightSourceBridge } from './light/LightSourceBridge';
 
 export class LocalRulePanelService {
   static async load(source: LocalRuleSource, login: boolean,
-    variables: Record<string, string> = {}): Promise<LocalRulePanel> {
-    if (source.engine === 'native-v1') return login ? new LocalRulePanel() : NativeSourceDefinition.panel(source);
-    if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl)) await GuangYuAuthService.syncScriptSession();
-    const rule = login ? source.loginUi : source.exploreUrl;
-    const value = LocalRuleScriptRuntime.hasScript(rule)
-      ? await LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl,
-        (login ? LocalRulePanelService.loginLibrary(source) : '') + (LocalRuleScriptRuntime.standaloneCode(rule) || rule), source, variables) : rule;
-    const panel = LocalRulePanelService.parse(value);
-    if (login && LocalRuleSourceRepository.isInitialized()) {
-      const state = LocalRuleScriptState.parse(await LocalRuleSourceRepository.readScriptState(source.bookSourceUrl));
-      if (state.loginInfo) {
-        const saved: Record<string, Object> = JSON.parse(state.loginInfo);
-        for (const control of panel.controls) {
-          if (GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl) && control.type === 'password') continue;
-          if (saved[control.title] !== undefined) control.value = LocalRulePanelService.scalar(saved[control.title]);
-        }
-      }
-    }
-    return panel;
+    _variables: Record<string, string> = {}): Promise<LocalRulePanel> {
+    if (!source.canExecute()) throw new Error('此书源格式已停用，请导入轻页支持的定义');
+    return LightSourceBridge.panel(source, login);
   }
-
-  static parse(value: string): LocalRulePanel {
-    if (value.length > 512 * 1024) throw new Error('书源面板超过 512 KiB');
-    const panel = new LocalRulePanel();
-    const clean = value.trim();
-    if (!clean) return panel;
-    if (!clean.startsWith('[')) {
-      for (const line of clean.split(new RegExp('\\r?\\n|&&'))) {
-        const split = line.indexOf('::');
-        if (split <= 0) continue;
-        const entry = new LocalRuleControl();
-        entry.title = line.substring(0, split).trim();
-        entry.url = line.substring(split + 2).trim();
-        entry.type = 'category';
-        entry.id = `${entry.title}:${entry.url}`;
-        LocalRulePanelService.normalizeUrlAction(entry);
-        if (entry.type === 'button') panel.controls.push(entry);
-        else panel.entries.push(entry);
-      }
-      return panel;
-    }
-    const valueItems = LocalRuleJsonLiteral.parse(clean);
-    if (!Array.isArray(valueItems)) throw new Error('书源面板必须为数组');
-    const items: Object[] = JSON.parse(JSON.stringify(valueItems));
-    const seen = new Set<string>();
-    LocalRulePanelService.appendItems(items, panel, seen, '', 0);
-    return panel;
-  }
-
-  private static appendItems(items: Object[], panel: LocalRulePanel, seen: Set<string>,
-    parent: string, depth: number): void {
-    if (depth > 8) throw new Error('书源面板分组层级超过 8 层');
-    let group = parent;
-    for (const item of items) {
-      if (seen.size >= 1000) throw new Error('书源面板项目超过 1000 项');
-      if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
-      const row: Record<string, Object> = JSON.parse(JSON.stringify(item));
-      const control = new LocalRuleControl();
-      control.title = LocalRulePanelService.scalar(row['title'] ?? row['name'] ?? row['viewName']);
-      if (!control.title) continue;
-      control.url = LocalRulePanelService.scalar(row['url']);
-      control.action = LocalRulePanelService.scalar(row['action']);
-      control.type = LocalRulePanelService.scalar(row['type']) || (control.url ? 'category' :
-        control.action ? 'button' : 'group');
-      const children = row['children'] ?? row['items'] ?? (Array.isArray(row['url']) ? row['url'] : undefined);
-      if (Array.isArray(children)) {
-        control.type = 'group';
-        control.url = '';
-      }
-      const types: string[] = ['category', 'group', 'select', 'toggle', 'switch', 'checkbox', 'button',
-        'text', 'input', 'password', 'number', 'email'];
-      if (!types.includes(control.type.toLowerCase())) control.type = control.action ? 'button' : 'text';
-      else control.type = control.type.toLowerCase();
-      control.value = LocalRulePanelService.scalar(row['value'] ?? row['default'] ?? row['defaultValue']);
-      control.placeholder = LocalRulePanelService.scalar(row['placeholder']);
-      if (Array.isArray(row['chars'])) {
-        const options: Object[] = JSON.parse(JSON.stringify(row['chars']));
-        for (const option of options.slice(0, 200)) {
-          if (option !== null && typeof option === 'object') {
-            const pair: Record<string, Object> = JSON.parse(JSON.stringify(option));
-            const label = LocalRulePanelService.scalar(pair['label'] ?? pair['title'] ?? pair['name'] ?? pair['value']);
-            control.options.push(label);
-            control.optionValues.push(LocalRulePanelService.scalar(pair['value'] ?? label));
-          } else {
-            control.options.push(LocalRulePanelService.scalar(option));
-            control.optionValues.push(LocalRulePanelService.scalar(option));
-          }
-        }
-      } else if (typeof row['chars'] === 'string') {
-        control.options = String(row['chars']).split(new RegExp('[,|\\n]')).slice(0, 200);
-        control.optionValues = control.options.slice();
-      }
-      if (control.type === 'select' && control.value.length === 0) control.value = control.optionValues[0] ?? '';
-      if (control.type === 'group') group = control.title;
-      control.group = parent || group;
-      control.id = `${group}:${control.type}:${control.title}:${control.url}`;
-      if (seen.has(control.id)) continue;
-      seen.add(control.id);
-      LocalRulePanelService.normalizeUrlAction(control);
-      if (control.url || control.type === 'group') panel.entries.push(control);
-      else panel.controls.push(control);
-      if (Array.isArray(children)) {
-        const nested: Object[] = JSON.parse(JSON.stringify(children));
-        LocalRulePanelService.appendItems(nested, panel, seen, `${parent ? parent + '/' : ''}${control.title}`, depth + 1);
-      }
-    }
-  }
-
   static async act(source: LocalRuleSource, control: LocalRuleControl,
-    controls: LocalRuleControl[], login: boolean): Promise<LocalRulePanelAction> {
-    if (source.engine === 'native-v1') {
-      const nativeAction = new LocalRulePanelAction();
-      if (login || control.type !== 'category' || !control.url) throw new Error('原生书源不支持此面板动作');
-      nativeAction.browseUrl = control.url;
-      return nativeAction;
+    controls: LocalRuleControl[], _login: boolean): Promise<LocalRulePanelAction> {
+    const result = await LightSourceBridge.panelAction(source, control, controls);
+    if (result.refresh) {
+      SourceDataService.invalidateLocalSources(source.bookSourceUrl);
+      emitter.emit(EVT_HOME_SOURCE_CHANGED);
     }
-    const isGuangYu = GuangYuSourceIdentity.isSourceUrl(source.bookSourceUrl);
-    if (isGuangYu) {
-      const account = await GuangYuPanelService.accountAction(control.action, controls);
-      if (account !== undefined) return account;
-      const settings = await GuangYuPanelService.settings(source, control.action);
-      if (settings !== undefined) {
-        const result = new LocalRulePanelAction();
-        result.panel = settings;
-        return result;
-      }
-      await GuangYuAuthService.syncScriptSession();
-    }
-    const values: Record<string, string> = {};
-    for (const input of controls) {
-      if (isGuangYu && input.type === 'password') continue;
-      values[input.title] = input.value;
-    }
-    const variables: Record<string, string> = { 'infoMap': JSON.stringify(values) };
-    const code = LocalRuleScriptRuntime.standaloneCode(control.action) || control.action;
-    const inputs: string[] = [];
-    for (const input of controls) {
-      if (input !== control && input.action && ['text', 'input', 'password', 'number', 'email'].includes(input.type)) {
-        const inputCode = LocalRuleScriptRuntime.standaloneCode(input.action) || input.action;
-        inputs.push(`(function(){${inputCode}\n}).call(this);`);
-      }
-    }
-    const response = await LocalRuleScriptRuntime.evaluate('', source.bookSourceUrl,
-      `${login ? LocalRulePanelService.loginLibrary(source) + 'source.putLoginInfo(infoMap);\n' : ''}` +
-      `${isGuangYu && login ? 'globalThis.result=infoMap;\n' : ''}` +
-      `${inputs.join('\n;')}\n;${code}`, source, variables);
-    if (isGuangYu) SourceDataService.invalidateLocalSources(source.bookSourceUrl);
-    if (login && !isGuangYu && !variables['__openBrowser']) await LocalRulePanelService.checkLogin(source, response, variables);
-    const result = new LocalRulePanelAction();
-    if (isGuangYu && control.id === 'guangyu-setting--发现页类型') {
-      result.panel = await GuangYuPanelService.settings(source, 'getHtmlSettings()');
-    }
-    result.message = variables['__toast'] ?? '';
-    result.searchKeyword = variables['__searchBook'] ?? '';
-    result.refresh = login || variables['__refreshExplore'] === 'true';
-    result.browserUrl = variables['__openBrowser'] ?? '';
-    if (!result.browserUrl && !result.searchKeyword &&
-      new RegExp('^(https?://|data:|/)', 'i').test(response.trim())) result.browseUrl = response.trim();
     return result;
   }
-
-  private static normalizeUrlAction(control: LocalRuleControl): void {
-    const value = control.url.trim();
-    let code = LocalRuleScriptRuntime.standaloneCode(value);
-    if (!code && value.startsWith('{{') && LocalRuleTemplate.end(value, 2) === value.length - 2) {
-      code = value.substring(2, value.length - 2).trim();
-    }
-    if (!code || control.action) return;
-    control.action = code;
-    control.url = '';
-    control.type = 'button';
-  }
-
   static async checkLogin(source: LocalRuleSource, content: string,
-    variables: Record<string, string> = {}, baseUrl: string = source.bookSourceUrl): Promise<void> {
-    if (!source.loginCheckJs.trim()) {
-      await LocalRuleSourceRepository.setLoginStatus(source.bookSourceUrl, 'saved');
-      return;
-    }
-    const check = LocalRuleScriptRuntime.standaloneCode(source.loginCheckJs) || source.loginCheckJs;
-    const checked = await LocalRuleScriptRuntime.evaluate(content, baseUrl,
-      LocalRulePanelService.loginLibrary(source) + check, source, variables, content);
-    if (checked.trim().toLowerCase() === 'false') {
+    _variables: Record<string, string> = {}, baseUrl: string = source.bookSourceUrl): Promise<void> {
+    if (!await LightSourceBridge.checkLogin(source, content, baseUrl)) {
       await LocalRuleSourceRepository.expireLogin(source.bookSourceUrl);
-      throw new Error('书源登录已过期，请重新登录');
+      throw new Error('书源登录未通过声明的检查');
     }
     await LocalRuleSourceRepository.setLoginStatus(source.bookSourceUrl, 'valid');
-  }
-
-  private static loginLibrary(source: LocalRuleSource): string {
-    const value = source.loginUrl.trim();
-    if (!value || new RegExp('^https?://', 'i').test(value)) return '';
-    return (LocalRuleScriptRuntime.standaloneCode(value) || value) + '\n';
-  }
-
-  private static scalar(value: Object | undefined): string {
-    if (value === undefined || value === null) return '';
-    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+    SourceDataService.invalidateLocalSources(source.bookSourceUrl);
+    emitter.emit(EVT_HOME_SOURCE_CHANGED);
   }
 }

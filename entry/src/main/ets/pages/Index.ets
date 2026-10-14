@@ -6,7 +6,6 @@ import { BookDetailPage, DetailBackInterceptor, DetailTitleBarActions, DetailTit
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
 import { SettingsPage } from './SettingsPage';
 import { MembershipPage } from './MembershipPage';
-import { MembershipSubscriptionPage } from './MembershipSubscriptionPage';
 import { AboutPage } from './AboutPage';
 import { TechnicalSupportPage } from './TechnicalSupportPage';
 import { AccountPage } from './AccountPage';
@@ -444,7 +443,7 @@ struct Index {
       }
     } else if (name === 'membershipSubscription') {
       ProfileMenuDestination() {
-        MembershipSubscriptionPage({ navStack: this.navStack })
+        MembershipPage({ navStack: this.navStack })
       }
     } else if (name === 'membership') {
       ProfileMenuDestination() {

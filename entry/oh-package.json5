@@ -4,7 +4,7 @@
   "description": "简听主模块",
   "main": "",
   "author": "ylwang",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "dependencies": {
     "libnative_rulecore.so": "file:./src/main/cpp/types/libnative_rulecore",
     "@devzeng/quickjs": "file:./libs/quickjs.har"
