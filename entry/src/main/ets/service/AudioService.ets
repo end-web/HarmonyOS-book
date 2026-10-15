@@ -1,4 +1,5 @@
 import { PlaybackCoordinator } from './PlaybackCoordinator';
+import { ChapterRuleContext } from './rulesource/ChapterRuleContext';
 import { LightSourceRequest } from './rulesource/light/LightSourceRequestPolicy';
 import { media } from '@kit.MediaKit';
 import { PlatformCompat } from '../utils/PlatformCompat';
@@ -376,6 +377,8 @@ export class AudioService {
 
   private async syncPlaybackStateNow(forceWidget: boolean): Promise<void> {
     if (!this.state) return;
+    // 卡片不等待媒体中心 IPC 或收藏查询；调用时即截取当前书籍状态。
+    const widgetUpdate = this.syncPlayerCard(forceWidget);
     try {
       const isFav = this.state.currentBook
         ? await PreferenceService.isFavorite(this.state.currentBook.id)
@@ -391,8 +394,12 @@ export class AudioService {
       hilog.warn(DOMAIN, TAG, 'updatePlaybackState failed: %{public}s',
         (err as Error)?.message ?? JSON.stringify(err));
     }
+    await widgetUpdate;
+  }
+
+  private async syncPlayerCard(force: boolean): Promise<void> {
     try {
-      await WidgetUpdater.updatePlayerCard(this.state, forceWidget);
+      await WidgetUpdater.updatePlayerCard(this.state, force);
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'updatePlayerCard failed: %{public}s',
         (err as Error)?.message ?? JSON.stringify(err));
@@ -1232,6 +1239,8 @@ export class AudioService {
       // 页面若无提示用户会以为卡死。真正出声(prepared→playing)后清掉,
       // 本地文件秒切时只是闪一下,不影响"瞬间切换"观感。
       this.state.isLoading = true;
+      // 在解析地址、网络缓冲之前切换卡片，不能等 playing 回调或 15 秒兜底。
+      this.syncPlayerCard(true);
       AVSessionService.getInstance().updateMetadata(book, chapter);
       // 早写 PlaybackStore:让正在等待的页面立刻看到"当前书已切换"
       PlaybackStore.getInstance().update(
@@ -1424,7 +1433,8 @@ export class AudioService {
       const requestStartedAt = Date.now();
       let requestInfo: AudioRequestInfo;
       try {
-        requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables, chapter.variables);
+        requestInfo = await this.resolveAudioRequestWithTimeout(source, pageUrl, book.variables,
+          ChapterRuleContext.create(chapter.title, chapter.index - 1, chapter.variables));
       } finally { this.tracePlaybackDuration('resolveAudioRequest', requestStartedAt, generation); }
       const audioUrl = requestInfo.url;
       // 解析失败时书源层会原样回传章节页 URL（如 tingyou://play/...），
@@ -1499,7 +1509,7 @@ export class AudioService {
       const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
       if (!source) return '';
       const requestInfo = await this.resolveAudioRequestWithTimeout(
-        source, pageUrl, book.variables, chapter.variables);
+        source, pageUrl, book.variables, ChapterRuleContext.create(chapter.title, chapter.index - 1, chapter.variables));
       return this.isHttpUrl(requestInfo.url) ? requestInfo.url : '';
     } catch (err) {
       const error = err as Error;

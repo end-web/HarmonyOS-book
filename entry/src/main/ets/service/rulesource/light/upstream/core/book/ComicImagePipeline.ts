@@ -1,13 +1,18 @@
+import { BookSource } from '../../model/data/Book';
+import { HttpClient } from '../http/HttpClient';
+import { NativeSourceCrypto } from '../nativesource/NativeSourceCrypto';
 import fs from '@ohos.file.fs';
 import { util } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { BookSource } from '../../model/data/Book';
-import { HttpClient } from '../http/HttpClient';
 
 export class ComicImageSpec {
   url: string = '';
   headers: Record<string, string> = {};
   hasOptions: boolean = false;
+  /** 原生书源给出的解密参数；空串表示不解密。 */
+  decodeAlgorithm: string = '';
+  decodeKey: string = '';
+  decodeIv: string = '';
 }
 
 /**
@@ -36,6 +41,13 @@ export class ComicImagePipeline {
           if (this.allowedHeader(key) && headerValue) spec.headers[key] = headerValue;
         }
       }
+      const decode = options['decode'];
+      if (decode && typeof decode === 'object' && !Array.isArray(decode)) {
+        const record = decode as Record<string, Object>;
+        spec.decodeAlgorithm = String(record['algorithm'] || '');
+        spec.decodeKey = String(record['key'] || '');
+        spec.decodeIv = String(record['iv'] || '');
+      }
       spec.hasOptions = true;
     } catch (_) {
     }
@@ -51,7 +63,8 @@ export class ComicImagePipeline {
     if (!cacheDir) return spec.url;
     const dir = `${cacheDir}/comic_images`;
     this.ensureDir(dir);
-    const basePath = `${dir}/${this.hashText(`${source.bookSourceUrl}\n${spec.url}\n${decodeRule}`)}`;
+    const basePath = `${dir}/${this.hashText(`${source.bookSourceUrl}\n${spec.url}\n${decodeRule}` +
+      `\n${spec.decodeAlgorithm}\n${spec.decodeKey}\n${spec.decodeIv}`)}`;
     const existing = this.findExisting(basePath);
     if (existing) return existing;
 
@@ -69,6 +82,14 @@ export class ComicImagePipeline {
     if (!response.success || response.data.length === 0) return spec.url;
 
     let bytes = response.data;
+    if (spec.decodeAlgorithm && spec.decodeKey && !this.looksLikeImage(bytes)) {
+      try {
+        bytes = NativeSourceCrypto.decryptBytes(spec.decodeAlgorithm, bytes, spec.decodeKey, spec.decodeIv);
+      } catch (e) {
+        console.warn('[ComicImagePipeline] native image decode failed:', (e as Error).message);
+        return spec.url;
+      }
+    }
     if (decodeRule && !this.looksLikeImage(bytes)) {
       const decoded = await this.decodeImage(bytes, decodeRule);
       if (decoded.length > 0) bytes = decoded;

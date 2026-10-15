@@ -30,8 +30,58 @@ export interface NativeRequestSpec {
   method?: string;
   headers?: Record<string, string>;
   body?: NativeValue;
-  /** 用内置浏览器加载并取渲染后的页面，用于必须执行网页自身脚本的站点。 */
-  webView?: boolean;
+  /**
+   * 用内置浏览器加载并取渲染后的页面，用于必须执行网页自身脚本的站点。
+   * 写成对象时可以等指定元素出现再取：{ "waitFor": "选择器", "timeout": 秒 }。
+   */
+  webView?: boolean | NativeWebViewSpec;
+  /** 请求参数与表单的编码，如 gbk；不写为 UTF-8。响应的解码由应用自动识别。 */
+  charset?: string;
+  /** 请求失败后的重试次数，0 到 3。 */
+  retry?: number;
+}
+
+export interface NativeWebViewSpec {
+  /** CSS 选择器：等这个元素出现后再取页面。 */
+  waitFor?: string;
+  /** 最长等待秒数，默认 15，上限 60。 */
+  timeout?: number;
+}
+
+/** 点一下发一个请求、把结果提示给用户的动作。open 有值时改为在应用内打开这个网页。 */
+export interface NativeActionSpec extends NativeRequestSpec {
+  label: string;
+  when?: string;
+  open?: string;
+  /** 请求完成后提示给用户的文字。 */
+  message?: string;
+}
+
+export interface NativeLoginFieldSpec {
+  key: string;
+  label?: string;
+  /** 为 true 时按密码输入，内容不显示也不保存。 */
+  secret?: boolean;
+}
+
+export interface NativeLoginSubmitSpec extends NativeRequestSpec {
+  /** 求值为真表示登录成功。 */
+  ok: string;
+  /** 登录成功后要保存的凭据，之后通过 login.token 读取。 */
+  token?: string;
+  /** 可选：账号显示名，通过 login.user 读取。 */
+  user?: string;
+  /** 失败时提示给用户的文字。 */
+  message?: string;
+}
+
+/** 先取一次、之后复用的值（如访问令牌）。只能在这里声明，规则不能随处写入状态。 */
+export interface NativeCacheSpec extends NativeRequestSpec {
+  /** 从响应里取出要保存的值。 */
+  value: string;
+  /** 有效期（秒），默认 600。到期后下次用到时重新获取。 */
+  ttl?: number;
+  when?: string;
 }
 
 export interface NativeLoginCheckSpec extends NativeRequestSpec {
@@ -42,8 +92,14 @@ export interface NativeLoginCheckSpec extends NativeRequestSpec {
 }
 
 export interface NativeLoginSpec {
-  /** 登录页地址，在应用内置浏览器中打开。 */
-  url: string;
+  /** 登录页地址，在应用内置浏览器中打开。使用表单登录时可以不写。 */
+  url?: string;
+  /** 表单登录：要用户填写的项。填写的值在 submit 和 sendCode 里通过 form.名称 读取。 */
+  form?: NativeLoginFieldSpec[];
+  /** 表单登录：提交登录的请求。 */
+  submit?: NativeLoginSubmitSpec;
+  /** 表单登录：发送验证码之类的辅助请求。 */
+  sendCode?: NativeActionSpec;
   /** 登录成功后应当存在的 Cookie 名，用于判断登录状态。 */
   cookies?: string[];
   check?: NativeLoginCheckSpec;
@@ -113,8 +169,20 @@ export interface NativeCommentsSpec {
 /** 正文末尾的链接按钮，点击后在应用内打开网页（例如视频播放页）。 */
 export interface NativeLinkSpec {
   label: string;
-  url: string;
+  /** 点击后在应用内打开的网页。与 request 二选一。 */
+  url?: string;
   when?: string;
+  /** 点击后发出的请求（点赞、收藏等），结果用 message 提示。 */
+  request?: NativeRequestSpec;
+  message?: string;
+}
+
+/** 漫画图片解密：密钥和 IV 在取正文时算好，应用下载图片后用系统加密框架解密。 */
+export interface NativeImageDecodeSpec {
+  /** 如 AES/CBC/PKCS5Padding。 */
+  algorithm: string;
+  key: string;
+  iv?: string;
 }
 
 export interface NativeContentSpec extends NativeStageSpec {
@@ -124,8 +192,11 @@ export interface NativeContentSpec extends NativeStageSpec {
   text?: string;
   images?: string;
   audio?: string;
-  /** 视频类书籍这一集的播放页地址，应用直接打开它而不进入阅读器。 */
+  /** 视频类书籍这一集的视频流地址，由应用自带的播放页播放。 */
   video?: string;
+  /** 取图片、音频时附带的请求头，例如 Referer。 */
+  mediaHeaders?: Record<string, string>;
+  imageDecode?: NativeImageDecodeSpec;
   nextUrl?: string;
   replace?: NativeReplaceSpec[];
 }
@@ -148,6 +219,9 @@ export interface NativeSourceDefinition {
   login?: NativeLoginSpec;
   /** 可选的听书音色。用户在听书页选中的 id 存在书籍变量里，规则通过 book.vars.custom 读取。 */
   voices?: NativeVoiceSpec[];
+  cache?: Record<string, NativeCacheSpec>;
+  /** 书源设置页里的动作按钮（签到、打开个人中心等）。 */
+  actions?: NativeActionSpec[];
   let?: Record<string, NativeValue>;
   search?: NativeStageSpec;
   explore?: NativeExploreSpec;
@@ -275,11 +349,53 @@ export class NativeSourceSpec {
     }
     NativeSourceSpec.checkValues(definition.let, 'let', errors);
     NativeSourceSpec.checkValues(definition.headers, 'headers', errors);
+    if (definition.cache !== undefined) {
+      if (!definition.cache || typeof definition.cache !== 'object' || Array.isArray(definition.cache)) {
+        errors.push('cache 必须是对象');
+      } else {
+        for (const name of Object.keys(definition.cache)) {
+          const entry = definition.cache[name];
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) errors.push(`cache 的名称只能用字母、数字和下划线：${name}`);
+          if (!entry || !entry.url || !entry.value) errors.push(`cache.${name} 需要 url 和 value`);
+        }
+        NativeSourceSpec.checkValues(definition.cache, 'cache', errors);
+      }
+    }
+    if (definition.actions !== undefined) {
+      if (!Array.isArray(definition.actions)) {
+        errors.push('actions 必须是数组');
+      } else {
+        for (const action of definition.actions) {
+          if (!action || !action.label || (!action.url && !action.open)) {
+            errors.push('actions 的每一项都需要 label，以及 url 或 open');
+          }
+        }
+        NativeSourceSpec.checkValues(definition.actions, 'actions', errors);
+      }
+    }
     if (definition.login !== undefined) {
       const login = definition.login;
-      if (!login || typeof login !== 'object' || !/^https?:\/\//i.test(String(login.url || ''))) {
+      if (!login || typeof login !== 'object') {
+        errors.push('login 必须是对象');
+      } else if (!login.url && !login.submit) {
+        errors.push('login 需要 url（网页登录）或 submit（表单登录）');
+      } else if (login.url && !/^https?:\/\//i.test(String(login.url))) {
         errors.push('login.url 必须是以 http:// 或 https:// 开头的登录页地址');
       } else {
+        if (login.submit) {
+          if (!login.submit.url || !login.submit.ok) errors.push('login.submit 需要 url 和 ok');
+          if (!Array.isArray(login.form) || login.form.length === 0) errors.push('表单登录需要 login.form');
+          NativeSourceSpec.checkValues(login.submit, 'login.submit', errors);
+        }
+        for (const field of Array.isArray(login.form) ? login.form : []) {
+          if (!field || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(field.key || '')) {
+            errors.push('login.form 里的 key 只能用字母、数字和下划线');
+          }
+        }
+        if (login.sendCode) {
+          if (!login.sendCode.url) errors.push('login.sendCode 需要 url');
+          NativeSourceSpec.checkValues(login.sendCode, 'login.sendCode', errors);
+        }
         if (login.cookies !== undefined && !Array.isArray(login.cookies)) errors.push('login.cookies 必须是数组');
         if (login.check) {
           if (!login.check.url || !login.check.ok) errors.push('login.check 需要 url 和 ok');
@@ -330,8 +446,17 @@ export class NativeSourceSpec {
       if (content.links !== undefined) {
         if (!Array.isArray(content.links)) {
           errors.push('content.links 必须是数组');
-        } else if (content.links.some((link: NativeLinkSpec): boolean => !link || !link.label || !link.url)) {
-          errors.push('content.links 的每一项都需要 label 和 url');
+        } else if (content.links.some((link: NativeLinkSpec): boolean =>
+          !link || !link.label || (!link.url && !(link.request && link.request.url)))) {
+          errors.push('content.links 的每一项都需要 label，以及 url 或 request');
+        }
+      }
+      if (content.imageDecode !== undefined) {
+        const decode = content.imageDecode;
+        if (!decode || !decode.algorithm || !decode.key) {
+          errors.push('content.imageDecode 需要 algorithm 和 key');
+        } else if (!/^(aes|desede|3des)\//i.test(String(decode.algorithm))) {
+          errors.push('content.imageDecode.algorithm 只支持 AES 和 3DES，例如 AES/CBC/PKCS5Padding');
         }
       }
       if (content.comments) {

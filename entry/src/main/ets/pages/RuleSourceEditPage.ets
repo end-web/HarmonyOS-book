@@ -8,6 +8,8 @@ import { AppColor, AppFont, AppRadius, AppSpace } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import { promptAction } from '@kit.ArkUI';
 import { fileIo, picker } from '@kit.CoreFileKit';
+import { NativeSourceForm } from '../components/NativeSourceForm';
+import { NativeSourceDraft } from '../service/rulesource/NativeSourceDraft';
 
 interface FormFieldParams {
   label: ResourceStr;
@@ -75,7 +77,9 @@ export struct RuleSourceEditPage {
   @Local rawDraft: string = '';
   @Local rawError: string = '';
   @Local exploreDraft: string = '';
+  @Local nativeDraft: NativeSourceDraft = new NativeSourceDraft();
   private rawSnapshot: string = '';
+  private nativeFormChanged: boolean = false;
   private exploreSnapshot: string = '';
   private isNewSource: boolean = true;
   private formScroller: Scroller = new Scroller();
@@ -121,8 +125,8 @@ export struct RuleSourceEditPage {
         this.markSaved();
         if (this.usesNativeEditor()) {
           this.prepareRawDraft();
-          this.currentTab = 7;
-          if (!loaded.nativeRulesValid) this.rawError = loaded.validationMessage;
+          if (this.isNativeForm()) this.nativeDraft = new NativeSourceDraft(this.rawDraft);
+          else this.currentTab = 7;
         }
       } else {
         promptAction.showToast({ message: '书源不存在' });
@@ -139,6 +143,7 @@ export struct RuleSourceEditPage {
   private markSaved(): void {
     this.originalSnapshot = this.sourceSnapshot();
     this.hasUnsavedChanges = false;
+    this.nativeFormChanged = false;
   }
 
   private markChanged(): void {
@@ -155,8 +160,7 @@ export struct RuleSourceEditPage {
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.source_manage_locked_message') });
       return;
     }
-    if ((this.currentTab === 7 || this.usesNativeEditor()) && !this.applyRawDraft()) return;
-    if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
+    if (!this.applyEditorDraft()) return;
     if (!this.source.bookSourceUrl || this.source.bookSourceUrl.trim().length === 0) {
       promptAction.showToast({ message: '请输入书源地址' });
       return;
@@ -194,11 +198,6 @@ export struct RuleSourceEditPage {
       return false;
     }
     const parsed = report.sources[0];
-    if ((parsed.engine.length > 0 || parsed.nativeRulesJson.length > 0) && !parsed.nativeRulesValid) {
-      this.rawError = parsed.validationMessage || this.getUIContext().getHostContext()?.resourceManager
-        .getStringSync($r('app.string.rule_source_json_single').id) || 'Invalid source JSON';
-      return false;
-    }
     if (!this.isNewSource && parsed.bookSourceUrl !== this.sourceUrl) {
       this.rawError = this.getUIContext().getHostContext()?.resourceManager
         .getStringSync($r('app.string.rule_source_json_identity').id) || 'Source identity cannot change';
@@ -209,13 +208,43 @@ export struct RuleSourceEditPage {
     parsed.customOrder = this.source.customOrder;
     this.source = parsed;
     this.sourceType = parsed.bookSourceType;
+    if (this.currentTab === 7 && this.isNativeForm()) this.nativeDraft = new NativeSourceDraft(this.rawDraft);
     this.rawError = '';
     this.markChanged();
     return true;
   }
 
   private usesNativeEditor(): boolean {
-    return this.source.engine.length > 0 || this.source.nativeRulesJson.length > 0;
+    // 原生定义和兼容规则的模型不同，原生表单直接编辑原始定义。
+    return this.source.engine === 'light-native' || this.source.engine === 'native-v1' ||
+      this.source.nativeRulesJson.length > 0;
+  }
+
+  private isNativeForm(): boolean { return this.source.engine === 'light-native'; }
+
+  private nativeSection(): string {
+    switch (this.currentTab) {
+      case 1: return '/search';
+      case 2: return '/detail';
+      case 3: return '/toc';
+      case 4: return '/content';
+      case 5: return '/explore';
+      case 6: return '/login';
+      default: return '';
+    }
+  }
+
+  private applyEditorDraft(): boolean {
+    if (this.isNativeForm() && this.currentTab !== 7) {
+      try { this.rawDraft = this.nativeDraft.serialize(); }
+      catch (_error) {
+        this.rawError = this.getUIContext().getHostContext()?.resourceManager.getStringSync(
+          $r('app.string.native_editor_number_error').id, this.nativeDraft.errorPath()) || this.nativeDraft.errorPath();
+        return false;
+      }
+    }
+    if (this.currentTab === 7 || this.usesNativeEditor()) return this.applyRawDraft();
+    return this.currentTab !== 5 || this.updateExploreRule(this.exploreDraft);
   }
 
   private prepareRawDraft(): void {
@@ -227,9 +256,9 @@ export struct RuleSourceEditPage {
   private selectTab(index: number): void {
     if (index === this.currentTab) return;
     if (this.currentTab === 7 && !this.applyRawDraft()) return;
-    if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
-    if (this.usesNativeEditor()) index = 7;
-    if (index === 5) {
+    if (this.currentTab === 5 && !this.isNativeForm() && !this.updateExploreRule(this.exploreDraft)) return;
+    if (this.usesNativeEditor() && !this.isNativeForm()) index = 7;
+    if (index === 5 && !this.isNativeForm()) {
       const definition: Record<string, Object> = JSON.parse(LocalRuleSourceCodec.stringify(this.source));
       const fields = definition['ruleExplore'];
       this.exploreDraft = JSON.stringify(fields !== null && typeof fields === 'object' && !Array.isArray(fields)
@@ -237,11 +266,16 @@ export struct RuleSourceEditPage {
       this.exploreSnapshot = this.exploreDraft;
     }
     if (index === 7) {
-      this.prepareRawDraft();
+      if (this.isNativeForm()) {
+        // JSON 和表单共用草稿；允许在 JSON 中继续修复未完成的原生定义。
+        try { this.rawDraft = JSON.stringify(JSON.parse(this.nativeDraft.serialize()), null, 2); }
+        catch (_error) { this.applyEditorDraft(); return; }
+        this.rawSnapshot = this.rawDraft;
+      } else this.prepareRawDraft();
     }
     this.currentTab = index;
     this.rawError = '';
-    this.formScroller.scrollEdge(Edge.Top);
+    if (!this.isNativeForm()) this.formScroller.scrollEdge(Edge.Top);
   }
 
   private requestBack(): boolean {
@@ -265,8 +299,7 @@ export struct RuleSourceEditPage {
 
   private async exportSource(): Promise<void> {
     if (this.isExporting || this.isSaving) return;
-    if ((this.currentTab === 7 || this.usesNativeEditor()) && !this.applyRawDraft()) return;
-    if (this.currentTab === 5 && !this.updateExploreRule(this.exploreDraft)) return;
+    if (!this.applyEditorDraft()) return;
     const context = this.getUIContext().getHostContext();
     if (context === undefined) return;
     this.isExporting = true;
@@ -362,7 +395,7 @@ export struct RuleSourceEditPage {
             // Tab栏
             Scroll() {
               Row() {
-              if (!this.usesNativeEditor()) {
+              if (!this.usesNativeEditor() || this.isNativeForm()) {
                 this.TabButton('基本', 0)
                 this.TabButton('搜索', 1)
                 this.TabButton('详情', 2)
@@ -383,6 +416,19 @@ export struct RuleSourceEditPage {
             .borderColor($r('sys.color.comp_divider'))
 
             // 内容区域
+            if (this.isNativeForm() && this.currentTab !== 7) {
+              Column() {
+                if (this.rawError) {
+                  Text(this.rawError).fontSize(AppFont.Caption).fontColor(AppColor.Brand).padding(AppSpace.Sm)
+                }
+                NativeSourceForm({ draft: this.nativeDraft, section: this.nativeSection(),
+                  onChanged: (): void => {
+                    this.nativeFormChanged = true; this.hasUnsavedChanges = true; this.rawError = '';
+                  } })
+                  .layoutWeight(1)
+              }.layoutWeight(1).width('100%').padding({ bottom: this.safeBottom })
+                .enabled(!this.isSaving)
+            } else {
             Scroll(this.formScroller) {
               Column({ space: AppSpace.Md }) {
                 if (this.currentTab === 0) {
@@ -417,6 +463,7 @@ export struct RuleSourceEditPage {
             .enabled(!this.isSaving)
             .scrollBar(BarState.Auto)
             .edgeEffect(EdgeEffect.Spring)
+            }
           }
         }
         .width('100%')
@@ -1035,7 +1082,8 @@ export struct RuleSourceEditPage {
         .borderRadius(AppRadius.Xs).padding(AppSpace.Sm)
         .onChange((value: string) => {
           this.rawDraft = value;
-          this.hasUnsavedChanges = this.rawDraft !== this.rawSnapshot || this.sourceSnapshot() !== this.originalSnapshot;
+          this.hasUnsavedChanges = this.nativeFormChanged || this.rawDraft !== this.rawSnapshot ||
+            this.sourceSnapshot() !== this.originalSnapshot;
         })
       if (this.rawError) {
         Text(this.rawError).fontSize(AppFont.Caption).fontColor(AppColor.Brand).width('100%')

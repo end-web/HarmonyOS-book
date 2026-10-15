@@ -1,9 +1,15 @@
+import { SourceEngineHost, SourceCookieJar } from '../host/SourceEngineHost';
 import { webview } from '@kit.ArkWeb';
 import { util } from '@kit.ArkTS';
 import { LogText } from '../../utils/LogText';
 import { SetCookieParser } from './SetCookieParser';
 
 export class LightCookieSemantics {
+  /** Legacy unscoped callers keep the ArkWeb jar; source execution always supplies its identity. */
+  static forSource(sourceUrl: string = ''): SourceCookieJar {
+    return SourceEngineHost.cookies(sourceUrl) || LightCookieSemantics;
+  }
+
   private static readonly TOMBSTONE_VALUE = '__removed__';
 
   static getCookie(url: string): string {
@@ -93,7 +99,7 @@ export class LightCookieSemantics {
         webview.WebCookieManager.configCookieSync(target, value, true);
       } catch (error) {
         // Never log the cookie itself; a write that fails here silently drops the login state of that site.
-        console.warn('[CookieStore] 写入 Cookie 失败:', LogText.url(target), (error as Error).message);
+        console.warn('[LightCookieSemantics] 写入 Cookie 失败:', LogText.url(target), (error as Error).message);
       }
     }
   }
@@ -102,7 +108,7 @@ export class LightCookieSemantics {
     try {
       webview.WebCookieManager.clearAllCookiesSync(true);
     } catch (error) {
-      console.warn('[CookieStore] 清空 Cookie 失败:', (error as Error).message);
+      console.warn('[LightCookieSemantics] 清空 Cookie 失败:', (error as Error).message);
     }
   }
 

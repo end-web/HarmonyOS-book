@@ -7,6 +7,8 @@ import { Book, BookChapter, BookSource, SearchBook } from './upstream/model/data
 import { LightSourceImport } from './upstream/LightSourceImport';
 import { NativeSourceSpec } from './upstream/core/nativesource/NativeSourceSpec';
 import { NativeSourceService } from './upstream/core/nativesource/NativeSourceService';
+import { ChapterRuleContext } from '../ChapterRuleContext';
+import { NativeSourceImport } from './upstream/core/nativesource/NativeSourceImport';
 import { WebBookService } from './upstream/core/book/WebBookService';
 import { SearchCoordinator } from './upstream/core/book/SearchCoordinator';
 import { ExploreCoordinator } from './upstream/core/book/ExploreCoordinator';
@@ -38,6 +40,9 @@ export class LightSourceCore {
     const local = JSON.parse(localJson) as LocalRuleSource;
     const source = this.source(local);
     return LightSourceRuntime.run(source,local,async () => {
+      if (NativeSourceService.isNative(source) && NativeSourceService.isReaderAction(address)) {
+        return JSON.stringify({message:await NativeSourceService.runReaderAction(source,new HttpClient(),address)});
+      }
       const expanded = ReaderInteractionProviderRegistry.expandAction(source,address);
       const panel = ReaderInteractionProviderRegistry.buildPanel(expanded);
       if (panel) return JSON.stringify({html:panel.html,url:panel.baseUrl});
@@ -70,16 +75,16 @@ export class LightSourceCore {
   }
   static normalizeDefinition(raw: string): string {
     const value = JSON.parse(raw) as Record<string, Object>;
-    const source = NativeSourceSpec.isDefinitionObject(value) ? NativeSourceService.importObject(value) :
+    const source = NativeSourceSpec.isDefinitionObject(value) ? NativeSourceImport.importObject(value) :
       new LightSourceImport().parseBookSource(value);
     return JSON.stringify(source);
   }
   private static source(local: LocalRuleSource): BookSource {
     LightSourceRuntime.parseDefinition = value => NativeSourceSpec.isDefinitionObject(value) ?
-      NativeSourceService.importObject(value) : new LightSourceImport().parseBookSource(value);
+      NativeSourceImport.importObject(value) : new LightSourceImport().parseBookSource(value);
     const raw = local.definition || local.rawSourceJson;
     const value = JSON.parse(raw) as Record<string, Object>;
-    return NativeSourceSpec.isDefinitionObject(value) ? NativeSourceService.importObject(value) :
+    return NativeSourceSpec.isDefinitionObject(value) ? NativeSourceImport.importObject(value) :
       new LightSourceImport().parseBookSource(value);
   }
   private static book(source: BookSource, url: string, vars: Record<string, string>): Book {
@@ -92,7 +97,11 @@ export class LightSourceCore {
     book.tocUrl = vars['tocUrl'] || book.tocUrl || url;
     book.name = book.name || vars['bookName'] || vars['name'] || '';
     book.author = book.author || vars['author'] || '';
-    book.variable = JSON.stringify(vars);
+    // App-only catalog revision contains the entire source definition. It must not
+    // enter rule variables and be copied into every chapter returned by the engine.
+    const ruleVariables = {...vars};
+    delete ruleVariables.__audioTocDefinition;
+    book.variable = JSON.stringify(ruleVariables);
     BookTypeSupport.applyBookType(book, source);
     if (vars['__lightBookType']) book.type = Number(vars['__lightBookType']);
     return book;
@@ -152,7 +161,21 @@ export class LightSourceCore {
       }));
       if (controls.length) controls.push({id:'light-native-save',title:saveLabel,type:'button',action:'light-native-save'});
       const spec = NativeSourceService.loginSpec(source);
-      if (spec) controls.push({id:'light-native-login',title:loginLabel,type:'button',action:'light-native-login'});
+      const form = NativeSourceService.loginForm(source);
+      for (const field of form) {
+        controls.push({id:`light-native-form:${field.key}`,title:field.label || field.key,
+          type:field.secret ? 'password' : 'text',value:'',group:field.key});
+      }
+      if (form.length) {
+        if (spec?.sendCode) controls.push({id:'light-native-send-code',title:spec.sendCode.label,
+          type:'button',action:'light-native-send-code'});
+        controls.push({id:'light-native-submit',title:loginLabel,type:'button',action:'light-native-submit'});
+      }
+      if (spec?.url) controls.push({id:'light-native-login',title:loginLabel,type:'button',action:'light-native-login'});
+      for (const item of await NativeSourceService.actions(source,new HttpClient())) {
+        controls.push({id:`light-native-action:${item.index}`,title:item.label,type:'button',
+          action:`light-native-action:${item.index}`});
+      }
       const menus = login ? [] : await NativeSourceService.exploreMenus(source, new HttpClient());
       let group = '';
       const entries = menus.map(menu => {
@@ -196,8 +219,36 @@ export class LightSourceCore {
       }
       if (action.action === 'light-native-login') {
         const spec = NativeSourceService.loginSpec(source);
-        if (!spec || !/^https:\/\//i.test(spec.url)) throw new Error('书源未声明有效的 HTTPS 登录地址');
+        if (!spec?.url || !/^https:\/\//i.test(spec.url)) throw new Error('书源未声明有效的 HTTPS 登录地址');
         return JSON.stringify({browserUrl:spec.url});
+      }
+      if (action.action === 'light-native-submit' || action.action === 'light-native-send-code') {
+        const inputs = JSON.parse(controlsJson) as {id:string;value:string}[];
+        const form: Record<string,string> = {};
+        for (const field of NativeSourceService.loginForm(source)) {
+          form[field.key] = inputs.find(item => item.id === `light-native-form:${field.key}`)?.value || '';
+        }
+        if (action.action === 'light-native-send-code') {
+          return JSON.stringify({message:await NativeSourceService.sendLoginCode(source,new HttpClient(),form)});
+        }
+        const result = await NativeSourceService.submitLogin(source,new HttpClient(),form);
+        if (result.ok) {
+          const info = NativeSourceService.loginInfoWith(source,result.token,result.user);
+          await LightSourceDatabase.getInstance(source).updateBookSourceLoginRuntime(
+            source.bookSourceUrl,source.variable,source.loginHeader,info);
+        }
+        // Only the returned credential is persisted. Form inputs, including passwords, stay transient.
+        return JSON.stringify({message:result.message,refresh:result.ok,refreshLogin:result.ok});
+      }
+      if (action.action.startsWith('light-native-action:')) {
+        const index = Number(action.action.substring('light-native-action:'.length));
+        const item = (await NativeSourceService.actions(source,new HttpClient())).find(value => value.index === index);
+        if (!item) throw new Error('未知原生书源面板动作');
+        if (item.open) {
+          if (!/^https:\/\//i.test(item.open)) throw new Error('书源未声明有效的 HTTPS 登录地址');
+          return JSON.stringify({browserUrl:item.open});
+        }
+        return JSON.stringify({message:await NativeSourceService.runAction(source,new HttpClient(),index),refresh:true});
       }
       if (action.action.startsWith('light-native-set:')) {
         if (typeof action.value !== 'string') throw new Error('书源选项值未传入解析引擎');
@@ -251,6 +302,7 @@ export class LightSourceCore {
     const local = JSON.parse(localJson) as LocalRuleSource;
     const source = this.source(local);
     await LightSourceRuntime.run(source,local,async () => {
+      if (NativeSourceService.isNative(source)) NativeSourceService.clearCache(source.bookSourceUrl);
       LightCookieStore.forSource(source.bookSourceUrl).clearAll();
       await LightSourceDatabase.getInstance(source).updateBookSourceLoginRuntime(source.bookSourceUrl,source.variable,'','');
       await LightSourceRuntime.updateState(source.bookSourceUrl,state => { delete state.lightLoginPending; });
@@ -302,8 +354,12 @@ export class LightSourceCore {
       const items = await new WebBookService().getChapterList(source, book);
       const failure = LightSourceRuntime.getError(source);
       if (!items.length && failure) throw new Error(failure);
+      const bookVariables = JSON.parse(book.variable || '{}') as Record<string, string>;
+      delete bookVariables.__audioTocDefinition;
       return JSON.stringify(items.map(item => {
-        const variables = {...JSON.parse(book.variable || '{}'), ...JSON.parse(item.variable || '{}'),__lightBookType:String(book.type || 0)};
+        const variables = ChapterRuleContext.create(item.title, item.index,
+          {...bookVariables, ...JSON.parse(item.variable || '{}'),__lightBookType:String(book.type || 0), chapterName:item.title});
+        delete variables.__audioTocDefinition;
         return {name:item.title,url:item.url,isVip:item.isVip,isPay:item.isPay,isVolume:!!(item as BookChapter & {isVolume?:boolean}).isVolume,
           updateTime:String(variables.updateTime || ''),duration:Number(variables.duration || 0),variables};
       }));

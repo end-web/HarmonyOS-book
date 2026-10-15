@@ -1,5 +1,6 @@
 import { AppColor, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { Book } from '../model/Book';
+import { PlaybackLoadingIndicator } from './PlaybackLoadingIndicator';
 import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 
 @ComponentV2
@@ -118,7 +119,7 @@ export struct MiniPlayer {
 
           Stack() {
             if (this.loading) {
-              LoadingProgress().width(24).height(24).color(AppColor.Brand)
+              PlaybackLoadingIndicator({ indicatorSize: 24 })
             } else {
               SymbolGlyph(this.playing ? $r('sys.symbol.pause_fill') : $r('sys.symbol.play_fill'))
                 .fontSize(24).fontColor([$r('sys.color.font_primary')])

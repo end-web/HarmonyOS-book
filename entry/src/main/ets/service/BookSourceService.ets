@@ -379,7 +379,6 @@ export class BookSourceService {
       const panel = await LocalRulePanelService.load(source, false, variables);
       const entries = panel.entries.filter((entry): boolean => entry.url.trim().length > 0).slice(0, 8);
       if (entries.length === 0) throw new Error('没有解析出发现分类');
-      const candidates: SearchResult[] = [];
       const seen = new Set<string>();
       let lastError = '';
       for (const entry of entries) {
@@ -389,28 +388,28 @@ export class BookSourceService {
           for (const book of result.books) {
             if (seen.has(book.bookUrl)) continue;
             seen.add(book.bookUrl);
-            candidates.push(book);
-            if (candidates.length >= 4) break;
+            BookSourceService.checkHealthCancellation(isCancelled);
+            try {
+              // 验证通过即结束，避免先收集候选而等待其他分类请求。
+              await BookSourceService.validateCandidate(source, book,
+                source.isAudio() ? 'audio' : 'text', isCancelled, true);
+              BookSourceService.checkHealthCancellation(isCancelled);
+              health.status = LocalRuleSourceStatus.READY;
+              health.message = `发现、详情、目录与${(book.contentType ?? (source.isAudio() ? 'audio' : 'text')) === 'audio' ? '音频' : '正文'}解析正常：${book.name}`;
+              return health;
+            } catch (error) {
+              BookSourceService.checkHealthCancellation(isCancelled);
+              lastError = error instanceof Error ? error.message : String(error);
+            }
+            if (seen.size >= 4) break;
           }
         } catch (error) {
-          lastError = error instanceof Error ? error.message : String(error);
-        }
-        if (candidates.length >= 4) break;
-      }
-      if (candidates.length === 0) throw new Error(lastError || '发现分类未返回可验证的书籍');
-      for (const candidate of candidates) {
-        BookSourceService.checkHealthCancellation(isCancelled);
-        try {
-          await BookSourceService.validateCandidate(source, candidate,
-            source.isAudio() ? 'audio' : 'text', isCancelled, true);
           BookSourceService.checkHealthCancellation(isCancelled);
-          health.status = LocalRuleSourceStatus.READY;
-          health.message = `发现、详情、目录与${(candidate.contentType ?? (source.isAudio() ? 'audio' : 'text')) === 'audio' ? '音频' : '正文'}解析正常：${candidate.name}`;
-          return health;
-        } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
         }
+        if (seen.size >= 4) break;
       }
+      if (seen.size === 0) throw new Error(lastError || '发现分类未返回可验证的书籍');
       throw new Error(lastError || '发现/阅读链路未取得有效内容');
     } catch (error) {
       health.status = LocalRuleSourceStatus.FAILED;

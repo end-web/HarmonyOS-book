@@ -13,6 +13,11 @@ const code = ts.transpileModule(fs.readFileSync(source, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText;
 const flush = () => new Promise(resolve => setImmediate(resolve));
+const chapterContextModule = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,
+  '../entry/src/main/ets/service/rulesource/ChapterRuleContext.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, { exports: chapterContextModule.exports, module: chapterContextModule });
 const audio = {
   InterruptForceType: { INTERRUPT_FORCE: 0, INTERRUPT_SHARE: 1 },
   InterruptHint: { INTERRUPT_HINT_RESUME: 1, INTERRUPT_HINT_PAUSE: 2, INTERRUPT_HINT_STOP: 3 },
@@ -42,6 +47,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   let uptime = 0;
   let timerId = 0;
   const savedPositions = [];
+  const widgetUpdates = [];
   const player = {
     state: initialState, duration: 180000, currentTime: 42000,
     plays: 0, pauses: 0, seeks: [],
@@ -154,7 +160,12 @@ async function fixture(initialState = 'paused', realUsage = false) {
     './DataService': { DataService: { async upsertCachedBook() {},
       resolveChapterIndex: (book, id) => book.chapters.findIndex(ch => ch.id === id) } },
     './PreferenceService': prefModule.exports,
-    './WidgetUpdater': { WidgetUpdater: { async optimisticSetPlaying() {} } }
+    './WidgetUpdater': { WidgetUpdater: { async optimisticSetPlaying() {},
+      async updatePlayerCard(state) {
+        widgetUpdates.push({ bookId: state?.currentBook?.id, chapterId: state?.currentChapter?.id,
+          playing: state?.isPlaying });
+      }
+    } }
   };
   const module = { exports: {} };
   const downloadPolicy = { exports: {} };
@@ -175,6 +186,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
     setInterval: realUsage ? callback => { const id = ++timerId; usageTimers.set(id, callback); return id; } : setInterval,
     clearInterval: realUsage ? id => usageTimers.delete(id) : clearInterval,
     require(name) {
+      if (name === './rulesource/ChapterRuleContext') return chapterContextModule.exports;
       if (modules[name]) return modules[name];
       // Unused business dependencies remain unloaded; unexpected calls fail normally.
       if (name.startsWith('./') || name.startsWith('../model/')) return {};
@@ -194,7 +206,7 @@ async function fixture(initialState = 'paused', realUsage = false) {
   }
   service.initAVSession();
   await service.ensurePlayer();
-  return { service, player, state, session, savedPositions, events, preference, cacheCalls,
+  return { service, player, state, session, savedPositions, events, preference, cacheCalls, widgetUpdates,
     cache, mediaSources, platformCompat, usage, usageTimers, backgroundCalls, background,
     preloadTimers,
     advancePreload(ms) {
@@ -359,6 +371,21 @@ async function check(name, test) {
     assert.equal(f.state.currentChapter, chapter);
     assert.equal(f.state.progressMs, 9000);
     assert.equal(f.state.isLoading, true);
+  });
+  await check('switching books updates widget before audio URL resolution finishes', async () => {
+    const f = await fixture('idle');
+    f.player.reset = async () => {};
+    const chapter = { id: 'new-chapter', source: { type: 'rawfile', value: 'new.mp3' } };
+    const book = { id: 'new-book', chapters: [chapter] };
+    let finishResolve;
+    f.service.resolveAudioUrl = () => new Promise(resolve => { finishResolve = resolve; });
+    f.service.syncCastMediaSource = () => {};
+    f.service.applySource = async () => true;
+    const switching = f.service.doPlayChapter(book, chapter, 0);
+    await flush();
+    assert.deepEqual(f.widgetUpdates.at(-1), { bookId: 'new-book', chapterId: 'new-chapter', playing: false });
+    finishResolve({ success: true, headers: {} });
+    await switching;
   });
   await check('a start waiting for background eligibility cannot play a newly reset player', async () => {
     const f = await fixture('initialized');

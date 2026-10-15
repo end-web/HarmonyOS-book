@@ -1,5 +1,4 @@
-import { LightSourceRequestPolicy } from '../../../LightSourceRequestPolicy';
-import { LightSourceTiming } from '../../../LightSourceTiming';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 import { BookSource } from '../../model/data/Book';
 import { HttpClient, HttpRequest, HttpResponse } from '../http/HttpClient';
 import { VerificationSupport } from '../http/VerificationSupport';
@@ -457,8 +456,8 @@ export class AnalyzeUrl {
         'application/json; charset=utf-8' : 'application/x-www-form-urlencoded';
     }
     const request: HttpRequest = {
-      cancelCheck: () => LightSourceRequestPolicy.isCancelled(this.source) || !!this.cancelCheck?.(),
-      timingId: LightSourceTiming.id(this.source),
+      cancelCheck: () => SourceEngineHost.isCancelled(this.source) || !!this.cancelCheck?.(),
+      timingId: SourceEngineHost.id(this.source),
       cookieSource: this.source?.bookSourceUrl || '',
       url: this.config.url,
       method: this.config.method,
@@ -507,7 +506,7 @@ export class AnalyzeUrl {
     if (this.shouldRetryWithWebView(req, resp)) {
       console.info('[AnalyzeUrl] native transport failed; retrying with WebView:', this.urlHost(req.url));
       if (req.cancelCheck?.()) return this.notSentResponse(req, RateLimitAcquireResult.Cancelled);
-      const webResponse = await this.client.execute({ ...req, useWebView: true });
+      const webResponse = await this.fetchFollowingRedirects({ ...req, useWebView: true });
       if (this.isUsableResponse(webResponse)) return webResponse;
     }
 
@@ -519,6 +518,10 @@ export class AnalyzeUrl {
       }
     }
     return resp;
+  }
+
+  async fetchPrepared(req: HttpRequest): Promise<HttpResponse> {
+    return this.fetchWithRetry(req);
   }
 
   private async fetchWithRetry(req: HttpRequest): Promise<HttpResponse> {
@@ -590,7 +593,7 @@ export class AnalyzeUrl {
   private async acquireTimedSlot(): Promise<RateLimitAcquireResult> {
     const startedAt = Date.now();
     try { return await BookSourceRateLimiter.acquire(this.source, this.cancelCheck, this.rateLimitMaxWaitMs); }
-    finally { LightSourceTiming.end(LightSourceTiming.id(this.source), 'source-rate-wait', startedAt, 'priority=' + LightSourceRequestPolicy.priority(this.source) + ' cancelled=' + LightSourceRequestPolicy.isCancelled(this.source)); }
+    finally { SourceEngineHost.end(SourceEngineHost.id(this.source), 'source-rate-wait', startedAt, 'priority=' + SourceEngineHost.priority(this.source) + ' cancelled=' + SourceEngineHost.isCancelled(this.source)); }
   }
 
   private async fetchFollowingRedirects(req: HttpRequest): Promise<HttpResponse> {

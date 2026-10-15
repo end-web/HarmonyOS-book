@@ -57,7 +57,10 @@ const stubs = {
       this.jar.set(origin,[...jar].map(([k,v]) => `${k}=${v}`).join('; '));
     }
   }} }, '@kit.AbilityKit': {}, '@ohos.data.preferences': {},
-  '@kit.CryptoArchitectureKit': { cryptoFramework: {} }, '@ohos.file.fs': {},
+  '@kit.CryptoArchitectureKit': { cryptoFramework: { createMd: algorithm => {
+    const hash = require('node:crypto').createHash(algorithm.toLowerCase());
+    return { updateSync: value => hash.update(value.data), digestSync: () => ({data:hash.digest()}) };
+  } } }, '@ohos.file.fs': {},
   '@devzeng/quickjs': {},
   'service/rulesource/LocalRuleSourceRepository': { LocalRuleSourceRepository: repository },
   [prefix + 'LightSourceCookies']: { LightSourceCookies: {
@@ -87,6 +90,8 @@ function load(name) {
   return module.exports;
 }
 async function run() {
+  // Application startup installs the shared engine host before any source work.
+  load(prefix + 'LightSourceRuntime');
   const { BookSource } = load(prefix + 'upstream/model/data/Book');
   const { BookSourceRateLimiter: limiter, RateLimitAcquireResult: rateResult } = load(prefix + 'upstream/core/http/BookSourceRateLimiter');
   const { LightSourceRequest, LightSourceRequestPolicy: policy } = load(prefix + 'LightSourceRequestPolicy');
@@ -163,6 +168,14 @@ async function run() {
   assert.equal(detail.author, 'Author');
   const toc = JSON.parse(await engine.toc(JSON.stringify(local), detail.tocUrl, JSON.stringify({ bookUrl: search[0].bookUrl })));
   assert.equal(toc[0].url, 'https://engine.test/chapter');
+  assert.equal(toc[0].variables.chapterName, 'One');
+  assert.equal(toc[0].variables.chapterIndex, '0');
+  const largeRevision = JSON.stringify(['light-source-toc-v1', 'source-definition'.repeat(8192)]);
+  const compactToc = await engine.toc(JSON.stringify(local), detail.tocUrl,
+    JSON.stringify({bookUrl:search[0].bookUrl, session:'preserve-rule-variable', __audioTocDefinition:largeRevision}));
+  assert.ok(compactToc.length < 4096, 'application revision must not be duplicated into chapter variables');
+  assert.equal(JSON.parse(compactToc)[0].variables.session, 'preserve-rule-variable');
+  assert.equal(JSON.parse(compactToc)[0].variables.__audioTocDefinition, undefined);
   assert.equal(JSON.parse(await engine.content(JSON.stringify(local), toc[0].url, '{}')).content, 'chapter text');
   const { BookSourceStageWebRuntime, StageWebRuntimeRequest } = load(prefix + 'upstream/core/book/BookSourceStageWebRuntime');
   const canonical = new LightSourceImport().parseBookSource(source);
@@ -185,6 +198,114 @@ async function run() {
   assert.equal(JSON.parse(codec.stringify(importedNative)).search.fields.bookUrl, '$.url');
   importedNative.definition = codec.stringify(importedNative);
   assert.equal(JSON.parse(await engine.search(JSON.stringify(importedNative), 'Book', 1))[0].name, 'Book');
+  // The shared sourceengine added a debug argument before our application page argument.
+  const pagedNative = {...importedNative,definition:JSON.stringify({...native,sourceFormat:'native',version:1,
+    search:{...native.search,url:'/search?page={{page}}'}})};
+  fixtures.set('https://engine.test/search?page=3','{"books":[{"name":"NativeThird","url":"/third"}]}');
+  assert.equal(JSON.parse(await engine.search(JSON.stringify(pagedNative),'NativeThird',3))[0].name,'NativeThird');
+  const upgradedDefinition = {sourceFormat:'native',version:1,name:'Shared engine',url:'https://upgrade.test',
+    voices:[{id:'0',name:'真人原声'},{id:'74',name:'成熟升级'}],
+    type:'audio',search:{url:'/search',list:'$.books',fields:{name:'$.name',bookUrl:'$.url'}},
+    content:{url:'{{chapter.url}}',audio:'$.audio',mediaHeaders:{Referer:'https://upgrade.test/listen','X-Media':'native'}},
+    login:{form:[{key:'account',label:'Account'},{key:'password',label:'Password',secret:true}],
+      submit:{url:'/login',method:'POST',body:{account:'=form.account',password:'=form.password'},
+        ok:'=data.ok',token:'=data.token',user:'=data.user',message:'=data.message'},
+      sendCode:{label:'Send code',url:'/code',method:'POST',body:{account:'=form.account'},message:'=data.message'}},
+    actions:[{label:'Check in',url:'/check-in',headers:{Authorization:'Bearer {{login.token}}'},message:'=data.message'},
+      {label:'Account',open:'/account'}]};
+  const upgraded = parser.parse(JSON.stringify(upgradedDefinition)).sources[0];
+  assert.ok(upgraded,'shared sourceengine native schema imports');
+  upgraded.definition = codec.stringify(upgraded);
+  assert.deepEqual(JSON.parse(await engine.voices(JSON.stringify(upgraded))),
+    [{id:'0',name:'真人原声'},{id:'74',name:'成熟升级'}], 'voice names and ids survive the imported-source boundary');
+  fixtures.set('https://upgrade.test/chapter','{"audio":"https://media.test/native.mp3"}');
+  const upgradedAudio = JSON.parse(await engine.content(JSON.stringify(upgraded),'https://upgrade.test/chapter','{}'));
+  assert.equal(upgradedAudio.audioUrl,'https://media.test/native.mp3');
+  assert.equal(upgradedAudio.requestHeaders.Referer,'https://upgrade.test/listen');
+  assert.equal(upgradedAudio.requestHeaders['X-Media'],'native');
+  const { ChapterRuleContext } = load('service/rulesource/ChapterRuleContext');
+  const titleSource = {...upgraded, definition: JSON.stringify({...upgradedDefinition,
+    content:{url:'{{chapter.url}}',audio:'=chapter.title == "One" && chapter.index == 0 ? "https://media.test/real.mp3" : "https://media.test/tts.mp3"'}})};
+  const resolveTitle = async variables => JSON.parse(await engine.content(JSON.stringify(titleSource),
+    'https://upgrade.test/chapter',JSON.stringify(variables))).audioUrl;
+  assert.equal(await resolveTitle({}), 'https://media.test/tts.mp3', 'missing title reproduces synthesized fallback');
+  assert.equal(await resolveTitle({...toc[0].variables,__lightBookType:'32'}), 'https://media.test/real.mp3', 'fresh catalog preserves rule chapter metadata');
+  const oldVariables = {session:'keep'};
+  const restoredContext = ChapterRuleContext.create('One',0,oldVariables);
+  assert.equal(await resolveTitle(restoredContext), 'https://media.test/real.mp3', 'old catalog title reaches native content');
+  assert.equal(restoredContext.session,'keep');
+  assert.equal(oldVariables.chapterName,undefined,'input variables remain unchanged');
+  assert.equal(ChapterRuleContext.create('UI title',1,{chapterName:'Original title'}).chapterName,'Original title');
+  assert.equal(ChapterRuleContext.create('Second',1).chapterIndex,'1');
+  const formPanel = JSON.parse(await engine.panel(JSON.stringify(upgraded),true,'save','login'));
+  const submitControl = formPanel.controls.find(item => item.action === 'light-native-submit');
+  const codeControl = formPanel.controls.find(item => item.action === 'light-native-send-code');
+  assert.ok(submitControl && codeControl,'native form actions reach the existing panel');
+  const passwordControl = formPanel.controls.find(item => item.id === 'light-native-form:password');
+  assert.equal(passwordControl.type,'password');
+  passwordControl.value = 'transient-secret';
+  formPanel.controls.find(item => item.id === 'light-native-form:account').value = 'fixture-user';
+  fixtures.set('https://upgrade.test/code',request => {
+    assert.equal(JSON.parse(request.body).account,'fixture-user');
+    return '{"message":"code sent"}';
+  });
+  assert.equal(JSON.parse(await engine.panelAction(JSON.stringify(upgraded),JSON.stringify(codeControl),
+    JSON.stringify(formPanel.controls))).message,'code sent');
+  fixtures.set('https://upgrade.test/login',request => {
+    assert.equal(JSON.parse(request.body).password,'transient-secret');
+    return '{"ok":true,"token":"fixture-token","user":"fixture-user","message":"logged in"}';
+  });
+  const loggedIn = JSON.parse(await engine.panelAction(JSON.stringify(upgraded),JSON.stringify(submitControl),
+    JSON.stringify(formPanel.controls)));
+  assert.equal(loggedIn.refreshLogin,true);
+  assert.equal(JSON.parse(JSON.parse(states.get(upgraded.bookSourceUrl)).loginInfo).nativeToken,'fixture-token');
+  assert.ok(!states.get(upgraded.bookSourceUrl).includes('transient-secret'),'password never persists');
+  assert.equal(await engine.checkNativeLogin(JSON.stringify(upgraded)),true);
+  fixtures.set('https://upgrade.test/check-in',request => {
+    assert.equal(request.headers.Authorization,'Bearer fixture-token');
+    return '{"message":"checked in"}';
+  });
+  const checkIn = formPanel.controls.find(item => item.action === 'light-native-action:0');
+  assert.equal(JSON.parse(await engine.panelAction(JSON.stringify(upgraded),JSON.stringify(checkIn),'[]')).message,'checked in');
+  const account = formPanel.controls.find(item => item.action === 'light-native-action:1');
+  assert.equal(JSON.parse(await engine.panelAction(JSON.stringify(upgraded),JSON.stringify(account),'[]')).browserUrl,
+    'https://upgrade.test/account');
+  fixtures.set('https://upgrade.test/login','{"ok":false,"message":"denied"}');
+  assert.equal(JSON.parse(await engine.panelAction(JSON.stringify(upgraded),JSON.stringify(submitControl),
+    JSON.stringify(formPanel.controls))).refreshLogin,false);
+  assert.equal(JSON.parse(JSON.parse(states.get(upgraded.bookSourceUrl)).loginInfo).nativeToken,'fixture-token');
+  const readerAction = 'legado-native-action:'+encodeURIComponent(JSON.stringify({
+    r:{url:'https://upgrade.test/check-in',method:'GET',headers:{Authorization:'Bearer fixture-token'},body:'',retry:0},
+    m:'=data.message'}));
+  assert.equal(JSON.parse(await engine.readerAction(JSON.stringify(upgraded),readerAction,'{}')).message,'checked in');
+  await engine.clearLogin(JSON.stringify(upgraded));
+  assert.equal(await engine.checkNativeLogin(JSON.stringify(upgraded)),false);
+  const {NativeSourceService} = load(prefix+'upstream/core/nativesource/NativeSourceService');
+  const waitingDefinition = {sourceFormat:'native',version:1,name:'Wait for',url:'https://wait.test',rate:'60',
+    search:{url:'/search',webView:{waitFor:'#ready',timeout:3},list:'$.books',fields:{name:'$.name',bookUrl:'$.url'}}};
+  const waitingLocal = parser.parse(JSON.stringify(waitingDefinition)).sources[0];
+  waitingLocal.definition = codec.stringify(waitingLocal);
+  const waitingSource = NativeSourceService.importObject(waitingDefinition);
+  const waitTimes = [];
+  fixtures.set('https://wait.test/search',request => {
+    waitTimes.push(Date.now());
+    assert.equal(request.cookieSource,waitingSource.bookSourceUrl);
+    assert.equal(request.maxResponseBytes,2048);
+    assert.match(request.webJs,/#ready/);
+    return '{"books":[{"name":"Ready","url":"/book"}]}';
+  });
+  await LightSourceRuntime.run(waitingSource,waitingLocal,async () => {
+    for(let i=0;i<2;i++) assert.equal((await NativeSourceService.search(waitingSource,new FakeHttpClient(),
+      'Ready',()=>false,2048))[0].name,'Ready');
+    assert.ok(waitTimes[1]-waitTimes[0]>=59,'waitFor respects the source frequency window');
+    const pending = new LightSourceRequest(0);
+    policy.bind(waitingSource,pending);
+    const stopped = NativeSourceService.search(waitingSource,new FakeHttpClient(),'Ready',()=>false,2048);
+    pending.cancel();
+    await assert.rejects(stopped,/取消/);
+    assert.equal(waitTimes.length,2,'cancelled waitFor must not send HTTP');
+  });
+  console.log('PASS: shared engine native pagination, media headers, form login/code, transient secrets, actions and logout');
   source.searchUrl = '/search?page={{page}}';
   fixtures.set('https://engine.test/search?page=2', '{"books":[{"name":"Second","url":"/second"}]}');
   const paged = {...local, definition:JSON.stringify(source)};

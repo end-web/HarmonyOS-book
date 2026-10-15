@@ -1,3 +1,4 @@
+import { SourceEngineHost } from '../host/SourceEngineHost';
 /** Runtime stages are routed independently so enabling ArkWeb for login never changes reading rules. */
 export class SourceRuntimeStage {
   static readonly LOGIN: string = 'login';
@@ -110,7 +111,7 @@ export class BookSourceRuntimeRouter {
         '登录动作由已启用的ArkWeb兼容层执行' : '保持现有ArkWeb登录路径并报告缺少的桥接能力';
       return decision;
     }
-    if (script.trim().length > 0) {
+    if (decision.capabilities.requiresFullJs || (SourceEngineHost.scriptExecutor()?.forceFullScripts && script.trim().length > 0)) {
       decision.runtime = 'arkweb';
       decision.reason = '规则使用完整JavaScript语义，路由到分阶段ArkWeb兼容层';
       return decision;

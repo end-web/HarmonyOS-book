@@ -1,8 +1,9 @@
 import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
+import { PlaybackLoadingIndicator } from '../components/PlaybackLoadingIndicator';
 import { PlayerCoverImage } from '../components/PlayerCoverImage';
 import { BookSourceSwitchSheet } from '../components/BookSourceSwitchSheet';
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, curves, LengthMetrics } from '@kit.ArkUI';
+import { AppStorageV2, curves, FrameCallback, LengthMetrics } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { vibrator } from '@kit.SensorServiceKit';
@@ -29,6 +30,10 @@ import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransi
 import { TextToSpeechService } from '../service/text/TextToSpeechService';
 import { TextToSpeechState } from '../model/TextToSpeechState';
 import { ReaderSpeechSheet } from '../components/ReaderSpeechSheet';
+import { LightSourceBridge } from '../service/rulesource/light/LightSourceBridge';
+import { LocalRuleVoice } from '../service/rulesource/LocalRuleRuntimeTypes';
+import { SourceVoiceDataSource } from '../utils/SourceVoiceDataSource';
+import { PlatformCompat } from '../utils/PlatformCompat';
 
 const DOMAIN = 0xFF00;
 const TAG = 'ListenBook_Player';
@@ -37,6 +42,17 @@ class PlayerSourceSwitchRoute {
   bookId: string = '';
   chapterId: string = '';
   progressMs: number = 0;
+}
+
+class PlayerVoiceLayoutReadyFrame extends FrameCallback {
+  private callback: () => void;
+
+  constructor(callback: () => void) {
+    super();
+    this.callback = callback;
+  }
+
+  onIdle(_timeLeftInNano: number): void { this.callback(); }
 }
 
 /**
@@ -115,8 +131,11 @@ export struct PlayerPage {
   @Local sourceName: ResourceStr = '';
   @Local sourceVoiceAvailable: boolean = false;
   @Local showSourceVoice: boolean = false;
+  @Local showSpeechVoice: boolean = false;
   @Local sourceVoiceDraft: string = '';
   @Local savingSourceVoice: boolean = false;
+  private sourceVoices: SourceVoiceDataSource = new SourceVoiceDataSource();
+  private sourceVoiceScroller: Scroller = new Scroller();
   @Local isFavorite: boolean = false;
   @Local showChapterList: boolean = false;
   @Local chapterGridVisible: boolean = false;
@@ -349,8 +368,9 @@ export struct PlayerPage {
    * 实际同时只会有一个抽屉打开,逐个判断即可。
    */
   private handleBack(): boolean {
-    if (this.showSourceVoice) {
+    if (this.showSourceVoice || this.showSpeechVoice) {
       this.showSourceVoice = false;
+      this.showSpeechVoice = false;
       return true;
     }
     if (this.showSourceSwitch) {
@@ -524,45 +544,49 @@ export struct PlayerPage {
     return Math.max(0, Math.min(100, this.speechState.charOffset * 100 / this.speechState.contentLength));
   }
 
-  private openVoiceSheet(): void {
+  private openVoiceOptions(): void {
     if (this.isSpeechBook()) {
       TextToSpeechService.getInstance().refreshVoices();
+      this.showSpeechVoice = true;
     } else {
       this.sourceVoiceDraft = this.book?.variables?.['__audioSourceVoice'] ?? this.book?.variables?.['custom'] ?? '';
+      this.showSourceVoice = !this.showSourceVoice;
     }
-    this.showSourceVoice = true;
   }
 
   @Builder
   private buildPlaybackVoiceSheet(): void {
-    if (this.isSpeechBook()) {
-      ReaderSpeechSheet({ state: this.speechState, voiceOnly: true,
-        onClose: (): void => { this.showSourceVoice = false; } })
-    } else {
-      this.buildSourceVoiceSheet()
-    }
+    ReaderSpeechSheet({ state: this.speechState, voiceOnly: true,
+      onClose: (): void => { this.showSpeechVoice = false; } })
   }
 
   private async loadSourceName(book: Book): Promise<void> {
     this.sourceVoiceAvailable = false;
+    this.sourceVoices.setVoices([]);
     if (!book.sourceUrl) {
       this.sourceName = $r('app.string.player_source_local');
       return;
     }
     this.sourceName = $r('app.string.player_source_unknown');
     const source = await SourceDataService.getSourceByUrl(book.sourceUrl);
-    if (this.isLeaving || this.book?.sourceUrl !== book.sourceUrl) return;
+    if (this.isLeaving || this.book?.id !== book.id || this.book?.sourceUrl !== book.sourceUrl) return;
     this.sourceName = source?.bookSourceName || $r('app.string.player_source_unknown');
     if (source instanceof LocalRuleSource) {
-      this.sourceVoiceAvailable = new RegExp('\\bcustom\\b').test(
-        source.rawSourceJson + source.jsLib + source.ruleContent.content + source.ruleToc.chapterUrl);
+      try {
+        const voices = await LightSourceBridge.voices(source);
+        if (this.isLeaving || this.book?.id !== book.id || this.book?.sourceUrl !== book.sourceUrl) return;
+        this.sourceVoices.setVoices(voices, book.variables);
+        this.sourceVoiceAvailable = this.sourceVoices.totalCount() > 0 ||
+          !!(book.variables?.['__audioSourceVoice'] ?? book.variables?.['custom']);
+      } catch (_error) {
+        // Missing voice declarations must not interrupt loading the book.
+      }
     }
   }
 
-  private async saveSourceVoice(): Promise<void> {
+  private async saveSourceVoice(voice: string): Promise<void> {
     const book = this.book;
-    if (book === null || this.savingSourceVoice) return;
-    const voice = this.sourceVoiceDraft.trim();
+    if (book === null || this.savingSourceVoice || this.reloadingChapter || this.playerState.isLoading) return;
     const variables: Record<string, string> = JSON.parse(JSON.stringify(book.variables ?? {}));
     if (voice === (variables['__audioSourceVoice'] ?? variables['custom'] ?? '')) {
       this.showSourceVoice = false;
@@ -571,6 +595,8 @@ export struct PlayerPage {
     variables['custom'] = voice;
     variables['__audioSourceVoice'] = voice;
     const updated = this.cloneBookWithChapters(book, book.chapters, book.intro, variables);
+    const previousVoice = this.sourceVoiceDraft;
+    this.sourceVoiceDraft = voice;
     this.savingSourceVoice = true;
     try {
       await DataService.upsertCachedBook(updated);
@@ -586,6 +612,7 @@ export struct PlayerPage {
         await this.reloadCurrentChapter();
       }
     } catch (_error) {
+      this.sourceVoiceDraft = previousVoice;
       if (!this.isLeaving) this.showToast($r('app.string.settings_save_failed'));
     } finally {
       this.savingSourceVoice = false;
@@ -593,20 +620,78 @@ export struct PlayerPage {
   }
 
   @Builder
-  private buildSourceVoiceSheet(): void {
-    Column({ space: AppSpace.Md }) {
-      Text($r('app.string.player_source_voice_title'))
-        .fontSize(AppFont.Title).fontWeight(FontWeight.Bold).fontColor($r('sys.color.font_primary'))
-      Text($r('app.string.player_source_voice_hint'))
-        .fontSize(AppFont.Body).fontColor($r('sys.color.font_secondary'))
-      TextInput({ text: this.sourceVoiceDraft, placeholder: $r('app.string.player_source_voice_default') })
-        .maxLength(128).onChange((value: string): void => { this.sourceVoiceDraft = value; })
-        .enabled(!this.savingSourceVoice)
-      Button($r('app.string.player_source_voice_apply'))
-        .backgroundColor(AppColor.Brand).fontColor(Color.White).width('100%')
-        .enabled(!this.savingSourceVoice).onClick((): void => { this.saveSourceVoice(); })
+  private buildSourceVoiceOption(id: string, label: ResourceStr): void {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: AppSpace.Md }) {
+        Text(label).fontSize(16)
+          .fontColor(this.sourceVoiceDraft === id ? AppColor.Brand : $r('sys.color.font_primary'))
+          .layoutWeight(1).textAlign(TextAlign.Start).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.sourceVoiceDraft === id) {
+          if (this.savingSourceVoice) {
+            LoadingProgress().width(22).height(22).color(AppColor.Brand)
+          } else {
+            SymbolGlyph($r('sys.symbol.checkmark')).fontSize(20).fontColor([AppColor.Brand])
+              .accessibilityText($r('app.string.tts_selected'))
+          }
+        }
+      }.width('100%').padding({ left: AppSpace.Sm, right: AppSpace.Sm })
     }
-    .width('100%').padding(AppSpace.Lg)
+    .width('100%').height(48).borderRadius(AppRadius.Xl - AppSpace.Xs)
+    .backgroundColor(this.sourceVoiceDraft === id ? AppColor.BrandSoft : Color.Transparent)
+    .enabled(!this.savingSourceVoice && !this.reloadingChapter && !this.playerState.isLoading)
+    .onClick((): void => {
+      this.showSourceVoice = false;
+      this.saveSourceVoice(id);
+    }).id(`source-voice-${id || 'default'}`)
+  }
+
+  private selectedSourceVoiceIndex(): number {
+    for (let index = 0; index < this.sourceVoices.totalCount(); index++) {
+      if (this.sourceVoices.getData(index).id === this.sourceVoiceDraft) return index + 1;
+    }
+    return 0;
+  }
+
+  private scrollToSelectedSourceVoice(): void {
+    this.getUIContext().postFrameCallback(new PlayerVoiceLayoutReadyFrame((): void => {
+      if (!this.showSourceVoice || this.isLeaving) return;
+      const index = this.selectedSourceVoiceIndex();
+      this.sourceVoiceScroller.scrollToIndex(index, false, index === 0 ? ScrollAlign.START : ScrollAlign.CENTER);
+    }));
+  }
+
+  private sourceVoiceMenuOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      builder: this.buildSourceVoiceMenu,
+      placement: Placement.BottomRight,
+      popupColor: Color.Transparent,
+      radius: AppRadius.Xl,
+      enableArrow: false,
+      focusable: true,
+      onStateChange: (event): void => {
+        this.showSourceVoice = event.isVisible;
+        if (event.isVisible) this.scrollToSelectedSourceVoice();
+      }
+    };
+    if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    else options.backgroundBlurStyle = AppMaterial.SheetBlur;
+    return options;
+  }
+
+  @LocalBuilder
+  buildSourceVoiceMenu() {
+    Column() {
+      List({ scroller: this.sourceVoiceScroller, initialIndex: this.selectedSourceVoiceIndex() }) {
+        ListItem() {
+          this.buildSourceVoiceOption('', $r('app.string.player_source_voice_default'))
+        }
+        LazyForEach(this.sourceVoices, (voice: LocalRuleVoice): void => {
+          ListItem() { this.buildSourceVoiceOption(voice.id, voice.name) }
+        }, (voice: LocalRuleVoice): string => voice.id)
+      }.width('100%').height(Math.min(288, (this.sourceVoices.totalCount() + 1) * 48))
+        .scrollBar(BarState.Off)
+    }
+    .width(Math.min(180, Math.max(120, this.viewportWidth - 32))).padding(AppSpace.Xs)
   }
 
   private needsChapterHydration(book: Book): boolean {
@@ -1421,10 +1506,11 @@ export struct PlayerPage {
           .accessibilityText($r('app.string.player_source_voice_label'))
           .margin({ right: 8 })
           .enabled(this.isSpeechBook() || (!this.reloadingChapter && !this.playerState.isLoading && !this.savingSourceVoice))
-          .onClick((): void => this.openVoiceSheet()).id('player-voice')
-          .bindSheet($$this.showSourceVoice, this.buildPlaybackVoiceSheet(), {
-            height: this.isSpeechBook() ? '82%' : SheetSize.FIT_CONTENT,
-            preferType: SheetType.BOTTOM, showClose: !this.isSpeechBook(),
+          .onClick((): void => this.openVoiceOptions()).id('player-voice')
+          .bindPopup(this.showSourceVoice, this.sourceVoiceMenuOptions())
+          .bindSheet($$this.showSpeechVoice, this.buildPlaybackVoiceSheet(), {
+            height: '82%',
+            preferType: SheetType.BOTTOM, showClose: false,
             backgroundColor: AppMaterial.SheetBackground,
             blurStyle: AppMaterial.PlayerSheetBlur, systemMaterial: AppMaterial.PlayerSheet
           })
@@ -1612,18 +1698,15 @@ export struct PlayerPage {
 
       Stack({ alignContent: Alignment.Center }) {
         if (this.playbackLoading()) {
-          LoadingProgress()
-            .width(36)
-            .height(36)
-            .color(AppColor.Brand)
+          PlaybackLoadingIndicator({ indicatorSize: 36 })
+        } else {
+          SymbolGlyph(this.playbackPlaying()
+            ? $r('sys.symbol.pause_round_triangle_fill') : $r('sys.symbol.play_round_triangle_fill'))
+            .fontSize(this.isCompactPlayer() ? 56 : 64)
+            .fontWeight(this.playbackPlaying() ? FontWeight.Medium : FontWeight.Normal)
+            .fontColor(['#FFFFFF'])
+            .symbolEffect(new ReplaceSymbolEffect(EffectScope.WHOLE), this.playbackPlaying() ? 1 : 0)
         }
-        SymbolGlyph(this.playbackPlaying()
-          ? $r('sys.symbol.pause_round_triangle_fill') : $r('sys.symbol.play_round_triangle_fill'))
-          .fontSize(this.isCompactPlayer() ? 56 : 64)
-          .fontWeight(this.playbackPlaying() ? FontWeight.Medium : FontWeight.Normal)
-          .fontColor(['#FFFFFF'])
-          .symbolEffect(new ReplaceSymbolEffect(EffectScope.WHOLE), this.playbackPlaying() ? 1 : 0)
-          .opacity(this.playbackLoading() ? 0 : 1)
       }
       .width(this.isCompactPlayer() ? 56 : 64)
       .height(this.isCompactPlayer() ? 56 : 64)

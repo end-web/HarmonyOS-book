@@ -138,7 +138,7 @@ function load(name) {
 
   const settle = () => new Promise(resolve => setImmediate(resolve));
   const makeBook = id => ({ id, sourceUrl: source.bookSourceUrl,
-    chapters: Array.from({ length: 6 }, (_, i) => ({ id: `${id}-c${i}`, title: `chapter ${i}`,
+    chapters: Array.from({ length: 6 }, (_, i) => ({ id: `${id}-c${i}`, title: `chapter ${i}`, index: i + 1,
       source: { type: 'url', value: `https://source.invalid/${id}/${i}` } })) });
   const freshCache = async () => {
     const instance = new ChapterCacheService();
@@ -153,7 +153,10 @@ function load(name) {
   sourceService.prepareAudioChapter = async () => {};
   sourceService.getAudioResolveTimeoutMs = (_source, fallback) => fallback;
   const resolved = [];
-  sourceService.resolveAudioRequest = async (_source, url) => {
+  sourceService.resolveAudioRequest = async (_source, url, _variables, chapterVariables) => {
+    const index = Number(url.split('/').at(-1));
+    assert.equal(chapterVariables.chapterName, `chapter ${index}`);
+    assert.equal(chapterVariables.chapterIndex, String(index));
     resolved.push(url);
     return { url: `${url}.mp3`, headers: {} };
   };

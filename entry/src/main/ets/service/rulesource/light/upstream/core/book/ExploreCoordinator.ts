@@ -1,6 +1,5 @@
 import { NativeSourceService } from '../nativesource/NativeSourceService';
 import { BookSource, ExploreRule, SearchBook } from '../../model/data/Book';
-import { appDb } from '../../model/data/AppDatabase';
 import { HttpClient } from '../http/HttpClient';
 import { AnalyzeUrl } from '../rule/AnalyzeUrl';
 import { AnalyzeRule } from '../rule/AnalyzeRule';
@@ -8,15 +7,12 @@ import { RuleContext } from '../rule/RuleContext';
 import { JsRuntime } from '../rule/JsRuntime';
 import { VerificationSupport } from '../http/VerificationSupport';
 import { EncodedSourceUrl } from './EncodedSourceUrl';
-import { BookSourceDataUrlSupport } from './BookSourceDataUrlSupport';
 import { BookUrlResolver } from './BookUrlResolver';
 import { PageCandidateUrl } from '../rule/PageCandidateUrl';
 import { BookSourceScriptRunner } from './BookSourceScriptRunner';
-import { BookSourceMetadataSupport } from './BookSourceMetadataSupport';
 import { BookTypeSupport } from './BookTypeSupport';
 import { BookSourceRuntimeRouter, SourceRuntimeStage } from './BookSourceRuntimeRouter';
 import { BookSourceStageWebRuntime, StageWebRuntimeRequest } from './BookSourceStageWebRuntime';
-import { BookSourceStageRuleSupport } from './BookSourceStageRuleSupport';
 import { RuleExecutionService } from '../rule/RuleExecutionService';
 import { RuleBatchExecutionRequest, RuleBatchExecutionResult, RuleFieldRequest } from '../rule/RuleExecutionModels';
 import { CooperativeScheduler } from '../concurrency/CooperativeScheduler';
@@ -25,6 +21,10 @@ import { QuickJsObservationContext } from '../script/QuickJsRuntimeStatus';
 import { RuleExecutionTarget, RuleValue } from '../rule/RuleValue';
 import { BookSourceDebugContext } from './BookSourceDebugModels';
 import { LogText } from '../../utils/LogText';
+import { appDb } from '../../model/data/AppDatabase';
+import { BookSourceDataUrlSupport } from './BookSourceDataUrlSupport';
+import { BookSourceMetadataSupport } from './BookSourceMetadataSupport';
+import { BookSourceStageRuleSupport } from './BookSourceStageRuleSupport';
 
 export interface ExploreEntry {
   title: string;
@@ -154,7 +154,7 @@ export class ExploreCoordinator {
       if (!source.enabledExplore || !source.exploreUrl) continue;
       if (sourceUrl && source.bookSourceUrl !== sourceUrl) continue;
       if (NativeSourceService.isNative(source)) {
-        entries.push(...await this.nativeEntries(source));
+        entries.push(...await this.nativeEntries(source, debugContext));
         continue;
       }
       if (!source.variable && this.requiresSourceVariable(source)) {
@@ -179,7 +179,9 @@ export class ExploreCoordinator {
     this.noticeMessage = '';
     const source = await appDb.getBookSource(entry.sourceUrl);
     if (!source) return [];
-    if (NativeSourceService.isNative(source)) return await this.exploreNative(source, entry, page, maxItems);
+    if (NativeSourceService.isNative(source)) {
+      return await this.exploreNative(source, entry, page, maxItems, debugContext);
+    }
     try {
       VerificationSupport.clearVerification();
       const au = new AnalyzeUrl(source, this.http);
@@ -574,7 +576,8 @@ export class ExploreCoordinator {
   }
 
   /** 原生书源的发现分类：筛选项来自定义里的变量，分类列表不经过脚本引擎。 */
-  private async nativeEntries(source: BookSource): Promise<ExploreEntry[]> {
+  private async nativeEntries(source: BookSource,
+    debugContext: BookSourceDebugContext | null = null): Promise<ExploreEntry[]> {
     this.filterSelectors[source.bookSourceUrl] = NativeSourceService.filters(source).map((group) => {
       const selector = new ExplorePlatformSelector();
       selector.parameter = group.title;
@@ -589,11 +592,12 @@ export class ExploreCoordinator {
     console.info('[ExploreCoordinator] native menus:', source.bookSourceName,
       this.filterSelectors[source.bookSourceUrl].map((item: ExplorePlatformSelector): string =>
         `${item.parameter}=${item.currentLabel}`).join(' '), cached ? 'cached' : 'fetch');
-    if (cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) return cached.entries.slice();
+    // 调试时不用缓存，否则执行明细里看不到这次请求。
+    if (!debugContext && cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) return cached.entries.slice();
     const entries: ExploreEntry[] = [];
     try {
       let groupTitle = '';
-      for (const menu of await NativeSourceService.exploreMenus(source, this.http)) {
+      for (const menu of await NativeSourceService.exploreMenus(source, this.http, debugContext)) {
         if (!menu.target) {
           groupTitle = menu.title;
           continue;
@@ -615,9 +619,11 @@ export class ExploreCoordinator {
   }
 
   private async exploreNative(source: BookSource, entry: ExploreEntry, page: number,
-    maxItems: number): Promise<SearchBook[]> {
+    maxItems: number, debugContext: BookSourceDebugContext | null = null): Promise<SearchBook[]> {
     try {
-      const found = await NativeSourceService.explore(source, this.http, entry.url, page);
+      // 清掉上一次遗留的待验证地址，发现页据此判断这次是否需要去验证。
+      VerificationSupport.clearVerification();
+      const found = await NativeSourceService.explore(source, this.http, entry.url, page, debugContext);
       const books: SearchBook[] = [];
       for (const book of maxItems > 0 ? found.slice(0, Math.max(1, maxItems)) : found) {
         this.sanitizeExploreBook(book);

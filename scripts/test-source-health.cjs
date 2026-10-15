@@ -21,6 +21,7 @@ const { LocalRuleSource, LocalRuleSourceStatus: status } = model;
 let searchCalls = 0, exploreCalls = 0, contentCalls = 0;
 let searchError = true, emptySearch = false, emptyExplore = false, paidOnly = false;
 let cancel = false, cancelOnSearch = false, cancelOnExplore = false;
+let discoveryEntries = [{ url: 'https://fixture/discover' }];
 const candidate = { name: '示例', bookUrl: 'https://fixture/book', contentType: 'text', variables: {} };
 const dispatcher = {
   searchForHealthCheck: async () => {
@@ -41,7 +42,7 @@ const { BookSourceService: service } = compile('service/BookSourceService.ets', 
   './DownloadPolicy': compile('service/DownloadPolicy.ets'),
   './rulesource/LocalRuleDispatcher': { LocalRuleDispatcher: dispatcher },
   './rulesource/LocalRulePanelService': { LocalRulePanelService: {
-    load: async () => ({ entries: [{ url: 'https://fixture/discover' }] })
+    load: async () => ({ entries: discoveryEntries })
   } },
   './rulesource/LocalRuleDiagnostics': { LocalRuleDiagnostics: { open: () => ({}), close() {} } }
 });
@@ -116,6 +117,95 @@ async function run() {
   await assert.rejects(service.testLocalSourceAvailability(source(), '测试', () => cancel), /已取消/);
   console.log('PASS: single/bulk health fallback, text/audio, missing rules, empty discovery, paid chapters, disabled discovery, empty/successful search and cancellation');
 }
+async function testDiscoveryEarlyExit() {
+  cancel = false;
+  cancelOnExplore = false;
+  discoveryEntries = Array.from({ length: 10 }, (_, i) => ({ url: `https://fixture/category/${i}` }));
+  const originalExplore = dispatcher.explore;
+  const originalInfo = service.getBookInfo;
+  const visited = [], checked = [];
+  let allEmpty = false;
+  dispatcher.explore = async (_source, url) => {
+    visited.push(url);
+    const index = Number(url.split('/').pop());
+    return { books: allEmpty ? [] : [candidate, { ...candidate, bookUrl: `https://fixture/book/${index}` }] };
+  };
+  service.getBookInfo = async (_source, url) => {
+    checked.push(url);
+    return originalInfo();
+  };
+  try {
+    assert.equal((await service.testLocalSourceExploreReading(source())).status, status.READY);
+    assert.equal(visited.length, 1, 'first valid book must skip the remaining categories');
+    assert.equal(checked.length, 1);
+    visited.length = 0; checked.length = 0;
+    service.getBookInfo = async (_source, url) => {
+      checked.push(url);
+      if (url === candidate.bookUrl || url.endsWith('/0')) throw new Error('书籍失效');
+      return originalInfo();
+    };
+    assert.equal((await service.testLocalSourceExploreReading(source())).status, status.READY);
+    assert.equal(visited.length, 2, 'failed candidates must continue into the next category');
+    assert.equal(checked.filter(url => url === candidate.bookUrl).length, 1, 'duplicates must not be revalidated');
+    visited.length = 0; checked.length = 0;
+    service.getBookInfo = async (_source, url) => { checked.push(url); throw new Error('书籍失效'); };
+    assert.equal((await service.testLocalSourceExploreReading(source())).status, status.FAILED);
+    assert.equal(checked.length, 4, 'at most four unique books are sampled');
+    assert.equal(visited.length, 3);
+    visited.length = 0; checked.length = 0; allEmpty = true;
+    assert.equal((await service.testLocalSourceExploreReading(source())).status, status.FAILED);
+    assert.equal(visited.length, 8, 'empty discovery remains bounded to eight categories');
+    assert.equal(checked.length, 0);
+    allEmpty = false; visited.length = 0;
+    service.getBookInfo = async () => { cancel = true; throw new Error('停止'); };
+    const cancelled = await service.testLocalSourceExploreReading(source(), () => cancel);
+    assert.match(cancelled.message, /已取消/);
+    assert.equal(visited.length, 1, 'cancellation must stop remaining categories');
+  } finally {
+    dispatcher.explore = originalExplore;
+    service.getBookInfo = originalInfo;
+    cancel = false;
+  }
+  console.log('PASS: discovery early exit, failed-book fallback, deduplication, sampling bounds and cancellation');
+}
+async function testBulkRefill() {
+  const { LocalRuleSourceBulkTester: Tester } = compile('service/rulesource/LocalRuleSourceBulkTester.ets', {
+    '../../model/LocalRuleSource': model,
+    './LocalRuleBrowserLoginCoordinator': { LocalRuleBrowserLoginCoordinator: {
+      openScope: () => 1, closeScope() {}, cancelScope() {}
+    } }
+  });
+  let started = 0, active = 0, maxActive = 0;
+  const saved = [];
+  const executor = { test: async () => {
+    started++; active++; maxActive = Math.max(maxActive, active);
+    await Promise.resolve(); active--;
+    return { status: status.READY, message: 'ready' };
+  } };
+  const items = Array.from({ length: 13 }, (_, i) => {
+    const item = source(); item.bookSourceUrl += `/${i}`; return item;
+  });
+  const tester = new Tester(executor, { saveTested: async batch => {
+    if (!saved.length) assert.equal(started, 12, 'refill the sixth vacant slot before persisting results');
+    saved.push(...batch);
+  } });
+  assert.equal((await tester.run(items, '测试')).completed, 13);
+  assert.equal(saved.length, 13);
+  assert.equal(new Set(saved.map(item => item.bookSourceUrl)).size, 13);
+  assert.ok(maxActive <= 6);
+  assert.ok(items.every(item => !item.enabled), 'testing must preserve enabled state');
+  const broken = new Tester(executor, { saveTested: async () => { throw new Error('save failed'); } });
+  await assert.rejects(broken.run(items, '测试'), /save failed/);
+  const cancelledSaved = [];
+  const cancelled = new Tester(executor, { saveTested: async batch => cancelledSaved.push(...batch) });
+  const result = await cancelled.run(items, '测试', progress => {
+    if (progress.completed === 1) cancelled.cancel();
+  });
+  assert.equal(result.cancelled, true);
+  assert.equal(cancelledSaved.length, result.completed);
+  assert.ok(result.completed < items.length);
+  console.log('PASS: bulk refill before persistence, concurrency limit, result persistence, save failure and cancellation');
+}
 async function testDebug() {
   const diagnosticsModule = compile('service/rulesource/LocalRuleDiagnostics.ets');
   const diagnostics = diagnosticsModule.LocalRuleDiagnostics;
@@ -184,4 +274,5 @@ async function testDebug() {
   assert.equal(calls.includes('panel'), false);
   console.log('PASS: debug full-chain HTTP 400 fallback, text/audio, category fallback, public chapter variables, search-only scope, combined errors and cancellation');
 }
-run().then(testDebug).catch(error => { console.error(error); process.exitCode = 1; });
+run().then(testDiscoveryEarlyExit).then(testBulkRefill).then(testDebug)
+  .catch(error => { console.error(error); process.exitCode = 1; });

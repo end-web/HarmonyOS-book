@@ -1,10 +1,8 @@
-import { LightSourceRequestPolicy } from '../../../LightSourceRequestPolicy';
-import { LightSourceTiming } from '../../../LightSourceTiming';
-import { LightSourceRuntime } from '../../../LightSourceRuntime';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 import { util } from '@kit.ArkTS';
 import { webview } from '@kit.ArkWeb';
 import { Book, BookChapter, BookSource } from '../../model/data/Book';
-import { AppDatabase } from '../../model/data/AppDatabase';
+import { BookSourceRuntimeStore } from './BookSourceRuntimeStore';
 import { CookieStore } from '../http/CookieStore';
 import { HttpClient, HttpResponse } from '../http/HttpClient';
 import { AnalyzeUrl } from '../rule/AnalyzeUrl';
@@ -201,7 +199,25 @@ export class BookSourceStageWebRuntime {
   }
 
   async waitUntilAvailable(timeoutMs: number = 5000): Promise<boolean> {
-    return true;
+    if (SourceEngineHost.scriptExecutor()) return true;
+    if (this.isAvailable()) return true;
+    const startedAt = Date.now();
+    let deadline = startedAt + Math.max(100, timeoutMs);
+    while (Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      if (this.isAvailable()) return true;
+      // Past the grace window a plain race is unlikely; recover a stuck host instead of
+      // failing into the permanent "not ready" notice (see recoverAvailability).
+      if (Date.now() - startedAt >= BookSourceStageWebRuntime.RECOVERY_GRACE_MS &&
+        Date.now() - this.lastRecoveryAttemptAt >= BookSourceStageWebRuntime.RECOVERY_INTERVAL_MS) {
+        this.lastRecoveryAttemptAt = Date.now();
+        const rebuildRequested = await this.recoverAvailability();
+        if (rebuildRequested) {
+          deadline = Math.max(deadline, Date.now() + BookSourceStageWebRuntime.RECOVERY_REBUILD_WAIT_MS);
+        }
+      }
+    }
+    return this.isAvailable();
   }
 
   detach(controller: webview.WebviewController): void {
@@ -215,12 +231,13 @@ export class BookSourceStageWebRuntime {
   }
 
   isAvailable(): boolean {
-    return true;
+    if (SourceEngineHost.scriptExecutor()) return true;
+    return this.findReadyController() !== null;
   }
 
   execute(request: StageWebRuntimeRequest): Promise<StageWebRuntimeResult> {
     return new Promise<StageWebRuntimeResult>((resolve, reject) => {
-      if (LightSourceRequestPolicy.isCancelled(request.source) || (request.ownerId && this.cancelledOwners.has(request.ownerId))) {
+      if (SourceEngineHost.isCancelled(request.source) || (request.ownerId && this.cancelledOwners.has(request.ownerId))) {
         reject(new Error('书源脚本任务已取消'));
         return;
       }
@@ -231,7 +248,7 @@ export class BookSourceStageWebRuntime {
         reject(new Error(`书源脚本输入过大(${Math.ceil(estimatedBytes / 1024)} KiB)`));
         return;
       }
-      if (this.workers.size >= BookSourceStageWebRuntime.MAX_QUEUED_TASKS ||
+      if (this.tasks.length + this.workers.size >= BookSourceStageWebRuntime.MAX_QUEUED_TASKS ||
         this.queuedBytes + estimatedBytes > BookSourceStageWebRuntime.MAX_QUEUED_BYTES) {
         reject(new Error('书源脚本队列繁忙，请稍后重试'));
         return;
@@ -241,19 +258,25 @@ export class BookSourceStageWebRuntime {
       task.estimatedBytes = estimatedBytes;
       task.resolve = resolve;
       task.reject = reject;
-      const worker = new BookSourceStageWebRuntime();
-      worker.cancelledOwners = this.cancelledOwners;
-      worker.caches = this.caches;
-      worker.cacheTouchedAt = this.cacheTouchedAt;
-      worker.activeTask = task;
-      this.workers.set(task, worker);
-      this.queuedBytes += estimatedBytes;
-      worker.executeTask(request).then(resolve, reject).finally(() => {
-        this.workers.delete(task);
-        this.queuedBytes = Math.max(0, this.queuedBytes - estimatedBytes);
-        worker.activeTask = null;
-        worker.activeHttpClient = null;
+      if (SourceEngineHost.scriptExecutor()?.concurrent) {
+        const worker = new BookSourceStageWebRuntime();
+        worker.cancelledOwners = this.cancelledOwners;
+        worker.caches = this.caches;
+        worker.cacheTouchedAt = this.cacheTouchedAt;
+        worker.activeTask = task;
+        this.workers.set(task, worker);
+        this.queuedBytes += estimatedBytes;
+        worker.executeTask(request).then(resolve, reject).finally(() => {
+          this.workers.delete(task);
+          this.queuedBytes = Math.max(0, this.queuedBytes - estimatedBytes);
+          worker.activeTask = null;
+          worker.activeHttpClient = null;
       });
+      return;
+      }
+      this.tasks.push(task);
+      this.queuedBytes += estimatedBytes;
+      this.startNext();
     });
   }
 
@@ -433,7 +456,7 @@ export class BookSourceStageWebRuntime {
     // Coordinators may hold a source snapshot while the login/editor page saves a new token.
     // Refresh missing runtime fields before executing so a stale empty snapshot cannot issue an
     // unauthenticated request or overwrite the newly saved state when the stage completes.
-    const persistedAtStart = await AppDatabase.getInstance(request.source).getBookSource(request.source.bookSourceUrl);
+    const persistedAtStart = await BookSourceRuntimeStore.forSource(request.source)?.getBookSource(request.source.bookSourceUrl);
     if (persistedAtStart) {
       // Persisted state is authoritative: the login panel (tone/type/explore switches) and the
       // editor write runtime state through the database, while coordinators may still hold a
@@ -467,8 +490,8 @@ export class BookSourceStageWebRuntime {
       const buildStartedAt = Date.now();
       const script = this.buildScript(request, responses, stringResults, cookies, cacheState,
         fixedNow, randomSeed, journal.responseHeaders);
-      LightSourceTiming.end(LightSourceTiming.id(request.source), 'stage-script-build', buildStartedAt, `replay=${stepIndex}`);
-      const raw = await this.runJavaScript(script, request.source.bookSourceUrl, LightSourceTiming.id(request.source));
+      SourceEngineHost.end(SourceEngineHost.id(request.source), 'stage-script-build', buildStartedAt, `replay=${stepIndex}`);
+      const raw = await this.runJavaScript(script, request.source.bookSourceUrl, SourceEngineHost.id(request.source));
       this.ensureNotCancelled(request);
       const step = this.parseStep(raw);
       if (request.debugContext && step.logs) {
@@ -615,7 +638,7 @@ export class BookSourceStageWebRuntime {
       // script cache/runtime state only after a pass finishes, otherwise a placeholder can poison
       // the next evaluation (for example, caching an empty paragraph-comment summary).
       cacheState = this.storeCache(sourceKey, nextCacheState, cacheState);
-      const persistedBeforeSave = await AppDatabase.getInstance(request.source).getBookSource(request.source.bookSourceUrl);
+      const persistedBeforeSave = await BookSourceRuntimeStore.forSource(request.source)?.getBookSource(request.source.bookSourceUrl);
       if (persistedBeforeSave) {
         // Empty state from a non-login task is never an explicit logout. Preserve a token/header
         // that another page saved while this asynchronous task was running.
@@ -625,7 +648,7 @@ export class BookSourceStageWebRuntime {
           persistedBeforeSave.loginInfo || request.source.loginInfo || '',
           step.javaState, step.sourceState);
       }
-      await AppDatabase.getInstance(request.source).updateBookSourceLoginRuntime(request.source.bookSourceUrl,
+      await BookSourceRuntimeStore.forSource(request.source)?.updateBookSourceLoginRuntime(request.source.bookSourceUrl,
         request.source.variable || '', request.source.loginHeader || '', request.source.loginInfo || '');
       return step;
     }
@@ -797,7 +820,23 @@ export class BookSourceStageWebRuntime {
   }
 
   private async runJavaScript(script: string, sourceUrl: string, timingId: number): Promise<string> {
-    return LightSourceRuntime.evaluate(script, sourceUrl, timingId);
+    if (SourceEngineHost.scriptExecutor()) return SourceEngineHost.evaluate(script, sourceUrl, timingId);
+    let controller = this.findReadyController();
+    // A routed detail page can mount its hidden Web host while the Index host is still alive.
+    // During onControllerAttached -> onPageBegin -> onPageEnd, `this.controller` temporarily
+    // points at an unready controller although another attached controller is usable. Also, the
+    // database refresh at the start of a task gives that lifecycle race a chance to happen after
+    // the queue has already accepted the task. Resolve a ready attached controller at the actual
+    // execution point and wait for remount/recycle recovery when none is ready.
+    if (!controller) {
+      const available = await this.waitUntilAvailable(5000);
+      if (available) controller = this.findReadyController();
+    }
+    if (!controller) {
+      console.warn('[StageWebRuntime] unavailable after wait, ' + this.describeState());
+      throw new Error('书源脚本运行环境未就绪');
+    }
+    return this.runJavaScriptOnController(controller, script);
   }
 
   private runJavaScriptOnController(controller: webview.WebviewController, script: string): Promise<string> {

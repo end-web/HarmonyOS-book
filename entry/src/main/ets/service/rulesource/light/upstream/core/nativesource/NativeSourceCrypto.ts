@@ -56,8 +56,8 @@ function cipherSpec(raw: string, keyLength: number): CipherSpec {
   throw new Error(`不支持的加密算法：${raw || '空'}`);
 }
 
-function symmetric(decrypting: boolean, transformation: string, data: Uint8Array, keyBytes: Uint8Array,
-  iv: Uint8Array): number[] {
+function symmetricBytes(decrypting: boolean, transformation: string, data: Uint8Array, keyBytes: Uint8Array,
+  iv: Uint8Array): Uint8Array {
   const spec = cipherSpec(transformation, keyBytes.length);
   if (spec.needsIv && iv.length === 0) throw new Error(`${transformation} 需要提供 IV`);
   const key = cryptoFramework.createSymKeyGenerator(spec.keyAlgorithm).convertKeySync({ data: keyBytes });
@@ -66,13 +66,30 @@ function symmetric(decrypting: boolean, transformation: string, data: Uint8Array
     const params: cryptoFramework.IvParamsSpec | null = spec.needsIv ? { algName: 'IvParamsSpec', iv: { data: iv } } : null;
     cipher.initSync(decrypting ? cryptoFramework.CryptoMode.DECRYPT_MODE : cryptoFramework.CryptoMode.ENCRYPT_MODE,
       key, params);
-    return toList(cipher.doFinalSync({ data: data }).data);
+    return cipher.doFinalSync({ data: data }).data;
   } finally {
     key.clearMem();
   }
 }
 
+function symmetric(decrypting: boolean, transformation: string, data: Uint8Array, keyBytes: Uint8Array,
+  iv: Uint8Array): number[] {
+  return toList(symmetricBytes(decrypting, transformation, data, keyBytes, iv));
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = (hex || '').replace(/[^0-9a-f]/gi, '');
+  const bytes = new Uint8Array(Math.floor(clean.length / 2));
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
 export class NativeSourceCrypto {
+  /** 解密整张图片这类大块数据：不经过表达式引擎，密钥与 IV 用十六进制传入。 */
+  static decryptBytes(transformation: string, data: Uint8Array, keyHex: string, ivHex: string): Uint8Array {
+    return symmetricBytes(true, transformation, data, hexToBytes(keyHex), hexToBytes(ivHex));
+  }
+
   static run(name: string, args: Object[]): Object {
     switch (name) {
       case 'hash': {

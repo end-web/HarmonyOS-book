@@ -84,3 +84,56 @@ created.exploreUrl = '/explore';
 assert.equal(parser.parse(codec.stringify(created)).sources[0].ruleContent.content, '$.text');
 assert.equal(parser.parse(codec.stringify(created)).sources[0].enabledExplore, false);
 console.log(`PASS: unchanged/tested export ${Buffer.byteLength(input)} bytes; 5 stable round trips, edits, compact rules, extensions, credentials and new sources`);
+
+const { NativeSourceDraft } = load(path.join(root, 'service/rulesource/NativeSourceDraft.ts'));
+const nativeInput = {sourceFormat:'native',version:1,name:'原生测试',url:'https://native.test',type:'audio',
+  enabled:true,search:{url:'/search',headers:{'X-Token':'keep'},list:'$.items',fields:{name:'$.name',bookUrl:'$.url'}},
+  vars:[{key:'mode',label:'模式',options:['text','audio'],default:'audio',filter:true}],
+  futureField:{nested:['unchanged',7,null]},toc:{url:'/toc',reverse:false,list:'$.chapters',fields:{title:'$.title',url:'$.url'}},
+  content:{audio:'$.audio'},explore:{list:'$.items',fields:{name:'$.name',bookUrl:'$.url'}},
+  login:{url:'https://native.test/login',cookies:['sid']}};
+const draft = new NativeSourceDraft(JSON.stringify(nativeInput));
+const field = (parent,key) => draft.fields(parent).find(item=>item.key===key);
+assert.equal(draft.serialize(),JSON.stringify(nativeInput),'opening form must not materialize optional fields');
+draft.edit(field('','name'),'修改原生名称');
+draft.edit(field('/search/fields','name'),'$.title');
+draft.edit(field('/toc','reverse'),'true');
+draft.edit(field('/vars/0','filter'),'false');
+draft.add('/search/headers','X-New','string');
+draft.edit(field('/search/headers','X-New'),'token');
+draft.add('/explore/menus','','object');
+draft.edit(field('/explore/menus/0','title'),'新分类');
+draft.edit(field('/explore/menus/0','url'),'/new');
+draft.add('/vars/0/options','','string');
+draft.edit(field('/vars/0/options','2'),'comic');
+const secondOptionId = draft.stableKey('/vars/0/options/1');
+draft.remove(field('/vars/0/options','0'));
+assert.equal(draft.stableKey('/vars/0/options/0'),secondOptionId,'array node identity survives preceding removal');
+draft.remove(field('/search/headers','X-New'));
+draft.remove(field('','enabled'));
+assert.equal(field('','enabled').value,'true','omitted enabled flag follows native default');
+assert.throws(()=>draft.add('/search/headers','X-Token','string'));
+assert.throws(()=>draft.add('/search/headers','__proto__','object'));
+assert.throws(()=>draft.edit(field('','url'),'https://other.test'));
+const result = JSON.parse(draft.serialize());
+assert.equal(result.toc.reverse,true);
+assert.equal(result.vars[0].filter,false);
+assert.deepEqual(result.vars[0].options,['audio','comic']);
+assert.deepEqual(result.futureField,nativeInput.futureField);
+assert.deepEqual(result.search.headers,{'X-Token':'keep'});
+assert.equal(result.explore.menus[0].title,'新分类');
+const parsedNative = parser.parse(draft.serialize());
+assert.equal(parsedNative.sources.length,1,parsedNative.message);
+assert.equal(parsedNative.sources[0].engine,'light-native');
+const exportedNative = JSON.parse(codec.stringify(parsedNative.sources[0]));
+assert.equal(exportedNative.name,'修改原生名称');
+assert.equal(exportedNative.search.fields.name,'$.title');
+assert.deepEqual(exportedNative.futureField,nativeInput.futureField);
+draft.edit(field('/content/comments','max'),'not-a-number');
+assert.throws(()=>draft.serialize(),'invalid number cannot silently retain or save an old value');
+draft.edit(field('/content/comments','max'),'10');
+assert.equal(JSON.parse(draft.serialize()).content.comments.max,10);
+draft.add('/search/headers','escaped/key~name','string');
+draft.edit(field('/search/headers','escaped/key~name'),'preserved');
+assert.equal(JSON.parse(draft.serialize()).search.headers['escaped/key~name'],'preserved');
+console.log('PASS: native grouped fields, nested maps/arrays, stable item identities, type preservation, unknown fields, form/JSON round trip and validation');

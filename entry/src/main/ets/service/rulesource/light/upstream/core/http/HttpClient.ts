@@ -1,6 +1,4 @@
-import { LightSourceRequestPolicy } from '../../../LightSourceRequestPolicy';
-import { LightSourceTiming } from '../../../LightSourceTiming';
-import { LightSourceRuntime } from '../../../LightSourceRuntime';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 import http from '@ohos.net.http';
 import { util } from '@kit.ArkTS';
 import { CookieStore } from './CookieStore';
@@ -75,7 +73,7 @@ export class HttpClient {
       response = { url: req.url || '', statusCode: 0, headers: {}, body: '', success: false,
         error: error instanceof Error ? error.message : String(error || 'network error') };
     }
-    LightSourceTiming.end(req.timingId || 0, 'http-total', startedAt, `status=${response.statusCode} success=${response.success} web=${!!req.useWebView}`);
+    SourceEngineHost.end(req.timingId || 0, 'http-total', startedAt, `status=${response.statusCode} success=${response.success} web=${!!req.useWebView}`);
     if (req.debugContext) {
       const trace = new BookSourceDebugNetworkTrace();
       trace.method = req.method || 'GET';
@@ -98,27 +96,28 @@ export class HttpClient {
       return { url: '', statusCode: 0, headers: {}, body: '', success: false, error: 'empty url' };
     }
     if (req.useWebView) {
-      return await LightSourceRuntime.withWeb(req.cookieSource || '', async () => {
-      const runtime = WebBookFetchRuntime.get();
-      // Only wait for the hidden ArkWeb host to attach. A busy host is healthy: fetch() queues
-      // subsequent requests and runs them in order instead of misreporting it as "not ready".
-      const attached = await runtime.waitUntilAttached(8000);
-      if (!attached) {
-        return { url: req.url, statusCode: 0, headers: {}, body: '', success: false,
-          error: 'WebView 抓取环境未挂载，请重新进入当前页面' };
-      }
-      return await runtime.fetch({
-        url: req.url,
-        cookieSource: req.cookieSource,
-        method: req.method,
-        headers: { ...this.defaultHeaders, ...req.headers },
-        body: req.body,
-        webJs: req.webJs,
-        webJsAcceptPattern: req.webJsAcceptPattern,
-        webJsMaxAttempts: req.webJsMaxAttempts,
-        timeoutMs: Math.max(req.connectTimeout || 0, req.readTimeout || 0, this.timeout),
-        maxResponseBytes: req.maxResponseBytes
-      });
+      return await SourceEngineHost.withWeb(req.cookieSource || '', async () => {
+        const runtime = WebBookFetchRuntime.get();
+        // Only wait for the hidden ArkWeb host to attach. A busy host is healthy: fetch() queues
+        // subsequent requests and runs them in order instead of misreporting it as "not ready".
+        const attached = await runtime.waitUntilAttached(8000);
+        if (!attached) {
+          return { url: req.url, statusCode: 0, headers: {}, body: '', success: false,
+            error: 'WebView 抓取环境未挂载，请重新进入当前页面' };
+        }
+        if (req.cancelCheck?.()) return {url:req.url,statusCode:0,headers:{},body:'',success:false,error:'书源请求已取消'};
+        return await runtime.fetch({
+          url: req.url,
+          cookieSource: req.cookieSource,
+          method: req.method,
+          headers: { ...this.defaultHeaders, ...req.headers },
+          body: req.body,
+          webJs: req.webJs,
+          webJsAcceptPattern: req.webJsAcceptPattern,
+          webJsMaxAttempts: req.webJsMaxAttempts,
+          timeoutMs: Math.max(req.connectTimeout || 0, req.readTimeout || 0, this.timeout),
+          maxResponseBytes: req.maxResponseBytes
+        });
       });
     }
     const response = await this.executeWithProtocol(req, false);
@@ -163,7 +162,7 @@ export class HttpClient {
         const onHeadersReceive = (value: Object): void => {
           if (!headersTimed && streamSentAt > 0) {
             headersTimed = true;
-            LightSourceTiming.end(req.timingId || 0, 'http-stream-first-headers', streamSentAt);
+            SourceEngineHost.end(req.timingId || 0, 'http-stream-first-headers', streamSentAt);
           }
           streamedHeaders = (value || {}) as Record<string, string>;
           const contentLength = Number(this.findHeader(streamedHeaders, 'content-length') || '0');
@@ -176,7 +175,7 @@ export class HttpClient {
           if (responseTooLarge) return;
           if (!dataTimed && streamSentAt > 0) {
             dataTimed = true;
-            LightSourceTiming.end(req.timingId || 0, 'http-stream-first-data', streamSentAt);
+            SourceEngineHost.end(req.timingId || 0, 'http-stream-first-data', streamSentAt);
           }
           receivedBytes += chunk.byteLength;
           if (receivedBytes > maxResponseBytes) {
@@ -204,7 +203,7 @@ export class HttpClient {
           const streamStartedAt = Date.now();
           streamSentAt = streamStartedAt;
           try { responseCode = await client.requestInStream(req.url, options); }
-          finally { LightSourceTiming.end(req.timingId || 0, 'http-stream-transport', streamStartedAt, 'http1=' + forceHttp1); }
+          finally { SourceEngineHost.end(req.timingId || 0, 'http-stream-transport', streamStartedAt, 'http1=' + forceHttp1); }
         } catch (error) {
           streamError = this.decorateTlsError(req.url, this.describeError(error as Object));
         } finally {
@@ -246,7 +245,7 @@ export class HttpClient {
       const transportStartedAt = Date.now();
       const resp = await client.request(req.url, options);
       const timing = resp.performanceTiming;
-      LightSourceTiming.end(req.timingId || 0, 'http-transport', transportStartedAt,
+      SourceEngineHost.end(req.timingId || 0, 'http-transport', transportStartedAt,
         'http1=' + forceHttp1 + ' status=' + resp.responseCode + (timing ?
         ' dnsEndMs=' + timing.dnsTiming + ' tcpEndMs=' + timing.tcpTiming +
         ' tlsEndMs=' + timing.tlsTiming + ' sendStartMs=' + timing.firstSendTiming +
@@ -289,6 +288,8 @@ export class HttpClient {
 
   private async executeBinaryWithProtocol(req: HttpRequest, maxResponseBytes: number,
     forceHttp1: boolean): Promise<HttpBinaryResponse> {
+    if (req.cancelCheck?.()) return {url:req.url,statusCode:0,headers:{},data:new Uint8Array(),
+      success:false,error:'书源请求已取消'};
     const client = http.createHttp();
     this.activeClients.add(client);
     try {
@@ -309,7 +310,7 @@ export class HttpClient {
       const transportStartedAt = Date.now();
       const resp = await client.request(req.url, options);
       const timing = resp.performanceTiming;
-      LightSourceTiming.end(req.timingId || 0, 'http-transport', transportStartedAt,
+      SourceEngineHost.end(req.timingId || 0, 'http-transport', transportStartedAt,
         'http1=' + forceHttp1 + ' status=' + resp.responseCode + (timing ?
         ' dnsEndMs=' + timing.dnsTiming + ' tcpEndMs=' + timing.tcpTiming +
         ' tlsEndMs=' + timing.tlsTiming + ' sendStartMs=' + timing.firstSendTiming +
@@ -401,7 +402,7 @@ export class HttpClient {
     const charset = req.charset || this.responseCharset(responseHeaders);
     const body = this.decodeBody(result, charset);
     const finalBody = req.charset ? body : this.decodeBodyWithMetaCharset(result, body, charset);
-    LightSourceTiming.end(req.timingId || 0, 'http-cookie-decode', decodeStartedAt);
+    SourceEngineHost.end(req.timingId || 0, 'http-cookie-decode', decodeStartedAt);
     return {
       url: req.url,
       statusCode: responseCode,

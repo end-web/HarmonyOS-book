@@ -31,7 +31,7 @@ Apache License 2.0 全文见 `third_party/quickjs/LICENSE-APACHE-2.0`。
 
 - 上游：https://github.com/wip3l/legado-harmony
 - 组织 Fork：https://github.com/hos-book/legado-harmony
-- 固定提交：`bf691dc124c3a145d444e8e78bb64933c2f6ef97`
+- 固定提交：`5d685ca3be020795ff1ce2eae5780dfd9bdc4470`（本地共同维护分支 `codex/sourceengine-host`，尚未推送；基于上游 `fc1f3b25861965a698f824679e7ebbc7130ae393`，含公共解析内核与 entry 调度适配）
 - 许可证：GPL-3.0，全文见 `third_party/light-source/LICENSE`
 
 迁入位置：`entry/src/main/ets/service/rulesource/light/upstream/`。原版权头保留；修改和适配由 `scripts/sync-light-source.cjs` 记录，版本和文件校验值见 `third_party/light-source/upstream.json`，维护流程见 `docs/LIGHT_SOURCE_SYNC.md`。

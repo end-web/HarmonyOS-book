@@ -1206,13 +1206,21 @@ export struct BookDetailPage {
 
   // ==================== 进度 / 标签 / 简介 ====================
 
-  /** 「第 N 集 标题」；用于进度行与最新行。 */
+  /** 保留书源已有编号，仅为无编号标题补充目录序号。 */
+  private formatChapterLabel(index: number, rawTitle: string): string {
+    const title = rawTitle.trim();
+    const numbered = /^[【\[（(]?\s*(?:第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章集回节節話话期]|[0-9０-９]+\s*[章集回节節話话期]|[0-9０-９]+(?:\s|[、.．:：_\-]|$))/;
+    if (numbered.test(title)) return title;
+    const unit = this.book?.contentType === 'text' ? '章' : '集';
+    const prefix = `第${index + 1}${unit}`;
+    return title.length > 0 ? `${prefix} ${title}` : prefix;
+  }
+
   private chapterLabel(index: number): string {
     if (!this.book || index < 0) return '';
     const chapters = this.book.chapters;
     if (index >= chapters.length) return '';
-    const unit = this.book.contentType === 'text' ? '章' : '集';
-    return `第${index + 1}${unit} ${chapters[index].title}`;
+    return this.formatChapterLabel(index, chapters[index].title);
   }
 
   /** 历史章节标题，供进度行与换源定位使用。 */
@@ -1232,10 +1240,7 @@ export struct BookDetailPage {
     if (index < 0 || !this.book) return '';
     const chapters = this.book.chapters;
     if (index >= chapters.length) return '';
-    const unit = this.book.contentType === 'text' ? '章' : '集';
-    const title = this.historyChapterTitle();
-    const prefix = `第${index + 1}${unit}`;
-    return title.length > 0 ? `${prefix} ${title}` : prefix;
+    return this.formatChapterLabel(index, chapters[index].title || this.historyChapterTitle());
   }
 
   private latestChapterLabel(): string {

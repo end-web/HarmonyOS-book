@@ -110,7 +110,8 @@ const image = {
   }
 };
 function load(relative) {
-  const filename = path.resolve(root, relative.endsWith('.ets') ? relative : relative + '.ets');
+  let filename = path.resolve(root, relative.endsWith('.ets') ? relative : relative + '.ets');
+  if (!fs.existsSync(filename)) filename = filename.slice(0, -4) + '.ts';
   if (modules.has(filename)) return modules.get(filename);
   const exports = {}; modules.set(filename, exports);
   const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -423,6 +424,20 @@ function load(relative) {
   console.log('PASS MOBI covers: EXTH index, thumbnail/legacy fallback, direct ZIP import, persisted cover, manual override, corrupt image isolation');
 
   const online = { ...book, id: 'search_text_history', sourceUrl: 'source', bookUrl: 'book' };
+  const largeChapters = Array.from({length:600},(_,i)=>({...online.chapters[0],id:`large_${i}`,
+    variables:{payload:'中文'.repeat(120),__audioTocDefinition:'source'.repeat(4096)}}));
+  await data.writeToc('large_chunks',largeChapters);
+  const savedToc = JSON.parse(await fsp.readFile(path.join(temp,'library_toc/large_chunks.json'),'utf8'));
+  assert.equal(savedToc.length,600,'all write chunks preserve one valid JSON array');
+  assert.equal(savedToc[599].id,'large_599');
+  assert.equal(savedToc[0].variables.__audioTocDefinition,undefined);
+  const concurrentReads = await Promise.all([data.getChaptersForBook('large_chunks'),data.getChaptersForBook('large_chunks')]);
+  assert.equal(concurrentReads[0],concurrentReads[1],'concurrent catalog loads share one parsed result');
+  failingWrite = 'large_chunks.json.tmp';
+  await data.writeToc('large_chunks',[online.chapters[0]]);
+  failingWrite = '';
+  assert.equal(JSON.parse(await fsp.readFile(path.join(temp,'library_toc/large_chunks.json'),'utf8')).length,600,
+    'failed streaming write preserves the previous complete directory');
   // 未收藏直接阅读的书经过进程重启后仍可按进度 id 找回完整信息。
   await data.upsertCachedBook(online);
   readingIds.add(online.id);

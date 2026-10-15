@@ -5,7 +5,8 @@ import { SetCookieParser } from './upstream/core/http/SetCookieParser';
 import { LightCookieSemantics } from './upstream/core/http/LightCookieSemantics';
 import { webview } from '@kit.ArkWeb';
 import { LightSourceTiming } from './LightSourceTiming';
-import { LightSourceRequestPolicy } from './LightSourceRequestPolicy';
+import { LightSourceRequestPolicy, LightSourceRateWaiter } from './LightSourceRequestPolicy';
+import { SourceEngineHost, SourceEngineHostAdapter, SourceRateWaiter } from './upstream/core/host/SourceEngineHost';
 
 class LightExecutionState {
   local: LocalRuleSource;
@@ -461,3 +462,38 @@ export class LightCookieStore {
 
 export { WebBookFetchRuntime as LightWebFetchRuntime } from './upstream/core/book/WebBookFetchRuntime';
 export { BookSourceAudioWebRuntime as LightAudioWebRuntime } from './upstream/core/book/BookSourceAudioWebRuntime';
+
+class LightEngineRateWaiter implements SourceRateWaiter {
+  waiter: LightSourceRateWaiter;
+  constructor(waiter: LightSourceRateWaiter) { this.waiter = waiter; }
+  isCancelled(): boolean { return this.waiter.isCancelled(); }
+  wait(ms: number): Promise<void> { return this.waiter.wait(ms); }
+}
+
+// One startup installation. All mutable execution state remains bound to source instances.
+const engineHost: SourceEngineHostAdapter = {
+  cookies: sourceUrl => LightCookieStore.forSource(sourceUrl),
+  persistence: source => LightSourceDatabase.getInstance(source),
+  scripts: {
+    concurrent: true, forceFullScripts: true, allowSynchronousQuickJs: false,
+    evaluate: (script, sourceUrl, timingId) => LightSourceRuntime.evaluate(script, sourceUrl, timingId)
+  },
+  web: {run: <T>(sourceUrl: string, action: () => Promise<T>): Promise<T> => LightSourceRuntime.withWeb(sourceUrl, action)},
+  state: {
+    bindSource: (source, target) => LightSourceRuntime.bindSource(source, target),
+    setError: (source, message) => LightSourceRuntime.setError(source, message),
+    getError: source => LightSourceRuntime.getError(source)
+  },
+  diagnostics: {
+    id: source => LightSourceTiming.id(source),
+    end: (id, stage, startedAt, details) => LightSourceTiming.end(id, stage, startedAt, details)
+  },
+  requests: {
+    isCancelled: source => LightSourceRequestPolicy.isCancelled(source),
+    priority: source => LightSourceRequestPolicy.priority(source),
+    enqueue: (key, source, cancelCheck) => new LightEngineRateWaiter(LightSourceRequestPolicy.enqueue(key, source, cancelCheck)),
+    first: (key, waiter) => waiter instanceof LightEngineRateWaiter && LightSourceRequestPolicy.first(key, waiter.waiter),
+    remove: (key, waiter) => { if (waiter instanceof LightEngineRateWaiter) LightSourceRequestPolicy.remove(key, waiter.waiter); }
+  }
+};
+SourceEngineHost.install(engineHost);

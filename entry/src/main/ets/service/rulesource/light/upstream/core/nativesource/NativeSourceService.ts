@@ -1,10 +1,12 @@
+import { NativeSourceImport } from './NativeSourceImport';
 /**
  * 原生书源接入层：把执行器接到应用的请求层、选择器引擎和数据模型上。
  * 原生书源只经过这里，不进入任何脚本引擎。
  */
 
 import { Book, BookChapter, BookSource, SearchBook } from '../../model/data/Book';
-import { HttpClient } from '../http/HttpClient';
+import { HttpClient, HttpResponse } from '../http/HttpClient';
+import { BookSourceDebugContext, BookSourceDebugRuleTrace } from '../book/BookSourceDebugModels';
 import { digestHashHex } from '../http/DigestHash';
 import { AnalyzeUrl } from '../rule/AnalyzeUrl';
 import { AnalyzeRule } from '../rule/AnalyzeRule';
@@ -22,9 +24,13 @@ import type {
 import { NativeSourceSpec } from './NativeSourceSpec';
 import { NativeSourceCrypto } from './NativeSourceCrypto';
 import { CookieStore } from '../http/CookieStore';
+import { VerificationSupport } from '../http/VerificationSupport';
 import { ReaderActionMarker } from '../book/ReaderActionMarker';
 import type { NativeLoginSpec, NativeSourceDefinition, NativeVarSpec, NativeVoiceSpec } from './NativeSourceSpec';
-import type { NativeLoginState } from './NativeSourceRunner';
+import type {
+  NativeActionEntry, NativeLoginCredential, NativeLoginResult, NativeLoginState, NativeRuleTrace
+} from './NativeSourceRunner';
+import type { NativeLoginFieldSpec } from './NativeSourceSpec';
 
 export interface NativeFilterGroup {
   title: string;
@@ -51,12 +57,45 @@ class NativeHost implements NativeRunnerHost {
   private http: HttpClient;
   private cancelled: () => boolean;
   private maxResponseBytes: number;
+  private debugContext: BookSourceDebugContext | null;
+  /** 只在调试时提供：把规则求值记到调试页的执行明细里。 */
+  trace?: (entry: NativeRuleTrace) => void;
 
-  constructor(source: BookSource, http: HttpClient, cancelled: () => boolean, maxResponseBytes: number) {
+  constructor(source: BookSource, http: HttpClient, cancelled: () => boolean, maxResponseBytes: number,
+    debugContext: BookSourceDebugContext | null = null) {
     this.source = source;
     this.http = http;
     this.cancelled = cancelled;
     this.maxResponseBytes = maxResponseBytes;
+    this.debugContext = debugContext;
+    if (debugContext) {
+      this.trace = (entry: NativeRuleTrace): void => {
+        const trace = new BookSourceDebugRuleTrace();
+        trace.field = entry.field;
+        trace.rule = entry.rule;
+        trace.ruleType = entry.type;
+        trace.inputCount = 1;
+        trace.matchedCount = entry.count;
+        trace.outputPreview = entry.preview;
+        trace.error = entry.error;
+        debugContext.addRule(trace);
+      };
+    }
+  }
+
+  /** 网页渲染并等待指定元素出现：反复检查页面，元素出现后取整页内容。 */
+  private async fetchWaitingFor(analyzeUrl: AnalyzeUrl, url: string, request: NativeRequest): Promise<HttpResponse> {
+    analyzeUrl.parse(url);
+    const webRequest = analyzeUrl.buildRequest();
+    webRequest.useWebView = true;
+    webRequest.webJs = `(function(){return document.querySelector(${JSON.stringify(request.webWaitFor)})` +
+      `?document.documentElement.outerHTML:'';})()`;
+    webRequest.webJsAcceptPattern = '\\S';
+    webRequest.webJsMaxAttempts = Math.max(4, request.webTimeout * 2);
+    webRequest.readTimeout = request.webTimeout * 1000;
+    webRequest.debugContext = this.debugContext || undefined;
+    if (this.maxResponseBytes > 0) webRequest.maxResponseBytes = this.maxResponseBytes;
+    return await analyzeUrl.fetchPrepared(webRequest);
   }
 
   async fetch(request: NativeRequest): Promise<NativeResponse> {
@@ -67,9 +106,24 @@ class NativeHost implements NativeRunnerHost {
     if (request.body) options['body'] = request.body;
     if (Object.keys(request.headers).length > 0) options['headers'] = request.headers;
     if (request.webView) options['webView'] = true;
+    if (request.charset) options['charset'] = request.charset;
+    if (request.retry > 0) options['retry'] = request.retry;
     const url = Object.keys(options).length > 0 ? `${request.url},${JSON.stringify(options)}` : request.url;
     const analyzeUrl = new AnalyzeUrl(this.source, this.http).setCancelCheck(this.cancelled);
-    const response = await analyzeUrl.fetch(url, this.maxResponseBytes > 0 ? this.maxResponseBytes : undefined);
+    const response = request.webView && request.webWaitFor ?
+      await this.fetchWaitingFor(analyzeUrl, url, request) :
+      await analyzeUrl.fetch(url, this.maxResponseBytes > 0 ? this.maxResponseBytes : undefined, this.debugContext);
+    // 主请求拿到的是人机验证或登录拦截页时，沿用应用现有的「去验证」流程，而不是当成没有结果。
+    if (request.primary && VerificationSupport.shouldRequestBrowserVerification(this.source, response.body || '',
+      response.statusCode, '')) {
+      VerificationSupport.requestVerification(
+        VerificationSupport.pickVerificationUrl(this.source, request.url, ''),
+        `${this.source.bookSourceName} 验证`, this.source);
+      return {
+        ok: false, status: response.statusCode, body: '', url: request.url,
+        error: NativeSourceService.VERIFICATION_REASON
+      };
+    }
     return {
       ok: response.success,
       status: response.statusCode,
@@ -109,6 +163,23 @@ class NativeHost implements NativeRunnerHost {
     return digestHashHex(algorithm, text);
   }
 
+  cacheGet(key: string): NativeValue {
+    return NativeSourceService.cacheGet(this.source.bookSourceUrl, this.cacheKey(key));
+  }
+
+  cachePut(key: string, value: NativeValue, ttlSeconds: number): void {
+    NativeSourceService.cachePut(this.source.bookSourceUrl, this.cacheKey(key), value, ttlSeconds);
+  }
+
+  private cacheKey(key: string): string {
+    // Pure definition conversion must not reuse values from another definition or login session.
+    const login = NativeSourceService.loginSpec(this.source);
+    const cookies = login?.url ? CookieStore.forSource(this.source.bookSourceUrl).getCookie(login.url) : '';
+    const context = JSON.stringify([this.source.jsLib, this.source.header, this.source.loginHeader,
+      this.source.loginInfo, cookies]);
+    return digestHashHex('SHA256', context) + '\n' + key;
+  }
+
   crypto(name: string, args: NativeValue[]): NativeValue {
     return NativeSourceCrypto.run(name, args as Object[]);
   }
@@ -118,7 +189,41 @@ class NativeHost implements NativeRunnerHost {
   }
 }
 
+interface NativeCacheEntry {
+  value: NativeValue;
+  expiresAt: number;
+}
+
 export class NativeSourceService {
+  static readonly VERIFICATION_REASON: string = '需要登录或网页验证';
+  static readonly READER_ACTION_SCHEME: string = 'legado-native-action:';
+  // 声明式缓存只放在内存里：应用重启后重新获取，不需要考虑落库与同步。
+  private static cacheEntries: Map<string, NativeCacheEntry> = new Map();
+
+  static cacheGet(sourceUrl: string, key: string): NativeValue {
+    const fullKey = `${sourceUrl}\n${key}`;
+    const entry = NativeSourceService.cacheEntries.get(fullKey);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      NativeSourceService.cacheEntries.delete(fullKey);
+      return undefined;
+    }
+    return entry.value;
+  }
+
+  static cachePut(sourceUrl: string, key: string, value: NativeValue, ttlSeconds: number): void {
+    if (NativeSourceService.cacheEntries.size >= 200) NativeSourceService.cacheEntries.clear();
+    NativeSourceService.cacheEntries.set(`${sourceUrl}\n${key}`,
+      { value: value, expiresAt: Date.now() + ttlSeconds * 1000 });
+  }
+
+  /** 书源被修改、重新导入或退出登录后，丢掉它的缓存值。 */
+  static clearCache(sourceUrl: string): void {
+    const prefix = `${sourceUrl}\n`;
+    for (const key of Array.from(NativeSourceService.cacheEntries.keys())) {
+      if (key.startsWith(prefix)) NativeSourceService.cacheEntries.delete(key);
+    }
+  }
   /** 该书源是否为原生书源。 */
   static isNative(source: BookSource | null | undefined): boolean {
     return !!source && NativeSourceSpec.isPacked(source.jsLib || '');
@@ -132,29 +237,8 @@ export class NativeSourceService {
 
   /** 把定义写进书源记录。existing 传入时保留排序、置顶、已选变量等本地状态。 */
   static toBookSource(definition: NativeSourceDefinition, existing: BookSource | null = null): BookSource {
-    const source = existing ? Object.assign(new BookSource(), existing) : new BookSource();
-    source.bookSourceUrl = definition.url;
-    source.bookSourceName = definition.name;
-    source.bookSourceGroup = definition.group || '';
-    source.bookSourceComment = definition.comment || '';
-    source.bookSourceType = NativeSourceSpec.bookSourceType(definition);
-    source.concurrentRate = definition.rate || '';
-    source.header = definition.headers && Object.keys(definition.headers).length > 0 ?
-      JSON.stringify(definition.headers) : '';
-    source.jsLib = NativeSourceSpec.pack(definition);
-    source.searchUrl = definition.search ? NativeSourceSpec.SEARCH_MARKER : '';
-    source.exploreUrl = definition.explore ? NativeSourceSpec.EXPLORE_MARKER : '';
-    // 登录页地址放进 loginUrl，列表上的登录状态角标和 Cookie 同步沿用现有逻辑。
-    source.loginUrl = definition.login ? definition.login.url : '';
-    source.loginUi = '';
-    source.loginCheckJs = '';
-    source.rawSourceJson = '';
-    source.bookUrlPattern = '';
-    if (!existing) {
-      source.enabled = definition.enabled !== false;
-      source.enabledExplore = definition.enabledExplore !== false;
-    }
-    source.lastUpdateTime = Date.now();
+    const source = NativeSourceImport.toBookSource(definition, existing);
+    NativeSourceService.clearCache(source.bookSourceUrl);
     return source;
   }
 
@@ -214,6 +298,8 @@ export class NativeSourceService {
   static hasLoginCookies(source: BookSource): boolean {
     const login = NativeSourceService.loginSpec(source);
     if (!login) return false;
+    if (NativeSourceService.credential(source).token) return true;
+    if (!login.url) return false;
     const names = Array.isArray(login.cookies) ? login.cookies : [];
     if (names.length === 0) return !!CookieStore.forSource(source.bookSourceUrl).getCookie(login.url);
     return names.every((name: string): boolean => !!CookieStore.forSource(source.bookSourceUrl).getCookieValue(login.url, String(name)));
@@ -222,6 +308,8 @@ export class NativeSourceService {
   static logout(source: BookSource): void {
     const login = NativeSourceService.loginSpec(source);
     if (!login) return;
+    NativeSourceService.clearCache(source.bookSourceUrl);
+    if (!login.url) return;
     const origin = /^https?:\/\/[^/?#]+/i.exec(login.url);
     CookieStore.forSource(source.bookSourceUrl).removeCookie(login.url);
     if (origin) {
@@ -229,6 +317,7 @@ export class NativeSourceService {
       CookieStore.forSource(source.bookSourceUrl).removeCookie(`${origin[0]}/`);
     }
     CookieStore.forSource(source.bookSourceUrl).saveAsync();
+    NativeSourceService.clearCache(source.bookSourceUrl);
   }
 
   static async checkLogin(source: BookSource, http: HttpClient): Promise<NativeLoginState> {
@@ -267,10 +356,86 @@ export class NativeSourceService {
   }
 
   private static runner(source: BookSource, http: HttpClient, cancelled: () => boolean,
-    maxResponseBytes: number = 0): NativeSourceRunner {
-    const host = new NativeHost(source, http, cancelled, maxResponseBytes);
+    maxResponseBytes: number = 0, debugContext: BookSourceDebugContext | null = null): NativeSourceRunner {
+    const host = new NativeHost(source, http, cancelled, maxResponseBytes, debugContext);
     return new NativeSourceRunner(NativeSourceService.definitionOf(source), host,
-      NativeSourceService.storedVars(source)).setCancelCheck(cancelled);
+      NativeSourceService.storedVars(source)).setCancelCheck(cancelled)
+      .setCredential(NativeSourceService.credential(source));
+  }
+
+  // ---------- 表单登录的凭据：存在 loginInfo 里，备份和云同步都不包含它 ----------
+
+  static credential(source: BookSource): NativeLoginCredential {
+    try {
+      const parsed = JSON.parse(source.loginInfo || '{}') as Record<string, Object>;
+      return { token: String(parsed['nativeToken'] || ''), user: String(parsed['nativeUser'] || '') };
+    } catch (e) {
+      return { token: '', user: '' };
+    }
+  }
+
+  /** 写入或清除凭据后的 loginInfo 文本。只保存登录换来的凭据，不保存用户填写的密码。 */
+  static loginInfoWith(source: BookSource, token: string, user: string): string {
+    let record: Record<string, Object> = {};
+    try {
+      const parsed = JSON.parse(source.loginInfo || '{}') as Object;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) record = parsed as Record<string, Object>;
+    } catch (e) {
+    }
+    if (token) {
+      record['nativeToken'] = token;
+      record['nativeUser'] = user;
+    } else {
+      delete record['nativeToken'];
+      delete record['nativeUser'];
+    }
+    return JSON.stringify(record);
+  }
+
+  static loginForm(source: BookSource): NativeLoginFieldSpec[] {
+    const login = NativeSourceService.loginSpec(source);
+    return login && login.submit && Array.isArray(login.form) ? login.form : [];
+  }
+
+  static async submitLogin(source: BookSource, http: HttpClient,
+    form: Record<string, string>): Promise<NativeLoginResult> {
+    const result = await NativeSourceService.runner(source, http, (): boolean => false).submitLogin(form);
+    if (result.ok) NativeSourceService.clearCache(source.bookSourceUrl);
+    return result;
+  }
+
+  static async sendLoginCode(source: BookSource, http: HttpClient, form: Record<string, string>): Promise<string> {
+    return await NativeSourceService.runner(source, http, (): boolean => false).sendLoginCode(form);
+  }
+
+  // ---------- 动作按钮 ----------
+
+  static async actions(source: BookSource, http: HttpClient): Promise<NativeActionEntry[]> {
+    return await NativeSourceService.runner(source, http, (): boolean => false).actions();
+  }
+
+  static async runAction(source: BookSource, http: HttpClient, index: number): Promise<string> {
+    return await NativeSourceService.runner(source, http, (): boolean => false).runAction(index);
+  }
+
+  /** 正文里的请求按钮：阅读器点击后把标记里的地址交回这里执行。 */
+  static isReaderAction(url: string): boolean {
+    return (url || '').startsWith(NativeSourceService.READER_ACTION_SCHEME);
+  }
+
+  static async runReaderAction(source: BookSource, http: HttpClient, url: string): Promise<string> {
+    let request: NativeRequest | null = null;
+    let message = '';
+    try {
+      const payload = JSON.parse(decodeURIComponent(url.substring(NativeSourceService.READER_ACTION_SCHEME.length))) as
+        Record<string, Object>;
+      request = payload['r'] as NativeRequest;
+      message = String(payload['m'] || '');
+    } catch (e) {
+      request = null;
+    }
+    if (!request || !/^https?:\/\//i.test(String(request.url || ''))) return '操作无效';
+    return await NativeSourceService.runner(source, http, (): boolean => false).runLinkAction(request, message);
   }
 
   private static typeBits(type: string, source: BookSource): number {
@@ -330,24 +495,29 @@ export class NativeSourceService {
   }
 
   static async search(source: BookSource, http: HttpClient, keyword: string, cancelled: () => boolean,
-    maxResponseBytes: number = 0, page: number = 1): Promise<SearchBook[]> {
-    const records = await NativeSourceService.runner(source, http, cancelled, maxResponseBytes).search(keyword, page);
+    maxResponseBytes: number = 0, debugContext: BookSourceDebugContext | null = null, page: number = 1): Promise<SearchBook[]> {
+    const records = await NativeSourceService.runner(source, http, cancelled, maxResponseBytes, debugContext)
+      .search(keyword, page);
     return records.map((record: NativeBookRecord): SearchBook => NativeSourceService.toSearchBook(source, record));
   }
 
-  static async exploreMenus(source: BookSource, http: HttpClient): Promise<NativeMenuEntry[]> {
-    return await NativeSourceService.runner(source, http, (): boolean => false).exploreMenus();
+  static async exploreMenus(source: BookSource, http: HttpClient,
+    debugContext: BookSourceDebugContext | null = null): Promise<NativeMenuEntry[]> {
+    return await NativeSourceService.runner(source, http, (): boolean => false, 0, debugContext).exploreMenus();
   }
 
-  static async explore(source: BookSource, http: HttpClient, target: string, page: number): Promise<SearchBook[]> {
-    const records = await NativeSourceService.runner(source, http, (): boolean => false).explore(target, page);
+  static async explore(source: BookSource, http: HttpClient, target: string, page: number,
+    debugContext: BookSourceDebugContext | null = null): Promise<SearchBook[]> {
+    const records = await NativeSourceService.runner(source, http, (): boolean => false, 0, debugContext)
+      .explore(target, page);
     return records.map((record: NativeBookRecord): SearchBook => NativeSourceService.toSearchBook(source, record));
   }
 
-  static async getBookInfo(source: BookSource, http: HttpClient, book: Book): Promise<Book> {
+  static async getBookInfo(source: BookSource, http: HttpClient, book: Book,
+    debugContext: BookSourceDebugContext | null = null): Promise<Book> {
     book.origin = source.bookSourceUrl;
     book.originName = source.bookSourceName;
-    const record = await NativeSourceService.runner(source, http, (): boolean => false)
+    const record = await NativeSourceService.runner(source, http, (): boolean => false, 0, debugContext)
       .detail(NativeSourceService.bookInput(source, book));
     book.name = BookFieldSanitizer.prefer(record.name, book.name);
     book.author = BookFieldSanitizer.prefer(record.author, book.author);
@@ -372,8 +542,8 @@ export class NativeSourceService {
   }
 
   static async getChapterList(source: BookSource, http: HttpClient, book: Book,
-    limit: number = 0): Promise<BookChapter[]> {
-    const records = await NativeSourceService.runner(source, http, (): boolean => false)
+    limit: number = 0, debugContext: BookSourceDebugContext | null = null): Promise<BookChapter[]> {
+    const records = await NativeSourceService.runner(source, http, (): boolean => false, 0, debugContext)
       .toc(NativeSourceService.bookInput(source, book), limit);
     const chapters: BookChapter[] = [];
     let pendingVolume = '';
@@ -403,10 +573,22 @@ export class NativeSourceService {
   }
 
   static async getContent(source: BookSource, http: HttpClient, book: Book, chapter: BookChapter,
-    cancelled: () => boolean): Promise<NativeContentResult> {
-    const result = await NativeSourceService.runner(source, http, cancelled).content(
+    cancelled: () => boolean, debugContext: BookSourceDebugContext | null = null): Promise<NativeContentResult> {
+    const result = await NativeSourceService.runner(source, http, cancelled, 0, debugContext).content(
       NativeSourceService.bookInput(source, book), { url: chapter.url, title: chapter.title, index: chapter.index });
     if (result.kind === 'text') result.text = NativeSourceService.withCommentMarkers(result);
+    // 图片和音频要带请求头、图片要解密时，沿用应用已有的写法：地址后面跟一个选项对象。
+    const hasHeaders = Object.keys(result.mediaHeaders).length > 0;
+    if (result.kind === 'audio' && result.text && hasHeaders) {
+      result.text += `,${JSON.stringify({ headers: result.mediaHeaders })}`;
+    }
+    if (result.kind === 'images' && (hasHeaders || result.imageDecode)) {
+      const options: Record<string, Object> = {};
+      if (hasHeaders) options['headers'] = result.mediaHeaders;
+      if (result.imageDecode) options['decode'] = result.imageDecode;
+      const suffix = `,${JSON.stringify(options)}`;
+      result.images = result.images.map((url: string): string => url + suffix);
+    }
     return result;
   }
 
@@ -425,7 +607,10 @@ export class NativeSourceService {
         comment.url, '段评');
     }
     for (const link of result.links) {
-      const button = ReaderActionMarker.create(link.label, link.url, link.label);
+      // 请求按钮把渲染好的请求编进标记地址，点击时由 runReaderAction 取出执行。
+      const target = link.request ? NativeSourceService.READER_ACTION_SCHEME +
+        encodeURIComponent(JSON.stringify({ r: link.request, m: link.message })) : link.url;
+      const button = ReaderActionMarker.create(link.label, target, link.label);
       if (button) lines.push('', button);
     }
     if (result.chapterCommentUrl) {

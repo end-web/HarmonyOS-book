@@ -75,8 +75,11 @@ export class WidgetUpdater {
   private static updateGeneration: number = 0;
   /** url -> 沙箱文件路径 */
   private static coverPathCache: Map<string, string> = new Map();
+  private static coverDownloads: Map<string, Promise<string | null>> = new Map();
   /** 每张卡片最后一次成功推送的可见状态，新登记的 formId 不会被全局去重误伤。 */
   private static pushedCardStateByForm: Map<string, WidgetPlayerSnapshot> = new Map();
+  /** 已成功经 FD 推送的封面，区分文字快照已到达但封面仍在下载的状态。 */
+  private static pushedCoverByForm: Map<string, string> = new Map();
   private static coverMigrationPromise: Promise<void> | null = null;
 
   static setContext(ctx: common.Context): void {
@@ -93,6 +96,19 @@ export class WidgetUpdater {
    * - 失败：返回 null（外层用 https URL 兜底）
    */
   private static async downloadCover(url: string, allowNetwork: boolean = true): Promise<string | null> {
+    if (!allowNetwork) return WidgetUpdater.loadCover(url, false);
+    const pending = WidgetUpdater.coverDownloads.get(url);
+    if (pending) return pending;
+    const download = WidgetUpdater.loadCover(url, true);
+    WidgetUpdater.coverDownloads.set(url, download);
+    try {
+      return await download;
+    } finally {
+      WidgetUpdater.coverDownloads.delete(url);
+    }
+  }
+
+  private static async loadCover(url: string, allowNetwork: boolean): Promise<string | null> {
     if (!url || !url.startsWith('http')) return null;
     const cached = WidgetUpdater.coverPathCache.get(url);
     if (cached) {
@@ -308,6 +324,7 @@ export class WidgetUpdater {
     const generation = ++WidgetUpdater.updateGeneration;
     const snap = WidgetUpdater.buildSnapshot(state);
     const existing = await PreferenceService.getWidgetPlayerSnapshot();
+    if (!WidgetUpdater.isLatest(generation)) return;
     if (force || !existing || !WidgetUpdater.sameCardState(snap, existing)) {
       await PreferenceService.setWidgetPlayerSnapshot(snap);
     }
@@ -321,16 +338,26 @@ export class WidgetUpdater {
     if (!WidgetUpdater.isLatest(generation)) return;
     const pendingIds: string[] = ids.filter((id: string) => {
       const pushed = WidgetUpdater.pushedCardStateByForm.get(id);
-      return force || !pushed || !WidgetUpdater.sameCardState(snap, pushed);
+      return force || !pushed || !WidgetUpdater.sameCardState(snap, pushed) ||
+        (snap.cover.startsWith('http') && WidgetUpdater.coverPathCache.has(snap.cover) &&
+          WidgetUpdater.pushedCoverByForm.get(id) !== snap.cover);
     });
-    if (pendingIds.length === 0) return;
-    const built = await WidgetUpdater.buildPlayerBinding(snap);
+    if (pendingIds.length === 0) {
+      // 相同状态的后续同步也会推进代次，接手尚未完成的封面下载。
+      if (snap.cover.startsWith('http') && !WidgetUpdater.coverPathCache.has(snap.cover)) {
+        WidgetUpdater.refreshCardCover(snap, ids, generation).catch((): void => {});
+      }
+      return;
+    }
+    // 文本和播放状态先推送，只读本地封面缓存，不能被网络封面阻塞。
+    const built = await WidgetUpdater.buildPlayerBinding(snap, false);
     try {
       for (const id of pendingIds) {
         if (!WidgetUpdater.isLatest(generation)) break;
         try {
           await formProvider.updateForm(id, built.binding);
           WidgetUpdater.pushedCardStateByForm.set(id, snap);
+          WidgetUpdater.pushedCoverByForm.set(id, built.imgFile ? snap.cover : '');
           hilog.info(DOMAIN, TAG, 'update card success id=%{public}s', id);
         } catch (err) {
           const e = err as BusinessError;
@@ -340,8 +367,32 @@ export class WidgetUpdater {
           // 这三种都是死 ID，从持久化里清掉，下次重新添加卡片时由 onAddForm 重新登记
           if (e.code === 16500001 || e.code === 16500100 || e.code === 16501001) {
             WidgetUpdater.pushedCardStateByForm.delete(id);
+            WidgetUpdater.pushedCoverByForm.delete(id);
             await PreferenceService.removeWidgetFormId(WIDGET_PLAYER, id);
           }
+        }
+      }
+    } finally {
+      WidgetUpdater.closeFd(built.imgFile);
+    }
+    if (!built.imgFile && snap.cover.startsWith('http') && WidgetUpdater.isLatest(generation)) {
+      WidgetUpdater.refreshCardCover(snap, pendingIds, generation).catch((): void => {});
+    }
+  }
+
+  private static async refreshCardCover(snap: WidgetPlayerSnapshot, ids: string[],
+    generation: number): Promise<void> {
+    const built = await WidgetUpdater.buildPlayerBinding(snap);
+    try {
+      if (!built.imgFile) return;
+      for (const id of ids) {
+        // 下载期间切书或暂停后，不得回写旧的书名、封面和播放状态。
+        if (!WidgetUpdater.isLatest(generation)) return;
+        try {
+          await formProvider.updateForm(id, built.binding);
+          WidgetUpdater.pushedCoverByForm.set(id, snap.cover);
+        } catch (_error) {
+          hilog.warn(DOMAIN, TAG, 'refresh card cover failed id=%{public}s', id);
         }
       }
     } finally {

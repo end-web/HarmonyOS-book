@@ -147,14 +147,15 @@ export class LocalRuleSourceBulkTester {
         }
         LocalRuleSourceBulkTester.notifyProgress(report, onProgress, outcome.source);
 
-        if (pendingSave.length >= BULK_TEST_BATCH_SIZE) {
-          await this.store.saveTested(pendingSave.slice());
-          pendingSave.length = 0;
-        }
         if (!this.cancelled && nextIndex < sources.length) {
           activeTasks.push(this.testOne(sources[nextIndex], cleanKeyword, nextIndex));
           activeIndexes.push(nextIndex);
           nextIndex++;
+        }
+        // 先补齐网络任务，让新请求与本批结果落库重叠执行。
+        if (pendingSave.length >= BULK_TEST_BATCH_SIZE) {
+          await this.store.saveTested(pendingSave.slice());
+          pendingSave.length = 0;
         }
       }
 

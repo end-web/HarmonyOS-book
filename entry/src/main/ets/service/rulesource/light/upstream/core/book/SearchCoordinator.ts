@@ -1,6 +1,5 @@
 import { NativeSourceService } from '../nativesource/NativeSourceService';
 import { BookSource, SearchBook } from '../../model/data/Book';
-import { appDb } from '../../model/data/AppDatabase';
 import { HttpClient, HttpResponse } from '../http/HttpClient';
 import { AnalyzeUrl } from '../rule/AnalyzeUrl';
 import { AnalyzeRule } from '../rule/AnalyzeRule';
@@ -9,15 +8,12 @@ import { ScriptCompatibility } from '../rule/ScriptCompatibility';
 import { JsRuntime } from '../rule/JsRuntime';
 import { VerificationSupport } from '../http/VerificationSupport';
 import { EncodedSourceUrl } from './EncodedSourceUrl';
-import { BookSourceDataUrlSupport } from './BookSourceDataUrlSupport';
 import { BookUrlResolver } from './BookUrlResolver';
 import { PageCandidateUrl } from '../rule/PageCandidateUrl';
 import { BookFieldSanitizer } from '../../utils/BookFieldSanitizer';
-import { BookSourceMetadataSupport } from './BookSourceMetadataSupport';
 import { BookTypeSupport } from './BookTypeSupport';
 import { BookSourceRuntimeRouter, SourceRuntimeStage } from './BookSourceRuntimeRouter';
 import { BookSourceStageWebRuntime, StageWebRuntimeRequest } from './BookSourceStageWebRuntime';
-import { BookSourceStageRuleSupport } from './BookSourceStageRuleSupport';
 import { RuleExecutionService } from '../rule/RuleExecutionService';
 import { RuleBatchExecutionRequest, RuleFieldRequest } from '../rule/RuleExecutionModels';
 import { CooperativeScheduler } from '../concurrency/CooperativeScheduler';
@@ -25,6 +21,10 @@ import { QuickJsObservationContext } from '../script/QuickJsRuntimeStatus';
 import { RuleExecutionTarget, RuleValue } from '../rule/RuleValue';
 import { BookSourceDebugContext } from './BookSourceDebugModels';
 import { LogText } from '../../utils/LogText';
+import { appDb } from '../../model/data/AppDatabase';
+import { BookSourceDataUrlSupport } from './BookSourceDataUrlSupport';
+import { BookSourceMetadataSupport } from './BookSourceMetadataSupport';
+import { BookSourceStageRuleSupport } from './BookSourceStageRuleSupport';
 
 export interface SearchProgress {
   done: number;
@@ -633,9 +633,13 @@ export class SearchCoordinator {
     if (!source.searchUrl) return this.sourceResult([], BookSource.VALIDATION_FAILED, '该书源没有配置搜索');
     let found: SearchBook[] = [];
     try {
-      found = await NativeSourceService.search(source, this.http, keyword, stopped, responseLimit, this.currentPage);
+      found = await NativeSourceService.search(source, this.http, keyword, stopped, responseLimit,
+        options.debugContext || null, this.currentPage);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
+      if (reason.indexOf(NativeSourceService.VERIFICATION_REASON) >= 0) {
+        return this.sourceResult([], BookSource.VALIDATION_NEEDS_VERIFICATION, NativeSourceService.VERIFICATION_REASON);
+      }
       return this.sourceResult([], /请求失败|空响应|已取消/.test(reason) ?
         BookSource.VALIDATION_TEMPORARY_ERROR : BookSource.VALIDATION_FAILED, reason || '搜索过程中发生异常');
     }

@@ -1,4 +1,5 @@
 import { PreferenceService } from './PreferenceService';
+import { ChapterRuleContext } from './rulesource/ChapterRuleContext';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { fileIo } from '@kit.CoreFileKit';
@@ -480,7 +481,8 @@ export class DownloadService {
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       const pageUrl = this.chapterPageUrl(item.chapter);
       const requestInfo = await BookSourceService.resolveAudioRequest(
-        source, pageUrl, item.book.variables, item.chapter.variables);
+        source, pageUrl, item.book.variables,
+        ChapterRuleContext.create(item.chapter.title, item.chapter.index - 1, item.chapter.variables));
       if (!this.isItemCurrent(item)) return this.discardStaleItem(item);
       if (!DownloadPolicy.isResolvedAudioUrl(pageUrl, requestInfo.url, requestInfo.resolved)) {
         await this.markFailed(item, '音频地址解析失败');

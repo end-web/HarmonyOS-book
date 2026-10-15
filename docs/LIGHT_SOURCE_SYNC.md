@@ -4,19 +4,21 @@
 
 ## 固定版本与维护边界
 
-当前上游：`wip3l/legado-harmony`，提交 `bf691dc124c3a145d444e8e78bb64933c2f6ef97`。精确版本及每个文件的原始/适配 SHA256 见 `third_party/light-source/upstream.json`。
+上游基线为 `wip3l/legado-harmony` 的 `fc1f3b25861965a698f824679e7ebbc7130ae393`；当前固定到共同维护的本地分支 `codex/sourceengine-host`，提交 `5d685ca3be020795ff1ce2eae5780dfd9bdc4470`（尚未推送）。工作区为 `D:\legado-harmony-sourceengine-host`。精确版本、原始仓库路径及每个文件的原始/适配 SHA256 见 `third_party/light-source/upstream.json`。
 
-- `light/upstream/`：递归迁入的规则、解析、网络、媒体和交互核心；导入方法从上游原方法抽取。勿直接修改，适配变更写入同步脚本。
+- `light/upstream/`：递归迁入的规则、解析、网络、媒体和交互核心；导入方法从上游原方法抽取。勿直接修改生成文件；通用能力修改公共包，简听策略通过宿主端口注入。
 - `light/LightSource*.ts`、`LightSource*.ets`：简听 JSON 模型边界、平台接口和有界 QuickJS 桥接。
 - `upstream/model/data/AppDatabase.ts`：本地数据库桥接，明确排除同步覆盖。
 - `scripts/sync-light-source.cjs`：检查本地改动、执行适配、更新版本清单，不修改页面。
 
+上游已在 `234a23c` 将解析内核拆到 `sourceengine` HAR。简听继续按固定提交迁入源码：同步器同时解析 `entry/src/main/ets` 与 `sourceengine/src/main/ets`，从 `sourceengine/Index.ts` 解析公开符号并转换包导入，保留仍在 entry 的搜索/发现/阅读流程调度和音频后处理。这样沿用现有平台适配，不引入第二套 QuickJS 或 Cookie 存储，也不增加 App 模块和签名配置。
+
 ## 更新流程
 
-先在 `D:\legado-harmony` 查看上游差异并将组织 Fork 更新到需要的提交，再在简听运行：
+先在 `D:\legado-harmony` 拉取并查看上游差异。同步输入必须是需要的固定提交；可以使用独立 detached worktree，避免覆盖本地签名配置。组织 Fork 的推送独立处理。随后在简听运行（路径替换为实际检出目录）：
 
 ```powershell
-node scripts/sync-light-source.cjs D:\legado-harmony
+node scripts/sync-light-source.cjs D:\legado-harmony-sourceengine-host
 node scripts/test-light-source-engine.cjs
 node scripts/test-rule-source-export.cjs
 ```
@@ -26,6 +28,34 @@ node scripts/test-rule-source-export.cjs
 测试需设置 `DEVECO_HOME` 为 Release DevEco Studio。同步前工作区上游引擎文件必须与旧清单一致，参考仓库相关源码必须干净；检查失败不会覆盖本地引擎。上游方法或依赖变化需先调整脚本，再同步。随后执行 ArkTS 检查、Release SDK 增量构建，以及设备导入→测试→搜索→详情→阅读/播放验证。对比通过后提交升级；Git 提交可用于回退。此流程是维护工具，没有启用自动拉取、自动发布或后台更新。
 
 ## 能力与验证边界
+
+### sourceengine 公共包接入（2026-10-15）
+
+本次同步 71 个引擎/适配文件，保留简听有界 QuickJS taskpool、按源 Cookie 隔离及属性持久化、独占隐私 Web 租约、任务错误隔离、变量增量合并、播放优先调度与取消、计时诊断。新增 `BookSourceRuntimeStore.forSource(source)` 宿主适配，按执行实例绑定 `LightSourceDatabase`，不以全局可变“当前源”代替并发上下文。
+
+上游原生搜索新增 debugContext 参数，适配器保留其位置并在后面传入简听页码。新增 WebView `waitFor` 请求经 `AnalyzeUrl.fetchPrepared` 进入既有限流、重试、重定向和取消路径，同时传递响应大小限制；不会直接绕过调度发送 HTTP。公共包新增 `NativeSourceImport`，`LightNativeImport` 仅作兼容别名；定义解析不清理缓存、不加载 HTTP、ArkWeb 或 QuickJS 宿主。原生缓存按定义、登录信息及登录站点 Cookie 隔离，实际导入仍清理源缓存。
+
+原生源 `login.form/submit/sendCode` 接到现有面板，仅持久化返回的 token/user；密码等表单值不写入状态。`actions` 与正文请求动作由原生服务执行，网页入口维持 HTTPS-only。`content.mediaHeaders` 沿既有音频地址/请求头链路输出。原有章节变量瘦身、目录压缩、预加载接管和书籍身份逻辑保留。
+
+验证：引擎回归、导入导出、音频预加载、音频书籍身份及目录缓存回归通过；新增覆盖原生搜索第三页、媒体头、表单登录/验证码、登录失败保持已有凭据、动作、注销及 waitFor 限流/取消。Node 使用模拟 HTTP 和 VM，不能代替设备 QuickJS 或真实账号验证。MCP 构建遇到本机 ohpm 批处理递归错误，改用已验证 Release SDK 26.0.0.105 的 IDE CLI（--no-daemon）增量 debug 构建成功；签名 HAP 元数据为 apiReleaseType=Release、min API=20、target API=26。设备列表为空，未安装或执行本轮实机播放、下载、导出验证。
+
+源码依据：[公共包说明](https://github.com/wip3l/legado-harmony/blob/fc1f3b25861965a698f824679e7ebbc7130ae393/sourceengine/README.md)、[公开入口](https://github.com/wip3l/legado-harmony/blob/fc1f3b25861965a698f824679e7ebbc7130ae393/sourceengine/Index.ts)、[双目录加载参考](https://github.com/wip3l/legado-harmony/blob/fc1f3b25861965a698f824679e7ebbc7130ae393/scripts/lib/ets-module-staging.mjs)。在线技能已刷新目录并读取 [ArkTS 检索指南](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkts/hmos-arkts-knowledge-retriever/SKILL.md) 与其 [linter 实现约束摘要](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkts/hmos-arkts-knowledge-retriever/docs/linter/ArkTS_Syntax_Knowledge_From_Linter.md)；编译结论以本机 Release SDK 为准。
+
+### 两项目共用宿主接口（2026-10-15）
+
+公共包新增 `SourceEngineHost.install(adapter)`：Cookie、运行时持久化、有界脚本执行器、Web 会话、优先级/取消调度、执行错误与耗时诊断均通过可选端口注入。轻页不安装适配器时保持原 CookieStore、已安装数据库和 ArkWeb 串行行为；简听在 `LightSourceRuntime.ts` 初始化时安装宿主，只有独立有界 QuickJS 执行器声明允许并发。
+
+同步脚本已移除运行时、并发隔离、调度及计时的字符串替换补丁。仍保留包路径转换、隐私 Cookie 语义辅助类生成、兼容源导入和音频页面方法提取；搜索/发现/阅读编排仍来自 entry，尚未把整套应用搬入 HAR。简听仍采用固定源码同步，没有增加第二套 QuickJS 二进制或改动模块签名配置。
+
+验证：公共包宿主回归覆盖默认串行、注入并发、Cookie/持久化及取消，定义转换与缓存隔离回归通过；原生源 181 项、脚本运行时 46 项及中立性检查通过。简听引擎、导入导出、预加载、书籍身份和章节缓存回归通过。Release SDK 26.0.0.105 公共 HAR、简听签名 debug HAP 构建通过；轻页应用编译和打包通过，签名因上游配置引用的本机不存在证书而失败，已生成未签名 HAP。两个应用产物元数据均为 Release、最低 API 20、目标 API 26。设备列表为空，本轮未执行设备验证。
+
+### 通用边界
+
+书籍变量含 `tones` 时，播放器将其逗号分隔的音色 ID 与源声明 `voices` 取交集，不把全源音色都当成当前书可用。`real` 非空时保留声明中的 `0`（真人原声），菜单始终提供“默认”。显式空 `tones` 不展示合成音色；未提供 `tones` 的源仍使用原声明列表。此筛选只依据源返回的元数据，不代表每个章节的音频请求必定成功。
+
+播放器通过 `LightSourceBridge.voices()` 读取原生源声明的 `voices: [{id, name}]`，名称展示给用户、id 写入当前书籍的 `custom` / `__audioSourceVoice`。音色列表采用 ArkUI V2 和 LazyForEach（按音色 id 去重并生成稳定 key），参考在线 [ArkUI 检索技能](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkui/hmos-arkui-knowledge-retriever/SKILL.md) 与 [LazyForEach 指南](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkui/hmos-arkui-knowledge-retriever/references/knowledges/09-rendering/arkts-rendering-control-lazyforeach.md)。不按域名硬编码音色，也不要求用户输入编号；可选音色与最终回退行为仍由导入书源决定。
+
+章节上下文通过 `ChapterRuleContext` 跨 JSON 边界保留：新目录保存规则原始标题 `chapterName` 和零基 `chapterIndex`；播放、投播、预加载及下载遇到旧目录时，用本地 `Chapter.title` 和 `Chapter.index - 1` 补齐，不改写原变量。否则依赖 `chapter.title` 匹配真人目录的原生音频源会误走合成回退。此适配留在简听，不修改公共包或书源。回归覆盖缺标题回退、新旧目录补齐、原标题保留、预加载实际参数，以及既有播放控制；Release SDK 签名构建和手机覆盖安装通过。《狩猎北大荒》首章实机重新解析播放后，地址从 `v26-fq-tts.fqnovelvod.com` 变为 `v3-novelapp.fqnovelvod.com`，显示时长 7:33；下一章预加载解析成功。此次未实测投播、显式下载和导出。
 
 迁入核心覆盖 CSS/JSONPath/XPath、正则与替换、规则组合、脚本宿主动作回放、搜索/发现/详情/目录/正文，以及图片标记、图片请求选项/解码、音频/视频地址和段评动作标记。正文输出保留 `richContent`，同时提供 `imageUrls`、`videoUrl`、`interactions` 等结构数据；没有新增漫画、视频或段评页面。轻页原生源的 `vars` 设置、模式/频道切换、静态/动态发现分类和登录声明由 `LocalRulePanelService → LightSourceBridge` 连接到既有面板；设置保存到加密脚本状态，并使首页内容缓存失效、通知首页刷新。选项操作只更新当前变量，避免其他控件的旧值阻止模式切换。
 

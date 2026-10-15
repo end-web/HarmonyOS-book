@@ -1,4 +1,5 @@
 import { PreferenceService } from './PreferenceService';
+import { ChapterRuleContext } from './rulesource/ChapterRuleContext';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
@@ -512,7 +513,7 @@ export class ChapterCacheService {
         await BookSourceService.prepareAudioChapter(source, book, chapter);
         if (expired || !this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return null;
         return BookSourceService.resolveAudioRequest(source, chapter.originSourceValue || chapter.source.value,
-          book.variables, chapter.variables, request);
+          book.variables, ChapterRuleContext.create(chapter.title, chapter.index - 1, chapter.variables), request);
       };
       const requestInfo = await Promise.race([resolve(), timeout]);
       if (requestInfo === null || !this.isResolveCurrent(chapter.id, myClearGen, myPreloadGen)) return;

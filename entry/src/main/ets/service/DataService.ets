@@ -9,6 +9,7 @@ import { TextReadingProgressService } from './text/TextReadingProgressService';
 import { StorageMigrationService } from './StorageMigrationService';
 import { OnlineTextContentCache } from './text/OnlineTextContentCache';
 import { parseCachedChapters } from './ChapterCacheWorker';
+import { ChapterCacheCodec } from './ChapterCacheCodec';
 
 /** 缓存书"索引":只放元数据壳(无 chapters),小且冷启动读取飞快 */
 const CACHED_BOOKS_FILE = 'cached_books_v1.json';
@@ -53,6 +54,7 @@ export class DataService {
   /** sidecar 目录是否已确保存在(避免每次写都 mkdir) */
   private static tocDirReady: boolean = false;
   private static migrationPromise: Promise<void> | null = null;
+  private static chapterReads: Map<string, Promise<Chapter[]>> = new Map();
 
   /** 由 EntryAbility 启动时注入,用于缓存书文件读写 */
   static setContext(c: common.Context): void {
@@ -188,6 +190,15 @@ export class DataService {
 
   /** 读取某本书的本地章节目录(瞬时,无网络)。没有则返回空数组。 */
   static async getChaptersForBook(id: string): Promise<Chapter[]> {
+    const active = DataService.chapterReads.get(id);
+    if (active !== undefined) return active;
+    const task = DataService.readChaptersForBook(id);
+    DataService.chapterReads.set(id, task);
+    try { return await task; }
+    finally { if (DataService.chapterReads.get(id) === task) DataService.chapterReads.delete(id); }
+  }
+
+  private static async readChaptersForBook(id: string): Promise<Chapter[]> {
     if (id.startsWith('import_') && DataService.ctx) {
       const imported = await DataService.readFileSafe(`${DataService.ctx.filesDir}/imported_toc/${id}.json`);
       if (imported.ok && imported.json) {
@@ -211,9 +222,30 @@ export class DataService {
 
   private static async writeToc(id: string, chapters: Chapter[]): Promise<void> {
     const path = DataService.tocPath(id);
-    if (!path) return;
+    if (!path || DataService.persistUnsafe) return;
     await DataService.ensureTocDir();
-    await DataService.writeFileSerial(path, JSON.stringify(chapters));
+    // Serialize only after earlier writes finish, and bound each write buffer.
+    const task = DataService.writeChain.then(() => DataService.atomicWriteToc(path, chapters));
+    DataService.writeChain = task.then(() => {}, () => {});
+    await task.catch(() => {});
+  }
+
+  private static async atomicWriteToc(path: string, chapters: Chapter[]): Promise<void> {
+    const tmp = path + '.tmp';
+    const file = await fileIo.open(tmp, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+    try {
+      let chunk = '[';
+      for (let i = 0; i < chapters.length; i++) {
+        chunk += (i > 0 ? ',' : '') + ChapterCacheCodec.stringify(chapters[i]);
+        if (chunk.length >= 64 * 1024) {
+          await fileIo.write(file.fd, chunk);
+          chunk = '';
+        }
+      }
+      await fileIo.write(file.fd, chunk + ']');
+      try { await fileIo.fsync(file.fd); } catch (_e) { /* 不支持 fsync 时仍原子替换。 */ }
+    } finally { await fileIo.close(file); }
+    await fileIo.moveFile(tmp, path);
   }
 
   private static async deleteToc(id: string): Promise<void> {

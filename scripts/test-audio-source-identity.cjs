@@ -19,12 +19,18 @@ const {BookCoverPolicy} = compile('utils/BookCoverPolicy.ets');
 const {ChapterTitleFormatter} = compile('utils/ChapterTitleFormatter.ets');
 const source = {rawSourceJson:'fixture',variable:'{}'};
 const saved = [];
+let resolvedVariables;
 const {BookSourceService: service} = compile('service/BookSourceService.ets', {
   '../utils/BookCoverPolicy':{BookCoverPolicy},
   '../utils/ChapterTitleFormatter':{ChapterTitleFormatter},
   './rulesource/LocalRuleSourceRepository':{LocalRuleSourceRepository:{getByUrl:async () => source}},
   '../utils/SearchCache':{SearchCache:{put() {}}},
-  './DataService':{DataService:{upsertCachedBook:async book => saved.push(book)}}
+  './DataService':{DataService:{upsertCachedBook:async book => saved.push(book)}},
+  './DownloadPolicy':{DownloadPolicy:{isHttpUrl:url=>url.startsWith('https://')}},
+  './rulesource/LocalRuleDispatcher':{LocalRuleDispatcher:{resolveContent:async (_source,_url,variables)=>{
+    resolvedVariables=variables;
+    return {audioUrl:'https://fixture/audio.mp3',requestHeaders:{Referer:'https://fixture'}};
+  }}}
 });
 const preview = {id:'audio-fixture',title:'有声版名称',author:'作者',cover:'https://fixture/audio.jpg',
   category:'有声书',intro:'',contentType:'audio',bookUrl:'https://fixture/detail?id=123',
@@ -42,6 +48,19 @@ service.getBookToc = async (_source,url,variables,_name,onBatch) => {
   return chapters;
 };
 async function run() {
+  const {SourceVoiceDataSource} = compile('utils/SourceVoiceDataSource.ets');
+  const voiceData = new SourceVoiceDataSource();
+  const voices = [{id:'0',name:'真人原声'},{id:'1',name:'默认合成'},
+    {id:'28',name:'亲切姐姐'},{id:'74',name:'成熟升级'},{id:'74',name:'重复'}];
+  voiceData.setVoices(voices,{tones:'74,1,2,5,4,6,91',real:'7556227913956199449'});
+  assert.deepEqual(Array.from({length:voiceData.totalCount()},(_,i)=>voiceData.getData(i).id),['0','1','74'],
+    'book tones exclude unsupported voice 28 while retaining the related real edition');
+  voiceData.setVoices(voices,{tones:' 74, 1 ',real:''});
+  assert.deepEqual(Array.from({length:voiceData.totalCount()},(_,i)=>voiceData.getData(i).id),['1','74']);
+  voiceData.setVoices(voices,{tones:''});
+  assert.equal(voiceData.totalCount(),0,'explicit empty availability leaves only the separate default choice');
+  voiceData.setVoices(voices,{});
+  assert.equal(voiceData.totalCount(),4,'sources without per-book availability keep declared choices and deduplicate');
   const cached = {...preview,cover:'https://fixture/novel.jpg',coverFromDetail:true};
   BookCoverPolicy.merge(preview,cached);
   assert.equal(preview.cover,'https://fixture/audio.jpg','old detail cache cannot override fresh audio edition');
@@ -71,6 +90,13 @@ async function run() {
   const writes = saved.length;
   await service.prepareAudioChapter(source,legacy,chapter);
   assert.equal(saved.length,writes,'current catalogs are reused without another migration');
+  const chapterVariables = {custom:'1',chapterName:'第一章'};
+  await service.resolveAudioRequest(source,'https://fixture/chapter',{__audioSourceVoice:'74'},chapterVariables);
+  assert.equal(resolvedVariables.custom,'74','selected book voice wins over old catalog voice');
+  assert.equal(resolvedVariables.chapterName,'第一章');
+  await service.resolveAudioRequest(source,'https://fixture/chapter',{__audioSourceVoice:''},chapterVariables);
+  assert.equal(resolvedVariables.custom,'','default selection clears old catalog override');
+  assert.equal(chapterVariables.custom,'1','switching does not mutate the chapter snapshot');
   console.log('PASS: audio edition identity, old cover cache, detail/toc variables, updates and persistence');
 }
 run().catch(error => {console.error(error);process.exitCode=1;});

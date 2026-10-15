@@ -1,3 +1,4 @@
+import { SourceEngineHost } from '../host/SourceEngineHost';
 import { JSBoundedExecutionResult, JSContext, JSRuntimeOptions } from '@devzeng/quickjs';
 import { QuickJsObservationContext, QuickJsRuntimeMode, QuickJsRuntimeStatus } from './QuickJsRuntimeStatus';
 import { QuickJsValidationStore } from './QuickJsValidationStore';
@@ -100,8 +101,28 @@ export class QuickJsScriptRuntime {
   }
 
   private static evaluateInContext(code: string, variables: Record<string, Object>,
-    declarations: string[], timeoutMs: number, output: QuickJsExpressionResult, scriptName: string): QuickJsExpressionResult {
-    output.error = 'synchronous QuickJS disabled; use bounded taskpool stage runtime';
+    declarations: string[], timeoutMs: number, output: QuickJsExpressionResult,
+    scriptName: string): QuickJsExpressionResult {
+    if (SourceEngineHost.scriptExecutor()?.allowSynchronousQuickJs === false) {
+      output.error = 'synchronous QuickJS disabled by host; use the asynchronous stage runtime';
+      return output;
+    }
+    const options = new JSRuntimeOptions();
+    options.memoryLimitBytes = 16 * 1024 * 1024;
+    options.stackLimitBytes = 512 * 1024;
+    const context = new JSContext(options);
+    try {
+      context.setObject(variables, '__legadoBindings');
+      const wrapped = `(function(){const __bindings=globalThis.__legadoBindings;` +
+        `${declarations.join(';')};return (${code});})()`;
+      const result = context.evaluateBounded(wrapped, scriptName,
+        Math.max(10, Math.min(250, timeoutMs)), 8);
+      QuickJsScriptRuntime.copyResult(result, output);
+    } catch (error) {
+      output.error = QuickJsScriptRuntime.errorMessage(error);
+    } finally {
+      context.release();
+    }
     return output;
   }
 

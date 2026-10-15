@@ -43,6 +43,7 @@ import { ProfileMenuDestination } from '../components/ProfileMenuDestination';
 import { WindowUtils } from '../utils/WindowUtils';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { LocalImportRouteParams } from '../utils/FileOpenRouting';
+import { RuleSourceImportQueue } from '../service/rulesource/RuleSourceImportQueue';
 import {
   BookOneShotPayload,
   NavigationOneShotRunner,
@@ -158,7 +159,7 @@ struct Index {
       return;
     }
     if (target === 'ruleSourceImport') {
-      this.navStack.pushPathByName('ruleSources', bookId, false);
+      RuleSourceImportQueue.getInstance().open(this.navStack, bookId);
       return;
     }
     if (target === 'resume') {
@@ -451,7 +452,7 @@ struct Index {
       }
     } else if (name === 'ruleSources') {
       // RuleSourcePage 自带 ProfileMenuDestination：页内多级视图需拦截侧滑返回
-      RuleSourcePage({ navStack: this.navStack, importFileUri: typeof param === 'string' ? param : '' })
+      RuleSourcePage({ navStack: this.navStack })
     } else if (name === 'ruleSourceAccount') {
       ProfileMenuDestination() {
         RuleSourceAccountPage({ navStack: this.navStack, sourceUrl: String(param) })

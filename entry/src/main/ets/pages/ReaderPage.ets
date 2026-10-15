@@ -1591,13 +1591,15 @@ export struct ReaderPage {
   }
 
   @Builder
-  readerTabStyle(icon: Resource, label: Resource, enabled: boolean = true) {
+  readerTabStyle(icon: Resource, label: Resource, direction: number = 0) {
     Column({ space: 2 }) {
       SymbolGlyph(icon).fontSize(22).fontColor([this.palette.primary])
         .accessibilityText(label)
       Text(label).fontSize(AppFont.Caption).fontColor(this.palette.primary).maxLines(1)
     }.width('100%').height(48).justifyContent(FlexAlign.Center)
-      .opacity(enabled ? 1 : 0.35).enabled(enabled)
+      // Builder 的普通参数只在创建时取值；切章状态须在属性表达式中直接读取。
+      .opacity(direction === 0 || this.canSwitchChapter(direction > 0) ? 1 : 0.35)
+      .enabled(direction === 0 || this.canSwitchChapter(direction > 0))
   }
 
   private adjacentChapterIndex(forward: boolean): number {
@@ -1696,12 +1698,12 @@ export struct ReaderPage {
     Stack({ alignContent: Alignment.Bottom }) {
       HdsTabs() {
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.backward_end_fill'),
-          $r('app.string.reader_previous_chapter'), this.canSwitchChapter(false)))
+          $r('app.string.reader_previous_chapter'), -1))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.list_bullet'), $r('app.string.reader_chapters')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.textformat'), $r('app.string.reader_font_tab')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.forward_end_fill'),
-          $r('app.string.reader_next_chapter'), this.canSwitchChapter(true)))
+          $r('app.string.reader_next_chapter'), 1))
       }
       .width('100%')
       .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM)

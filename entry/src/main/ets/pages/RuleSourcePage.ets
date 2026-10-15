@@ -1,4 +1,5 @@
 import { fileIo, picker } from '@kit.CoreFileKit';
+import { RuleSourceImportQueue } from '../service/rulesource/RuleSourceImportQueue';
 import lazy { scanBarcode, scanCore } from '@kit.ScanKit';
 import { LocalRuleSource, LocalRuleSourceStatus, LocalRuleSourceType } from '../model/LocalRuleSource';
 import { RuleSourceLoginRouteParams } from '../model/RuleSourceLogin';
@@ -104,8 +105,8 @@ class RuleSourceDataSource implements IDataSource {
 @ComponentV2
 export struct RuleSourcePage {
   @Param navStack: NavPathStack = new NavPathStack();
-  @Param importFileUri: string = '';
-  private externalImportConsumed: boolean = false;
+  @Local externalImports: RuleSourceImportQueue = RuleSourceImportQueue.getInstance();
+  private pageAttached: boolean = false;
   @Local importJson: string = '';
   @Local searchKeyword: string = '';
   @Local sourceCount: number = 0;
@@ -190,6 +191,7 @@ export struct RuleSourcePage {
   };
 
   aboutToAppear(): void {
+    this.pageAttached = true;
     WindowUtils.addSafeAreaListener(this.safeAreaListener);
     this.lastInvalidationCounter = SourceDataService.getInvalidationCounter();
     this.loadSources();
@@ -197,6 +199,7 @@ export struct RuleSourcePage {
   }
 
   aboutToDisappear(): void {
+    this.pageAttached = false;
     this.loadRevision++;
     WindowUtils.removeSafeAreaListener(this.safeAreaListener);
     this.stopRefreshCheck();
@@ -205,6 +208,8 @@ export struct RuleSourcePage {
 
   private startRefreshCheck(): void {
     this.refreshCheckTimer = setInterval(() => {
+      // 手动导入/测试期间收到的文件保留排队，空闲且回到本页后继续。
+      this.consumeExternalImports();
       if (this.loginRevision !== LocalRuleSourceRepository.getLoginRevision()) {
         this.refreshLoginStatuses().catch((): void => {});
       }
@@ -245,15 +250,6 @@ export struct RuleSourcePage {
       this.loadFailed = false;
       this.lastInvalidationCounter = invalidationCounter;
       this.refreshLoginStatuses().catch((): void => {});
-      if (this.importFileUri.length > 0 && !this.externalImportConsumed) {
-        this.externalImportConsumed = true;
-        this.isImporting = true;
-        this.showImportPanel = true;
-        try {
-          const content = await this.readLocalJson(this.importFileUri);
-          if (content !== undefined) await this.persistImportContent(content);
-        } finally { this.isImporting = false; }
-      }
     } catch (_error) {
       if (revision !== this.loadRevision) return;
       this.sourceCount = 0;
@@ -263,7 +259,47 @@ export struct RuleSourcePage {
       this.dataSource.setSources([]);
       this.loadFailed = true;
     } finally {
-      if (revision === this.loadRevision) this.isLoading = false;
+      if (revision === this.loadRevision) {
+        this.isLoading = false;
+        this.consumeExternalImports();
+      }
+    }
+  }
+
+  @Monitor('externalImports.revision')
+  private onExternalImportRequested(): void {
+    this.consumeExternalImports();
+  }
+
+  private async consumeExternalImports(): Promise<void> {
+    const paths = this.navStack.getAllPathName();
+    if (!this.pageAttached || this.isLoading || this.loadFailed || this.isImporting || this.isBulkTesting ||
+      this.busySourceUrl.length > 0 || paths[paths.length - 1] !== 'ruleSources' ||
+      !this.externalImports.hasPending()) return;
+    if (!this.externalImports.tryBegin()) return;
+    this.closeManagement();
+    this.isEditMode = false;
+    this.resetSelection();
+    this.isImporting = true;
+    this.showImportPanel = true;
+    let allSucceeded = true;
+    try {
+      while (this.pageAttached && this.externalImports.hasPending()) {
+        const uri = this.externalImports.take();
+        if (uri === undefined) break;
+        try {
+          const content = await this.readLocalJson(uri);
+          const imported = content !== undefined && await this.persistImportContent(content);
+          if (!imported) allSucceeded = false;
+        } catch (error) {
+          allSucceeded = false;
+          this.showImportError(error);
+        }
+      }
+      if (allSucceeded) this.showImportPanel = false;
+    } finally {
+      this.isImporting = false;
+      this.externalImports.finish();
     }
   }
 
@@ -573,9 +609,6 @@ export struct RuleSourcePage {
 
   private toggleImportPanel(): void {
     this.showImportPanel = !this.showImportPanel;
-    if (this.showImportPanel) {
-      setTimeout((): void => this.sourceListScroller.scrollToIndex(0, false), 0);
-    }
     if (this.showImportPanel && this.isEditMode) {
       this.isEditMode = false;
       this.resetSelection();
@@ -938,10 +971,6 @@ export struct RuleSourcePage {
     }
   }
 
-  private createNewSource(): void {
-    this.navStack.pushPathByName('RuleSourceEditPage', null, () => this.refresh());
-  }
-
   private editSource(source: LocalRuleSource): void {
     if (source.isLocked) { this.showToast($r('app.string.source_manage_locked_message')); return; }
     const params: RuleSourceEditParams = { sourceUrl: source.bookSourceUrl };
@@ -1282,7 +1311,31 @@ export struct RuleSourcePage {
       pageBackground: $r('sys.color.background_secondary'),
       onBackRequested: (): boolean => this.requestBack()
     }) {
-      this.buildBody()
+      Stack({ alignContent: Alignment.BottomEnd }) {
+        this.buildBody()
+        if (!this.isLoading && !this.loadFailed && !this.isEditMode &&
+          this.managementView.length === 0 && !this.showImportPanel) {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph($r('sys.symbol.plus')).fontSize(25).fontColor([AppColor.Brand])
+          }
+          .width(52).height(52)
+          .backgroundColor($r('sys.color.comp_background_primary'))
+          .border({ width: 1, color: AppColor.BrandSoft })
+          .shadow({ radius: 12, color: '#20000000', offsetY: 4 })
+          .margin({ right: AppSpace.Lg, bottom: Math.max(this.safeBottom, RULE_SOURCE_MIN_BOTTOM_INSET) + 16 })
+          .enabled(!this.isImporting && !this.isBulkTesting && this.busySourceUrl.length === 0)
+          .accessibilityText($r('app.string.rule_source_import_title'))
+          .id('rule-source-import-button')
+          .bindMenu(this.buildImportMenu())
+        }
+      }.width('100%').height('100%')
+      .bindSheet($$this.showImportPanel, this.buildImportSheet(), {
+        height: SheetSize.LARGE,
+        showClose: true,
+        onWillDismiss: (action: DismissSheetAction): void => {
+          if (!this.isImporting) action.dismiss();
+        }
+      })
     }
   }
 
@@ -1308,12 +1361,6 @@ export struct RuleSourcePage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: AppSpace.Sm, scroller: this.sourceListScroller }) {
-          if (this.showImportPanel) {
-            ListItem() {
-              this.buildImportSection()
-            }
-          }
-
           ListItem() {
             Row() {
               Text($r('app.string.rule_source_installed'))
@@ -1386,6 +1433,27 @@ export struct RuleSourcePage {
   }
 
   @Builder
+  buildImportMenu() {
+    Menu() {
+      MenuItem({ content: $r('app.string.rule_source_import_file_action') })
+        .onClick((): void => { this.showImportPanel = true; this.importLocalFile(); })
+      MenuItem({ content: $r('app.string.rule_source_import_link_action') })
+        .onClick((): void => this.toggleImportPanel())
+      if (canIUse('SystemCapability.Multimedia.Scan.ScanBarcode')) {
+        MenuItem({ content: $r('app.string.rule_source_import_scan_action') })
+          .onClick(() => this.scanQRCode())
+      }
+    }
+  }
+
+  @Builder
+  buildImportSheet() {
+    Scroll() { this.buildImportSection() }
+      .width('100%').height('100%')
+      .padding({ bottom: Math.max(this.safeBottom, RULE_SOURCE_MIN_BOTTOM_INSET) })
+  }
+
+  @Builder
   buildTalebookConnection() {
     TalebookConnectComponent({
       sourceUrl: this.talebookSourceUrl,
@@ -1448,39 +1516,12 @@ export struct RuleSourcePage {
             .onClick(() => this.confirmBulkTest())
           }
 
-          Button() {
-            SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize('20vp')
-              .fontColor([AppColor.Brand])
-          }
-          .width(36)
-          .height(36)
-          .padding(0)
-          .backgroundColor(Color.Transparent)
-          .borderRadius(AppRadius.Pill)
-          .accessibilityText($r('app.string.source_manage_new'))
-          .onClick(() => this.createNewSource())
-
           if (this.sourceCount === 0) {
             Button() { SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(20).fontColor([AppColor.Brand]) }
               .height(36).width(36).padding(0).backgroundColor(Color.Transparent)
               .accessibilityText($r('app.string.source_manage_more')).bindMenu(this.buildToolsMenu())
           }
 
-          Button() {
-            Text(this.showImportPanel ? $r('app.string.rule_source_close_import') :
-              $r('app.string.rule_source_import_short'))
-              .fontSize(AppFont.Body)
-              .fontColor(AppColor.Brand)
-          }
-          .height(36)
-          .constraintSize({ minWidth: 0 })
-          .padding({ left: AppSpace.Xs, right: AppSpace.Xxs })
-          .backgroundColor(Color.Transparent)
-          .borderRadius(AppRadius.Sm)
-          .accessibilityText(this.showImportPanel ? $r('app.string.rule_source_close_import') :
-            $r('app.string.rule_source_import_title'))
-          .onClick(() => this.toggleImportPanel())
         }
 
         if (!this.isLoading && !this.loadFailed && this.sourceCount > 0 && this.managementView.length === 0) {
@@ -2038,7 +2079,7 @@ export struct RuleSourcePage {
           SymbolGlyph($r('sys.symbol.qrcode'))
             .fontSize(18)
             .fontColor([AppColor.Brand])
-          Text('扫描二维码导入')
+          Text($r('app.string.rule_source_import_scan_action'))
             .fontSize(AppFont.Body)
             .fontColor(AppColor.Brand)
             .fontWeight(FontWeight.Medium)

@@ -1,6 +1,5 @@
-import { LightSourceRequestPolicy } from '../../../LightSourceRequestPolicy';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 import { BookSource } from '../../model/data/Book';
-import { sleepMs } from '../../utils/Sleep';
 
 class BookSourceRateState {
   timestamps: number[] = [];
@@ -28,7 +27,7 @@ export class BookSourceRateLimiter {
    */
   static async acquire(source: BookSource | null, isCancelled?: () => boolean,
     maxWaitMs: number = 0): Promise<RateLimitAcquireResult> {
-    if (LightSourceRequestPolicy.isCancelled(source) || isCancelled?.()) return RateLimitAcquireResult.Cancelled;
+    if (SourceEngineHost.isCancelled(source) || isCancelled?.()) return RateLimitAcquireResult.Cancelled;
     if (!source || !source.concurrentRate) return RateLimitAcquireResult.Acquired;
     const config = this.parse(source.concurrentRate);
     if (!config) return RateLimitAcquireResult.Acquired;
@@ -40,29 +39,29 @@ export class BookSourceRateLimiter {
       state = new BookSourceRateState();
       this.states.set(key, state);
     }
-    const waiter = LightSourceRequestPolicy.enqueue(key, source, isCancelled);
+    const waiter = SourceEngineHost.enqueue(key, source, isCancelled);
     try {
-    while (true) {
-      if (waiter.isCancelled()) return RateLimitAcquireResult.Cancelled;
-      const now = Date.now();
-      state.timestamps = state.timestamps.filter(timestamp => now - timestamp < config.windowMs);
-      if (state.timestamps.length < config.limit) {
-        if (!LightSourceRequestPolicy.first(key, waiter)) {
-          if (deadline > 0 && now >= deadline) return RateLimitAcquireResult.RateLimited;
-          await waiter.wait(deadline > 0 ? Math.min(500, Math.max(1, deadline - now)) : 500);
-          continue;
+      while (true) {
+        if (waiter.isCancelled()) return RateLimitAcquireResult.Cancelled;
+        const now = Date.now();
+        state.timestamps = state.timestamps.filter(timestamp => now - timestamp < config.windowMs);
+        if (state.timestamps.length < config.limit) {
+          if (!SourceEngineHost.first(key, waiter)) {
+            if (deadline > 0 && now >= deadline) return RateLimitAcquireResult.RateLimited;
+            await waiter.wait(deadline > 0 ? Math.min(500, Math.max(1, deadline - now)) : 500);
+            continue;
+          }
+          state.timestamps.push(now);
+          return RateLimitAcquireResult.Acquired;
         }
-        state.timestamps.push(now);
-        return RateLimitAcquireResult.Acquired;
+        let waitMs = Math.max(1, state.timestamps[0] + config.windowMs - now);
+        if (deadline > 0) {
+          if (now >= deadline) return RateLimitAcquireResult.RateLimited;
+          waitMs = Math.min(waitMs, deadline - now);
+        }
+        await waiter.wait(Math.min(waitMs, BookSourceRateLimiter.WAIT_SLICE_MS));
       }
-      let waitMs = Math.max(1, state.timestamps[0] + config.windowMs - now);
-      if (deadline > 0) {
-        if (now >= deadline) return RateLimitAcquireResult.RateLimited;
-        waitMs = Math.min(waitMs, deadline - now);
-      }
-      await waiter.wait(Math.min(waitMs, BookSourceRateLimiter.WAIT_SLICE_MS));
-    }
-    } finally { LightSourceRequestPolicy.remove(key, waiter); }
+    } finally { SourceEngineHost.remove(key, waiter); }
   }
 
   /**
