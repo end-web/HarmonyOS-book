@@ -57,8 +57,11 @@ class ReaderParagraphFrameNode extends FrameNode {
     }
     this.paintLines(canvas, page.paintState.lines);
     if (this.range.start >= 0 && this.range.end > this.range.start) {
-      const boxes = paragraph.getRectsForRange({ start: page.displayStart + this.range.start,
-        end: page.displayStart + this.range.end }, graphicsText.RectWidthStyle.TIGHT,
+      const displayStart = page.displayStart + this.range.start;
+      const displayEnd = page.displayStart + this.range.end;
+      const boxes = paragraph.getRectsForRange({
+        start: page.nativeOffsets?.nativeOffsetForDisplay(displayStart) ?? displayStart,
+        end: page.nativeOffsets?.nativeOffsetForDisplay(displayEnd) ?? displayEnd }, graphicsText.RectWidthStyle.TIGHT,
         graphicsText.RectHeightStyle.TIGHT);
       const brush = new drawing.Brush();
       brush.setColor(foreground);

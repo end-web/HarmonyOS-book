@@ -277,6 +277,7 @@ export struct HomePage {
   @Local homeResolved: boolean = false;
   private rankingBackHandler: (() => boolean) | undefined = undefined;
   @Event onManageSources: (resume: () => void) => void = () => {};
+  @Event onSourceSettings: (sourceUrl: string) => void = () => {};
   @Event onRankingBookTap: (id: string, resume: () => void) => void = () => {};
   @Local homeBlocks: HomeBlockSection[] = [];
   @Local carouselBooks: SearchResult[] = [];
@@ -291,6 +292,10 @@ export struct HomePage {
   @Local loadingHomeSources: boolean = false;
   @Local homeSourceKeyword: string = '';
   @Local homeSourceMatchCount: number = 0;
+  @Local homeSourceMenuColumns: number = 1;
+  @Local savingHomeSourceMenuColumns: boolean = false;
+  @Local homeSourceMenuViewportWidth: number = WindowUtils.getWindowWidthVp();
+  @Local homeSourceMenuViewportHeight: number = WindowUtils.getWindowHeightVp();
   private homeSourcesRevision: number = -1;
   private homeSourceMenuSerial: number = 0;
   private homeSourceMenuData: HomeRecommendationDataSource<LocalRuleSource> = new HomeRecommendationDataSource();
@@ -372,6 +377,11 @@ export struct HomePage {
     emitter.on(EVT_FAVORITES_CHANGED, this.favoritesChangedHandler);
     this.loadFavorites();
     this.loadHomeBlocks();
+    PreferenceService.getHomeSourceMenuColumns().then((columns: number): void => {
+      this.homeSourceMenuColumns = columns;
+    }).catch((): void => {
+      hilog.warn(DOMAIN, TAG, 'Failed to load home source menu columns');
+    });
     // 把滚动控制器交给上层(MainPage)绑定到 HdsTabsController
     this.onScrollerReady(this.headerScroller);
   }
@@ -1026,6 +1036,41 @@ export struct HomePage {
     this.headerScrollOffset = 0;
   }
 
+  private openHomeSourceSettings(sourceUrl: string): void {
+    if (!sourceUrl || this.savingHomeSource) return;
+    this.homeSourceMenuVisible = false;
+    this.onSourceSettings(sourceUrl);
+  }
+
+  @Computed
+  get homeSourceMenuWidth(): number {
+    const available: number = Math.max(1,
+      this.homeSourceMenuViewportWidth - this.leftSafeVp - this.rightSafeVp - AppSpace.Md * 2);
+    return Math.min(this.homeSourceMenuColumns === 2 ? 640 : 248, available);
+  }
+
+  @Computed
+  get homeSourceMenuHeight(): number {
+    return this.homeSourceMenuViewportHeight * 0.76;
+  }
+
+  private async changeHomeSourceMenuColumns(columns: number): Promise<void> {
+    if (this.homeSourceMenuColumns === columns || this.savingHomeSourceMenuColumns) return;
+    const previous: number = this.homeSourceMenuColumns;
+    this.homeSourceMenuColumns = columns;
+    this.savingHomeSourceMenuColumns = true;
+    this.scrollHomeSourceMenuToSelection();
+    try {
+      await PreferenceService.setHomeSourceMenuColumns(columns);
+    } catch (_error) {
+      this.homeSourceMenuColumns = previous;
+      this.scrollHomeSourceMenuToSelection();
+      this.showHomeSourceToast($r('app.string.rule_source_operation_failed'));
+    } finally {
+      this.savingHomeSourceMenuColumns = false;
+    }
+  }
+
   private filterHomeSources(value: string, resetPosition: boolean = true): void {
     this.homeSourceKeyword = value;
     const keyword = value.trim().toLowerCase();
@@ -1081,6 +1126,7 @@ export struct HomePage {
   private homeSourceMenuOptions(): CustomPopupOptions {
     const options: CustomPopupOptions = {
       builder: this.buildHomeSourceMenu,
+      width: this.homeSourceMenuWidth,
       placement: Placement.BottomRight,
       popupColor: Color.Transparent,
       radius: AppRadius.Xl,
@@ -1099,17 +1145,34 @@ export struct HomePage {
   @LocalBuilder
   buildHomeSourceMenu() {
     Column({ space: 2 }) {
-      Text($r('app.string.ranking_home')).fontSize(16)
-        .fontColor(this.rankingMode ? AppColor.Brand : $r('sys.color.font_primary'))
-        .width('100%').height(40).padding({ left: 12, right: 12 })
-        .borderRadius(AppRadius.Xl - AppSpace.Xs)
-        .backgroundColor(this.rankingMode ? AppColor.BrandSoft : Color.Transparent)
-        .onClick((): void => {
-          this.homeSourceMenuVisible = false;
-          PreferenceService.setHomeSourceUrl(RankingService.HOME_URL).catch((): void => {
-            this.showHomeSourceToast($r('app.string.rule_source_operation_failed'));
-          });
-        })
+      Row({ space: AppSpace.Xs }) {
+        Text($r('app.string.ranking_home')).fontSize(16)
+          .fontColor(this.rankingMode ? AppColor.Brand : $r('sys.color.font_primary'))
+          .layoutWeight(1).height(48).padding({ left: 12, right: 12 })
+          .borderRadius(AppRadius.Xl - AppSpace.Xs)
+          .backgroundColor(this.rankingMode ? AppColor.BrandSoft : Color.Transparent)
+          .onClick((): void => {
+            this.homeSourceMenuVisible = false;
+            PreferenceService.setHomeSourceUrl(RankingService.HOME_URL).catch((): void => {
+              this.showHomeSourceToast($r('app.string.rule_source_operation_failed'));
+            });
+          })
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(this.homeSourceMenuColumns === 1 ?
+            $r('sys.symbol.square_grid_2x2') : $r('sys.symbol.list_bullet'))
+            .fontSize(22).fontColor([AppColor.Brand])
+        }
+          .width(48).height(48)
+          .backgroundColor(Color.Transparent)
+          .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
+          .enabled(!this.savingHomeSourceMenuColumns)
+          .id('home-source-menu-layout')
+          .accessibilityText(this.homeSourceMenuColumns === 1 ?
+            $r('app.string.home_source_menu_switch_two_columns') : $r('app.string.home_source_menu_switch_one_column'))
+          .onClick((): void => {
+            this.changeHomeSourceMenuColumns(this.homeSourceMenuColumns === 1 ? 2 : 1);
+          })
+      }.width('100%').height(48)
       Search({ value: this.homeSourceKeyword, placeholder: $r('app.string.rule_source_search_placeholder') })
         .width('100%').height(40).margin(0)
         .borderRadius(AppRadius.Xl - AppSpace.Xs)
@@ -1119,34 +1182,50 @@ export struct HomePage {
       if (this.loadingHomeSources) {
         Row() {
           LoadingProgress().width(24).height(24).color(AppColor.Brand)
-        }.width('100%').height(64).justifyContent(FlexAlign.Center)
+        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
       } else if (this.homeSourceMatchCount === 0) {
         Text($r('app.string.rule_source_no_match'))
           .fontSize(14).fontColor($r('sys.color.font_secondary'))
-          .width('100%').height(64).textAlign(TextAlign.Center)
+          .width('100%').layoutWeight(1).textAlign(TextAlign.Center)
       } else {
-        List({ scroller: this.homeSourceMenuScroller,
+        List({ space: AppSpace.Xxs, scroller: this.homeSourceMenuScroller,
           initialIndex: this.rankingMode || this.homeSourceKeyword.length > 0 ? 0 : Math.max(0, this.homeSourceIndex) }) {
           LazyForEach(this.homeSourceMenuData, (source: LocalRuleSource) => {
             ListItem() {
-              Text(source.bookSourceName)
-                .fontSize(16).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                .fontColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
-                  AppColor.Brand : $r('sys.color.font_primary'))
-                .width('100%').height(48).padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+              Row() {
+                Text(source.bookSourceName)
+                  .fontSize(16).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .fontColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
+                    AppColor.Brand : $r('sys.color.font_primary'))
+                  .layoutWeight(1).height(48).padding({ left: AppSpace.Sm, right: AppSpace.Xs })
+                  .enabled(!this.savingHomeSource)
+                  .onClick((): void => {
+                    this.homeSourceMenuVisible = false;
+                    this.selectHomeSource(this.homeSources.findIndex((item: LocalRuleSource): boolean =>
+                      item.bookSourceUrl === source.bookSourceUrl));
+                  })
+                Button({ type: ButtonType.Circle }) {
+                  SymbolGlyph($r('sys.symbol.chevron_right'))
+                    .fontSize(24).fontColor([AppColor.Brand])
+                }
+                .width(48).height(48).margin({ right: AppSpace.Xxs })
+                .backgroundColor(Color.Transparent)
+                .enabled(!this.savingHomeSource)
+                .accessibilityText($r('app.string.home_source_open_settings'))
+                .accessibilityDescription(source.bookSourceName)
+                .onClick((): void => this.openHomeSourceSettings(source.bookSourceUrl))
+              }
+                .width('100%').height(48)
                 .borderRadius(AppRadius.Xl - AppSpace.Xs)
                 .backgroundColor(source.bookSourceUrl === this.homeSources[this.homeSourceIndex]?.bookSourceUrl ?
-                  AppColor.BrandSoft : Color.Transparent)
-                .onClick((): void => {
-                  this.homeSourceMenuVisible = false;
-                  this.selectHomeSource(this.homeSources.findIndex((item: LocalRuleSource): boolean =>
-                    item.bookSourceUrl === source.bookSourceUrl));
-                })
+                  AppColor.BrandSoft : HomeTheme.ProgressTrack)
             }
           }, (source: LocalRuleSource): string => source.bookSourceUrl)
-        }.width('100%').height(Math.min(288, this.homeSourceMatchCount * 48)).scrollBar(BarState.Auto)
+        }.width('100%').layoutWeight(1)
+          .lanes(this.homeSourceMenuColumns, AppSpace.Xs).scrollBar(BarState.Auto)
       }
-    }.width(280).padding(AppSpace.Xs)
+    }.width(this.homeSourceMenuWidth).height(this.homeSourceMenuHeight).padding(AppSpace.Xs)
+      .id('home-source-menu')
   }
 
   /** 标题栏主区域：放入 Navigation 生效范围，启用原生沉浸光感。 */
@@ -1190,6 +1269,7 @@ export struct HomePage {
           if (this.homeSourceMenuVisible) this.loadHomeSourceMenu();
         })
         .bindPopup(this.homeSourceMenuVisible, this.homeSourceMenuOptions())
+
     }
     .width('100%')
     .height(SEARCH_FIELD_ROW_HEIGHT)
@@ -1252,6 +1332,15 @@ export struct HomePage {
         this.buildSourceHome()
       }
     }.width('100%').height('100%')
+      .onSizeChange((_oldSize: SizeOptions, newSize: SizeOptions): void => {
+        const width: number = Number(newSize.width);
+        const height: number = Number(newSize.height);
+        if (Number.isFinite(width) && width > 0) this.homeSourceMenuViewportWidth = width;
+        if (Number.isFinite(height) && height > 0) {
+          const windowHeight: number = WindowUtils.getWindowHeightVp();
+          this.homeSourceMenuViewportHeight = windowHeight > 0 ? windowHeight : height;
+        }
+      })
       .onVisibleAreaChange([0, 1], (visible: boolean): void => {
         if (visible && this.lastSourceRevision !== SourceDataService.getInvalidationCounter()) this.reloadSource();
       })

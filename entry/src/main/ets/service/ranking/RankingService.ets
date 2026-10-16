@@ -34,7 +34,7 @@ export class RankingService {
 
   static boards(): RankingBoard[] {
     return [
-      new RankingBoard('fq-hot', 'fanqie', $r('app.string.ranking_fanqie'), $r('app.string.ranking_hot'),
+      new RankingBoard('fq-hot', 'fanqie', $r('app.string.ranking_fanqie'), $r('app.string.ranking_novel_hot'),
         'https://fanqienovel.com/api/author/misc/top_book_list/v1/'),
       new RankingBoard('fl-month', 'faloo', $r('app.string.ranking_faloo'), $r('app.string.ranking_month'),
         'https://b.faloo.com/y_0_0_0_0_3_15_1.html'),
@@ -99,8 +99,32 @@ export class RankingService {
       new RankingBoard('jj-vip', 'jjwxc', $r('app.string.ranking_jjwxc'), $r('app.string.ranking_vip_recommend'),
         'https://www.jjwxc.net/topten.php?orderstr=2'),
       new RankingBoard('jj-words', 'jjwxc', $r('app.string.ranking_jjwxc'), $r('app.string.ranking_words'),
-        'https://www.jjwxc.net/topten.php?orderstr=8')
+        'https://www.jjwxc.net/topten.php?orderstr=8'),
+      new RankingBoard('fq-fantasy-reading', 'fanqie', $r('app.string.ranking_fanqie'),
+        $r('app.string.ranking_fantasy_reading'), RankingService.fanqieCategory(1, 2, 257)),
+      new RankingBoard('fq-urban-reading', 'fanqie', $r('app.string.ranking_fanqie'),
+        $r('app.string.ranking_urban_reading'), RankingService.fanqieCategory(1, 2, 1014)),
+      new RankingBoard('fq-historical-reading', 'fanqie', $r('app.string.ranking_fanqie'),
+        $r('app.string.ranking_historical_reading'), RankingService.fanqieCategory(0, 2, 1139)),
+      new RankingBoard('fq-fantasy-new', 'fanqie', $r('app.string.ranking_fanqie'),
+        $r('app.string.ranking_fantasy_new'), RankingService.fanqieCategory(1, 1, 257)),
+      new RankingBoard('fq-historical-new', 'fanqie', $r('app.string.ranking_fanqie'),
+        $r('app.string.ranking_historical_new'), RankingService.fanqieCategory(0, 1, 1139)),
+      new RankingBoard('fl-week-flowers', 'faloo', $r('app.string.ranking_faloo'),
+        $r('app.string.ranking_week_flowers'), 'https://b.faloo.com/y_0_0_0_0_3_4_1.html'),
+      new RankingBoard('fl-week-clicks', 'faloo', $r('app.string.ranking_faloo'),
+        $r('app.string.ranking_week_clicks'), 'https://b.faloo.com/y_0_0_0_0_3_1_1.html'),
+      new RankingBoard('fl-month-clicks', 'faloo', $r('app.string.ranking_faloo'),
+        $r('app.string.ranking_month_clicks'), 'https://b.faloo.com/y_0_0_0_0_3_2_1.html'),
+      new RankingBoard('fl-month-favorites', 'faloo', $r('app.string.ranking_faloo'),
+        $r('app.string.ranking_month_favorites'), 'https://b.faloo.com/y_0_0_0_0_3_8_1.html')
     ];
+  }
+
+  /** 官网分类榜：gender 1/0 为男/女频，rankMold 2/1 为阅读/新书榜。 */
+  private static fanqieCategory(gender: number, rankMold: number, categoryId: number): string {
+    return 'https://fanqienovel.com/api/rank/category/list?app_id=2503&rank_list_type=3' +
+      `&offset=0&limit=30&category_id=${categoryId}&rank_version=&gender=${gender}&rankMold=${rankMold}`;
   }
 
   static async cached(context: common.Context, board: RankingBoard): Promise<RankingBoard> {

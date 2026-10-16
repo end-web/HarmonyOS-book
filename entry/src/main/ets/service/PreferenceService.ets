@@ -34,6 +34,7 @@ const KEY_DEFAULT_PLAYBACK_SPEED = 'default_playback_speed';
 const KEY_PRIVACY_AGREED_VERSION = 'privacy_agreed_version';
 const KEY_HOME_GRID_COLUMNS = 'home_grid_columns';
 const KEY_HOME_SOURCE_URL = 'home_source_url';
+const KEY_HOME_SOURCE_MENU_COLUMNS = 'home_source_menu_columns';
 const KEY_CACHED_BOOKS = 'cached_books_v1';
 const KEY_PRELOAD_CHAPTERS = 'preload_chapters_count';
 /** 搜索历史记录 */
@@ -909,6 +910,19 @@ export class PreferenceService {
     await store.put(KEY_HOME_SOURCE_URL, sourceUrl);
     await store.flush();
     emitter.emit(EVT_HOME_SOURCE_CHANGED);
+  }
+
+  /** 首页切源弹框列数，与首页书籍栅格设置独立。 */
+  static async getHomeSourceMenuColumns(): Promise<number> {
+    const store = await PreferenceService.ensureStore();
+    const value = await store.get(KEY_HOME_SOURCE_MENU_COLUMNS, 1);
+    return value === 2 ? 2 : 1;
+  }
+
+  static async setHomeSourceMenuColumns(columns: number): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    await store.put(KEY_HOME_SOURCE_MENU_COLUMNS, columns === 2 ? 2 : 1);
+    await store.flush();
   }
 
   /** 首页书籍栅格列数：1 / 2 / 3，默认 3 */

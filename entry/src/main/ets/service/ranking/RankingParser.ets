@@ -1,5 +1,6 @@
 import { RankingBook } from '../../model/Ranking';
 import { JsonObj } from '../builtin/JsonValue';
+import { FanqieRankingText } from './FanqieRankingText';
 
 /** 只解析已经下载的公开榜单文本，不执行页面脚本。 */
 export class RankingParser {
@@ -26,7 +27,7 @@ export class RankingParser {
     if (platform === 'ximalaya') return RankingParser.ximalaya(boardId, body);
     if (platform === 'qimao') return RankingParser.qimao(body);
     if (platform === 'jjwxc') return RankingParser.jjwxc(body);
-    if (platform === 'fanqie') return RankingParser.fanqie(body);
+    if (platform === 'fanqie') return RankingParser.fanqie(boardId, body);
     if (platform === 'faloo') return RankingParser.faloo(body);
     if (platform === 'qidian') {
       const records = RankingParser.qidianPage(boardId, body);
@@ -71,29 +72,37 @@ export class RankingParser {
     return books;
   }
 
-  private static fanqie(body: string): RankingBook[] {
+  private static fanqie(boardId: string, body: string): RankingBook[] {
     const root = new JsonObj(JSON.parse(body));
-    const list = root.getArr('book_list');
+    const category = boardId !== 'fq-hot';
+    if (category && root.getString('code') !== '0') return [];
+    const list = category ? root.getObj('data').getArr('book_list') : root.getArr('book_list');
     const books: RankingBook[] = [];
     const seen = new Set<string>();
     for (let index = 0; index < Math.min(list.length(), 99); index++) {
       const item = list.getObj(index);
-      const id = item.getString('book_id');
-      const title = RankingParser.text(item.getString('book_name'));
+      const id = item.getString(category ? 'bookId' : 'book_id');
+      const title = RankingParser.fanqieText(item.getString(category ? 'bookName' : 'book_name'), category);
       if (!/^\d+$/.test(id) || !title || /[\uE000-\uF8FF]/.test(title) || seen.has(id)) continue;
       const book = new RankingBook();
       book.id = `fanqie:${id}`;
       book.platformId = 'fanqie';
       book.title = title;
-      book.author = RankingParser.text(item.getString('author'));
-      book.coverUrl = RankingParser.imageUrl(item.getString('thumb_url'));
+      book.author = RankingParser.fanqieText(item.getString('author'), category);
+      book.coverUrl = RankingParser.imageUrl(item.getString(category ? 'thumbUri' : 'thumb_url'));
       book.originalUrl = `https://fanqienovel.com/page/${id}`;
-      book.intro = RankingParser.text(item.getString('category'));
-      book.rank = index + 1;
+      book.intro = RankingParser.fanqieText(item.getString(category ? 'abstract' : 'category'), category);
+      const rank = category ? item.getInt('currentPos') : 0;
+      book.rank = rank > 0 ? rank : index + 1;
       seen.add(id);
       books.push(book);
     }
     return books;
+  }
+
+  private static fanqieText(value: string, decode: boolean): string {
+    const text = RankingParser.text(decode ? FanqieRankingText.decode(value) : value);
+    return /[\uE000-\uF8FF]/.test(text) ? '' : text;
   }
 
   private static faloo(body: string): RankingBook[] {

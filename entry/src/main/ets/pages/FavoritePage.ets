@@ -172,7 +172,6 @@ export struct FavoritePage {
 
   @Param navStack: NavPathStack = new NavPathStack();
   @Event onBookTap: (id: string) => void = () => {};
-  @Event onGotoStore: () => void = () => {};
   @Event onScrollerReady: (scroller: Scroller) => void = () => {};
   @Event onBackHandlerChange: (handler: (() => boolean) | undefined) => void = () => {};
 
@@ -832,7 +831,7 @@ export struct FavoritePage {
   @LocalBuilder
   buildStatusFilterMenu() {
     Column({ space: 2 }) {
-      ForEach([0, 1, 2, 3], (index: number) => {
+      ForEach([0, 1, 2], (index: number) => {
         Text(this.statusFilterLabel(index))
           .fontSize(16)
           .fontColor(index === this.shelfStatusFilter ? AppColor.Brand : $r('sys.color.font_primary'))
@@ -1271,11 +1270,16 @@ export struct FavoritePage {
               ListItemGroup({ header: this.buildShelfContentInset() }) {
                 ListItem() {
                   Column({ space: AppSpace.Md }) {
-                    Text($r('app.string.shelf_filter_empty')).fontSize(AppFont.Body)
-                      .fontColor($r('sys.color.font_secondary'))
-                    Text($r('app.string.shelf_filter_empty_hint')).fontSize(AppFont.Caption)
-                      .fontColor($r('sys.color.font_tertiary'))
-                    if (!this.isManaging) { this.buildAddListItem() }
+                    if (this.favoriteBooks.length === 0) {
+                      Text($r('app.string.shelf_empty_hint')).fontSize(AppFont.Body)
+                        .fontColor($r('sys.color.font_secondary'))
+                        .textAlign(TextAlign.Center)
+                    } else {
+                      Text($r('app.string.shelf_filter_empty')).fontSize(AppFont.Body)
+                        .fontColor($r('sys.color.font_secondary'))
+                      Text($r('app.string.shelf_filter_empty_hint')).fontSize(AppFont.Caption)
+                        .fontColor($r('sys.color.font_tertiary'))
+                    }
                   }.width('100%').padding(AppSpace.Lg)
                 }
               }
@@ -1294,9 +1298,6 @@ export struct FavoritePage {
                   // 不重跑 buildBookTile。刷新后章数 742→758 但 book.id 不变 → 贴片卡在旧值。
                   // 把会变的展示量编进 key,值一变 key 变 → 强制重建贴片。
                 }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-                if (!this.isManaging) {
-                  ListItem() { this.buildAddTile() }
-                }
               }
             }
             .lanes(this.bookColumns, AppSpace.Sm)
@@ -1309,7 +1310,7 @@ export struct FavoritePage {
             })
             .contentEndOffset(WindowUtils.getFloatingTabBottomVp() + (this.isManaging ? 72 : 0))
             .scrollBar(BarState.Off)
-            // 空书架只有添加入口，也需要在上下边界提供原生回弹。
+            // 内容不足一屏时也提供原生回弹。
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .backgroundColor(Color.Transparent)
           } else {
@@ -1320,9 +1321,6 @@ export struct FavoritePage {
                     this.buildListItem(book)
                   }
                 }, (book: Book) => `${book.id}:${this.getChapterCount(book)}:${this.chapterIdxMap[book.id] ?? -1}`)
-                if (!this.isManaging) {
-                  ListItem() { this.buildAddListItem() }
-                }
               }
               .divider({
                 strokeWidth: 1,
@@ -1978,57 +1976,4 @@ export struct FavoritePage {
     })
   }
 
-  @Builder
-  buildAddTile() {
-    Column({ space: AppSpace.Xs }) {
-      Column() {
-        SymbolGlyph($r('sys.symbol.plus_circle'))
-          .fontSize(32)
-          .fontColor([$r('sys.color.font_tertiary')])
-        Text('去书城寻好书')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_tertiary'))
-          .margin({ top: AppSpace.Xs })
-      }
-      .width('100%')
-      .aspectRatio(BOOKSHELF_COVER_RATIO)
-      .borderRadius(AppRadius.Md)
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor($r('sys.color.comp_background_secondary'))
-      .border({ width: 1, color: $r('sys.color.comp_divider'), style: BorderStyle.Dashed })
-
-      Text(' ')
-        .fontSize(AppFont.Body)
-        .width('100%')
-      Text(' ')
-        .fontSize(AppFont.Caption)
-        .width('100%')
-    }
-    .onClick(() => this.onGotoStore())
-  }
-
-  @Builder
-  buildAddListItem() {
-    Row({ space: AppSpace.Md }) {
-      Column() {
-        SymbolGlyph($r('sys.symbol.plus_circle'))
-          .fontSize(26)
-          .fontColor([$r('sys.color.font_tertiary')])
-      }
-      .width(72)
-      .height(72)
-      .borderRadius(AppRadius.Sm)
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor($r('sys.color.comp_background_secondary'))
-
-      Text('去书城寻好书')
-        .fontSize(AppFont.Body)
-        .fontColor($r('sys.color.font_secondary'))
-        .layoutWeight(1)
-    }
-    .width('100%')
-    .padding({ top: AppSpace.Sm, bottom: AppSpace.Sm })
-    .alignItems(VerticalAlign.Center)
-    .onClick(() => this.onGotoStore())
-  }
 }

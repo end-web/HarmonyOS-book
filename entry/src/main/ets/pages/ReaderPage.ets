@@ -73,13 +73,22 @@ const READER_GESTURE_SAFE_MAX: number = 16;
 // 与首页 HdsTabs barFloatingStyle 官方沉浸栏同款视觉参数。
 const READER_BAR_HEIGHT: number = 56;
 const READER_BAR_MASK_HEIGHT: number = 92;
-const READER_BAR_SIDE_MARGIN: number = 12;
 const READER_CHAPTER_ROW_HEIGHT: number = 64;
 const READER_CHAPTER_JUMP_DISTANCE: number = 200;
 const READER_TEXT_HORIZONTAL_PADDING: number = 24;
 const READER_TEXT_HEADER_HEIGHT: number = 22;
 const READER_TEXT_FOOTER_HEIGHT: number = 24;
 const READER_TEXT_LAYOUT_GUARD: number = 4;
+
+/** 与章节栏一致裁剪 HDS 材质，避免默认外投影落到正文上。 */
+class ReaderControlClip implements AttributeModifier<CommonAttribute> {
+  applyNormalAttribute(node: CommonAttribute): void {
+    if (PlatformCompat.floatingTabs) node.borderRadius(READER_BAR_HEIGHT / 2, RenderStrategy.OFFSCREEN);
+    else node.borderRadius(READER_BAR_HEIGHT / 2);
+    node.clip(true);
+  }
+}
+
 class ReaderOnlineTextTurnPreview {
   chapterIndex: number = 0;
   pageIndex: number = 0;
@@ -1600,10 +1609,9 @@ export struct ReaderPage {
 
   @Builder
   readerTabStyle(icon: Resource, label: Resource) {
-    Column({ space: 2 }) {
-      SymbolGlyph(icon).fontSize(22).fontColor([this.palette.primary])
+    Column() {
+      SymbolGlyph(icon).fontSize(24).fontColor([this.palette.primary])
         .accessibilityText(label)
-      Text(label).fontSize(AppFont.Caption).fontColor(this.palette.primary).maxLines(1)
     }.width('100%').height(48).justifyContent(FlexAlign.Center)
   }
 
@@ -1664,7 +1672,7 @@ export struct ReaderPage {
 
   private chapterBarFloatingStyle(): HdsTabsFloatingStyle | undefined {
     if (!PlatformCompat.floatingTabs) return undefined;
-    const width = Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84);
+    const width = this.readerControlWidthVp();
     return {
       barWidth: { smallWidth: width, mediumWidth: width, largeWidth: width },
       barSideMargin: 0,
@@ -1718,7 +1726,7 @@ export struct ReaderPage {
       if (PlatformCompat.floatingTabs) {
         HdsTabs() {
           TabContent() {}.tabBar(this.chapterMaterialContent())
-        }.width(Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84)).height(56).barPosition(BarPosition.End).barMode(BarMode.Fixed)
+        }.width(this.readerControlWidthVp()).height(56).barPosition(BarPosition.End).barMode(BarMode.Fixed)
           .barOverlap(true).scrollable(false)
           .attributeModifier(new CompatibleTabsModifier(this.chapterBarFloatingStyle(), 48))
           .barBackgroundColor(Color.Transparent)
@@ -1726,7 +1734,7 @@ export struct ReaderPage {
           .onContentWillChange((): boolean => false).hitTestBehavior(HitTestMode.None)
       } else {
         Row() {}
-          .width(Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84)).height(56).borderRadius(28).backgroundColor(this.palette.scrim)
+          .width(this.readerControlWidthVp()).height(56).borderRadius(28).backgroundColor(this.palette.scrim)
           .padding({ left: this.leftSafeVp + 12, right: this.rightSafeVp + 12 })
       }
       this.buildChapterBarContent()
@@ -1811,11 +1819,17 @@ export struct ReaderPage {
     return Math.max(READER_MIN_SAFE_BOTTOM, Math.min(this.bottomSafeVp, READER_GESTURE_SAFE_MAX));
   }
 
+  private readerControlWidthVp(): number {
+    return Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84);
+  }
+
   private readerFloatingStyle(): HdsTabsFloatingStyle | undefined {
     if (!PlatformCompat.floatingTabs) return undefined;
+    const width = Math.max(1, this.readerControlWidthVp() - (this.isOnlineTextBook() ? 48 + 8 : 0));
     return {
-      barSideMargin: READER_BAR_SIDE_MARGIN + Math.max(this.leftSafeVp, this.rightSafeVp),
-      barBottomMargin: Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + READER_FLOATING_BOTTOM,
+      barWidth: { smallWidth: width, mediumWidth: width, largeWidth: width },
+      barSideMargin: 0,
+      barBottomMargin: 0,
       gradientMask: { maskColor: Color.Transparent, maskHeight: 0 },
       systemMaterialEffect: HdsCompat.adaptiveMaterial,
       lightColor: AppColor.Brand,
@@ -1827,20 +1841,32 @@ export struct ReaderPage {
   buildReaderTabs(): void {
     // HdsTabs 保持稳定布局，显隐只作用于外层，避免浮动栏布局与属性动画互相干扰。
     Stack({ alignContent: Alignment.Bottom }) {
-      HdsTabs() {
-        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.list_bullet'), $r('app.string.reader_chapters')))
-        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
-        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.textformat'), $r('app.string.reader_font_tab')))
-      }
-      .width('100%')
-      .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM)
-      .barOverlap(true)
-      .barMode(BarMode.Fixed)
-      .barPosition(BarPosition.End)
-      .scrollable(false)
-      .attributeModifier(new CompatibleTabsModifier(this.readerFloatingStyle(), READER_BAR_HEIGHT + this.bottomSafeVp))
-      .onTabBarClick((index: number): void => this.handleReaderTabClick(index))
-      .onContentWillChange((): boolean => false)
+      Row({ space: 8 }) {
+        Stack() {
+          HdsTabs() {
+            TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.list_bullet'), $r('app.string.reader_chapters')))
+            TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
+            TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.textformat'), $r('app.string.reader_font_tab')))
+          }
+          .width('100%').height(READER_BAR_HEIGHT)
+          .barOverlap(true)
+          .barMode(BarMode.Fixed)
+          .barPosition(BarPosition.End)
+          .scrollable(false)
+          .attributeModifier(new CompatibleTabsModifier(this.readerFloatingStyle(), READER_BAR_HEIGHT))
+          .barBackgroundColor(PlatformCompat.floatingTabs ? Color.Transparent : $r('sys.color.comp_background_primary'))
+          .backgroundColor(Color.Transparent)
+          .onTabBarClick((index: number): void => this.handleReaderTabClick(index))
+          .onContentWillChange((): boolean => false)
+        }.layoutWeight(1).height(READER_BAR_HEIGHT).attributeModifier(new ReaderControlClip())
+        if (this.isOnlineTextBook()) {
+          ReaderSpeechFloating({ playing: this.speechState.playing && this.speechState.bookId === this.bookId,
+            onOpen: (): void => { this.openSpeechPlayer(); },
+            onSettings: (): void => { this.openSpeechSheet(); } })
+        }
+      }.width(this.readerControlWidthVp()).height(READER_BAR_HEIGHT)
+        .alignItems(VerticalAlign.Center)
+        .margin({ bottom: Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + READER_FLOATING_BOTTOM })
       this.buildReaderChapterBar()
     }
     .width('100%')
@@ -2114,17 +2140,6 @@ export struct ReaderPage {
             .width('100%')
             .height('100%')
           this.buildReaderTabs()
-          if (this.isOnlineTextBook() && this.readerBarVisible) {
-            Row() {
-              ReaderSpeechFloating({ playing: this.speechState.playing && this.speechState.bookId === this.bookId,
-                onOpen: (): void => { this.openSpeechPlayer(); },
-                onSettings: (): void => { this.openSpeechSheet(); } })
-            }
-            .width('100%').justifyContent(FlexAlign.End)
-            .padding({ right: 16 + this.rightSafeVp })
-            .margin({ bottom: READER_BAR_HEIGHT + Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + 8 + 56 + 12 })
-            .hitTestBehavior(HitTestMode.Transparent)
-          }
         }
         .width('100%')
         .height('100%')

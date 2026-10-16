@@ -1116,6 +1116,18 @@
       "value": "首页源"
     },
     {
+      "name": "home_source_open_settings",
+      "value": "打开书源的发现设置"
+    },
+    {
+      "name": "home_source_menu_switch_one_column",
+      "value": "切换为一列"
+    },
+    {
+      "name": "home_source_menu_switch_two_columns",
+      "value": "切换为两列"
+    },
+    {
       "name": "home_source_setting_hint",
       "value": "选择已启用且有发现内容的小说或有声书源，用于首页推荐和分类。"
     },
@@ -4772,6 +4784,10 @@
       "value": "收起书架搜索"
     },
     {
+      "name": "shelf_empty_hint",
+      "value": "去首页添加喜欢的书籍吧"
+    },
+    {
       "name": "shelf_filter_empty",
       "value": "没有符合条件的书籍"
     },
@@ -4970,6 +4986,16 @@
     {"name": "ranking_fanqie", "value": "番茄小说"},
     {"name": "ranking_faloo", "value": "飞卢小说"},
     {"name": "ranking_month_flowers", "value": "月鲜花榜"},
+    {"name": "ranking_novel_hot", "value": "热门榜"},
+    {"name": "ranking_fantasy_reading", "value": "玄幻脑洞阅读榜"},
+    {"name": "ranking_urban_reading", "value": "都市高武阅读榜"},
+    {"name": "ranking_historical_reading", "value": "古风世情阅读榜"},
+    {"name": "ranking_fantasy_new", "value": "玄幻脑洞新书榜"},
+    {"name": "ranking_historical_new", "value": "古风世情新书榜"},
+    {"name": "ranking_week_flowers", "value": "周鲜花榜"},
+    {"name": "ranking_week_clicks", "value": "周点击榜"},
+    {"name": "ranking_month_clicks", "value": "月点击榜"},
+    {"name": "ranking_month_favorites", "value": "月收藏榜"},
     {"name": "ranking_categories_empty", "value": "暂无展示分类，请在设置中开启全网榜单分类"},
     {"name": "record_content_filter", "value": "记录类型筛选"},
     {"name": "record_edit", "value": "编辑记录"},

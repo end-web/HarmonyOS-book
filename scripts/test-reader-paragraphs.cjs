@@ -7,6 +7,7 @@ const ide = process.env.DEVECO_HOME;
 if (!ide) throw new Error('Set DEVECO_HOME to the installed Release IDE');
 const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript'));
 const root = path.resolve(__dirname, '../entry/src');
+let apiVersion = 20;
 function load(relative, mocks = {}) {
   const filename = path.join(root, relative);
   const exports = {};
@@ -14,6 +15,7 @@ function load(relative, mocks = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
   }).outputText;
   vm.runInNewContext(code, { exports, require: name => {
+    if (name === '../../utils/PlatformCompat') return { PlatformCompat: { supports: version => apiVersion >= version } };
     if (!(name in mocks)) throw new Error(`Unexpected dependency: ${name}`);
     return mocks[name];
   } }, { filename });
@@ -49,18 +51,26 @@ const graphicsText = {
   WordBreak: { BREAK_WORD: 0 }, BreakStrategy: { GREEDY: 0 },
   FontCollection: { getGlobalInstance: () => ({}) },
   ParagraphBuilder: class {
-    constructor(style) { this.style = style; }
-    pushStyle() {}
-    addText(text) { this.text = text; }
-    popStyle() {}
+    constructor(style) { this.style = style; this.text = ''; this.indents = []; this.styles = []; }
+    pushStyle(style) { this.styles.push(style); }
+    addText(text) {
+      if (this.styles.at(-1)?.letterSpacing !== undefined) {
+        this.indents.push({ ...this.styles.at(-1), offset: this.text.length });
+      }
+      this.text += text;
+    }
+    popStyle() { this.styles.pop(); }
     build() {
-      const paragraph = { text: this.text, style: this.style, layoutSync(width) { this.width = width; },
+      const starts = this.style.headIndents === undefined ? [0, 4, 8] :
+        this.text.includes('\n') ? [0, 2, 4] : [0, 2, 6];
+      const paragraph = { text: this.text, indents: this.indents, style: this.style, layoutSync(width) { this.width = width; },
+        getMaxIntrinsicWidth: () => this.style.textStyle.fontSize * 0.6,
         getLineMetrics: () => [
-          { startIndex: 0, height: 20, baseline: 15, ascent: 15, descent: 5 },
-          { startIndex: 4, height: 20, baseline: 35, ascent: 15, descent: 5 },
-          { startIndex: 8, height: 20, baseline: 55, ascent: 15, descent: 5 }
+          { startIndex: starts[0], height: 20, baseline: 15, ascent: 15, descent: 5 },
+          { startIndex: starts[1], height: 20, baseline: 35, ascent: 15, descent: 5 },
+          { startIndex: starts[2], height: 20, baseline: 55, ascent: 15, descent: 5 }
         ] };
-      built.push(paragraph);
+      if (this.text !== '  ') built.push(paragraph);
       return paragraph;
     }
   }
@@ -71,7 +81,8 @@ for (const [alignment, expected] of [['justify', 3], ['start', 0], ['center', 2]
   assert.equal(pages.length, 3);
   const paragraph = built.at(-1);
   assert.equal(paragraph.style.align, expected);
-  assert.equal(paragraph.text, '\u3000\u3000甲乙丙丁戊己庚辛壬癸');
+  assert.equal(paragraph.text, '  甲乙丙丁戊己庚辛壬癸');
+  assert.equal(paragraph.indents[0].letterSpacing, (36 - 18 * 0.6) / 2);
   pages.forEach((page, index) => {
     assert.equal(page.paragraph, paragraph, 'all slices retain original paragraph geometry');
     assert.equal(page.layoutTop, index * 20);
@@ -82,6 +93,24 @@ for (const [alignment, expected] of [['justify', 3], ['start', 0], ['center', 2]
   assert.equal(pages[2].endOffset, 10);
 }
 console.log('PASS four alignments retain complete paragraph layout for page and scroll slices');
+
+// Native fixed indentation must retain display offsets across source whitespace, blank lines,
+// supplementary characters and font/viewport changes. Font space widths are compensated.
+const mixedSource = '甲乙\n\u2002\u2003\u2009\u202F第二段\n\n\u3000第三段😀';
+const mixedDisplay = paginator.OnlineTextIndentedContent.fromNormalized(mixedSource);
+for (const size of [14, 18, 30]) {
+  native.OnlineTextPaginator.paginate(mixedSource, 320, 600, size, 1.9, 'ImportedFont');
+  const paragraph = built.at(-1);
+  assert.equal(paragraph.text, '  甲乙\n  第二段\n  第三段😀');
+  assert.equal(paragraph.text.length, mixedDisplay.text.length);
+  assert.deepEqual(paragraph.indents.map(span => span.offset), [0, 5, 11]);
+  assert.ok(paragraph.indents.every(span => Math.abs(size * 0.6 + span.letterSpacing * 2 - size * 2) < 0.001));
+  assert.ok(paragraph.indents.every(span => span.fontFamilies[0] === 'ImportedFont'));
+  for (const body of ['甲乙', '第二段', '第三段😀']) {
+    assert.equal(mixedDisplay.sourceOffsetForDisplay(paragraph.text.indexOf(body)), mixedSource.indexOf(body));
+  }
+}
+console.log('PASS fixed two-em indentation, mixed Unicode whitespace, font sizes and source offsets');
 
 const paletteModule = load('main/ets/model/ReaderTheme.ets');
 const highlighter = load('main/ets/service/text/SpeechTextHighlighter.ets');
@@ -200,3 +229,28 @@ node.onDraw({ canvas: {
 assert.deepEqual(paints.slice(0, 3).map(p => p.y), [0, 18, 36]);
 assert.deepEqual(highlighted, [[0, 20], [38, 58], [76, 96]], 'speech highlight skips the added paragraph gaps');
 console.log('PASS paragraph spacing pagination, scroll gaps, source position, cache and speech highlight');
+
+apiVersion = 26;
+native.OnlineTextPaginator.invalidateLayouts();
+const insetPages = native.OnlineTextPaginator.paginate(sample, 100, 100, 18, 1.9);
+assert.equal(insetPages[0].paragraph.text, '甲\n乙\n丙丁');
+assert.deepEqual(Array.from(insetPages[0].paragraph.style.headIndents), [36, 36, 36]);
+assert.equal(insetPages[0].paragraph.indents.length, 0, 'native margins introduce no inline whitespace, markers or placeholders');
+assert.equal(insetPages[0].nativeOffsets.nativeOffsetForDisplay(2), 0);
+assert.equal(insetPages[0].nativeOffsets.nativeOffsetForDisplay(6), 2);
+assert.equal(insetPages[0].nativeOffsets.displayOffsetForNative(4), 8);
+const continued = native.OnlineTextPaginator.paginate('甲乙丙丁戊己庚辛壬癸', 100, 20, 18, 1.9);
+assert.deepEqual(Array.from(continued[0].paragraph.style.headIndents), [36, 0, 0]);
+assert.equal(continued[1].startOffset, 2);
+assert.equal(continued[2].endOffset, 10);
+insetPages[0].paragraph.updateColor = () => {};
+insetPages[0].paragraph.getTextLines = () => [0, 1, 2].map(() => ({ paint() {} }));
+let nativeHighlight;
+insetPages[0].paragraph.getRectsForRange = range => { nativeHighlight = range; return []; };
+const insetHighlight = new highlighter.SpeechHighlightRange();
+insetHighlight.start = 6; insetHighlight.end = 7;
+controller.update(insetPages[0], insetHighlight, palette);
+node.onDraw({ canvas: { save() {}, restore() {}, clipRect() {} } });
+assert.equal(nativeHighlight.start, 2);
+assert.equal(nativeHighlight.end, 3);
+console.log('PASS API 26 native first-line margins, native/display offset mapping and unindented continuation lines');

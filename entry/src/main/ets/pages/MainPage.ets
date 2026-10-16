@@ -337,6 +337,9 @@ export struct MainPage {
         TabContent() {
           HomePage({
             visible: this.currentTab === 0,
+            onSourceSettings: (sourceUrl: string): void => {
+              this.navStack.pushPathByName('ruleSourceExplore', sourceUrl);
+            },
             onManageSources: (resume: () => void): void => {
               this.pendingHomeResume = resume;
               this.navStack.pushPath({ name: 'ruleSources' });
@@ -367,7 +370,6 @@ export struct MainPage {
             visible: this.currentTab === 1,
             navStack: this.navStack,
             onBookTap: (id: string) => this.navigateToBook(id, '', 0, false),
-            onGotoStore: () => this.changeTab(0),
             onScrollerReady: (scroller: Scroller) => { this.scrollers.set(1, scroller); }
           })
         }

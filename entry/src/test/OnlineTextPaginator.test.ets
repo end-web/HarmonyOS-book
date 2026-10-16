@@ -73,6 +73,15 @@ export default function onlineTextPaginatorTest() {
       expect(OnlineTextIndentedContent.fromNormalized('').text).assertEqual('');
     });
 
+    it('removes mixed Unicode paragraph indentation without changing body positions', 0, () => {
+      const source = '首段\n\u2002\u2003\u2009\u202F\u205F\u3000次段😀';
+      const displayed = OnlineTextIndentedContent.fromNormalized(source);
+      expect(displayed.text).assertEqual('\u3000\u3000首段\n\u3000\u3000次段😀');
+      expect(displayed.sourceOffsetForDisplay(displayed.text.indexOf('次'))).assertEqual(source.indexOf('次'));
+      expect(displayed.sourceOffsetForDisplay(displayed.text.indexOf('😀'))).assertEqual(source.indexOf('😀'));
+      expect(displayed.sourceOffsetForDisplay(displayed.text.length)).assertEqual(source.length);
+    });
+
     it('collapses whitespace paragraphs while preserving page and character positions', 0, () => {
       const source = '\n \t\n甲乙\n\n\u3000\u00A0\n丙丁\n\u3000\n';
       const displayed = OnlineTextIndentedContent.fromNormalized(source);

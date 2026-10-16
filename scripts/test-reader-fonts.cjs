@@ -65,14 +65,15 @@ function verifyPaginatorFonts() {
       pushStyle() {}
       addText() {}
       popStyle() {}
-      build() { return { layoutSync() {}, getLineMetrics: () => [{ startIndex: 0, height: 24 }] }; }
+      build() { return { layoutSync() {}, getMaxIntrinsicWidth: () => 9, getLineMetrics: () => [{ startIndex: 0, height: 24 }] }; }
     }
   };
   const file = path.resolve(__dirname, '../entry/src/main/ets/service/text/OnlineTextPaginator.ets');
   const exports = {};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
-  }).outputText, { exports, require: () => ({ text: graphicsText }) }, { filename: file });
+  }).outputText, { exports, require: name => name === '../../utils/PlatformCompat' ?
+    { PlatformCompat: { supports: () => false } } : { text: graphicsText } }, { filename: file });
   const { OnlineTextPaginator: paginator } = exports;
   paginator.paginate('System font text', 300, 500, 18, 1.9);
   assert.deepEqual(Array.from(measuredStyle.fontFamilies), [], 'default pagination lets the system choose its current font');

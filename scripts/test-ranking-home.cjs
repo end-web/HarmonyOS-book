@@ -18,8 +18,9 @@ function load(relative, modules = {}) {
 }
 const model = load('model/Ranking.ets');
 const json = load('service/builtin/JsonValue.ets');
+const fanqieText = load('service/ranking/FanqieRankingText.ets');
 const parser = load('service/ranking/RankingParser.ets', {
-  '../../model/Ranking': model, '../builtin/JsonValue': json
+  '../../model/Ranking': model, '../builtin/JsonValue': json, './FanqieRankingText': fanqieText
 });
 const { RankingParser } = parser;
 const identity = load('utils/BookIdentity.ets');
@@ -107,16 +108,40 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   assert.equal(RankingParser.parse('ximalaya', 'xm-unknown', xm).length, 0);
   assert.equal(RankingParser.parse('ximalaya', 'xm-hot', v3(Array.from({length: 120},
     (_, id) => ({id, albumTitle: 'book'})))).length, 100);
-  for (const platform of ['qidian', 'lrts', 'ximalaya', 'qimao', 'jjwxc']) {
+  for (const platform of ['qidian', 'lrts', 'ximalaya', 'qimao', 'jjwxc', 'fanqie', 'faloo']) {
     assert.equal(RankingService.boards().filter(board => board.platformId === platform).length, 6);
   }
+  const categoryResponse = code => JSON.stringify({ code, data: { book_list: [
+    { bookId: '7590221243043826712', bookName: '\ue51e\ue449游戏\ue52a\ue49a劲，\ue521挖矿\ue4e9\ue522！',
+      author: '\ue459\ue52a易', abstract: '职业\ue4c2挖矿', thumbUri: 'https://cover.example/fq.jpg', currentPos: 7 },
+    { bookId: '7590221243043826712', bookName: '重复' },
+    { bookId: '1', bookName: '\ue600未知字' },
+    { bookId: '2', bookName: '正常书名', author: '\ue600未知作者', currentPos: 10 },
+    { bookId: 'javascript:bad', bookName: '非法编号' }
+  ] } });
+  const fq = RankingParser.parse('fanqie', 'fq-fantasy-reading', categoryResponse(0));
+  assert.equal(fq.length, 2);
+  assert.equal(fq[0].id, 'fanqie:7590221243043826712', 'large IDs stay lossless strings');
+  assert.equal(fq[0].title, '这个游戏不对劲，我挖矿成神！');
+  assert.equal(fq[0].author, '道不易');
+  assert.equal(fq[0].intro, '职业人挖矿');
+  assert.equal(fq[0].rank, 7, 'keep the public category rank');
+  assert.equal(fq[1].author, '', 'never display undecoded private characters');
+  assert.equal(RankingParser.parse('fanqie', 'fq-fantasy-reading', categoryResponse(1)).length, 0);
+  assert.equal(fanqieText.FanqieRankingText.decode('中文 ABC xyz 0123456789'), '中文 ABC xyz 0123456789');
+  const fqHot = RankingParser.parse('fanqie', 'fq-hot', JSON.stringify({ book_list: [
+    { book_id: '7276384138653862966', book_name: '我不是戏神', author: '三九音域', category: '都市高武',
+      thumb_url: 'https://cover.example/hot.jpg' }
+  ] }));
+  assert.equal(fqHot[0].title, '我不是戏神', 'the existing plain-text hot endpoint stays supported');
+  assert.equal(fqHot[0].intro, '都市高武');
 
   const vip = RankingParser.parse('jjwxc', 'jj-vip', '<tr><td><a href="onebook.php?novelid=123">强推书</a></td><td><a href="oneauthor.php?authorid=45">作者</a></td></tr>');
   assert.equal(vip[0].title, '强推书');
   assert.equal(vip[0].author, '作者');
 
   response = qidian;
-  assert.deepEqual(Array.from(RankingService.boards().slice(0, 2), item => item.id), ['lr-hot', 'qd-month']);
+  assert.deepEqual(Array.from(RankingService.boards().slice(0, 3), item => item.id), ['fq-hot', 'fl-month', 'fl-flowers']);
   const monthBoard = () => RankingService.boards().find(item => item.id === 'qd-month');
   let board = monthBoard();
   board = await RankingService.load({}, board, false);
@@ -140,7 +165,8 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   storage.RankingStorage.read = async (context, key) => key === 'xm-free'
     ? new Promise(resolve => { releaseTail = resolve; }) : originalRead(context, key);
   const progressiveUpdates = [];
-  const progressive = RankingService.loadProgressively({}, RankingService.boards().slice(0, 3), false,
+  const progressiveBoards = ['lr-hot', 'qd-month', 'xm-free'].map(id => RankingService.boards().find(board => board.id === id));
+  const progressive = RankingService.loadProgressively({}, progressiveBoards, false,
     item => progressiveUpdates.push(item), () => true);
   while (!releaseTail || !progressiveUpdates.some(item => item.id === 'qd-month')) {
     await new Promise(resolve => setImmediate(resolve));
@@ -215,7 +241,46 @@ const qidian = '<a href="//m.qidian.com/book/123/" class="_bookItem_x"><img data
   assert.equal(called, 1, 'cancel prevents additional source scheduling');
   assert.equal(progressCount, before, 'late results do not overwrite new selection');
 
-  if (process.argv[2] === '--qidian-live') {
+  if (process.argv[2] === '--expanded-live') {
+    const boards = RankingService.boards().filter(board => ['fanqie', 'faloo'].includes(board.platformId));
+    const results = new Map();
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < boards.length) {
+        const board = boards[cursor++];
+        const response = await fetch(board.endpoint, { signal: AbortSignal.timeout(20000), headers: {
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+        } });
+        assert.equal(response.status, 200, board.id);
+        const raw = new TextDecoder(board.platformId === 'faloo' ? 'gb18030' : 'utf-8').decode(await response.arrayBuffer());
+        const books = RankingParser.parse(board.platformId, board.id, raw);
+        assert.ok(books.length >= 3, `${board.id}: public response must contain real entries`);
+        assert.equal(new Set(books.map(book => book.id)).size, books.length);
+        assert.ok(books.every(book => book.title && book.coverUrl.startsWith('https://') &&
+          !/[\uE000-\uF8FF]/.test(book.title + book.author + book.intro)), board.id);
+        if (board.platformId === 'fanqie' && board.id !== 'fq-hot') {
+          assert.equal(books.length, Math.min(99, JSON.parse(raw).data.book_list.length), 'decode every real entry');
+        }
+        results.set(board.id, books);
+        console.log(`LIVE ${board.id}: ${books.length} books; first: ${books[0].title}`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    const originals = new Map(results.get('fq-hot').map(book => [book.id, book]));
+    let verified = 0;
+    for (const [id, books] of results) {
+      if (!id.startsWith('fq-') || id === 'fq-hot') continue;
+      for (const book of books) {
+        const original = originals.get(book.id);
+        if (!original) continue;
+        assert.equal(book.title, original.title, `font mapping must match plain official metadata for ${book.id}`);
+        assert.equal(book.author, original.author);
+        verified++;
+      }
+    }
+    assert.ok(verified > 0, 'compare decoded names against independent official plain-text metadata');
+    console.log(`LIVE verified ${verified} decoded titles/authors against official plain-text metadata`);
+  } else if (process.argv[2] === '--qidian-live') {
     for (const board of RankingService.boards().filter(board => board.platformId === 'qidian')) {
       const response = await fetch(board.endpoint, { signal: AbortSignal.timeout(20000) });
       assert.equal(response.status, 200, board.id);

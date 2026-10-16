@@ -1,4 +1,5 @@
 import { text as graphicsText } from '@kit.ArkGraphics2D';
+import { PlatformCompat } from '../../utils/PlatformCompat';
 
 export class OnlineTextPaintState {
   color: string = '';
@@ -16,6 +17,7 @@ export class OnlineTextPage {
   // Keep the measured paragraph: slicing text and laying it out again loses justification.
   paragraph: graphicsText.Paragraph | null = null;
   displayStart: number = 0;
+  nativeOffsets: OnlineTextIndentedContent | null = null;
   layoutTop: number = 0;
   layoutHeight: number = 0;
   layoutWidth: number = 0;
@@ -61,7 +63,7 @@ export class OnlineTextIndentedContent {
     let displayStart = 0;
     for (let index = 0; index < paragraphs.length; index++) {
       const paragraph = paragraphs[index];
-      const body = paragraph.replace(new RegExp('^[ \\t\\u00A0\\u3000]+'), '');
+      const body = paragraph.replace(new RegExp('^\\s+'), '');
       // Source separators remain in the offset space, but must not reserve extra line boxes.
       if (body.trim().length > 0) {
         if (displayed.length > 0) displayStart += 1;
@@ -75,6 +77,73 @@ export class OnlineTextIndentedContent {
     }
     result.text = displayed.join('\n');
     return result;
+  }
+
+  appendToBuilder(builder: graphicsText.ParagraphBuilder, textStyle: graphicsText.TextStyle,
+    nativeIndents: boolean = false): void {
+    if (nativeIndents) {
+      for (let index = 0; index < this.indents.length; index++) {
+        const start = this.indents[index].displayStart + OnlineTextIndentedContent.INDENT.length;
+        const end = index + 1 < this.indents.length ? this.indents[index + 1].displayStart : this.text.length;
+        builder.addText(this.text.substring(start, end));
+      }
+      return;
+    }
+    const measureStyle: graphicsText.ParagraphStyle = { textStyle: textStyle, align: graphicsText.TextAlign.LEFT };
+    const measureBuilder = new graphicsText.ParagraphBuilder(measureStyle, graphicsText.FontCollection.getGlobalInstance());
+    measureBuilder.pushStyle(textStyle);
+    measureBuilder.addText('  ');
+    measureBuilder.popStyle();
+    const measure = measureBuilder.build();
+    measure.layoutSync(Math.max(1, (textStyle.fontSize ?? 1) * 10));
+    const indentStyle: graphicsText.TextStyle = {
+      fontSize: textStyle.fontSize,
+      fontWeight: textStyle.fontWeight,
+      fontFamilies: textStyle.fontFamilies,
+      fontVariations: textStyle.fontVariations,
+      heightScale: textStyle.heightScale,
+      heightOnly: textStyle.heightOnly,
+      locale: textStyle.locale,
+      letterSpacing: ((textStyle.fontSize ?? 1) * 2 - measure.getMaxIntrinsicWidth()) / 2
+    };
+    for (let index = 0; index < this.indents.length; index++) {
+      const start = this.indents[index].displayStart + OnlineTextIndentedContent.INDENT.length;
+      const end = index + 1 < this.indents.length ? this.indents[index + 1].displayStart : this.text.length;
+      // Reserve 2em using the selected font on older SDKs and during the initial measurement.
+      // API 26 replaces these inline spaces with native line insets after wrapping is known.
+      builder.pushStyle(indentStyle);
+      builder.addText('  ');
+      builder.popStyle();
+      builder.addText(this.text.substring(start, end));
+    }
+  }
+
+  nativeOffsetForDisplay(displayOffset: number): number {
+    const offset = Math.max(0, Math.min(displayOffset, this.text.length));
+    let low = 0;
+    let high = this.indents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (this.indents[middle].displayStart <= offset) low = middle + 1;
+      else high = middle;
+    }
+    if (low === 0) return offset;
+    const start = this.indents[low - 1].displayStart;
+    return offset - (low - 1) * 2 - Math.min(2, offset - start);
+  }
+
+  displayOffsetForNative(nativeOffset: number): number {
+    const offset = Math.max(0, nativeOffset);
+    let low = 0;
+    let high = this.indents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (this.indents[middle].displayStart - middle * 2 <= offset) low = middle + 1;
+      else high = middle;
+    }
+    if (low === 0) return offset;
+    const start = this.indents[low - 1].displayStart;
+    return offset === start - (low - 1) * 2 ? start : Math.min(this.text.length, offset + low * 2);
   }
 
   sourceOffsetForDisplay(displayOffset: number): number {
@@ -170,6 +239,7 @@ class OnlineTextLayout {
   metrics: graphicsText.LineMetrics[] = [];
   lines: OnlineTextMeasuredLine[] = [];
   paintState: OnlineTextPaintState = new OnlineTextPaintState();
+  nativeIndents: boolean = false;
 }
 
 export class OnlineTextPaginator {
@@ -216,6 +286,7 @@ export class OnlineTextPaginator {
       page.paintState = layout.paintState;
       page.layoutKey = layout.serial;
       page.displayStart = page.startOffset;
+      page.nativeOffsets = layout.nativeIndents ? displayed : null;
       page.layoutWidth = layout.width;
       page.firstLine = lineIndex;
       const first = metrics[lineIndex];
@@ -277,11 +348,28 @@ export class OnlineTextPaginator {
     const builder = new graphicsText.ParagraphBuilder(
       paragraphStyle, graphicsText.FontCollection.getGlobalInstance());
     builder.pushStyle(textStyle);
-    builder.addText(layout.displayed.text);
+    layout.displayed.appendToBuilder(builder, textStyle);
     builder.popStyle();
-    const paragraph = builder.build();
+    let paragraph = builder.build();
     paragraph.layoutSync(safeWidth);
-    const metrics = paragraph.getLineMetrics();
+    let metrics = paragraph.getLineMetrics();
+    if (PlatformCompat.supports(26)) {
+      // Use layout insets rather than inline content: justification must start after the indent.
+      // The first layout determines which physical lines begin a source paragraph.
+      paragraphStyle.headIndents = metrics.map((line: graphicsText.LineMetrics, index: number): number =>
+        index === 0 || layout.displayed.text.charAt(line.startIndex - 1) === '\n' ? safeFontSize * 2 : 0);
+      const insetBuilder = new graphicsText.ParagraphBuilder(paragraphStyle, graphicsText.FontCollection.getGlobalInstance());
+      insetBuilder.pushStyle(textStyle);
+      layout.displayed.appendToBuilder(insetBuilder, textStyle, true);
+      insetBuilder.popStyle();
+      paragraph = insetBuilder.build();
+      paragraph.layoutSync(safeWidth);
+      metrics = paragraph.getLineMetrics();
+      layout.nativeIndents = true;
+      for (const metric of metrics) {
+        metric.startIndex = layout.displayed.displayOffsetForNative(metric.startIndex);
+      }
+    }
     const lines: OnlineTextMeasuredLine[] = [];
     for (let i = 0; i < metrics.length; i++) {
       const line = OnlineTextMeasuredLine.of(metrics[i].startIndex, metrics[i].height);
