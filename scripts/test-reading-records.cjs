@@ -84,6 +84,25 @@ const ts = require(path.join(process.env.DEVECO_HOME,
   assert.equal(missing[0].progressPercent, 25);
   assert.equal(page.shouldShowRecord(missing[0], new Set()), true);
   console.log('PASS: missing book/source cache retains unfavorited history and progress without throwing');
+  books.set('search_comic_fixture', { id: 'search_comic_fixture', contentType: 'comic', title: 'Comic',
+    sourceUrl: 'comic-source', bookUrl: 'comic', chapterCount: 12, chapters: [] });
+  const comicPosition = model.TextReadingPosition.of('search_comic_fixture', 3, 'comic:rtl', 7, 'Episode 4');
+  await progress.save(h.context, comicPosition);
+  const comicRecords = await page.buildRecordViews(h.context, [], [], [comicPosition]);
+  assert.equal(comicRecords[0].isComic, true);
+  assert.equal(comicRecords[0].isText, true, 'comic uses reading progress, never audio progress');
+  await page.resumeRecord(comicRecords[0]);
+  assert.equal(routes.at(-1)[0], 'comicReader');
+  assert.equal((await progress.get(h.context, comicPosition.bookId)).pageOffset, 7);
+  page.records = [...records, ...comicRecords];
+  page.recordDataSource = { setRecords: values => { page.visible = values; } };
+  page.contentFilter = 3;
+  page.applyContentFilter();
+  assert.deepEqual(Array.from(page.visible, item => item.bookId), ['search_comic_fixture']);
+  page.contentFilter = 2;
+  page.applyContentFilter();
+  assert.equal(page.visible.some(item => item.isComic), false);
+  console.log('PASS: comic page progress, separate comic/text groups and comic reader resume route');
   console.log('PASS: mixed reading/audio history, ordering, favorite filters, reading/player routes, progress and deletion');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {
   for (const dir of fixtures) fs.rmSync(dir, { recursive: true, force: true });

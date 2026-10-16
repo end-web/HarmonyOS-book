@@ -1,3 +1,4 @@
+import { ChapterSheetActions } from '../components/ChapterSheetActions';
 import { ReaderVolumeKeyService } from '../service/text/ReaderVolumeKeyService';
 import { ReadingSessionService, SessionLocation } from '../service/ReadingSessionService';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
@@ -156,6 +157,9 @@ export struct ReaderPage {
   @Local jumpingResourceIndex: number = -1;
   @Local readerBarVisible: boolean = false;
   private readerBarChapterTarget: number = -1;
+  @Local chapterSliderPreview: number = -1;
+  @Local chapterSliderDragging: boolean = false;
+  @Local chapterSliderConfirming: boolean = false;
   @Local pageLabelWidthVp: number = 0;
   @Local showChapterSheet: boolean = false;
   @Local chapterSegmented: boolean = false;
@@ -198,6 +202,9 @@ export struct ReaderPage {
   private context: common.UIAbilityContext | null = null;
   private leaving: boolean = false;
   private chapterDataSource: ChapterDataSource = new ChapterDataSource();
+  @Local chapterTopRequest: number = 0;
+  @Local chapterBottomRequest: number = 0;
+  @Local chapterDescending: boolean = false;
   private chapterListScroller: Scroller = new Scroller();
   // 普通文字阅读不触碰可选 ReaderKit HSP；仅在旧 EPUB 分支通过能力检查后创建。
   private readerKitController: readerCore.ReaderComponentController | null = null;
@@ -1591,15 +1598,12 @@ export struct ReaderPage {
   }
 
   @Builder
-  readerTabStyle(icon: Resource, label: Resource, direction: number = 0) {
+  readerTabStyle(icon: Resource, label: Resource) {
     Column({ space: 2 }) {
       SymbolGlyph(icon).fontSize(22).fontColor([this.palette.primary])
         .accessibilityText(label)
       Text(label).fontSize(AppFont.Caption).fontColor(this.palette.primary).maxLines(1)
     }.width('100%').height(48).justifyContent(FlexAlign.Center)
-      // Builder 的普通参数只在创建时取值；切章状态须在属性表达式中直接读取。
-      .opacity(direction === 0 || this.canSwitchChapter(direction > 0) ? 1 : 0.35)
-      .enabled(direction === 0 || this.canSwitchChapter(direction > 0))
   }
 
   private adjacentChapterIndex(forward: boolean): number {
@@ -1609,9 +1613,135 @@ export struct ReaderPage {
 
   private canSwitchChapter(forward: boolean): boolean {
     const target = this.adjacentChapterIndex(forward);
-    return this.book !== null && !this.loading && !this.onlineTextLoading &&
+    return !this.chapterSliderConfirming && this.book !== null && !this.loading && !this.onlineTextLoading &&
       !this.reloadingChapter && this.jumpingResourceIndex < 0 && !this.leaving &&
       (this.isOnlineTextBook() || this.readerKitReady) && target >= 0 && target < this.book.chapters.length;
+  }
+
+  private chapterSliderIndex(): number {
+    if (this.chapterSliderPreview >= 0) return this.chapterSliderPreview;
+    return this.chapterSliderPosition(this.currentResourceIndex);
+  }
+
+  /** 滑条按目录显示顺序计数；倒序目录与底栏箭头使用同一方向。 */
+  private chapterSliderPosition(index: number): number {
+    return this.book !== null && PreferenceService.chapterStep(this.book) < 0 ?
+      this.book.chapters.length - 1 - index : index;
+  }
+
+  private async changeChapterSlider(value: number, mode: SliderChangeMode): Promise<void> {
+    if (this.chapterSliderConfirming || this.book === null) return;
+    this.chapterSliderPreview = Math.max(0, Math.min(Math.round(value), this.book.chapters.length - 1));
+    this.chapterSliderDragging = mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving;
+    if (mode !== SliderChangeMode.End && mode !== SliderChangeMode.Click) return;
+    const target = this.chapterSliderPosition(this.chapterSliderPreview);
+    if (target === this.currentResourceIndex) {
+      this.chapterSliderPreview = -1;
+      return;
+    }
+    this.chapterSliderConfirming = true;
+    try {
+      const result = await this.getUIContext().getPromptAction().showDialog({
+        title: $r('app.string.reader_chapter_jump_title'),
+        message: $r('app.string.reader_chapter_jump_message', this.chapterTitle(target)),
+        buttons: [
+          { text: $r('app.string.common_cancel'), color: this.palette.secondary },
+          { text: $r('app.string.reader_chapter_jump_action'), color: AppColor.Brand }
+        ]
+      });
+      if (result.index === 1 && !this.leaving && this.readerBarVisible) {
+        await this.jumpToResourceIndex(target, true);
+      }
+    } catch (error) {
+      hilog.warn(READER_LOG_DOMAIN, READER_LOG_TAG, 'chapter slider: %{public}s', String(error));
+    } finally {
+      this.chapterSliderPreview = -1;
+      this.chapterSliderDragging = false;
+      this.chapterSliderConfirming = false;
+    }
+  }
+
+  private chapterBarFloatingStyle(): HdsTabsFloatingStyle | undefined {
+    if (!PlatformCompat.floatingTabs) return undefined;
+    const width = Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84);
+    return {
+      barWidth: { smallWidth: width, mediumWidth: width, largeWidth: width },
+      barSideMargin: 0,
+      barBottomMargin: 0,
+      gradientMask: { maskColor: Color.Transparent, maskHeight: 56 },
+      systemMaterialEffect: HdsCompat.adaptiveMaterial,
+      adaptToHandedness: false
+    };
+  }
+
+  @Builder
+  buildChapterBarContent(): void {
+    Row() {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(20).fontColor([this.palette.primary])
+      }.width(44).height(48).justifyContent(FlexAlign.Center)
+        .accessibilityText($r('app.string.reader_previous_chapter'))
+        .opacity(this.canSwitchChapter(false) ? 1 : 0.35).enabled(this.canSwitchChapter(false))
+        .onClick((): void => { this.jumpToResourceIndex(this.adjacentChapterIndex(false), true); })
+      Slider({ value: this.chapterSliderIndex(), min: 0,
+        max: Math.max(1, (this.book?.chapters.length ?? 0) - 1), step: 1, style: SliderStyle.OutSet })
+        .layoutWeight(1).height(48).trackThickness(6).blockSize({ width: 16, height: 16 })
+        .selectedColor(AppColor.Brand).trackColor(this.palette.divider).blockColor(this.palette.background)
+        .showSteps(false).enabled(this.canSwitchChapter(false) || this.canSwitchChapter(true))
+        .accessibilityText($r('app.string.reader_chapters'))
+        .onChange((value: number, mode: SliderChangeMode): void => { this.changeChapterSlider(value, mode); })
+        .onTouch((event: TouchEvent): void => {
+          if (event.type === TouchType.Cancel && !this.chapterSliderConfirming) {
+            this.chapterSliderPreview = -1;
+            this.chapterSliderDragging = false;
+          }
+        })
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(20).fontColor([this.palette.primary])
+      }.width(44).height(48).justifyContent(FlexAlign.Center)
+        .accessibilityText($r('app.string.reader_next_chapter'))
+        .opacity(this.canSwitchChapter(true) ? 1 : 0.35).enabled(this.canSwitchChapter(true))
+        .onClick((): void => { this.jumpToResourceIndex(this.adjacentChapterIndex(true), true); })
+    }.width(Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84))
+      .height(48).padding({ left: 4, right: 4 })
+  }
+
+  @Builder
+  chapterMaterialContent() {
+    Row().width('100%').height(56)
+  }
+
+  @Builder
+  buildReaderChapterBar(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      if (PlatformCompat.floatingTabs) {
+        HdsTabs() {
+          TabContent() {}.tabBar(this.chapterMaterialContent())
+        }.width(Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84)).height(56).barPosition(BarPosition.End).barMode(BarMode.Fixed)
+          .barOverlap(true).scrollable(false)
+          .attributeModifier(new CompatibleTabsModifier(this.chapterBarFloatingStyle(), 48))
+          .barBackgroundColor(Color.Transparent)
+          .backgroundColor(Color.Transparent).borderRadius(28, RenderStrategy.OFFSCREEN).clip(true)
+          .onContentWillChange((): boolean => false).hitTestBehavior(HitTestMode.None)
+      } else {
+        Row() {}
+          .width(Math.max(1, (this.readerViewportWidthVp - this.leftSafeVp - this.rightSafeVp) * 0.84)).height(56).borderRadius(28).backgroundColor(this.palette.scrim)
+          .padding({ left: this.leftSafeVp + 12, right: this.rightSafeVp + 12 })
+      }
+      this.buildChapterBarContent()
+      if (this.chapterSliderDragging) {
+        Column({ space: 2 }) {
+          Text(this.chapterTitle(this.chapterSliderPosition(this.chapterSliderIndex())))
+            .fontSize(AppFont.Caption).fontColor(Color.White).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(`${this.chapterSliderIndex() + 1}/${this.book?.chapters.length ?? 0}`)
+            .fontSize(AppFont.Caption).fontColor('#CCFFFFFF')
+        }.width('80%').height(44).padding({ left: 14, right: 14 }).borderRadius(22)
+          .justifyContent(FlexAlign.Center).backgroundColor(this.palette.isDark ? '#E63A3C40' : '#D94B4D52')
+          .translate({ y: -52 }).hitTestBehavior(HitTestMode.None)
+      }
+    }.width('100%').height(56)
+      .margin({ bottom: READER_BAR_HEIGHT + Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + 8 })
   }
 
   /** 横屏隐藏状态栏时仍保护页眉两端，挖孔避让不包含另一侧的屏幕圆角。 */
@@ -1685,7 +1815,7 @@ export struct ReaderPage {
     return {
       barSideMargin: READER_BAR_SIDE_MARGIN + Math.max(this.leftSafeVp, this.rightSafeVp),
       barBottomMargin: Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + READER_FLOATING_BOTTOM,
-      gradientMask: { maskColor: this.palette.background, maskHeight: READER_BAR_MASK_HEIGHT },
+      gradientMask: { maskColor: Color.Transparent, maskHeight: 0 },
       systemMaterialEffect: HdsCompat.adaptiveMaterial,
       lightColor: AppColor.Brand,
       adaptToHandedness: true
@@ -1697,13 +1827,9 @@ export struct ReaderPage {
     // HdsTabs 保持稳定布局，显隐只作用于外层，避免浮动栏布局与属性动画互相干扰。
     Stack({ alignContent: Alignment.Bottom }) {
       HdsTabs() {
-        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.backward_end_fill'),
-          $r('app.string.reader_previous_chapter'), -1))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.list_bullet'), $r('app.string.reader_chapters')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.gearshape'), $r('app.string.reader_settings')))
         TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.textformat'), $r('app.string.reader_font_tab')))
-        TabContent() {}.tabBar(this.readerTabStyle($r('sys.symbol.forward_end_fill'),
-          $r('app.string.reader_next_chapter'), 1))
       }
       .width('100%')
       .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM)
@@ -1714,9 +1840,10 @@ export struct ReaderPage {
       .attributeModifier(new CompatibleTabsModifier(this.readerFloatingStyle(), READER_BAR_HEIGHT + this.bottomSafeVp))
       .onTabBarClick((index: number): void => this.handleReaderTabClick(index))
       .onContentWillChange((): boolean => false)
+      this.buildReaderChapterBar()
     }
     .width('100%')
-    .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM)
+    .height(READER_BAR_MASK_HEIGHT + this.bottomSafeVp + READER_FLOATING_BOTTOM + 104)
     .animation(null)
     .translate({ y: this.readerBarVisible ? 0 : 24 })
     .opacity(this.readerBarVisible ? 1 : 0)
@@ -1734,6 +1861,8 @@ export struct ReaderPage {
   }
 
   private hideReaderBar(): void {
+    this.chapterSliderPreview = -1;
+    this.chapterSliderDragging = false;
     this.readerBarChapterTarget = -1;
     this.readerBarVisible = false;
     this.syncReaderStatusBar();
@@ -1778,6 +1907,7 @@ export struct ReaderPage {
     this.showSettingsSheet = false;
     this.chapterListOffsetFromCurrent = 0;
     this.chapterQuery = '';
+    this.chapterDescending = currentBook.chaptersDescending ?? false;
     this.chapterDataSource.setChapters(PreferenceService.orderedChapters(currentBook));
     this.showChapterSheet = true;
     this.hideReaderBar();
@@ -1785,6 +1915,7 @@ export struct ReaderPage {
   }
 
   private closeChapterSheet(): void {
+    this.chapterPositionGeneration++;
     this.showChapterSheet = false;
     this.showReaderBar();
   }
@@ -1802,7 +1933,20 @@ export struct ReaderPage {
     this.showReaderBar();
   }
 
+  private toggleChapterOrder(): void {
+    const book = this.book;
+    if (!book) return;
+    book.chaptersDescending = !book.chaptersDescending;
+    this.chapterDescending = book.chaptersDescending;
+    PreferenceService.saveTocOrder(book.id, book.chaptersDescending).catch((): void => {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.chapter_order_save_failed') });
+    });
+    this.filterReaderChapters(this.chapterQuery);
+    this.chapterTopRequest++;
+  }
+
   private filterReaderChapters(query: string): void {
+    this.chapterPositionGeneration++;
     this.chapterQuery = query;
     const keyword = query.trim().toLowerCase();
     const chapters = this.book ? PreferenceService.orderedChapters(this.book) : [];
@@ -1811,22 +1955,25 @@ export struct ReaderPage {
     if (!this.chapterSegmented) this.chapterListScroller.scrollToIndex(0, false);
   }
 
+  private chapterPositionGeneration: number = 0;
+
   private scrollChapterListToCurrent(): void {
     if (this.chapterSegmented) return;
     if (this.chapterQuery.length > 0) this.filterReaderChapters('');
+    const generation = ++this.chapterPositionGeneration;
     const currentBook = this.book;
     if (currentBook === null || currentBook.chapters.length === 0) return;
     const index = PreferenceService.chapterDisplayIndex(currentBook,
       this.clampResourceIndex(this.currentResourceIndex, currentBook.chapters.length));
     setTimeout((): void => {
-      if (this.chapterSegmented || !this.showChapterSheet) return;
+      if (generation !== this.chapterPositionGeneration || this.chapterSegmented || !this.showChapterSheet) return;
       try {
         this.chapterListScroller.scrollToIndex(index, false, ScrollAlign.CENTER);
       } catch (_e) {
         return;
       }
       setTimeout((): void => {
-        if (this.chapterSegmented || !this.showChapterSheet) return;
+        if (generation !== this.chapterPositionGeneration || this.chapterSegmented || !this.showChapterSheet) return;
         try {
           this.chapterListScroller.scrollToIndex(index, false, ScrollAlign.CENTER);
         } catch (_e) {
@@ -1846,14 +1993,11 @@ export struct ReaderPage {
   }
 
   private handleReaderTabClick(index: number): void {
-    if (index === 0 || index === 4) {
-      const forward = index === 4;
-      if (this.canSwitchChapter(forward)) this.jumpToResourceIndex(this.adjacentChapterIndex(forward), true);
-    } else if (index === 1) {
+    if (index === 0) {
       this.openChapterSheet();
-    } else if (index === 2) {
+    } else if (index === 1) {
       this.openSettingsSheet();
-    } else if (index === 3) {
+    } else if (index === 2) {
       this.openSettingsSheet(true);
     }
   }
@@ -1976,7 +2120,8 @@ export struct ReaderPage {
                 onSettings: (): void => { this.openSpeechSheet(); } })
             }
             .width('100%').justifyContent(FlexAlign.End)
-            .padding({ right: 16 + this.rightSafeVp }).margin({ bottom: this.bottomSafeVp + 86 })
+            .padding({ right: 16 + this.rightSafeVp })
+            .margin({ bottom: READER_BAR_HEIGHT + Math.max(this.bottomSafeVp, READER_MIN_SAFE_BOTTOM) + 8 + 56 + 12 })
             .hitTestBehavior(HitTestMode.Transparent)
           }
         }
@@ -2216,7 +2361,7 @@ export struct ReaderPage {
   @Builder
   buildChapterSheet(): void {
     Stack({ alignContent: Alignment.BottomEnd }) {
-      Column({ space: AppSpace.Sm }) {
+      Column({ space: AppSpace.Xs }) {
       Row() {
         Text($r('app.string.reader_chapters'))
           .fontSize(AppFont.Title)
@@ -2236,7 +2381,22 @@ export struct ReaderPage {
           .onClick((): void => this.closeChapterSheet())
       }
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs })
+
+      ChapterSheetActions({
+        descending: this.chapterDescending,
+        onOrder: (): void => this.toggleChapterOrder(),
+        onTop: (): void => {
+          this.chapterTopRequest++;
+          this.chapterPositionGeneration++;
+          if (!this.chapterSegmented && this.chapterDataSource.totalCount() > 0) this.chapterListScroller.scrollToIndex(0, false, ScrollAlign.START);
+        },
+        onBottom: (): void => {
+          this.chapterBottomRequest++;
+          this.chapterPositionGeneration++;
+          if (!this.chapterSegmented && this.chapterDataSource.totalCount() > 0) this.chapterListScroller.scrollToIndex(this.chapterDataSource.totalCount() - 1, false, ScrollAlign.END);
+        }
+      })
 
       Search({ value: this.chapterQuery, placeholder: $r('app.string.reader_search_chapters') })
         .onChange((query: string): void => this.filterReaderChapters(query))
@@ -2246,14 +2406,14 @@ export struct ReaderPage {
         .height(40)
         .borderRadius(AppRadius.Lg)
         .backgroundColor($r('sys.color.comp_background_tertiary'))
-        .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
+        .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: 0, bottom: 0 })
       if (this.chapterSegmented) {
         ChapterSegmentGrid({
-          book: this.book,
+          book: this.book, topRequest: this.chapterTopRequest, bottomRequest: this.chapterBottomRequest,
           chapters: this.book?.chapters ?? [],
           currentId: this.book?.chapters[this.currentResourceIndex]?.id ?? '',
           keyword: this.chapterQuery,
-          descending: this.book?.chaptersDescending ?? false,
+          descending: this.chapterDescending,
           onSelect: (chapter: Chapter): void => { this.selectChapter(chapter); }
         }).layoutWeight(1)
       } else {

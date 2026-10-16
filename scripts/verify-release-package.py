@@ -3,6 +3,7 @@
 import argparse
 import io
 import json
+import re
 import struct
 import zipfile
 from pathlib import Path
@@ -57,6 +58,8 @@ def main():
     parser.add_argument('--version-code', required=True, type=int)
     parser.add_argument('--min-api', type=int, default=20)
     parser.add_argument('--target-api', type=int, default=26)
+    parser.add_argument('--name-cache', type=Path,
+                        help='SDK-generated name cache from this release build; checks dynamic source property compatibility')
     args = parser.parse_args()
     if args.package.suffix.lower() == '.app':
         with zipfile.ZipFile(args.package) as app:
@@ -68,6 +71,24 @@ def main():
         parser.error('package must be an APP or HAP')
     if not results:
         parser.error('APP contains no HAP modules')
+    if args.name_cache is not None:
+        cache = json.loads(args.name_cache.read_text(encoding='utf-8'))
+        properties = cache.get('PropertyCache', {})
+        source_root = Path(__file__).resolve().parents[1] / 'entry/src/main/ets'
+        contracts = [
+            'service/rulesource/light/upstream/core/nativesource/NativeSourceSpec.ts',
+            'service/rulesource/LocalRuleRuntimeTypes.ets',
+            'model/LocalRulePanel.ets',
+        ]
+        wire_names = set()
+        for contract in contracts:
+            wire_names.update(re.findall(r'^  (\w+)\??\s*:',
+                                         (source_root / contract).read_text(encoding='utf-8'), re.MULTILINE))
+        renamed = sorted(key for key, value in properties.items() if key in wire_names and key != value)
+        if renamed:
+            for result in results:
+                result['errors'].append('Property obfuscation breaks dynamic source JSON/script contracts: ' +
+                                        ', '.join(renamed[:12]))
     print(json.dumps(results, ensure_ascii=False, indent=2))
     return 1 if any(result['errors'] for result in results) else 0
 

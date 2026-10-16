@@ -1,6 +1,26 @@
 import { AppRadius } from '../theme/Theme';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { CoverAspectRatio } from '../utils/CoverAspectRatio';
+import { PlatformCompat } from '../utils/PlatformCompat';
+
+class CoverCompositeClip implements AttributeModifier<CommonAttribute> {
+  private enabled: boolean;
+  private radius: number;
+
+  constructor(enabled: boolean, radius: number) {
+    this.enabled = enabled;
+    this.radius = radius;
+  }
+
+  applyNormalAttribute(node: CommonAttribute): void {
+    if (this.enabled && PlatformCompat.supports(22)) {
+      node.borderRadius(this.radius, RenderStrategy.OFFSCREEN);
+    } else {
+      node.borderRadius(this.enabled ? this.radius : 0);
+    }
+    node.clip(this.enabled).renderGroup(this.enabled);
+  }
+}
 
 /**
  * 网络封面图：占位始终保留，完整出图后显示；失败只后台重试一次。
@@ -16,6 +36,8 @@ export struct CoverImage {
   @Param useOriginalRatio: boolean = false;
   @Param maxOriginalHeight: number = 0;
   @Param radius: number = AppRadius.Md;
+  // 旋转封面先统一裁剪再合成，避免图片与占位的裁剪边缘叠加。
+  @Param compositeEdges: boolean = false;
   @Param imageFit: ImageFit = ImageFit.Cover;
   @Param decodeW: number = 300;
   @Param decodeH: number = 400;
@@ -110,8 +132,8 @@ export struct CoverImage {
       Image(url)
         .width(this.imgWidth)
         .height(this.imgHeight)
-        .borderRadius(this.radius)
-        .clip(true)
+        .borderRadius(this.compositeEdges ? 0 : this.radius)
+        .clip(!this.compositeEdges)
         .objectFit(this.imageFit)
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
         .opacity(this.imageReady ? 1 : 0)
@@ -135,8 +157,8 @@ export struct CoverImage {
       Image(url)
         .width(this.displayWidth())
         .aspectRatio(this.displayRatio())
-        .borderRadius(this.radius)
-        .clip(true)
+        .borderRadius(this.compositeEdges ? 0 : this.radius)
+        .clip(!this.compositeEdges)
         .objectFit(this.imageFit)
         .sourceSize(this.imageFit === ImageFit.Contain ? undefined : { width: this.decodeW, height: this.decodeH })
         .opacity(this.imageReady ? 1 : 0)
@@ -166,15 +188,15 @@ export struct CoverImage {
       Image($r('app.media.book_cover_placeholder'))
         .width(this.imgWidth)
         .height(this.imgHeight)
-        .borderRadius(this.radius)
-        .clip(true)
+        .borderRadius(this.compositeEdges ? 0 : this.radius)
+        .clip(!this.compositeEdges)
         .objectFit(ImageFit.Cover)
     } else {
       Image($r('app.media.book_cover_placeholder'))
         .width(this.displayWidth())
         .aspectRatio(this.displayRatio())
-        .borderRadius(this.radius)
-        .clip(true)
+        .borderRadius(this.compositeEdges ? 0 : this.radius)
+        .clip(!this.compositeEdges)
         .objectFit(ImageFit.Cover)
     }
   }
@@ -187,5 +209,6 @@ export struct CoverImage {
       }
     }
     .width(this.displayWidth())
+    .attributeModifier(new CoverCompositeClip(this.compositeEdges, this.radius))
   }
 }

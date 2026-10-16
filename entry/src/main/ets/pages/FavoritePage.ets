@@ -193,7 +193,7 @@ export struct FavoritePage {
 
   @Computed
   get shelfAudioCount(): number {
-    return this.favoriteBooks.filter((book: Book): boolean => book.contentType !== 'text').length;
+    return this.favoriteBooks.filter((book: Book): boolean => book.contentType !== 'text' && book.contentType !== 'comic').length;
   }
 
   @Computed
@@ -206,7 +206,8 @@ export struct FavoritePage {
     return new SegmentButtonV2Items([
       { text: this.shelfFilterText($r('app.string.shelf_filter_all_count'), this.favoriteBooks.length) },
       { text: this.shelfFilterText($r('app.string.shelf_filter_audio_count'), this.shelfAudioCount) },
-      { text: this.shelfFilterText($r('app.string.shelf_filter_text_count'), this.shelfTextCount) }
+      { text: this.shelfFilterText($r('app.string.shelf_filter_text_count'), this.shelfTextCount) },
+      { text: this.shelfFilterText($r('app.string.shelf_filter_comic_count'), this.favoriteBooks.filter((book: Book): boolean => book.contentType === 'comic').length) }
     ]);
   }
 
@@ -427,7 +428,7 @@ export struct FavoritePage {
     const textProgress = new Map<string, TextReadingPosition>();
     try {
       for (const book of this.favoriteBooks) {
-        if (book.contentType !== 'text') continue;
+        if (book.contentType !== 'text' && book.contentType !== 'comic') continue;
         const position = await TextReadingProgressService.get(context, book.id);
         if (position) textProgress.set(book.id, position);
       }
@@ -665,7 +666,7 @@ export struct FavoritePage {
             updateInfo.cover = nextBook.cover;
             updateInfo.oldCount = oldCount;
             updateInfo.newCount = newCount;
-            updateInfo.isText = nextBook.contentType === 'text';
+            updateInfo.isText = nextBook.contentType === 'text' || nextBook.contentType === 'comic';
             updateInfo.latestChapter = nextBook.latestChapterTitle || nextBook.chapters?.[newCount - 1]?.title || '';
             updatedBooks.push(updateInfo);
           }
@@ -701,7 +702,7 @@ export struct FavoritePage {
     if (this.isMissingCachedBook(book)) {
       return '缓存缺失 · 重新搜索后加入';
     }
-    if (book.contentType === 'text') {
+    if (book.contentType === 'text' || book.contentType === 'comic') {
       const position = this.textProgressMap.get(book.id);
       const chapterCount = this.getChapterCount(book);
       if (position && chapterCount > 0) {
@@ -774,8 +775,9 @@ export struct FavoritePage {
   private filteredBooks(books: Book[]): Book[] {
     const keyword = this.shelfKeyword.trim().toLocaleLowerCase();
     return books.filter((book: Book): boolean => {
-      if (this.shelfFilter === 1 && book.contentType === 'text') return false;
+      if (this.shelfFilter === 1 && (book.contentType === 'text' || book.contentType === 'comic')) return false;
       if (this.shelfFilter === 2 && book.contentType !== 'text') return false;
+      if (this.shelfFilter === 3 && book.contentType !== 'comic') return false;
       // 与详情页一致：只有明确的 false 表示连载，缺失状态默认完结。
       if (this.shelfStatusFilter === 1 && book.completed !== false) return false;
       if (this.shelfStatusFilter === 2 && book.completed === false) return false;
@@ -830,7 +832,7 @@ export struct FavoritePage {
   @LocalBuilder
   buildStatusFilterMenu() {
     Column({ space: 2 }) {
-      ForEach([0, 1, 2], (index: number) => {
+      ForEach([0, 1, 2, 3], (index: number) => {
         Text(this.statusFilterLabel(index))
           .fontSize(16)
           .fontColor(index === this.shelfStatusFilter ? AppColor.Brand : $r('sys.color.font_primary'))
@@ -844,7 +846,7 @@ export struct FavoritePage {
 
   private selectShelfFilter(index: number): void {
     if (this.removingBook || this.showBatchDelete) return;
-    if (index < 0 || index > 2 || this.shelfFilter === index) return;
+    if (index < 0 || index > 3 || this.shelfFilter === index) return;
     this.shelfFilter = index;
     this.selectedBookIds = new Set();
     this.bookDataSource.setBooks(this.filteredBooks(this.favoriteBooks));
@@ -864,9 +866,9 @@ export struct FavoritePage {
       return;
     }
     SearchCache.put(book);
-    if (book.contentType === 'text') {
+    if (book.contentType === 'text' || book.contentType === 'comic') {
       const params = TextReaderRouteParams.of(book.id);
-      this.navStack.pushPathByName('reader', params, onPop);
+      this.navStack.pushPathByName(book.contentType === 'comic' ? 'comicReader' : 'reader', params, onPop);
       return;
     }
     if (book.sourceUrl && !this.sourceNames.has(book.sourceUrl)) {
@@ -1711,7 +1713,7 @@ export struct FavoritePage {
         .width('100%')
 
         Row() {
-          ForEach([0, 1, 2], (index: number) => {
+          ForEach([0, 1, 2, 3], (index: number) => {
             Column() {
               Row()
                 .width(18)
@@ -1791,7 +1793,7 @@ export struct FavoritePage {
             .borderRadius(AppRadius.Md)
             .objectFit(ImageFit.Cover)
         }
-        this.buildTypeBadge(false, book.contentType === 'text')
+        this.buildTypeBadge(false, book.contentType ?? 'audio')
         this.buildSourceBadge(book)
         this.buildPinnedBadge(book)
         if (this.isManaging) {
@@ -1873,9 +1875,9 @@ export struct FavoritePage {
   }
 
   @Builder
-  buildTypeBadge(small: boolean, isText: boolean) {
+  buildTypeBadge(small: boolean, contentType: string) {
     Row() {
-      Text(isText ? '电子书' : '有声书')
+      Text(contentType === 'comic' ? $r('app.string.comic_type') : contentType === 'text' ? $r('app.string.rule_source_type_text') : $r('app.string.rule_source_type_audio'))
         .fontSize(small ? 9 : 10)
         .fontColor(Color.White)
         .fontWeight(FontWeight.Medium)
@@ -1886,7 +1888,7 @@ export struct FavoritePage {
       top: small ? 2 : 3,
       bottom: small ? 2 : 3
     })
-    .backgroundColor(isText ? '#CC4E7FA8' : '#CCFF8800')
+    .backgroundColor(contentType !== 'audio' ? '#CC4E7FA8' : '#CCFF8800')
     .borderRadius(AppRadius.Sm)
     .margin({ top: small ? 5 : 6, left: small ? 5 : 6 })
   }
@@ -1924,7 +1926,7 @@ export struct FavoritePage {
           .borderRadius(AppRadius.Sm)
           .clip(true)
         }
-        this.buildTypeBadge(true, book.contentType === 'text')
+        this.buildTypeBadge(true, book.contentType ?? 'audio')
         this.buildSourceBadge(book)
       }
       .width(72)

@@ -84,7 +84,7 @@ export struct BookSourceSwitchSheet {
     this.busy = true;
     this.errorText = '';
     try {
-      const loaded = candidate.contentType === 'text' ? await BookSourceService.loadTextBook(candidate) :
+      const loaded = candidate.contentType === 'text' || candidate.contentType === 'comic' ? await BookSourceService.loadTextBook(candidate) :
         await BookSourceService.loadAudioBook(candidate, (_book: Book): void => {});
       if (this.disposed) return;
       if (loaded.chapters.length === 0) {

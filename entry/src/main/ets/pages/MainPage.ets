@@ -24,7 +24,6 @@ import { EVT_SWITCH_TAB } from './ImportPage';
 import { WebViewAudioExtractorHost } from '../service/builtin/WebViewAudioExtractor';
 import { WebEngineGate } from '../service/WebEngineGate';
 import { AppColor, HomeTheme } from '../theme/Theme';
-import { WebBookFetchRuntimeHost } from '../service/rulesource/light/WebBookFetchRuntimeHost';
 import { BookSourceAudioWebRuntimeHost } from '../service/rulesource/light/BookSourceAudioWebRuntimeHost';
 import { RuleSourceImportWebHost } from '../service/rulesource/light/RuleSourceImportWebHost';
 
@@ -437,7 +436,6 @@ export struct MainPage {
       }
 
       if (this.gate.needRuleBrowser) {
-        WebBookFetchRuntimeHost()
         BookSourceAudioWebRuntimeHost()
         RuleSourceImportWebHost()
       }

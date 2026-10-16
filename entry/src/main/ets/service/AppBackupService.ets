@@ -289,7 +289,7 @@ export class AppBackupService {
         !Array.isArray(book.tags) || !book.tags.every((value: string): boolean => AppBackupService.validText(value)) ||
         !Array.isArray(book.chapters) || book.chapters.length > 0 ||
         !AppBackupService.optionalNumber(book.skipIntro) || !AppBackupService.optionalNumber(book.skipOutro) ||
-        (book.contentType !== undefined && book.contentType !== 'audio' && book.contentType !== 'text') ||
+        (book.contentType !== undefined && book.contentType !== 'audio' && book.contentType !== 'text' && book.contentType !== 'comic') ||
         ![book.totalDuration, book.chapterCount, book.rating]
           .every((value: number): boolean => AppBackupService.validNumber(value))) return AppBackupService.invalidSnapshot('books');
     }

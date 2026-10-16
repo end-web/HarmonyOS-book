@@ -12,6 +12,10 @@ export class BookIdentity {
     return `${SEARCH_AUDIO_PREFIX}${(hash >>> 0).toString(36)}`;
   }
 
+  static onlineComicBookId(sourceUrl: string, bookUrl: string): string {
+    return BookIdentity.onlineTextBookId(sourceUrl, bookUrl).replace('search_text_', 'search_comic_');
+  }
+
   static onlineTextBookId(sourceUrl: string, bookUrl: string): string {
     const raw = `${sourceUrl}::${bookUrl}`;
     let hash: number = 5381;

@@ -293,7 +293,7 @@ export struct BookDetailPage {
       // 先展示已有资料，章节加载仅影响目录区域。
       this.loadingDetail = false;
       // 音频搜索结果只有基础信息时，首帧直接展示目录骨架，避免先闪出”暂无章节信息”。
-      this.loadingToc = cached.contentType === 'text' ? cached.chapters.length === 0 : this.needsAudioTocLoad(cached);
+      this.loadingToc = (cached.contentType === 'text' || cached.contentType === 'comic') ? cached.chapters.length === 0 : this.needsAudioTocLoad(cached);
     } else {
       hilog.warn(DETAIL_LOG_DOMAIN, DETAIL_LOG_TAG, 'primeBookFromCache: NO cached book found in SearchCache');
     }
@@ -302,7 +302,7 @@ export struct BookDetailPage {
   private needsAudioTocLoad(book: Book): boolean {
     const tocIncomplete = book.tocComplete === false || book.chapters.length === 0 ||
       (book.chapters.length === 1 && book.chapterCount > 1);
-    return book.contentType !== 'text' && tocIncomplete &&
+    return book.contentType !== 'text' && book.contentType !== 'comic' && tocIncomplete &&
       book.bookUrl.length > 0 && book.sourceUrl.length > 0;
   }
 
@@ -382,6 +382,7 @@ export struct BookDetailPage {
   /** 将历史缓存或源端的内部类型值转换为详情页可见文案。 */
   private displayCategory(): string {
     if (!this.book) return '有声书';
+    if (this.book.contentType === 'comic') return this.getUIContext().getHostContext()?.resourceManager.getStringSync($r('app.string.comic_type').id) ?? '';
     const category = this.book.category.trim();
     const normalized = category.toLowerCase();
     const isStatus = normalized.includes('完结') || normalized.includes('完本') ||
@@ -427,7 +428,7 @@ export struct BookDetailPage {
         b.chapters = await DataService.getChaptersForBook(b.id);
       }
       await PreferenceService.applyTocOrder(b);
-      if (b.contentType === 'text') {
+      if ((b.contentType === 'text' || b.contentType === 'comic')) {
         this.book = this.copyBookForRender(b);
         this.loadingDetail = false;
         this.loadTextBook(b);
@@ -618,7 +619,7 @@ export struct BookDetailPage {
    */
   private currentChapterIndex(): number {
     if (!this.book) return -1;
-    if (this.book.contentType === 'text') {
+    if ((this.book.contentType === 'text' || this.book.contentType === 'comic')) {
       const position = this.textReadingProgress;
       if (!position || this.book.chapters.length === 0) return -1;
       return Math.max(0, Math.min(position.resourceIndex, this.book.chapters.length - 1));
@@ -796,7 +797,7 @@ export struct BookDetailPage {
 
   private openPrimaryAction(chapter?: Chapter): void {
     if (this.chaptersLoading() || !this.book || this.book.chapters.length === 0 || this.isStartingPlay) return;
-    if (this.book?.contentType === 'text') {
+    if ((this.book?.contentType === 'text' || this.book?.contentType === 'comic')) {
       this.openTextReader(chapter);
       return;
     }
@@ -805,6 +806,12 @@ export struct BookDetailPage {
 
   private openTextReader(chapter?: Chapter): void {
     if (!this.book) return;
+    if (this.book.contentType === 'comic') {
+      SearchCache.put(this.book);
+      const index = chapter ? DataService.resolveChapterIndex(this.book, chapter.id, chapter.title) : -1;
+      this.navStack.pushPathByName('comicReader', TextReaderRouteParams.of(this.book.id, index));
+      return;
+    }
     const loadingBook = SearchCache.get(this.bookId);
     if (loadingBook && BookSourceService.pendingTextBook(this.bookId) !== undefined) this.book = loadingBook;
     let resourceIndex = -1;
@@ -1112,7 +1119,7 @@ export struct BookDetailPage {
     if (total > 0) return this.formatTotalDuration(total);
     const count = Math.max(this.book?.chapterCount ?? 0, this.book?.chapters.length ?? 0);
     if (count <= 0) return '—';
-    return `${count}${this.book?.contentType === 'text' ? '章' : '集'}`;
+    return `${count}${(this.book?.contentType === 'text' || this.book?.contentType === 'comic') ? '章' : '集'}`;
   }
 
   private formatTotalDuration(seconds: number): string {
@@ -1173,7 +1180,7 @@ export struct BookDetailPage {
       })
       DetailActionItem({
         icon: $r('sys.symbol.calendar_fill'),
-        label: this.book?.contentType === 'text'
+        label: (this.book?.contentType === 'text' || this.book?.contentType === 'comic')
           ? $r('app.string.book_detail_action_read_record')
           : $r('app.string.book_detail_action_listen_record'),
         active: false,
@@ -1211,7 +1218,7 @@ export struct BookDetailPage {
     const title = rawTitle.trim();
     const numbered = /^[【\[（(]?\s*(?:第\s*[0-9０-９零〇一二两三四五六七八九十百千万]+\s*[章集回节節話话期]|[0-9０-９]+\s*[章集回节節話话期]|[0-9０-９]+(?:\s|[、.．:：_\-]|$))/;
     if (numbered.test(title)) return title;
-    const unit = this.book?.contentType === 'text' ? '章' : '集';
+    const unit = (this.book?.contentType === 'text' || this.book?.contentType === 'comic') ? '章' : '集';
     const prefix = `第${index + 1}${unit}`;
     return title.length > 0 ? `${prefix} ${title}` : prefix;
   }
@@ -1226,7 +1233,7 @@ export struct BookDetailPage {
   /** 历史章节标题，供进度行与换源定位使用。 */
   private historyChapterTitle(): string {
     if (!this.book) return '';
-    if (this.book.contentType === 'text') {
+    if ((this.book.contentType === 'text' || this.book.contentType === 'comic')) {
       return this.textReadingProgress?.chapterTitle ?? '';
     }
     if (!this.lastHistory) return '';
@@ -1254,16 +1261,16 @@ export struct BookDetailPage {
 
   private countLine(): ResourceStr {
     if (!this.book) return '';
-    const unit = this.book.contentType === 'text' ? '章' : '集';
+    const unit = (this.book.contentType === 'text' || this.book.contentType === 'comic') ? '章' : '集';
     const total = Math.max(this.book.chapterCount, this.book.chapters.length);
     if (total <= 0) return '';
     const record = this.downloadRecord();
     if (record && record.downloadedCount > 0) {
-      return this.book.contentType === 'text'
+      return (this.book.contentType === 'text' || this.book.contentType === 'comic')
         ? $r('app.string.book_detail_progress_text', total, record.downloadedCount)
         : $r('app.string.book_detail_progress_audio', total, record.downloadedCount);
     }
-    return this.book.contentType === 'text'
+    return (this.book.contentType === 'text' || this.book.contentType === 'comic')
       ? $r('app.string.book_detail_total_text', total)
       : $r('app.string.book_detail_total_audio', total);
   }
@@ -1274,7 +1281,7 @@ export struct BookDetailPage {
       // 当前进度回填时替换同一行，不能额外插入一行推动简介和标签。
       Text() {
         Span(this.progressChapterLabel().length > 0
-          ? (this.book!.contentType === 'text' ? $r('app.string.book_detail_reading_text')
+          ? ((this.book!.contentType === 'text' || this.book!.contentType === 'comic') ? $r('app.string.book_detail_reading_text')
             : $r('app.string.book_detail_reading'))
           : $r('app.string.book_detail_latest'))
           .fontColor($r('sys.color.font_secondary'))
@@ -1394,7 +1401,7 @@ export struct BookDetailPage {
 
   private primaryCtaLabel(): Resource {
     if (this.chaptersLoading()) return $r('app.string.book_detail_loading_chapters');
-    if (this.book?.contentType === 'text') {
+    if ((this.book?.contentType === 'text' || this.book?.contentType === 'comic')) {
       return this.textReadingProgress
         ? $r('app.string.book_detail_continue_read')
         : $r('app.string.book_detail_start_read');
@@ -1411,7 +1418,7 @@ export struct BookDetailPage {
   buildPrimaryCta() {
     Button({ type: ButtonType.Capsule }) {
       Row({ space: AppSpace.Sm }) {
-        SymbolGlyph(this.book?.contentType === 'text' ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
+        SymbolGlyph((this.book?.contentType === 'text' || this.book?.contentType === 'comic') ? $r('sys.symbol.book') : $r('sys.symbol.play_fill'))
           .fontSize(18).fontColor([$r('sys.color.font_primary')])
         Text(this.primaryCtaLabel())
           .fontSize(AppFont.Title).fontWeight(FontWeight.Medium)
@@ -1448,7 +1455,7 @@ export struct BookDetailPage {
 
   /** 目录弹层当前章进度文案（仅有声书）。 */
   private currentChapterProgressText(): string {
-    if (!this.book || this.book.contentType === 'text') return '';
+    if (!this.book || (this.book.contentType === 'text' || this.book.contentType === 'comic')) return '';
     if (this.playerState.currentBook?.id !== this.bookId) return '';
     if (this.playerState.durationMs <= 0) return '';
     const percent = Math.round(this.playerState.progressMs / this.playerState.durationMs * 100);
@@ -1471,7 +1478,7 @@ export struct BookDetailPage {
       onRetry: (): void => {
         const book = this.book;
         if (!book) return;
-        if (book.contentType === 'text') this.loadTextBook(book);
+        if ((book.contentType === 'text' || book.contentType === 'comic')) this.loadTextBook(book);
         else this.loadTocFromSource(book);
       },
       onClose: (): void => { this.showChapterSheet = false; }

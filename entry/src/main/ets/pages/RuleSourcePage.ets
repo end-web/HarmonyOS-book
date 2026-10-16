@@ -136,6 +136,7 @@ export struct RuleSourcePage {
   @Local sourceGroups: string[] = [];
   @Local selectedGroup: string = '';
   @Local statusFilter: number = 0;
+  @Local contentFilter: number = 0;
   @Local sortMode: number = 0;
   @Local groupDraft: string = '';
   @Local editingGroup: string = '';
@@ -320,7 +321,10 @@ export struct RuleSourcePage {
       filtered = filtered.filter((source: LocalRuleSource) => this.selectedGroup === '__ungrouped__'
         ? this.sourceGroupLabels(source).length === 0 : this.sourceGroupLabels(source).includes(this.selectedGroup));
     }
-    filtered = filtered.filter((source: LocalRuleSource) => this.matchesStatus(source));
+    filtered = filtered.filter((source: LocalRuleSource): boolean => this.matchesStatus(source) &&
+      (this.contentFilter === 0 || (this.contentFilter === 1 && source.isAudio()) ||
+      (this.contentFilter === 2 && source.isText() && !source.isComic()) ||
+      (this.contentFilter === 3 && source.isComic())));
     filtered.sort((left: LocalRuleSource, right: LocalRuleSource): number => {
       if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
       if (this.sortMode === 1) return left.bookSourceName.localeCompare(right.bookSourceName);
@@ -1300,6 +1304,7 @@ export struct RuleSourcePage {
   }
 
   private sourceTypeLabel(source: LocalRuleSource): ResourceStr {
+    if (source.isComic()) return $r('app.string.comic_type');
     if (source.bookSourceType === LocalRuleSourceType.AUDIO) {
       return $r('app.string.rule_source_type_audio');
     }
@@ -1569,6 +1574,16 @@ export struct RuleSourcePage {
         .width('100%')
         .padding({ left: AppSpace.Md, right: AppSpace.Md })
 
+        Row({ space: 8 }) {
+          ForEach([$r('app.string.search_type_all'), $r('app.string.search_type_audio'),
+            $r('app.string.search_type_text'), $r('app.string.comic_type')], (label: Resource, index: number) => {
+            Button(label).layoutWeight(1).fontSize(13)
+              .backgroundColor(this.contentFilter === index ? AppColor.Brand : $r('sys.color.comp_background_primary'))
+              .fontColor(this.contentFilter === index ? Color.White : $r('sys.color.font_primary'))
+              .enabled(!this.isEditMode && !this.isImporting && !this.isBulkTesting)
+              .onClick(() => { this.contentFilter = index; this.applyFilters(); })
+          }, (label: Resource): string => label.id.toString())
+        }.width('100%').padding({ left: AppSpace.Md, right: AppSpace.Md, top: 8 })
         Row({ space: AppSpace.Xs }) {
           Select(this.groupOptions(true))
             .selected(this.selectedGroupIndex()).value(this.currentGroupLabel())

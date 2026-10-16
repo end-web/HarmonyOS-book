@@ -795,7 +795,8 @@ export struct HomePage {
   }
 
   private homeBookId(r: SearchResult): string {
-    return r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl || '', r.bookUrl || r.name) :
+    return r.contentType === 'comic' ? BookIdentity.onlineComicBookId(r.sourceUrl, r.bookUrl) :
+      r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl || '', r.bookUrl || r.name) :
       BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name);
   }
 
@@ -807,7 +808,7 @@ export struct HomePage {
       author: r.author || '未知',
       narrator: r.sourceName,
       cover: r.coverUrl || '',
-      category: r.kind || (r.contentType === 'text' ? '小说' : '有声书'),
+      category: r.kind || (r.contentType === 'comic' ? '漫画' : r.contentType === 'text' ? '小说' : '有声书'),
       contentType: r.contentType ?? 'audio',
       intro: r.intro || '',
       wordCount: r.wordCount,

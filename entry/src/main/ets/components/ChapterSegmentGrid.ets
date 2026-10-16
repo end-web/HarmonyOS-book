@@ -40,6 +40,28 @@ export struct ChapterSegmentGrid {
   @Param keyword: string = '';
   @Param descending: boolean = false;
   @Param columns: number = 2;
+  @Param topRequest: number = 0;
+  @Param bottomRequest: number = 0;
+
+  @Monitor('bottomRequest')
+  onBottomRequested(): void {
+    if (this.positionTimer !== -1) clearTimeout(this.positionTimer);
+    this.positionTimer = -1;
+    this.selectedStart = this.descending ? 0 : Math.floor(Math.max(0, this.chapters.length - 1) / 40) * 40;
+    this.refresh();
+    if (this.chapters.length > 0) this.tabScroller.scrollToIndex(this.selectedStart / 40, false, ScrollAlign.END);
+    if (!this.empty) this.listScroller.scrollToIndex(this.source.totalCount() - 1, false, ScrollAlign.END);
+  }
+
+  @Monitor('topRequest')
+  onTopRequested(): void {
+    if (this.positionTimer !== -1) clearTimeout(this.positionTimer);
+    this.positionTimer = -1;
+    this.selectedStart = this.descending ? Math.floor(Math.max(0, this.chapters.length - 1) / 40) * 40 : 0;
+    this.refresh();
+    if (this.chapters.length > 0) this.tabScroller.scrollToIndex(this.selectedStart / 40, false, ScrollAlign.START);
+    if (!this.empty) this.listScroller.scrollToIndex(0, false, ScrollAlign.START);
+  }
   @Event onSelect: (chapter: Chapter) => void = () => {};
   @Event onLongPress: (chapter: Chapter) => void = () => {};
   @Local selectedStart: number = 0;

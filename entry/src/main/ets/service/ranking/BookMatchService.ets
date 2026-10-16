@@ -66,10 +66,10 @@ export class BookMatchService {
     return score;
   }
 
-  static toBook(result: SearchResult, type: 'audio' | 'text'): Book {
+  static toBook(result: SearchResult, type: 'audio' | 'text' | 'comic'): Book {
     const chapters: Chapter[] = [];
     return {
-      id: type === 'text' ? BookIdentity.onlineTextBookId(result.sourceUrl, result.bookUrl)
+      id: type === 'comic' ? BookIdentity.onlineComicBookId(result.sourceUrl, result.bookUrl) : type === 'text' ? BookIdentity.onlineTextBookId(result.sourceUrl, result.bookUrl)
         : BookIdentity.onlineAudioBookId(result.sourceUrl, result.bookUrl),
       title: result.name, author: result.author, narrator: '', cover: result.coverUrl,
       category: result.kind, contentType: type, intro: result.intro, totalDuration: 0,
@@ -128,8 +128,8 @@ export class BookMatchService {
           if (generation !== this.generation) return;
           for (const result of results.slice(0, 80)) {
             if (!result.bookUrl || !result.sourceUrl) continue;
-            const type: 'text' | 'audio' = result.contentType ??
-              (source.bookSourceType === 0 || source.bookSourceType === 3 ? 'text' : 'audio');
+            const type: 'text' | 'audio' | 'comic' = result.contentType ??
+              (source.bookSourceType === 0 || source.bookSourceType === 3 ? 'text' : source.bookSourceType === 2 ? 'comic' : 'audio');
             const score = BookMatchService.score(target, result);
             const key = `${result.sourceUrl}\u001f${result.bookUrl}`;
             if (score <= 0 || seen.has(key) || progress.matches.length >= 150) continue;

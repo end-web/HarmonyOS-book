@@ -26,6 +26,8 @@ export class RankingParser {
     if (platform === 'ximalaya') return RankingParser.ximalaya(boardId, body);
     if (platform === 'qimao') return RankingParser.qimao(body);
     if (platform === 'jjwxc') return RankingParser.jjwxc(body);
+    if (platform === 'fanqie') return RankingParser.fanqie(body);
+    if (platform === 'faloo') return RankingParser.faloo(body);
     if (platform === 'qidian') {
       const records = RankingParser.qidianPage(boardId, body);
       // 完结入口只使用带明确完本状态的结构化记录，不能回退到页面中的推荐书。
@@ -64,6 +66,56 @@ export class RankingParser {
       }
       if (!book.title) continue;
       seen.add(platformBookId);
+      books.push(book);
+    }
+    return books;
+  }
+
+  private static fanqie(body: string): RankingBook[] {
+    const root = new JsonObj(JSON.parse(body));
+    const list = root.getArr('book_list');
+    const books: RankingBook[] = [];
+    const seen = new Set<string>();
+    for (let index = 0; index < Math.min(list.length(), 99); index++) {
+      const item = list.getObj(index);
+      const id = item.getString('book_id');
+      const title = RankingParser.text(item.getString('book_name'));
+      if (!/^\d+$/.test(id) || !title || /[\uE000-\uF8FF]/.test(title) || seen.has(id)) continue;
+      const book = new RankingBook();
+      book.id = `fanqie:${id}`;
+      book.platformId = 'fanqie';
+      book.title = title;
+      book.author = RankingParser.text(item.getString('author'));
+      book.coverUrl = RankingParser.imageUrl(item.getString('thumb_url'));
+      book.originalUrl = `https://fanqienovel.com/page/${id}`;
+      book.intro = RankingParser.text(item.getString('category'));
+      book.rank = index + 1;
+      seen.add(id);
+      books.push(book);
+    }
+    return books;
+  }
+
+  private static faloo(body: string): RankingBook[] {
+    const rows = body.split('<div class="TwoBox02_02">').slice(1, 100);
+    const books: RankingBook[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const heading = /<h1\b[^>]*>([\s\S]*?)<\/h1>/.exec(row)?.[1] ?? '';
+      const id = /href="(?:https?:)?\/\/b\.faloo\.com\/(\d+)\.html"/.exec(heading)?.[1] ?? '';
+      const title = RankingParser.text(heading);
+      if (!id || !title || seen.has(id)) continue;
+      const book = new RankingBook();
+      book.id = `faloo:${id}`;
+      book.platformId = 'faloo';
+      book.title = title;
+      book.author = RankingParser.capture(row, /<a\b[^>]*href="[^\"]*\/l_0_1\.html\?t=2[^\"]*"[^>]*>([\s\S]*?)<\/a>/);
+      const image = /<img\b[^>]*\bsrc="([^"]+)"/.exec(row)?.[1] ?? '';
+      book.coverUrl = RankingParser.imageUrl(image.replace(/^http:\/\/img\.faloo\.com\//, 'https://img.faloo.com/'));
+      book.originalUrl = `https://b.faloo.com/${id}.html`;
+      book.intro = RankingParser.capture(row, /<div class="TwoBox02_06">([\s\S]*?)<\/div>/);
+      book.rank = books.length + 1;
+      seen.add(id);
       books.push(book);
     }
     return books;

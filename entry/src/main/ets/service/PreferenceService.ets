@@ -653,6 +653,18 @@ export class PreferenceService {
     book.chaptersDescending = await PreferenceService.getTocOrder(book.id);
   }
 
+  static async getRankingCategories(): Promise<string> {
+    const s = await PreferenceService.ensureStore();
+    const value = await s.get('ranking_categories_v1', '');
+    return typeof value === 'string' ? value : '';
+  }
+
+  static async setRankingCategories(value: string): Promise<void> {
+    const s = await PreferenceService.ensureStore();
+    await s.put('ranking_categories_v1', value);
+    await s.flush();
+  }
+
   static async getColorMode(): Promise<number> {
     const s = await PreferenceService.ensureStore();
     return await s.get(KEY_COLOR_MODE, ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) as number;
@@ -817,6 +829,23 @@ export class PreferenceService {
   static async getCoverSuperResolution(): Promise<boolean> {
     const store = await PreferenceService.ensureStore();
     return (await store.get(KEY_COVER_SUPER_RESOLUTION, false)) === true;
+  }
+
+  static async getComicSuperResolution(): Promise<boolean> {
+    const store = await PreferenceService.ensureStore();
+    return (await store.get('comicSuperResolution', false)) === true;
+  }
+
+  static async setComicSuperResolution(enabled: boolean): Promise<void> {
+    const store = await PreferenceService.ensureStore();
+    const previous = await store.get('comicSuperResolution', false);
+    try {
+      await store.put('comicSuperResolution', enabled);
+      await store.flush();
+    } catch (error) {
+      await store.put('comicSuperResolution', previous);
+      throw new Error(`Failed to save comic super resolution preference: ${String(error)}`);
+    }
   }
 
   static async setCoverSuperResolution(enabled: boolean): Promise<void> {

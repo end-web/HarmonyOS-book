@@ -149,6 +149,10 @@ export class LocalRuleSource implements BookSource {
     return this.bookSourceType === LocalRuleSourceType.AUDIO;
   }
 
+  isComic(): boolean {
+    return this.bookSourceType === LocalRuleSourceType.COMIC;
+  }
+
   isText(): boolean {
     // 漫画、Web 文件和未来新增类型先走通用内容链，不能因类型枚举未知而整源失效。
     return !this.isAudio();

@@ -14,6 +14,8 @@ const states = new Map();
 const fixtures = new Map();
 const requests = [];
 const storage = new Map();
+const comicDisk = new Map();
+const comicFiles = new Set();
 let liveOrigin = '';
 class FakeHttpClient {
   cancelAll() {}
@@ -37,6 +39,16 @@ class FakeHttpClient {
 const repository = { isInitialized: () => false, get: async () => undefined,
   readScriptState: async url => states.get(url) || '', writeScriptState: async (url, value) => states.set(url, value) };
 const stubs = {
+  '@kit.PerformanceAnalysisKit': { hilog: { info() {}, error() {} } },
+  '@kit.CoreFileKit': { fileUri: { getUriFromPath: value => 'file://' + value,
+    FileUri: class { constructor(uri) { this.path = uri.slice(7); } } },
+    fileIo: { stat: async p => { if (!comicFiles.has(p)) throw Error('missing'); return {size:128}; },
+      unlink: async p => comicFiles.delete(p) } },
+  '@kit.BasicServicesKit': { emitter: { emit() {} } },
+  'service/text/OnlineTextContentCache': { OnlineTextContentCache: {
+    key: (...parts) => JSON.stringify(parts), read: async (_ctx,key) => comicDisk.get(key),
+    write: async (_ctx,key,value) => comicDisk.set(key,value), removeChapter: async (_ctx,key) => comicDisk.delete(key)
+  } },
   '@kit.ArkTS': { url: {URL:{parseURL:(value,base)=>new URL(value,base)}}, util: { TextEncoder: class { encodeInto(s) { return new TextEncoder().encode(s); } },
     TextDecoder: { create: (encoding='utf-8',options={}) => {
       const decoder = new TextDecoder(encoding,options);
@@ -315,6 +327,50 @@ async function run() {
   const comicContent = JSON.parse(await engine.content(JSON.stringify(comic), 'https://engine.test/media', '{}'));
   assert.equal(comicContent.mediaType, 'comic');
   assert.equal(comicContent.imageUrls.length, 2);
+  const comicSearch = JSON.parse(await engine.search(JSON.stringify(comic), 'Second', 2));
+  assert.equal(comicSearch[0].contentType, 'comic', 'comic source results must not enter the text reader');
+  let requestedChapter;
+  stubs['service/BookSourceService'] = { BookSourceService: {
+    getSourceChapterContent: async (_book, url, variables) => {
+      requestedChapter = { url, variables };
+      return comicContent;
+    }
+  } };
+  const { ComicReaderService } = load('service/ComicReaderService');
+  const comicChapter = { id: 'comic-c0', originSourceValue: 'https://engine.test/media',
+    source: { value: 'stale-url' }, variables: { chapterName: 'First', chapterIndex: '0' } };
+  let comicPages = await ComicReaderService.load({ contentType: 'comic' }, comicChapter);
+  assert.equal(comicPages.length, 2);
+  assert.equal(requestedChapter.url, comicChapter.originSourceValue);
+  assert.equal(requestedChapter.variables, comicChapter.variables, 'chapter context reaches the shared dispatcher');
+  assert.equal(comicPages[0].url, 'https://engine.test/1.jpg');
+  comicContent.imageUrls.push(comicContent.imageUrls[0]);
+  comicPages = await ComicReaderService.load({}, comicChapter);
+  assert.equal(new Set(comicPages.map(page => page.key)).size, 3, 'repeated images retain order and unique stable keys');
+  comicContent.imageUrls = ['/data/storage/el2/base/haps/entry/cache/comic_images/page.webp',
+    'file:///data/storage/el2/base/haps/entry/cache/comic_images/ready.webp'];
+  comicPages = await ComicReaderService.load({}, comicChapter);
+  assert.equal(comicPages[0].url, 'file:///data/storage/el2/base/haps/entry/cache/comic_images/page.webp',
+    'materialized engine files must be passed to ArkUI as file URIs, not application assets');
+  assert.equal(comicPages[1].url, comicContent.imageUrls[1]);
+  const comicContext = {cacheDir:'/data/storage/el2/base/haps/entry/cache'};
+  const localImage = comicContext.cacheDir + '/comic_images/page.webp';
+  comicContent.imageUrls = [localImage];
+  comicFiles.add(localImage);
+  await ComicReaderService.load({}, comicChapter, comicContext);
+  comicContent.imageUrls = [];
+  assert.equal((await ComicReaderService.load({}, comicChapter, comicContext)).length, 1, 'reopen uses valid disk image cache');
+  comicFiles.clear();
+  assert.equal((await ComicReaderService.load({}, comicChapter, comicContext)).length, 0, 'deleted image must refetch, not claim offline availability');
+  comicFiles.add(localImage);
+  comicContent.imageUrls = [localImage];
+  await ComicReaderService.load({}, comicChapter, comicContext);
+  comicContent.imageUrls = [];
+  assert.equal((await ComicReaderService.load({}, comicChapter, comicContext, true)).length, 0, 'refresh bypasses chapter cache');
+  assert.equal(comicFiles.has(localImage), false, 'refresh invalidates owned image file');
+  comicContent.imageUrls = [];
+  assert.equal((await ComicReaderService.load({}, comicChapter)).length, 0, 'empty image chapters remain empty');
+  console.log('PASS: comic search typing, real image reader bridge, chapter context, duplicate pages and empty content');
   const audio = {...local,definition:JSON.stringify({...source,bookSourceType:1,ruleContent:{audioUrl:'$.url'}})};
   assert.equal(JSON.parse(await engine.content(JSON.stringify(audio), 'https://engine.test/media', '{}')).audioUrl, 'https://engine.test/audio.mp3');
   // AudioBook resolves JSON results after WebBookService and preserves anti-hotlink headers.

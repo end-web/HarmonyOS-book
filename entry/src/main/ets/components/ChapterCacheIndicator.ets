@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { Book, Chapter } from '../model/Book';
 import { OnlineTextContentCache } from '../service/text/OnlineTextContentCache';
+import { ComicReaderService } from '../service/ComicReaderService';
 import { ChapterCacheService, EVT_CHAPTER_CACHE_UPDATED } from '../service/ChapterCacheService';
 import { AppColor } from '../theme/Theme';
 
@@ -30,7 +31,12 @@ export struct ChapterCacheIndicator {
     const book = this.book;
     const chapter = this.chapter;
     if (book === null || chapter === null) return;
-    if (book.contentType !== 'text') {
+    if (book.contentType === 'comic') {
+      const context = this.getUIContext().getHostContext();
+      if (!context) return;
+      const pages = await ComicReaderService.cached(context, book, chapter);
+      if (ticket === this.serial) this.cached = pages.length > 0;
+    } else if (book.contentType !== 'text') {
       this.cached = ChapterCacheService.getInstance().isAudioChapterCached(book, chapter);
     } else if (chapter.source.type === 'file' || chapter.source.type === 'rawfile') {
       this.cached = true;

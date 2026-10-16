@@ -1,7 +1,9 @@
 # HarmonyOS 代码混淆规则
 
 # ─── 启用混淆 ───
--enable-property-obfuscation
+# 书源引擎读取用户 JSON、动态表达式和脚本桥接属性，字段名属于运行时协议。
+# 不混淆属性名：静态白名单无法覆盖导入书源及上游新增的协议字段。
+# 保留下方顶层、文件名和导出符号混淆。
 -enable-toplevel-obfuscation
 -enable-filename-obfuscation
 -enable-export-obfuscation

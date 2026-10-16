@@ -1,272 +1,1076 @@
 {
   "string": [
-    {"name": "light_source_save_settings", "value": "保存书源设置"},
-    {"name": "light_source_web_login", "value": "网页登录"},
-    {"name": "player_source_voice_label", "value": "音色"},
-    {"name": "player_source_voice_title", "value": "书源音色"},
-    {"name": "player_source_voice_hint", "value": "点击音色即可切换，仅对当前书籍生效。已下载音频保留原音色。"},
-    {"name": "player_source_voice_default", "value": "默认"},
-    {"name": "player_source_voice_apply", "value": "保存并重新加载"},
-    {"name": "settings_reset_listening_title", "value": "清除累计收听时长"},
-    {"name": "settings_reset_listening_subtitle", "value": "仅此操作清零收听统计；删书、清缓存和清记录均保留累计时长"},
-    {"name": "settings_reset_listening_confirm", "value": "将暂停当前播放，并清零累计、本月、每日收听时长及连续收听统计。书籍、章节进度和会话历史保留。此操作无法撤销，确定清除？"},
-    {"name": "settings_reset_listening_cancel", "value": "取消"},
-    {"name": "settings_reset_listening_action", "value": "清除时长"},
-    {"name": "settings_reset_listening_done", "value": "累计收听时长已清除"},
-    {"name": "settings_reset_listening_failed", "value": "清除收听时长失败，请重试"},
-    { "name": "settings_preload_saved", "value": "预缓存已应用：%d 章，重启后保留" },
-    { "name": "settings_search_concurrency_saved", "value": "搜索并发已保存为 %d，下次搜索生效" },
-    { "name": "session_history", "value": "历史记录" },
-    { "name": "session_empty", "value": "暂无会话历史，开始阅读或收听后自动记录" },
-    { "name": "session_load_failed", "value": "历史记录读取失败，请重试" },
-    { "name": "session_jump_failed", "value": "无法跳回，请检查书籍及章节是否仍可用" },
-    { "name": "session_start", "value": "开始：%s" },
-    { "name": "session_end", "value": "结束 / 最近记录：%s" },
-    { "name": "session_audio_position", "value": "%s · %s / %s" },
-    { "name": "session_text_position", "value": "%s · 第 %d 字" },
-    { "name": "session_jump_start", "value": "跳回开始" },
-    { "name": "session_jump_end", "value": "跳回停留位置" },
-    { "name": "session_retention", "value": "保留最近 2000 条章节会话；异常退出以最后保存位置为准" },
-    { "name": "epub_parser_unavailable", "value": "当前设备不支持 EPUB 解析，请转换为 TXT 后导入。" },
-    { "name": "reader_kit_unavailable", "value": "当前设备不支持 ReaderKit，无法打开旧版 EPUB 书籍。在线文字及已转换的本地书籍可正常阅读。" },
-    { "name": "reader_paragraph_spacing", "value": "段落间距" },
-    { "name": "reader_paragraph_preview_first", "value": "　　夜色渐深，他轻轻合上书。" },
-    { "name": "reader_paragraph_preview_second", "value": "　　远处钟声响起，往事涌上心头。" },
-    {"name": "auto_backup_title", "value": "自动备份"},
-    {"name": "auto_backup_frequency", "value": "备份频率"},
-    {"name": "auto_backup_daily", "value": "每天"},
-    {"name": "auto_backup_three_days", "value": "每 3 天"},
-    {"name": "auto_backup_weekly", "value": "每周"},
-    {"name": "auto_backup_description", "value": "开启后，在使用应用时按所选间隔检查，有变化才备份到当前账号的华为云空间并占用该空间。应用关闭期间不保证定时执行，下次打开后补做；传输受系统云同步设置管理。"},
-    {"name": "auto_backup_off", "value": "自动备份已关闭"},
-    {"name": "auto_backup_ready", "value": "已开启，到期且数据有变化时自动备份"},
-    {"name": "auto_backup_running", "value": "正在自动备份"},
-    {"name": "auto_backup_waiting", "value": "自动备份已暂停，稍后在应用使用期间重试"},
-    {"name": "auto_backup_retry", "value": "已保留上次成功备份，稍后在应用使用期间重试；也可点击立即备份。"},
-    {"name": "auto_backup_login_required", "value": "登录华为账号后可开启自动备份"},
-    {"name": "auto_backup_save_failed", "value": "自动备份设置保存或读取失败，请重试"},
-    {"name": "auto_backup_existing", "value": "发现此账号已有云备份，已暂停自动上传。请先恢复备份，或点击立即备份并确认使用本机数据。"},
-    {"name": "auto_backup_use_local_title", "value": "使用本机数据备份"},
-    {"name": "auto_backup_use_local_message", "value": "云端已有备份，尚未在本机恢复。继续会将本机数据作为新的备份，并恢复自动备份；云端仅保留最近两份成功备份，旧版本会随后续备份被清理。是否继续？"},
-    {"name": "app_icon_title", "value": "主题图标"},
-    {"name": "app_icon_hint", "value": "点击喜欢的图标，更换桌面上的简听阅读图标"},
-    {"name": "app_icon_unsupported", "value": "当前系统暂不支持直接切换桌面图标，可预览下方样式，升级系统后使用"},
-    {"name": "app_icon_default", "value": "默认"},
-    {"name": "app_icon_leather", "value": "拟物"},
-    {"name": "app_icon_enamel", "value": "珐琅"},
-    {"name": "app_icon_ink", "value": "水墨"},
-    {"name": "app_icon_clay", "value": "黏土"},
-    {"name": "app_icon_glass", "value": "磨砂玻璃"},
-    {"name": "app_icon_origami", "value": "折纸"},
-    {"name": "app_icon_embroidery", "value": "刺绣"},
-    {"name": "app_icon_retro", "value": "复古搪瓷"},
-    {"name": "app_icon_cartoon", "value": "小狐狸"},
-    {"name": "app_icon_cartooncat", "value": "卡通猫"},
-    {"name": "app_icon_cartoondog", "value": "卡通狗"},
-    {"name": "app_icon_wave", "value": "声波"},
-    {"name": "app_icon_life", "value": "夜曲"},
-    {"name": "app_icon_current", "value": "使用中"},
-    {"name": "app_icon_blank", "value": " "},
-    {"name": "app_icon_back", "value": "返回"},
-    {"name": "app_icon_retry", "value": "读取当前图标失败，点击重试"},
-    {"name": "app_icon_changed", "value": "图标已切换，返回桌面查看"},
-    {"name": "app_icon_change_failed", "value": "图标切换未完成，请稍后重试"},
-    {"name": "about_get_update", "value": "获取更新"},
-    {"name": "about_update_market", "value": "华为应用市场"},
-    {"name": "about_update_open_failed", "value": "无法打开应用市场，请在华为应用市场搜索“简听阅读”后更新"},
-    {"name": "reader_font_theme_title", "value": "字体主题"},
-    {"name": "reader_custom_font_title", "value": "自定义字体"},
-    {"name": "reader_delete_font_option", "value": "删除字体 %s"},
-    {"name": "reader_custom_theme_slot", "value": "配色 %d"},
-    {"name": "reader_custom_theme_edit_slot", "value": "编辑自定义主题 %d"},
-    {"name": "reader_color_hex_input", "value": "十六进制颜色值"},
-    {"name": "reader_color_hex_invalid", "value": "请输入 #RRGGBB 或 #RGB，例如 #F5F2EA"},
-    {"name": "reader_preset_themes", "value": "预设主题"},
-    {"name": "reader_custom_theme", "value": "自定义主题"},
-    {"name": "reader_my_palette", "value": "我的配色"},
-    {"name": "reader_theme_edit", "value": "编辑"},
-    {"name": "reader_custom_theme_edit", "value": "编辑自定义主题"},
-    {"name": "reader_theme_preview_title", "value": "阅读效果预览"},
-    {"name": "reader_theme_preview_text", "value": "山色渐晚，灯火缓缓亮起。他合上书页，听见远处传来一声钟响。"},
-    {"name": "reader_background_color", "value": "背景颜色"},
-    {"name": "reader_editing_background_color", "value": "正在编辑背景颜色"},
-    {"name": "reader_editing_font_color", "value": "正在编辑文字颜色"},
-    {"name": "reader_color_contrast_hint", "value": "文字与背景不易区分，建议调整颜色"},
-    {"name": "reader_recommend_font_color", "value": "一键推荐字色"},
-    {"name": "reader_theme_reset", "value": "恢复默认"},
-    {"name": "reader_theme_cancel", "value": "取消"},
-    {"name": "reader_theme_save_apply", "value": "保存并应用"},
-    {"name": "reader_image_text", "value": "图片文字"},
-    {"name": "reader_image_mode", "value": "显示方式"},
-    {"name": "reader_image_contain", "value": "自适应"},
-    {"name": "reader_image_tile", "value": "平铺"},
-    {"name": "reader_image_stretch", "value": "拉伸"},
-    {"name": "reader_image_cover", "value": "裁剪"},
-    {"name": "reader_image_contain_hint", "value": "等比完整显示，空余区域使用背景底色"},
-    {"name": "reader_image_tile_hint", "value": "按原始尺寸重复铺满，适合小尺寸纹理图片"},
-    {"name": "reader_image_stretch_hint", "value": "拉伸铺满阅读区域，图片比例可能改变"},
-    {"name": "reader_image_cover_hint", "value": "等比居中铺满，超出阅读区域的部分自动裁剪"},
-    {"name": "reader_text_dark", "value": "深色"},
-    {"name": "reader_text_light", "value": "浅色"},
-    {"name": "reader_follow_system_theme_hint", "value": "深色时临时使用夜晚，浅色时恢复日间主题；手动选择主题将关闭跟随系统。"},
-    {"name": "reader_follow_system_disabled", "value": "已关闭跟随系统深浅色"},
-    {"name": "reader_theme_parchment", "value": "羊皮纸"},
-    {"name": "reader_theme_night", "value": "夜晚"},
-    { "name": "player_sleep_chapters_badge", "value": "%d章" },
-    { "name": "player_sleep_current_badge", "value": "本章" },
-    { "name": "player_auto_sleep_chapters_hint", "value": "每次开始播放自动使用上次设置（%d 章），剩余不足则播完剩余章节" },
-    { "name": "player_auto_sleep", "value": "自动定时" },
-    { "name": "player_auto_sleep_hint", "value": "每次开始播放自动使用上次时长（%d 分钟），已有定时继续计时" },
-    { "name": "player_auto_sleep_save_failed", "value": "自动定时设置保存失败，请重试" },
-    { "name": "reader_volume_key_turn", "value": "音量键翻页" },
-    { "name": "reader_volume_key_hint", "value": "音量加上一页，音量减下一页；上下滚动模式按屏滚动" },
-    {"name": "reader_alignment_title", "value": "正文对齐"},
-    {"name": "reader_alignment_justify", "value": "两端对齐"},
-    {"name": "reader_alignment_start", "value": "左对齐"},
-    {"name": "reader_alignment_center", "value": "居中"},
-    {"name": "reader_alignment_end", "value": "右对齐"},
-    {"name": "tts_custom_play_error", "value": "朗读失败，请检查自定义语音配置或网络"},
-    {"name": "book_detail_latest_update", "value": "更新时间：%s"},
-    {"name": "import_reading_metadata", "value": "正在读取书名、作者和封面…"},
-    {"name": "import_metadata_failed", "value": "部分文件信息未能解析，可手动填写后导入"},
-    {"name": "reader_font_delete_failed", "value": "删除字体失败，请重试"},
-    {"name": "home_category_loading_more", "value": "正在加载更多"},
-    {"name": "chapter_loading_count", "value": "已加载 %d 章，继续加载中"},
-    {"name": "chapter_load_retry", "value": "重试目录"},
-    {"name": "home_category_load_more", "value": "上拉或点击加载更多"},
-    {"name": "home_category_more_failed", "value": "加载失败，点击重试"},
-    {"name": "search_options", "value": "筛选"},
-    {"name": "search_exact", "value": "精准搜索"},
-    {"name": "search_by_author", "value": "搜索作者"},
-    {"name": "search_text_only", "value": "仅搜索电子书"},
-    {"name": "search_audio_only", "value": "仅搜索有声书"},
-    {"name": "player_live", "value": "实时电台 · 直播"},
-    {"name": "player_live_no_download", "value": "实时电台不支持离线下载"},
-    {"name": "hw_auth_login_title", "value": "华为账号登录"},
-    {"name": "hw_auth_login_desc", "value": "使用华为账号，备份书架与记录"},
-    {"name": "hw_auth_account_title", "value": "华为账号用户"},
-    {"name": "hw_auth_account_id", "value": "账号 %s"},
-    {"name": "hw_auth_processing", "value": "正在处理账号请求"},
-    {"name": "hw_auth_login_success", "value": "登录成功"},
-    {"name": "hw_auth_system_login_required", "value": "请先登录系统华为账号，再重试"},
-    {"name": "hw_auth_network_error", "value": "网络连接异常，请检查网络后重试"},
-    {"name": "hw_auth_unavailable", "value": "华为账号登录暂不可用，请稍后重试或联系开发者"},
-    {"name": "hw_auth_not_supported", "value": "当前账号或设备暂不支持此登录方式"},
-    {"name": "hw_auth_not_authorized", "value": "尚未完成华为账号授权，请重试"},
-    {"name": "hw_auth_invalid_response", "value": "登录结果校验失败，请重新登录"},
-    {"name": "hw_auth_storage_error", "value": "登录信息保存失败，请重试"},
-    {"name": "hw_auth_service_error", "value": "华为账号服务暂时异常，请稍后重试"},
-    {"name": "hw_auth_failed", "value": "登录失败，请稍后重试"},
-    {"name": "hw_auth_logout_title", "value": "退出登录"},
-    {"name": "hw_auth_logout_message", "value": "退出后将清除本机账号资料，书架、记录、书源登录和云端备份将保留。系统华为账号不会退出。"},
-    {"name": "hw_auth_logout", "value": "退出"},
-    {"name": "hw_auth_cancel", "value": "取消"},
-    {"name": "hw_auth_logout_success", "value": "已退出登录"},
-    {"name": "hw_auth_logout_failed", "value": "退出失败，请重试"},
-    {"name": "account_title", "value": "账号与备份"},
-    {"name": "account_avatar", "value": "华为账号头像"},
-    {"name": "account_back", "value": "返回"},
-    {"name": "account_huawei_connected", "value": "已登录华为账号"},
-    {"name": "account_profile_refresh", "value": "更新华为头像与昵称"},
-    {"name": "account_profile_updated", "value": "账号资料已更新"},
-    {"name": "account_profile_failed", "value": "未能更新账号资料，请稍后重新授权"},
-    {"name": "account_wait_operation", "value": "请等待当前操作完成，或先取消同步"},
-    {"name": "account_local_available", "value": "本地备份无需登录，登录后可使用云空间"},
-    {"name": "source_expand", "value": "展开书源"},
-    {"name": "source_collapse", "value": "收起书源"},
-    {"name": "shelf_pin", "value": "置顶"},
-    {"name": "shelf_unpin", "value": "取消置顶"},
-    {"name": "shelf_pin_failed", "value": "置顶设置保存失败，请重试"},
-    {"name": "local_backup_title", "value": "本地备份"},
-    {"name": "local_backup_description", "value": "将书源定义、在线书架、阅听记录、阅读与播放进度、统计及常规设置保存为备份文件，不含本地导入书籍、自定义背景和字体文件，无需登录。"},
-    {"name": "local_backup_export", "value": "导出备份"},
-    {"name": "local_backup_export_desc", "value": "包含书源，选择文件保存位置"},
-    {"name": "local_backup_restore", "value": "从文件恢复"},
-    {"name": "local_backup_restore_desc", "value": "选择简听阅读备份，确认后恢复"},
-    {"name": "local_backup_exclusions", "value": "包含书源的搜索、发现、详情、目录和正文规则，以及在线阅读记录、阅读与朗读进度和常规设置。不包含离线音频、本地导入书籍、自定义背景、配色和字体文件、账号资料及书源登录凭证。异常阅听记录会跳过备份，本机原记录保留。"},
-    {"name": "local_backup_success", "value": "备份已保存，包含 %d 个书源"},
-    {"name": "local_restore_confirm_title", "value": "恢复这份本地备份？"},
-    {"name": "local_backup_invalid", "value": "请选择完整的简听阅读备份文件，当前文件无效或版本不受支持，未覆盖本地数据。普通书源文件请到书源管理中导入。"},
-    {"name": "local_backup_too_large", "value": "备份文件超过 32 MB，请选择较小的备份文件"},
-    {"name": "local_backup_file_error", "value": "文件读写未完成，请检查存储空间与文件访问权限后重试"},
-    {"name": "local_backup_prepare_error", "value": "未能生成完整备份，请检查本机存储与书源后重试"},
-    {"name": "local_backup_selecting", "value": "等待选择文件位置…"},
-    {"name": "local_backup_copying", "value": "正在处理备份文件…"},
-    {"name": "privacy_data_local_backup", "value": "你可通过“我的 → 账号与备份 → 本地备份”导出或恢复备份，无需登录华为账号。本地备份包含与下述云备份相同的数据范围，书源包括搜索、发现、详情、目录和正文规则，以及分组、开关、锁定、置顶与排序信息。备份以未加密的 JSON 文件保存到你主动选择的位置，请自行妥善保管；简听阅读不主动上传该文件。恢复前校验文件并由你确认，随后保留本机快照并恢复数据。卸载应用不会删除另行导出的备份，请在文件管理中自行删除。"},
-    {"name": "cloud_title", "value": "华为云空间"},
-    {"name": "cloud_description", "value": "将在线书架、阅听记录、阅读与播放进度、统计、常规设置和书源定义备份到当前账号的华为云空间，不含本地导入书籍、自定义背景和字体文件。"},
-    {"name": "cloud_last_backup", "value": "最近备份：%s"},
-    {"name": "cloud_last_backup_unknown", "value": "可从云端查看并恢复已有备份"},
-    {"name": "cloud_backup_now", "value": "立即备份"},
-    {"name": "cloud_backup_now_desc", "value": "保存当前数据，更新云端备份"},
-    {"name": "cloud_restore", "value": "从云端恢复"},
-    {"name": "cloud_restore_desc", "value": "先查看备份，再确认恢复"},
-    {"name": "cloud_backup_exclusions", "value": "不包含离线音频、本地导入书籍、自定义背景、配色和字体文件、账号资料及书源登录凭证。异常阅听记录会跳过备份，本机原记录保留。请先在系统云空间中开启简听阅读的应用数据同步。"},
-    {"name": "cloud_backup_success", "value": "备份成功，已保存到你的华为云空间"},
-    {"name": "cloud_restore_success", "value": "恢复完成。书源已回到待测试状态，必要时请重新登录书源；通用设置将在重新进入页面后应用。"},
-    {"name": "cloud_restore_confirm_title", "value": "恢复这份云端备份？"},
-    {"name": "cloud_restore_confirm_message", "value": "备份时间：%s\n书架：%d 本 · 书源：%d 个\n\n将恢复本机在线书架、阅听记录、阅读与播放进度、统计及备份中的常规设置，并合并书源定义。本地导入数据和锁定书源保留。恢复前会保留一份本机快照。"},
-    {"name": "cloud_restore_confirm", "value": "确认恢复"},
-    {"name": "cloud_phase_preparing", "value": "正在准备备份数据…"},
-    {"name": "cloud_phase_syncing", "value": "正在与华为云空间同步…"},
-    {"name": "cloud_phase_downloading", "value": "正在下载云端备份…"},
-    {"name": "cloud_phase_confirming", "value": "等待确认恢复…"},
-    {"name": "cloud_phase_restoring", "value": "正在恢复，请稍候…"},
-    {"name": "cloud_error_unavailable", "value": "云空间暂不可用。请确认系统已登录同一华为账号，并已开启简听阅读的云空间同步；若没有应用开关，请稍后重试或联系开发者。"},
-    {"name": "cloud_error_not_ready", "value": "系统云同步尚未就绪。请在系统设置中检查华为账号和云空间同步状态，稍后重试；若持续失败，可先使用下方本地备份保存数据。此次未确认云端操作完成，原备份和本机书架、记录均保留。"},
-    {"name": "cloud_error_network", "value": "网络不可用，请连接可用网络后重试"},
-    {"name": "cloud_error_battery", "value": "电量过低，请充电后重试"},
-    {"name": "cloud_error_cloud_full", "value": "华为云空间不足，请清理空间后重试"},
-    {"name": "cloud_error_local_full", "value": "本机空间不足，请清理存储后重试"},
-    {"name": "cloud_error_hot", "value": "设备温度较高，请稍后重试"},
-    {"name": "cloud_error_server", "value": "云端同步未完成，请稍后重试"},
-    {"name": "cloud_error_timeout", "value": "同步超时，尚未确认云端备份完成，请检查网络后重试"},
-    {"name": "cloud_error_cancelled", "value": "已停止本次操作；已交给系统的云文件可能继续同步"},
-    {"name": "cloud_error_account", "value": "请重新登录当前系统华为账号后再操作"},
-    {"name": "cloud_error_empty", "value": "当前华为账号的云空间中还没有简听阅读备份"},
-    {"name": "cloud_error_invalid", "value": "备份文件不完整或版本不受支持，未覆盖本地数据"},
-    {"name": "cloud_error_restore", "value": "恢复未全部完成，请重试。恢复前的本机快照已保留。"},
-    {"name": "cloud_error_local", "value": "备份数据准备失败，请重试"},
-    {"name": "cloud_error_file", "value": "云备份文件读写失败，请重试或先使用本地备份"},
-    {"name": "cloud_error_code", "value": "错误码：%d（反馈问题时请一并提供）"},
-    {"name": "profile_wechat_title", "value": "微信公众号"},
-    {"name": "profile_wechat_desc", "value": "关注「简听好运来」获取最新更新计划"},
-    {"name": "profile_wechat_name", "value": "简听好运来"},
-    {"name": "profile_wechat_copy", "value": "复制名称"},
-    {"name": "profile_wechat_copied", "value": "公众号名称已复制"},
-    {"name": "profile_wechat_copy_failed", "value": "复制失败，请重试"},
-    {"name": "guide_reader_theme_action", "value": "开启「跟随系统深浅色」"},
-    {"name": "guide_reader_theme_desc", "value": "夜间自动用深色，白天恢复已选背景图片或主题。"},
-    {"name": "guide_reader_speech_action", "value": "底栏 → 朗读"},
-    {"name": "guide_reader_speech_desc", "value": "从当前页或上次位置开始，可调倍速和正文跟随。"},
-    {"name": "import_supported_formats", "value": "音频：MP3/M4A/FLAC/WAV/OGG/AAC；电子书：TXT/EPUB/MOBI/HTML/HTM；打包：ZIP。MOBI 支持未加密 MOBI6（未压缩或 PalmDOC 压缩），自动提取封面，不保留正文图片和原排版。"},
-    {"name": "import_file_filter", "value": "音频、电子书、ZIP|.mp3,.m4a,.flac,.wav,.ogg,.aac,.txt,.epub,.mobi,.html,.htm,.zip"},
-    {"name": "import_external_failed", "value": "无法添加此文件，请重新选择支持的电子书或 ZIP 文件"},
-    {"name": "import_mobi_invalid", "value": "MOBI 文件损坏或正文不完整，请重新获取文件或转换为 EPUB"},
-    {"name": "import_mobi_size", "value": "MOBI 文件不能超过 128 MiB，解压正文不能超过 32 MiB"},
-    {"name": "import_mobi_encrypted", "value": "暂不支持加密的 MOBI，请使用未加密电子书"},
-    {"name": "import_mobi_kf8", "value": "暂不支持纯 KF8/AZW3 格式，请先转换为 EPUB 再导入"},
-    {"name": "import_mobi_compression", "value": "暂不支持此 MOBI 压缩方式（如 HUFF/CDIC），请先转换为 EPUB 再导入"},
-    {"name": "import_mobi_encoding", "value": "暂不支持此 MOBI 字符编码，请先转换为 UTF-8 EPUB 再导入"},
-    {"name": "import_limits_hint", "value": "每次可选 500 个文件，可继续添加。ZIP ≤32 GiB，解压 ≤64 GiB；每书 ≤50000 章/集。电子书逐本入架，音频按集数排序。"},
-    {"name": "import_title_optional", "value": "书名（选填，默认使用文件名）"},
-    {"name": "import_add_files", "value": "继续添加"},
-    {"name": "import_partial_result", "value": "已导入 %d 本，以下文件未完成：\n%s"},
-    {"name": "import_success", "value": "导入成功，已加入书架"},
-    {"name": "import_no_files", "value": "没有可导入的文件"},
-    { "name": "chapter_order_save_failed", "value": "章节顺序保存失败，请重试" },
-    {"name": "reader_footer_title", "value": "页脚显示"},
-    {"name": "reader_status_bar_title", "value": "状态栏"},
-    {"name": "reader_status_bar_always", "value": "始终显示状态栏"},
-    {"name": "reader_status_bar_hint", "value": "关闭后跟随底部工具栏显示或隐藏"},
-    {"name": "settings_preload_input_hint", "value": "0–50"},
-    {"name": "settings_search_group", "value": "搜索"},
-    {"name": "settings_search_concurrency", "value": "搜索并发数"},
-    {"name": "settings_search_custom", "value": "自定义"},
-    {"name": "settings_search_concurrency_hint", "value": "1–12"},
-    {"name": "settings_search_concurrency_range", "value": "请输入 1–12 的整数"},
-    {"name": "reader_show_battery_time", "value": "显示电量和时间"},
-    {"name": "reader_battery_level", "value": "电量 %s"},
+    { "name": "reader_chapter_jump_title", "value": "确认跳转章节" },
+    { "name": "reader_chapter_jump_message", "value": "是否跳转到「%s」？" },
+    { "name": "reader_chapter_jump_action", "value": "跳转" },
+    {
+      "name": "light_source_save_settings",
+      "value": "保存书源设置"
+    },
+    {
+      "name": "light_source_web_login",
+      "value": "网页登录"
+    },
+    {
+      "name": "player_source_voice_label",
+      "value": "音色"
+    },
+    {
+      "name": "player_source_voice_title",
+      "value": "书源音色"
+    },
+    {
+      "name": "player_source_voice_hint",
+      "value": "点击音色即可切换，仅对当前书籍生效。已下载音频保留原音色。"
+    },
+    {
+      "name": "player_source_voice_default",
+      "value": "默认"
+    },
+    {
+      "name": "player_source_voice_apply",
+      "value": "保存并重新加载"
+    },
+    {
+      "name": "settings_reset_listening_title",
+      "value": "清除累计收听时长"
+    },
+    {
+      "name": "settings_reset_listening_subtitle",
+      "value": "仅此操作清零收听统计；删书、清缓存和清记录均保留累计时长"
+    },
+    {
+      "name": "settings_reset_listening_confirm",
+      "value": "将暂停当前播放，并清零累计、本月、每日收听时长及连续收听统计。书籍、章节进度和会话历史保留。此操作无法撤销，确定清除？"
+    },
+    {
+      "name": "settings_reset_listening_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "settings_reset_listening_action",
+      "value": "清除时长"
+    },
+    {
+      "name": "settings_reset_listening_done",
+      "value": "累计收听时长已清除"
+    },
+    {
+      "name": "settings_reset_listening_failed",
+      "value": "清除收听时长失败，请重试"
+    },
+    {
+      "name": "settings_preload_saved",
+      "value": "预缓存已应用：%d 章，重启后保留"
+    },
+    {
+      "name": "settings_search_concurrency_saved",
+      "value": "搜索并发已保存为 %d，下次搜索生效"
+    },
+    {
+      "name": "session_history",
+      "value": "历史记录"
+    },
+    {
+      "name": "session_empty",
+      "value": "暂无会话历史，开始阅读或收听后自动记录"
+    },
+    {
+      "name": "session_load_failed",
+      "value": "历史记录读取失败，请重试"
+    },
+    {
+      "name": "session_jump_failed",
+      "value": "无法跳回，请检查书籍及章节是否仍可用"
+    },
+    {
+      "name": "session_start",
+      "value": "开始：%s"
+    },
+    {
+      "name": "session_end",
+      "value": "结束 / 最近记录：%s"
+    },
+    {
+      "name": "session_audio_position",
+      "value": "%s · %s / %s"
+    },
+    {
+      "name": "session_text_position",
+      "value": "%s · 第 %d 字"
+    },
+    {
+      "name": "session_jump_start",
+      "value": "跳回开始"
+    },
+    {
+      "name": "session_jump_end",
+      "value": "跳回停留位置"
+    },
+    {
+      "name": "session_retention",
+      "value": "保留最近 2000 条章节会话；异常退出以最后保存位置为准"
+    },
+    {
+      "name": "epub_parser_unavailable",
+      "value": "当前设备不支持 EPUB 解析，请转换为 TXT 后导入。"
+    },
+    {
+      "name": "reader_kit_unavailable",
+      "value": "当前设备不支持 ReaderKit，无法打开旧版 EPUB 书籍。在线文字及已转换的本地书籍可正常阅读。"
+    },
+    {
+      "name": "reader_paragraph_spacing",
+      "value": "段落间距"
+    },
+    {
+      "name": "reader_paragraph_preview_first",
+      "value": "　　夜色渐深，他轻轻合上书。"
+    },
+    {
+      "name": "reader_paragraph_preview_second",
+      "value": "　　远处钟声响起，往事涌上心头。"
+    },
+    {
+      "name": "auto_backup_title",
+      "value": "自动备份"
+    },
+    {
+      "name": "auto_backup_frequency",
+      "value": "备份频率"
+    },
+    {
+      "name": "auto_backup_daily",
+      "value": "每天"
+    },
+    {
+      "name": "auto_backup_three_days",
+      "value": "每 3 天"
+    },
+    {
+      "name": "auto_backup_weekly",
+      "value": "每周"
+    },
+    {
+      "name": "auto_backup_description",
+      "value": "开启后，在使用应用时按所选间隔检查，有变化才备份到当前账号的华为云空间并占用该空间。应用关闭期间不保证定时执行，下次打开后补做；传输受系统云同步设置管理。"
+    },
+    {
+      "name": "auto_backup_off",
+      "value": "自动备份已关闭"
+    },
+    {
+      "name": "auto_backup_ready",
+      "value": "已开启，到期且数据有变化时自动备份"
+    },
+    {
+      "name": "auto_backup_running",
+      "value": "正在自动备份"
+    },
+    {
+      "name": "auto_backup_waiting",
+      "value": "自动备份已暂停，稍后在应用使用期间重试"
+    },
+    {
+      "name": "auto_backup_retry",
+      "value": "已保留上次成功备份，稍后在应用使用期间重试；也可点击立即备份。"
+    },
+    {
+      "name": "auto_backup_login_required",
+      "value": "登录华为账号后可开启自动备份"
+    },
+    {
+      "name": "auto_backup_save_failed",
+      "value": "自动备份设置保存或读取失败，请重试"
+    },
+    {
+      "name": "auto_backup_existing",
+      "value": "发现此账号已有云备份，已暂停自动上传。请先恢复备份，或点击立即备份并确认使用本机数据。"
+    },
+    {
+      "name": "auto_backup_use_local_title",
+      "value": "使用本机数据备份"
+    },
+    {
+      "name": "auto_backup_use_local_message",
+      "value": "云端已有备份，尚未在本机恢复。继续会将本机数据作为新的备份，并恢复自动备份；云端仅保留最近两份成功备份，旧版本会随后续备份被清理。是否继续？"
+    },
+    {
+      "name": "app_icon_title",
+      "value": "主题图标"
+    },
+    {
+      "name": "app_icon_hint",
+      "value": "点击喜欢的图标，更换桌面上的简听阅读图标"
+    },
+    {
+      "name": "app_icon_unsupported",
+      "value": "当前系统暂不支持直接切换桌面图标，可预览下方样式，升级系统后使用"
+    },
+    {
+      "name": "app_icon_default",
+      "value": "默认"
+    },
+    {
+      "name": "app_icon_leather",
+      "value": "拟物"
+    },
+    {
+      "name": "app_icon_enamel",
+      "value": "珐琅"
+    },
+    {
+      "name": "app_icon_ink",
+      "value": "水墨"
+    },
+    {
+      "name": "app_icon_clay",
+      "value": "黏土"
+    },
+    {
+      "name": "app_icon_glass",
+      "value": "磨砂玻璃"
+    },
+    {
+      "name": "app_icon_origami",
+      "value": "折纸"
+    },
+    {
+      "name": "app_icon_embroidery",
+      "value": "刺绣"
+    },
+    {
+      "name": "app_icon_retro",
+      "value": "复古搪瓷"
+    },
+    {
+      "name": "app_icon_cartoon",
+      "value": "小狐狸"
+    },
+    {
+      "name": "app_icon_cartooncat",
+      "value": "卡通猫"
+    },
+    {
+      "name": "app_icon_cartoondog",
+      "value": "卡通狗"
+    },
+    {
+      "name": "app_icon_wave",
+      "value": "声波"
+    },
+    {
+      "name": "app_icon_life",
+      "value": "夜曲"
+    },
+    {
+      "name": "app_icon_current",
+      "value": "使用中"
+    },
+    {
+      "name": "app_icon_blank",
+      "value": " "
+    },
+    {
+      "name": "app_icon_back",
+      "value": "返回"
+    },
+    {
+      "name": "app_icon_retry",
+      "value": "读取当前图标失败，点击重试"
+    },
+    {
+      "name": "app_icon_changed",
+      "value": "图标已切换，返回桌面查看"
+    },
+    {
+      "name": "app_icon_change_failed",
+      "value": "图标切换未完成，请稍后重试"
+    },
+    {
+      "name": "about_get_update",
+      "value": "获取更新"
+    },
+    {
+      "name": "about_update_market",
+      "value": "华为应用市场"
+    },
+    {
+      "name": "about_update_open_failed",
+      "value": "无法打开应用市场，请在华为应用市场搜索“简听阅读”后更新"
+    },
+    {
+      "name": "reader_font_theme_title",
+      "value": "字体主题"
+    },
+    {
+      "name": "reader_custom_font_title",
+      "value": "自定义字体"
+    },
+    {
+      "name": "reader_delete_font_option",
+      "value": "删除字体 %s"
+    },
+    {
+      "name": "reader_custom_theme_slot",
+      "value": "配色 %d"
+    },
+    {
+      "name": "reader_custom_theme_edit_slot",
+      "value": "编辑自定义主题 %d"
+    },
+    {
+      "name": "reader_color_hex_input",
+      "value": "十六进制颜色值"
+    },
+    {
+      "name": "reader_color_hex_invalid",
+      "value": "请输入 #RRGGBB 或 #RGB，例如 #F5F2EA"
+    },
+    {
+      "name": "reader_preset_themes",
+      "value": "预设主题"
+    },
+    {
+      "name": "reader_custom_theme",
+      "value": "自定义主题"
+    },
+    {
+      "name": "reader_my_palette",
+      "value": "我的配色"
+    },
+    {
+      "name": "reader_theme_edit",
+      "value": "编辑"
+    },
+    {
+      "name": "reader_custom_theme_edit",
+      "value": "编辑自定义主题"
+    },
+    {
+      "name": "reader_theme_preview_title",
+      "value": "阅读效果预览"
+    },
+    {
+      "name": "reader_theme_preview_text",
+      "value": "山色渐晚，灯火缓缓亮起。他合上书页，听见远处传来一声钟响。"
+    },
+    {
+      "name": "reader_background_color",
+      "value": "背景颜色"
+    },
+    {
+      "name": "reader_editing_background_color",
+      "value": "正在编辑背景颜色"
+    },
+    {
+      "name": "reader_editing_font_color",
+      "value": "正在编辑文字颜色"
+    },
+    {
+      "name": "reader_color_contrast_hint",
+      "value": "文字与背景不易区分，建议调整颜色"
+    },
+    {
+      "name": "reader_recommend_font_color",
+      "value": "一键推荐字色"
+    },
+    {
+      "name": "reader_theme_reset",
+      "value": "恢复默认"
+    },
+    {
+      "name": "reader_theme_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "reader_theme_save_apply",
+      "value": "保存并应用"
+    },
+    {
+      "name": "reader_image_text",
+      "value": "图片文字"
+    },
+    {
+      "name": "reader_image_mode",
+      "value": "显示方式"
+    },
+    {
+      "name": "reader_image_contain",
+      "value": "自适应"
+    },
+    {
+      "name": "reader_image_tile",
+      "value": "平铺"
+    },
+    {
+      "name": "reader_image_stretch",
+      "value": "拉伸"
+    },
+    {
+      "name": "reader_image_cover",
+      "value": "裁剪"
+    },
+    {
+      "name": "reader_image_contain_hint",
+      "value": "等比完整显示，空余区域使用背景底色"
+    },
+    {
+      "name": "reader_image_tile_hint",
+      "value": "按原始尺寸重复铺满，适合小尺寸纹理图片"
+    },
+    {
+      "name": "reader_image_stretch_hint",
+      "value": "拉伸铺满阅读区域，图片比例可能改变"
+    },
+    {
+      "name": "reader_image_cover_hint",
+      "value": "等比居中铺满，超出阅读区域的部分自动裁剪"
+    },
+    {
+      "name": "reader_text_dark",
+      "value": "深色"
+    },
+    {
+      "name": "reader_text_light",
+      "value": "浅色"
+    },
+    {
+      "name": "reader_follow_system_theme_hint",
+      "value": "深色时临时使用夜晚，浅色时恢复日间主题；手动选择主题将关闭跟随系统。"
+    },
+    {
+      "name": "reader_follow_system_disabled",
+      "value": "已关闭跟随系统深浅色"
+    },
+    {
+      "name": "reader_theme_parchment",
+      "value": "羊皮纸"
+    },
+    {
+      "name": "reader_theme_night",
+      "value": "夜晚"
+    },
+    {
+      "name": "player_sleep_chapters_badge",
+      "value": "%d章"
+    },
+    {
+      "name": "player_sleep_current_badge",
+      "value": "本章"
+    },
+    {
+      "name": "player_auto_sleep_chapters_hint",
+      "value": "每次开始播放自动使用上次设置（%d 章），剩余不足则播完剩余章节"
+    },
+    {
+      "name": "player_auto_sleep",
+      "value": "自动定时"
+    },
+    {
+      "name": "player_auto_sleep_hint",
+      "value": "每次开始播放自动使用上次时长（%d 分钟），已有定时继续计时"
+    },
+    {
+      "name": "player_auto_sleep_save_failed",
+      "value": "自动定时设置保存失败，请重试"
+    },
+    {
+      "name": "reader_volume_key_turn",
+      "value": "音量键翻页"
+    },
+    {
+      "name": "reader_volume_key_hint",
+      "value": "音量加上一页，音量减下一页；上下滚动模式按屏滚动"
+    },
+    {
+      "name": "reader_alignment_title",
+      "value": "正文对齐"
+    },
+    {
+      "name": "reader_alignment_justify",
+      "value": "两端对齐"
+    },
+    {
+      "name": "reader_alignment_start",
+      "value": "左对齐"
+    },
+    {
+      "name": "reader_alignment_center",
+      "value": "居中"
+    },
+    {
+      "name": "reader_alignment_end",
+      "value": "右对齐"
+    },
+    {
+      "name": "tts_custom_play_error",
+      "value": "朗读失败，请检查自定义语音配置或网络"
+    },
+    {
+      "name": "book_detail_latest_update",
+      "value": "更新时间：%s"
+    },
+    {
+      "name": "import_reading_metadata",
+      "value": "正在读取书名、作者和封面…"
+    },
+    {
+      "name": "import_metadata_failed",
+      "value": "部分文件信息未能解析，可手动填写后导入"
+    },
+    {
+      "name": "reader_font_delete_failed",
+      "value": "删除字体失败，请重试"
+    },
+    {
+      "name": "home_category_loading_more",
+      "value": "正在加载更多"
+    },
+    {
+      "name": "chapter_loading_count",
+      "value": "已加载 %d 章，继续加载中"
+    },
+    {
+      "name": "chapter_load_retry",
+      "value": "重试目录"
+    },
+    {
+      "name": "home_category_load_more",
+      "value": "上拉或点击加载更多"
+    },
+    {
+      "name": "home_category_more_failed",
+      "value": "加载失败，点击重试"
+    },
+    {
+      "name": "search_options",
+      "value": "筛选"
+    },
+    {
+      "name": "search_exact",
+      "value": "精准搜索"
+    },
+    {
+      "name": "search_by_author",
+      "value": "搜索作者"
+    },
+    {
+      "name": "search_text_only",
+      "value": "仅搜索电子书"
+    },
+    {
+      "name": "search_audio_only",
+      "value": "仅搜索有声书"
+    },
+    {
+      "name": "player_live",
+      "value": "实时电台 · 直播"
+    },
+    {
+      "name": "player_live_no_download",
+      "value": "实时电台不支持离线下载"
+    },
+    {
+      "name": "hw_auth_login_title",
+      "value": "华为账号登录"
+    },
+    {
+      "name": "hw_auth_login_desc",
+      "value": "使用华为账号，备份书架与记录"
+    },
+    {
+      "name": "hw_auth_account_title",
+      "value": "华为账号用户"
+    },
+    {
+      "name": "hw_auth_account_id",
+      "value": "账号 %s"
+    },
+    {
+      "name": "hw_auth_processing",
+      "value": "正在处理账号请求"
+    },
+    {
+      "name": "hw_auth_login_success",
+      "value": "登录成功"
+    },
+    {
+      "name": "hw_auth_system_login_required",
+      "value": "请先登录系统华为账号，再重试"
+    },
+    {
+      "name": "hw_auth_network_error",
+      "value": "网络连接异常，请检查网络后重试"
+    },
+    {
+      "name": "hw_auth_unavailable",
+      "value": "华为账号登录暂不可用，请稍后重试或联系开发者"
+    },
+    {
+      "name": "hw_auth_not_supported",
+      "value": "当前账号或设备暂不支持此登录方式"
+    },
+    {
+      "name": "hw_auth_not_authorized",
+      "value": "尚未完成华为账号授权，请重试"
+    },
+    {
+      "name": "hw_auth_invalid_response",
+      "value": "登录结果校验失败，请重新登录"
+    },
+    {
+      "name": "hw_auth_storage_error",
+      "value": "登录信息保存失败，请重试"
+    },
+    {
+      "name": "hw_auth_service_error",
+      "value": "华为账号服务暂时异常，请稍后重试"
+    },
+    {
+      "name": "hw_auth_failed",
+      "value": "登录失败，请稍后重试"
+    },
+    {
+      "name": "hw_auth_logout_title",
+      "value": "退出登录"
+    },
+    {
+      "name": "hw_auth_logout_message",
+      "value": "退出后将清除本机账号资料，书架、记录、书源登录和云端备份将保留。系统华为账号不会退出。"
+    },
+    {
+      "name": "hw_auth_logout",
+      "value": "退出"
+    },
+    {
+      "name": "hw_auth_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "hw_auth_logout_success",
+      "value": "已退出登录"
+    },
+    {
+      "name": "hw_auth_logout_failed",
+      "value": "退出失败，请重试"
+    },
+    {
+      "name": "account_title",
+      "value": "账号与备份"
+    },
+    {
+      "name": "account_avatar",
+      "value": "华为账号头像"
+    },
+    {
+      "name": "account_back",
+      "value": "返回"
+    },
+    {
+      "name": "account_huawei_connected",
+      "value": "已登录华为账号"
+    },
+    {
+      "name": "account_profile_refresh",
+      "value": "更新华为头像与昵称"
+    },
+    {
+      "name": "account_profile_updated",
+      "value": "账号资料已更新"
+    },
+    {
+      "name": "account_profile_failed",
+      "value": "未能更新账号资料，请稍后重新授权"
+    },
+    {
+      "name": "account_wait_operation",
+      "value": "请等待当前操作完成，或先取消同步"
+    },
+    {
+      "name": "account_local_available",
+      "value": "本地备份无需登录，登录后可使用云空间"
+    },
+    {
+      "name": "source_expand",
+      "value": "展开书源"
+    },
+    {
+      "name": "source_collapse",
+      "value": "收起书源"
+    },
+    {
+      "name": "shelf_pin",
+      "value": "置顶"
+    },
+    {
+      "name": "shelf_unpin",
+      "value": "取消置顶"
+    },
+    {
+      "name": "shelf_pin_failed",
+      "value": "置顶设置保存失败，请重试"
+    },
+    {
+      "name": "local_backup_title",
+      "value": "本地备份"
+    },
+    {
+      "name": "local_backup_description",
+      "value": "将书源定义、在线书架、阅听记录、阅读与播放进度、统计及常规设置保存为备份文件，不含本地导入书籍、自定义背景和字体文件，无需登录。"
+    },
+    {
+      "name": "local_backup_export",
+      "value": "导出备份"
+    },
+    {
+      "name": "local_backup_export_desc",
+      "value": "包含书源，选择文件保存位置"
+    },
+    {
+      "name": "local_backup_restore",
+      "value": "从文件恢复"
+    },
+    {
+      "name": "local_backup_restore_desc",
+      "value": "选择简听阅读备份，确认后恢复"
+    },
+    {
+      "name": "local_backup_exclusions",
+      "value": "包含书源的搜索、发现、详情、目录和正文规则，以及在线阅读记录、阅读与朗读进度和常规设置。不包含离线音频、本地导入书籍、自定义背景、配色和字体文件、账号资料及书源登录凭证。异常阅听记录会跳过备份，本机原记录保留。"
+    },
+    {
+      "name": "local_backup_success",
+      "value": "备份已保存，包含 %d 个书源"
+    },
+    {
+      "name": "local_restore_confirm_title",
+      "value": "恢复这份本地备份？"
+    },
+    {
+      "name": "local_backup_invalid",
+      "value": "请选择完整的简听阅读备份文件，当前文件无效或版本不受支持，未覆盖本地数据。普通书源文件请到书源管理中导入。"
+    },
+    {
+      "name": "local_backup_too_large",
+      "value": "备份文件超过 32 MB，请选择较小的备份文件"
+    },
+    {
+      "name": "local_backup_file_error",
+      "value": "文件读写未完成，请检查存储空间与文件访问权限后重试"
+    },
+    {
+      "name": "local_backup_prepare_error",
+      "value": "未能生成完整备份，请检查本机存储与书源后重试"
+    },
+    {
+      "name": "local_backup_selecting",
+      "value": "等待选择文件位置…"
+    },
+    {
+      "name": "local_backup_copying",
+      "value": "正在处理备份文件…"
+    },
+    {
+      "name": "privacy_data_local_backup",
+      "value": "你可通过“我的 → 账号与备份 → 本地备份”导出或恢复备份，无需登录华为账号。本地备份包含与下述云备份相同的数据范围，书源包括搜索、发现、详情、目录和正文规则，以及分组、开关、锁定、置顶与排序信息。备份以未加密的 JSON 文件保存到你主动选择的位置，请自行妥善保管；简听阅读不主动上传该文件。恢复前校验文件并由你确认，随后保留本机快照并恢复数据。卸载应用不会删除另行导出的备份，请在文件管理中自行删除。"
+    },
+    {
+      "name": "cloud_title",
+      "value": "华为云空间"
+    },
+    {
+      "name": "cloud_description",
+      "value": "将在线书架、阅听记录、阅读与播放进度、统计、常规设置和书源定义备份到当前账号的华为云空间，不含本地导入书籍、自定义背景和字体文件。"
+    },
+    {
+      "name": "cloud_last_backup",
+      "value": "最近备份：%s"
+    },
+    {
+      "name": "cloud_last_backup_unknown",
+      "value": "可从云端查看并恢复已有备份"
+    },
+    {
+      "name": "cloud_backup_now",
+      "value": "立即备份"
+    },
+    {
+      "name": "cloud_backup_now_desc",
+      "value": "保存当前数据，更新云端备份"
+    },
+    {
+      "name": "cloud_restore",
+      "value": "从云端恢复"
+    },
+    {
+      "name": "cloud_restore_desc",
+      "value": "先查看备份，再确认恢复"
+    },
+    {
+      "name": "cloud_backup_exclusions",
+      "value": "不包含离线音频、本地导入书籍、自定义背景、配色和字体文件、账号资料及书源登录凭证。异常阅听记录会跳过备份，本机原记录保留。请先在系统云空间中开启简听阅读的应用数据同步。"
+    },
+    {
+      "name": "cloud_backup_success",
+      "value": "备份成功，已保存到你的华为云空间"
+    },
+    {
+      "name": "cloud_restore_success",
+      "value": "恢复完成。书源已回到待测试状态，必要时请重新登录书源；通用设置将在重新进入页面后应用。"
+    },
+    {
+      "name": "cloud_restore_confirm_title",
+      "value": "恢复这份云端备份？"
+    },
+    {
+      "name": "cloud_restore_confirm_message",
+      "value": "备份时间：%s\n书架：%d 本 · 书源：%d 个\n\n将恢复本机在线书架、阅听记录、阅读与播放进度、统计及备份中的常规设置，并合并书源定义。本地导入数据和锁定书源保留。恢复前会保留一份本机快照。"
+    },
+    {
+      "name": "cloud_restore_confirm",
+      "value": "确认恢复"
+    },
+    {
+      "name": "cloud_phase_preparing",
+      "value": "正在准备备份数据…"
+    },
+    {
+      "name": "cloud_phase_syncing",
+      "value": "正在与华为云空间同步…"
+    },
+    {
+      "name": "cloud_phase_downloading",
+      "value": "正在下载云端备份…"
+    },
+    {
+      "name": "cloud_phase_confirming",
+      "value": "等待确认恢复…"
+    },
+    {
+      "name": "cloud_phase_restoring",
+      "value": "正在恢复，请稍候…"
+    },
+    {
+      "name": "cloud_error_unavailable",
+      "value": "云空间暂不可用。请确认系统已登录同一华为账号，并已开启简听阅读的云空间同步；若没有应用开关，请稍后重试或联系开发者。"
+    },
+    {
+      "name": "cloud_error_not_ready",
+      "value": "系统云同步尚未就绪。请在系统设置中检查华为账号和云空间同步状态，稍后重试；若持续失败，可先使用下方本地备份保存数据。此次未确认云端操作完成，原备份和本机书架、记录均保留。"
+    },
+    {
+      "name": "cloud_error_network",
+      "value": "网络不可用，请连接可用网络后重试"
+    },
+    {
+      "name": "cloud_error_battery",
+      "value": "电量过低，请充电后重试"
+    },
+    {
+      "name": "cloud_error_cloud_full",
+      "value": "华为云空间不足，请清理空间后重试"
+    },
+    {
+      "name": "cloud_error_local_full",
+      "value": "本机空间不足，请清理存储后重试"
+    },
+    {
+      "name": "cloud_error_hot",
+      "value": "设备温度较高，请稍后重试"
+    },
+    {
+      "name": "cloud_error_server",
+      "value": "云端同步未完成，请稍后重试"
+    },
+    {
+      "name": "cloud_error_timeout",
+      "value": "同步超时，尚未确认云端备份完成，请检查网络后重试"
+    },
+    {
+      "name": "cloud_error_cancelled",
+      "value": "已停止本次操作；已交给系统的云文件可能继续同步"
+    },
+    {
+      "name": "cloud_error_account",
+      "value": "请重新登录当前系统华为账号后再操作"
+    },
+    {
+      "name": "cloud_error_empty",
+      "value": "当前华为账号的云空间中还没有简听阅读备份"
+    },
+    {
+      "name": "cloud_error_invalid",
+      "value": "备份文件不完整或版本不受支持，未覆盖本地数据"
+    },
+    {
+      "name": "cloud_error_restore",
+      "value": "恢复未全部完成，请重试。恢复前的本机快照已保留。"
+    },
+    {
+      "name": "cloud_error_local",
+      "value": "备份数据准备失败，请重试"
+    },
+    {
+      "name": "cloud_error_file",
+      "value": "云备份文件读写失败，请重试或先使用本地备份"
+    },
+    {
+      "name": "cloud_error_code",
+      "value": "错误码：%d（反馈问题时请一并提供）"
+    },
+    {
+      "name": "profile_wechat_title",
+      "value": "微信公众号"
+    },
+    {
+      "name": "profile_wechat_desc",
+      "value": "关注「简听好运来」获取最新更新计划"
+    },
+    {
+      "name": "profile_wechat_name",
+      "value": "简听好运来"
+    },
+    {
+      "name": "profile_wechat_copy",
+      "value": "复制名称"
+    },
+    {
+      "name": "profile_wechat_copied",
+      "value": "公众号名称已复制"
+    },
+    {
+      "name": "profile_wechat_copy_failed",
+      "value": "复制失败，请重试"
+    },
+    {
+      "name": "guide_reader_theme_action",
+      "value": "开启「跟随系统深浅色」"
+    },
+    {
+      "name": "guide_reader_theme_desc",
+      "value": "夜间自动用深色，白天恢复已选背景图片或主题。"
+    },
+    {
+      "name": "guide_reader_speech_action",
+      "value": "底栏 → 朗读"
+    },
+    {
+      "name": "guide_reader_speech_desc",
+      "value": "从当前页或上次位置开始，可调倍速和正文跟随。"
+    },
+    {
+      "name": "import_supported_formats",
+      "value": "音频：MP3/M4A/FLAC/WAV/OGG/AAC；电子书：TXT/EPUB/MOBI/HTML/HTM；打包：ZIP。MOBI 支持未加密 MOBI6（未压缩或 PalmDOC 压缩），自动提取封面，不保留正文图片和原排版。"
+    },
+    {
+      "name": "import_file_filter",
+      "value": "音频、电子书、ZIP|.mp3,.m4a,.flac,.wav,.ogg,.aac,.txt,.epub,.mobi,.html,.htm,.zip"
+    },
+    {
+      "name": "import_external_failed",
+      "value": "无法添加此文件，请重新选择支持的电子书或 ZIP 文件"
+    },
+    {
+      "name": "import_mobi_invalid",
+      "value": "MOBI 文件损坏或正文不完整，请重新获取文件或转换为 EPUB"
+    },
+    {
+      "name": "import_mobi_size",
+      "value": "MOBI 文件不能超过 128 MiB，解压正文不能超过 32 MiB"
+    },
+    {
+      "name": "import_mobi_encrypted",
+      "value": "暂不支持加密的 MOBI，请使用未加密电子书"
+    },
+    {
+      "name": "import_mobi_kf8",
+      "value": "暂不支持纯 KF8/AZW3 格式，请先转换为 EPUB 再导入"
+    },
+    {
+      "name": "import_mobi_compression",
+      "value": "暂不支持此 MOBI 压缩方式（如 HUFF/CDIC），请先转换为 EPUB 再导入"
+    },
+    {
+      "name": "import_mobi_encoding",
+      "value": "暂不支持此 MOBI 字符编码，请先转换为 UTF-8 EPUB 再导入"
+    },
+    {
+      "name": "import_limits_hint",
+      "value": "每次可选 500 个文件，可继续添加。ZIP ≤32 GiB，解压 ≤64 GiB；每书 ≤50000 章/集。电子书逐本入架，音频按集数排序。"
+    },
+    {
+      "name": "import_title_optional",
+      "value": "书名（选填，默认使用文件名）"
+    },
+    {
+      "name": "import_add_files",
+      "value": "继续添加"
+    },
+    {
+      "name": "import_partial_result",
+      "value": "已导入 %d 本，以下文件未完成：\n%s"
+    },
+    {
+      "name": "import_success",
+      "value": "导入成功，已加入书架"
+    },
+    {
+      "name": "import_no_files",
+      "value": "没有可导入的文件"
+    },
+    {
+      "name": "chapter_order_save_failed",
+      "value": "章节顺序保存失败，请重试"
+    },
+    {
+      "name": "reader_footer_title",
+      "value": "页脚显示"
+    },
+    {
+      "name": "reader_status_bar_title",
+      "value": "状态栏"
+    },
+    {
+      "name": "reader_status_bar_always",
+      "value": "始终显示状态栏"
+    },
+    {
+      "name": "reader_status_bar_hint",
+      "value": "关闭后跟随底部工具栏显示或隐藏"
+    },
+    {
+      "name": "settings_preload_input_hint",
+      "value": "0–50"
+    },
+    {
+      "name": "settings_search_group",
+      "value": "搜索"
+    },
+    {
+      "name": "settings_search_concurrency",
+      "value": "搜索并发数"
+    },
+    {
+      "name": "settings_search_custom",
+      "value": "自定义"
+    },
+    {
+      "name": "settings_search_concurrency_hint",
+      "value": "1–12"
+    },
+    {
+      "name": "settings_search_concurrency_range",
+      "value": "请输入 1–12 的整数"
+    },
+    {
+      "name": "reader_show_battery_time",
+      "value": "显示电量和时间"
+    },
+    {
+      "name": "reader_battery_level",
+      "value": "电量 %s"
+    },
     {
       "name": "reader_theme_title",
       "value": "阅读主题"
@@ -291,142 +1095,550 @@
       "name": "reader_image_apply_failed",
       "value": "图片应用失败，请重试或更换图片"
     },
-    {"name": "record_stats_pending", "value": "—"},
-    {"name": "record_stats_loading", "value": "正在读取收听统计"},
-    {"name": "record_stats_read_failed", "value": "统计读取失败，点击重试"},
-    {"name": "record_stats_equivalent_books", "value": "相当于读完 %d 本书"},
-    {"name": "home_source_setting", "value": "首页源"},
-    {"name": "home_source_setting_hint", "value": "选择已启用且有发现内容的小说或有声书源，用于首页推荐和分类。"},
-    {"name": "home_source_unset", "value": "未设置"},
-    {"name": "home_source_saved", "value": "已设为首页源"},
-    {"name": "home_source_current", "value": "当前首页源"},
-    {"name": "home_source_no_audio", "value": "暂无可选发现源，请先导入并启用支持发现的小说或有声书源"},
-    {"name": "home_source_no_discovery", "value": "该源未提供首页内容或未启用发现，可继续使用搜索"},
-    {"name": "home_source_empty", "value": "当前首页源暂无内容，可下拉刷新或在首页顶部更换书源"},
-    {"name": "home_source_load_failed", "value": "首页内容加载失败，请下拉重试或在书源管理中更换首页源"},
-    {"name": "home_recommendations", "value": "精品推荐"},
-    {"name": "home_carousel_open", "value": "打开书籍详情"},
-    {"name": "home_categories", "value": "分类"},
-    {"name": "home_categories_all", "value": "全部分类"},
-    {"name": "home_categories_count", "value": "%d 个分类"},
-    {"name": "home_categories_empty", "value": "当前首页源暂无分类，可下拉刷新或更换首页源"},
-    {"name": "home_source_category_failed", "value": "分类加载失败，请下拉重试"},
-    {"name": "app_description", "value": "简听阅读，让聆听与阅读更从容"},
-    {"name": "about_platform", "value": "HarmonyOS / ArkUI V2"},
-    {"name": "about_sdk", "value": "最低 API 20 / 目标 API 24"},
-    {"name": "profile_community_group", "value": "简听交流群2"},
-    {"name": "profile_community_open_failed", "value": "无法打开浏览器，请稍后重试"},
-    {"name": "community_group_open_failed", "value": "未找到 QQ 或无法打开群资料"},
-    {"name": "about_community_group_number", "value": "群号 602330717"},
-    {"name": "about_open_source", "value": "开源声明"},
-    {"name": "about_technical_support", "value": "技术与支持"},
-    {"name": "support_order_note", "value": "排名不分前后"},
-    {"name": "support_intro_title", "value": "感谢每一份支持"},
-    {"name": "support_intro_body", "value": "技术上的帮助与每一份心意，让简听阅读不断变得更好。"},
-    {"name": "technical_support_title", "value": "技术支持"},
-    {"name": "technical_support_names", "value": "QG\n浅度\n相思界\nXIAOBAO"},
-    {"name": "sponsor_thanks_title", "value": "感谢赞助"},
-    {"name": "sponsor_thanks_names", "value": "WT\n子阳\ndefault\n干脆面不用泡\n苏小锋\n张\n李富贵\n最初未来\n潮生万象\n向钱看向厚看\nHAOYUN\n*.\n一飞冲天\nL.\n再见\n柏子\n爱你806\n*城"},
-    {"name": "sponsor_thanks_hendo", "value": "HenDo"},
-    {"name": "about_compliance_title", "value": "合规说明"},
-    {"name": "about_compliance_body", "value": "本项目不内置、托管或分发小说正文及音频资源。全网榜单首页展示各平台公开的榜单和封面元数据，阅读与收听由用户导入的书源提供；不提供书源订阅服务，不保证第三方内容持续可用。"},
-    {"name": "about_usage_title", "value": "使用提醒"},
-    {"name": "about_usage_body", "value": "导入书源前，请自行确认书源来源、目标站点协议、内容授权和所在地法律法规要求。项目仅按用户配置的规则发起访问和解析，不以破解付费内容、绕过访问控制、规避反爬机制或批量抓取受保护内容为目标。"},
-    {"name": "open_source_section_components", "value": "一、开源组件"},
-    {"name": "open_source_quickjs", "value": "QuickJS（MIT）：受限 JavaScript 引擎，上游 bellard.org/quickjs/，版权所有 Copyright (c) 2017-2021 Fabrice Bellard 与 Charlie Gordon。"},
-    {"name": "open_source_binding", "value": "@devzeng/quickjs / ohos_quickjs（MIT）：HarmonyOS 侧 QuickJS 原生封装，上游 github.com/hhtczengjing/ohos_quickjs，版权所有 Copyright (c) 2026 zengjing。"},
-    {"name": "open_source_napi", "value": "OpenHarmony / Huawei N-API 封装代码（Apache-2.0）：带 Huawei Device Co., Ltd. 版权头的 N-API 文件继续保留原版权和许可头。"},
-    {"name": "open_source_crypto", "value": "CryptoJS 4.2.0 子集（MIT）：仅含 core、cipher-core、tripledes、mode-ecb 和 pad-nopadding，上游 github.com/brix/crypto-js，版权所有 Copyright (c) 2009-2013 Jeff Mott 与 Copyright (c) 2013-2016 Evan Vosberg。"},
-    {"name": "open_source_section_boundary", "value": "二、许可边界"},
-    {"name": "open_source_boundary_body", "value": "本项目只引入独立的 QuickJS 和上述 CryptoJS 组件，没有复制或链接轻页应用的 GPL-3.0 书源引擎、页面或业务代码；书源规则能力是按本项目需要独立实现的兼容子集。"},
-    {"name": "open_source_section_execution", "value": "三、执行范围与授权"},
-    {"name": "open_source_execution_body", "value": "书源规则只在受限 QuickJS 环境内执行，不开放文件、数据库和任意平台能力；应用不内置任何内容源，全部规则由使用者自行导入并对其合法性负责。DES／3DES 兼容代码仅用于解析旧书源协议，不用于应用数据库、账号、Cookie 或传输加密。"},
-    {"name": "open_source_section_license", "value": "四、许可文本"},
-    {"name": "open_source_license_body", "value": "许可全文与固定版本信息随源码提供：third_party/quickjs/LICENSE、third_party/quickjs/LICENSE-QUICKJS、third_party/quickjs/LICENSE-APACHE-2.0 和 third_party/crypto-js/LICENSE。"},
-    {"name": "imported_source_unavailable", "value": "导入的书源暂不可用"},
-    {"name": "privacy_title", "value": "简听阅读隐私政策"},
-    {"name": "privacy_overview_title", "value": "一、应用与信息使用"},
-    {"name": "privacy_overview_identity", "value": "简听阅读由 ylwang 开发，是一款本地优先的音频收听与小说阅读应用。使用简听阅读不要求注册简听阅读账号，开发者不通过应用收集姓名、电话、身份证、定位或通讯录。"},
-    {"name": "privacy_overview_local", "value": "为提供收藏、续播、继续阅读和个性化设置，简听阅读在设备本地保存书架、搜索历史、播放与阅读记录、使用统计、书源定义及应用设置。这些数据不会作为使用分析上传到开发者服务器。"},
-    {"name": "privacy_network_title", "value": "二、网络访问与账号"},
-    {"name": "privacy_network_huawei_account", "value": "你可在“我的”中自愿选择华为账号登录。登录和资料授权由华为 Account Kit 处理；简听阅读取得并在本机保存账号标识（UnionID、OpenID）、登录时间和授权返回的昵称，并将头像下载到本机缓存，用于显示与恢复账号资料。应用返回前台时向系统核对账号状态。这些资料不上传到开发者服务器，也不随应用备份迁移；不会读取华为账号密码，未设置昵称时可能显示华为返回的匿名手机号或邮箱。你可在“账号与备份”中更新授权资料或退出并清除本机账号资料。华为账号服务对信息的处理适用其授权页面及隐私政策。"},
-    {"name": "privacy_network_sources", "value": "简听阅读访问网络以下载你选择导入的书源规则，向已启用的导入书源请求搜索、推荐、分类、详情、目录和正文，加载封面、播放音频及下载你选择的章节。书源及相关内容服务会接收请求所需的搜索词、内容地址、请求头及网络连接信息（如 IP 地址）。"},
-    {"name": "privacy_network_accounts", "value": "部分书源需要登录。你填写的书源账号信息会按该书源协议发送至对应服务进行认证；网站登录由对应网站处理。为维持登录状态，简听阅读在本机加密保存书源会话及按来源、站点隔离的 Cookie，不将其上传给开发者。第三方服务对信息的处理适用其自身隐私政策。"},
-    {"name": "privacy_network_updates", "value": "点击获取更新会打开华为应用市场中的本应用详情页；无法打开市场时会尝试打开其官方网页，由应用市场提供版本信息与更新服务。相关服务会接收必要的网络连接信息。在线音频投播和系统媒体控制按你的操作调用系统服务。"},
-    {"name": "privacy_network_tracking", "value": "简听阅读不使用广告追踪或开发者侧用户行为统计服务。第三方书源的内容与登录操作由你选择，请在导入和登录前确认来源可信。"},
-    {"name": "privacy_permissions_title", "value": "三、系统权限与文件选择"},
-    {"name": "privacy_permissions_background", "value": "网络权限用于上述联网功能；后台运行权限用于锁屏或切换应用后继续播放音频、处理下载任务并提供系统媒体控制。"},
-    {"name": "privacy_permissions_vibration", "value": "振动权限用于交互触感反馈。"},
-    {"name": "privacy_permissions_picker", "value": "导入音频、音频 ZIP、书源文件、恢复本地备份和选择阅读背景时，使用系统文件或照片选择器访问你主动选择的文件；导出文件与本地备份由你选择保存位置。二维码导入调用系统扫码能力，可扫描二维码或选择二维码图片。应用不直接申请位置、麦克风、通讯录、短信或日历权限。"},
-    {"name": "privacy_content_title", "value": "四、内容来源"},
-    {"name": "privacy_content_sources", "value": "全网榜单首页直接获取起点、懒人听书、喜马拉雅、七猫小说、晋江文学公开的榜单、书名、作者或主播与封面，并在本机缓存；对应平台及图片服务会收到正常网络请求所需的 IP 地址和请求信息。首页浏览不需要导入书源；点击书籍后，书名关键词发送到你已启用的导入书源查找对应版本。小说正文、目录及音频仍由你自行导入的书源提供，本地书籍来自你选择的文件。简听阅读不保证第三方内容持续可用。"},
-    {"name": "privacy_content_rights", "value": "请在法律法规及内容提供方许可范围内阅读、收听、下载和导出内容，尊重作品及相关素材的合法权益。"},
-    {"name": "privacy_data_title", "value": "五、保存、备份与删除"},
-    {"name": "privacy_data_storage", "value": "本地记录和设置保存在系统应用数据目录；导入的书源及其登录会话、Cookie 使用本机加密数据库保存。本地导入音频、下载章节与缓存保存在应用沙箱或你选择的导出位置。"},
-    {"name": "privacy_data_backup", "value": "你主动使用“账号与备份”中的立即备份，或主动开启默认关闭的自动备份后，在线书架、阅听记录、播放进度、阅读章节与字位置、常规阅读设置、朗读进度与设置、统计、通用设置、在线书籍信息及清洗后的书源定义会交由系统云文件服务保存到你自己的华为云空间，并占用该空间；自动备份在应用使用期间按所选间隔检查，仅在数据变化时生成新备份；应用关闭期间不保证定时执行，下次打开后补做。开关和调度记录按账号保存在本机，不随备份迁移，可随时关闭。后续传输受系统同步设置管理，开发者不接收这些备份。恢复时先下载校验并由你确认，再覆盖对应在线记录与设置、合并书源；本机保留恢复前的快照。系统备份与恢复使用同一数据范围。无法识别或不符合格式的阅听记录在导出时逐条跳过，不删除本机原记录。实际账号资料、书源登录态、Cookie、敏感 Header Token、原始书源 JSON、离线音频、本地导入书籍、自定义阅读背景、配色和字体文件不进入该备份。跨设备续播传递恢复在线播放所需的书籍、章节和进度信息。"},
-    {"name": "privacy_data_delete", "value": "你可以在对应页面删除书架条目、搜索历史、阅听记录、下载和书源；删除书源会清除其会话及 Cookie，已锁定书源需先解锁。清除应用数据或卸载应用会清理本机应用数据，另行导出的文件和系统备份需在对应系统功能中管理。退出简听阅读登录不会删除华为云空间的备份，可在系统云空间中管理应用数据与同步设置。"},
-    {"name": "record_title", "value": "阅听记录"},
-    {"name": "record_unfavorited_title", "value": "未收藏记录"},
-    {"name": "record_favorited_back", "value": "返回收藏记录"},
-    {"name": "record_delete_confirm", "value": "确认删除已选 %d 本书的阅听记录？"},
-    {"name": "record_read_progress", "value": "已读 %d%"},
-    {"name": "record_listen_progress", "value": "已听 %d%"},
-    {"name": "record_read_started", "value": "已开始阅读"},
-    {"name": "record_empty", "value": "暂无收藏书籍的阅听记录"},
-    {"name": "record_empty_hint", "value": "收藏书籍后，这里会保留你的阅读和聆听进度。"},
-    {"name": "record_unfavorited_empty", "value": "暂无未收藏记录"},
-    {"name": "record_unfavorited_hint", "value": "未收藏书籍的阅读和聆听记录会显示在这里。"},
-    {"name": "privacy_children_title", "value": "六、未成年人保护"},
-    {"name": "privacy_children_body", "value": "简听阅读不以十四周岁以下儿童为主要服务对象。未成年人应在监护人指导下阅读本政策并使用应用。"},
-    {"name": "privacy_contact_title", "value": "七、政策更新与联系"},
-    {"name": "privacy_contact_updates", "value": "本政策于 2026 年 9 月 30 日更新。你可以在“我的 → 关于 → 隐私政策”查看当前政策；后续调整以应用内及公开政策页面的内容为准。"},
-    {"name": "privacy_contact_channel", "value": "开发者：ylwang。隐私问题可通过项目反馈页面 https://github.com/end-web/HarmonyOS-book/issues 联系。请勿在公开反馈中填写账号密码、Cookie 等敏感信息。"},
-    {"name": "privacy_version", "value": "政策版本：v%s"},
-    {"name": "player_sleep", "value": "定时"},
-    {"name": "player_source_local", "value": "本地导入"},
-    {"name": "player_source_unknown", "value": "未知来源"},
-    {"name": "player_rewind_15", "value": "后退15秒"},
-    {"name": "player_forward_15", "value": "快进15秒"},
-    {"name": "player_speed_title", "value": "播放速度"},
-    {"name": "player_speed", "value": "倍速"},
-    {"name": "player_skip_title", "value": "跳过片头片尾"},
-    {"name": "player_skip_intro", "value": "片头"},
-    {"name": "player_skip_outro", "value": "片尾"},
-    {"name": "player_skip_seconds", "value": "%d 秒"},
-    {"name": "player_speed_decrease", "value": "倍速减少0.05"},
-    {"name": "player_speed_increase", "value": "倍速增加0.05"},
-    {"name": "player_intro_decrease", "value": "片头减少1秒"},
-    {"name": "player_intro_increase", "value": "片头增加1秒"},
-    {"name": "player_outro_decrease", "value": "片尾减少1秒"},
-    {"name": "player_outro_increase", "value": "片尾增加1秒"},
-    {"name": "player_sleep_title", "value": "定时关闭"},
-    {"name": "player_sleep_by_time", "value": "按时长"},
-    {"name": "player_sleep_by_chapter", "value": "按章节"},
-    {"name": "player_sleep_this_chapter", "value": "本章结束"},
-    {"name": "player_sleep_finish_current", "value": "播完本章"},
-    {"name": "player_sleep_remaining_chapters", "value": "剩余 %d 章"},
-    {"name": "player_sleep_chapters", "value": "%d 章"},
-    {"name": "player_sleep_minutes", "value": "%d 分钟"},
-    {"name": "player_sleep_custom", "value": "自定义"},
-    {"name": "player_sleep_custom_minutes", "value": "自定义 · %d 分钟"},
-    {"name": "player_sleep_custom_chapters", "value": "自定义 · %d 章"},
-    {"name": "player_sleep_minutes_placeholder", "value": "输入 1–1440"},
-    {"name": "player_sleep_chapters_placeholder", "value": "输入 1–%d"},
-    {"name": "player_sleep_minute_unit", "value": "分钟"},
-    {"name": "player_sleep_chapter_unit", "value": "章"},
-    {"name": "player_sleep_custom_hint", "value": "输入后，点键盘“完成”立即生效"},
-    {"name": "player_sleep_minutes_error", "value": "请输入 1–1440 的整数分钟数"},
-    {"name": "player_sleep_chapters_error", "value": "请输入 1–%d 的整数章数"},
-    {"name": "player_sleep_smart", "value": "到时播完本章"},
-    {"name": "player_sleep_smart_hint", "value": "到时本章剩余不超过 10 分钟，则播完再暂停"},
-    {"name": "player_sleep_chapter_hint", "value": "当前章节计入章数，按目录顺序播放至目标章节"},
-    {"name": "player_sleep_target", "value": "将在「%s」结束后暂停"},
-    {"name": "player_sleep_waiting", "value": "定时已到，播完本章后暂停"},
-    {"name": "player_sleep_cancel", "value": "取消定时"},
-    {"name": "player_sleep_cancelled", "value": "已取消定时"},
-    {"name": "player_sleep_close", "value": "关闭定时面板"},
-    {"name": "player_sleep_minutes_set", "value": "已设置 %d 分钟后暂停"},
-    {"name": "player_sleep_switch_cancelled", "value": "已切换章节，章节停止已取消"},
+    {
+      "name": "record_stats_pending",
+      "value": "—"
+    },
+    {
+      "name": "record_stats_loading",
+      "value": "正在读取收听统计"
+    },
+    {
+      "name": "record_stats_read_failed",
+      "value": "统计读取失败，点击重试"
+    },
+    {
+      "name": "record_stats_equivalent_books",
+      "value": "相当于读完 %d 本书"
+    },
+    {
+      "name": "home_source_setting",
+      "value": "首页源"
+    },
+    {
+      "name": "home_source_setting_hint",
+      "value": "选择已启用且有发现内容的小说或有声书源，用于首页推荐和分类。"
+    },
+    {
+      "name": "home_source_unset",
+      "value": "未设置"
+    },
+    {
+      "name": "home_source_saved",
+      "value": "已设为首页源"
+    },
+    {
+      "name": "home_source_current",
+      "value": "当前首页源"
+    },
+    {
+      "name": "home_source_no_audio",
+      "value": "暂无可选发现源，请先导入并启用支持发现的小说或有声书源"
+    },
+    {
+      "name": "home_source_no_discovery",
+      "value": "该源未提供首页内容或未启用发现，可继续使用搜索"
+    },
+    {
+      "name": "home_source_empty",
+      "value": "当前首页源暂无内容，可下拉刷新或在首页顶部更换书源"
+    },
+    {
+      "name": "home_source_load_failed",
+      "value": "首页内容加载失败，请下拉重试或在书源管理中更换首页源"
+    },
+    {
+      "name": "home_recommendations",
+      "value": "精品推荐"
+    },
+    {
+      "name": "home_carousel_open",
+      "value": "打开书籍详情"
+    },
+    {
+      "name": "home_categories",
+      "value": "分类"
+    },
+    {
+      "name": "home_categories_all",
+      "value": "全部分类"
+    },
+    {
+      "name": "home_categories_count",
+      "value": "%d 个分类"
+    },
+    {
+      "name": "home_categories_empty",
+      "value": "当前首页源暂无分类，可下拉刷新或更换首页源"
+    },
+    {
+      "name": "home_source_category_failed",
+      "value": "分类加载失败，请下拉重试"
+    },
+    {
+      "name": "app_description",
+      "value": "简听阅读，让聆听与阅读更从容"
+    },
+    {
+      "name": "about_platform",
+      "value": "HarmonyOS / ArkUI V2"
+    },
+    {
+      "name": "about_sdk",
+      "value": "最低 API 20 / 目标 API 24"
+    },
+    {
+      "name": "profile_community_group",
+      "value": "简听交流群2"
+    },
+    {
+      "name": "profile_community_open_failed",
+      "value": "无法打开浏览器，请稍后重试"
+    },
+    {
+      "name": "community_group_open_failed",
+      "value": "未找到 QQ 或无法打开群资料"
+    },
+    {
+      "name": "about_community_group_number",
+      "value": "群号 602330717"
+    },
+    {
+      "name": "about_open_source",
+      "value": "开源声明"
+    },
+    {
+      "name": "about_technical_support",
+      "value": "技术与支持"
+    },
+    {
+      "name": "support_order_note",
+      "value": "排名不分前后"
+    },
+    {
+      "name": "support_intro_title",
+      "value": "感谢每一份支持"
+    },
+    {
+      "name": "support_intro_body",
+      "value": "技术上的帮助与每一份心意，让简听阅读不断变得更好。"
+    },
+    {
+      "name": "technical_support_title",
+      "value": "技术支持"
+    },
+    {
+      "name": "technical_support_names",
+      "value": "QG\n浅度\n相思界\nXIAOBAO"
+    },
+    {
+      "name": "sponsor_thanks_title",
+      "value": "感谢赞助"
+    },
+    {
+      "name": "sponsor_thanks_names",
+      "value": "WT\n子阳\ndefault\n干脆面不用泡\n苏小锋\n张\n李富贵\n最初未来\n潮生万象\n向钱看向厚看\nHAOYUN\n*.\n一飞冲天\nL.\n再见\n柏子\n爱你806\n*城"
+    },
+    {
+      "name": "sponsor_thanks_hendo",
+      "value": "HenDo"
+    },
+    {
+      "name": "about_compliance_title",
+      "value": "合规说明"
+    },
+    {
+      "name": "about_compliance_body",
+      "value": "本项目不内置、托管或分发小说正文及音频资源。全网榜单首页展示各平台公开的榜单和封面元数据，阅读与收听由用户导入的书源提供；不提供书源订阅服务，不保证第三方内容持续可用。"
+    },
+    {
+      "name": "about_usage_title",
+      "value": "使用提醒"
+    },
+    {
+      "name": "about_usage_body",
+      "value": "导入书源前，请自行确认书源来源、目标站点协议、内容授权和所在地法律法规要求。项目仅按用户配置的规则发起访问和解析，不以破解付费内容、绕过访问控制、规避反爬机制或批量抓取受保护内容为目标。"
+    },
+    {
+      "name": "open_source_section_components",
+      "value": "一、开源组件"
+    },
+    {
+      "name": "open_source_quickjs",
+      "value": "QuickJS（MIT）：受限 JavaScript 引擎，上游 bellard.org/quickjs/，版权所有 Copyright (c) 2017-2021 Fabrice Bellard 与 Charlie Gordon。"
+    },
+    {
+      "name": "open_source_binding",
+      "value": "@devzeng/quickjs / ohos_quickjs（MIT）：HarmonyOS 侧 QuickJS 原生封装，上游 github.com/hhtczengjing/ohos_quickjs，版权所有 Copyright (c) 2026 zengjing。"
+    },
+    {
+      "name": "open_source_napi",
+      "value": "OpenHarmony / Huawei N-API 封装代码（Apache-2.0）：带 Huawei Device Co., Ltd. 版权头的 N-API 文件继续保留原版权和许可头。"
+    },
+    {
+      "name": "open_source_crypto",
+      "value": "CryptoJS 4.2.0 子集（MIT）：仅含 core、cipher-core、tripledes、mode-ecb 和 pad-nopadding，上游 github.com/brix/crypto-js，版权所有 Copyright (c) 2009-2013 Jeff Mott 与 Copyright (c) 2013-2016 Evan Vosberg。"
+    },
+    {
+      "name": "open_source_section_boundary",
+      "value": "二、许可边界"
+    },
+    {
+      "name": "open_source_boundary_body",
+      "value": "本项目只引入独立的 QuickJS 和上述 CryptoJS 组件，没有复制或链接轻页应用的 GPL-3.0 书源引擎、页面或业务代码；书源规则能力是按本项目需要独立实现的兼容子集。"
+    },
+    {
+      "name": "open_source_section_execution",
+      "value": "三、执行范围与授权"
+    },
+    {
+      "name": "open_source_execution_body",
+      "value": "书源规则只在受限 QuickJS 环境内执行，不开放文件、数据库和任意平台能力；应用不内置任何内容源，全部规则由使用者自行导入并对其合法性负责。DES／3DES 兼容代码仅用于解析旧书源协议，不用于应用数据库、账号、Cookie 或传输加密。"
+    },
+    {
+      "name": "open_source_section_license",
+      "value": "四、许可文本"
+    },
+    {
+      "name": "open_source_license_body",
+      "value": "许可全文与固定版本信息随源码提供：third_party/quickjs/LICENSE、third_party/quickjs/LICENSE-QUICKJS、third_party/quickjs/LICENSE-APACHE-2.0 和 third_party/crypto-js/LICENSE。"
+    },
+    {
+      "name": "imported_source_unavailable",
+      "value": "导入的书源暂不可用"
+    },
+    {
+      "name": "privacy_title",
+      "value": "简听阅读隐私政策"
+    },
+    {
+      "name": "privacy_overview_title",
+      "value": "一、应用与信息使用"
+    },
+    {
+      "name": "privacy_overview_identity",
+      "value": "简听阅读由 ylwang 开发，是一款本地优先的音频收听与小说阅读应用。使用简听阅读不要求注册简听阅读账号，开发者不通过应用收集姓名、电话、身份证、定位或通讯录。"
+    },
+    {
+      "name": "privacy_overview_local",
+      "value": "为提供收藏、续播、继续阅读和个性化设置，简听阅读在设备本地保存书架、搜索历史、播放与阅读记录、使用统计、书源定义及应用设置。这些数据不会作为使用分析上传到开发者服务器。"
+    },
+    {
+      "name": "privacy_network_title",
+      "value": "二、网络访问与账号"
+    },
+    {
+      "name": "privacy_network_huawei_account",
+      "value": "你可在“我的”中自愿选择华为账号登录。登录和资料授权由华为 Account Kit 处理；简听阅读取得并在本机保存账号标识（UnionID、OpenID）、登录时间和授权返回的昵称，并将头像下载到本机缓存，用于显示与恢复账号资料。应用返回前台时向系统核对账号状态。这些资料不上传到开发者服务器，也不随应用备份迁移；不会读取华为账号密码，未设置昵称时可能显示华为返回的匿名手机号或邮箱。你可在“账号与备份”中更新授权资料或退出并清除本机账号资料。华为账号服务对信息的处理适用其授权页面及隐私政策。"
+    },
+    {
+      "name": "privacy_network_sources",
+      "value": "简听阅读访问网络以下载你选择导入的书源规则，向已启用的导入书源请求搜索、推荐、分类、详情、目录和正文，加载封面、播放音频及下载你选择的章节。书源及相关内容服务会接收请求所需的搜索词、内容地址、请求头及网络连接信息（如 IP 地址）。"
+    },
+    {
+      "name": "privacy_network_accounts",
+      "value": "部分书源需要登录。你填写的书源账号信息会按该书源协议发送至对应服务进行认证；网站登录由对应网站处理。为维持登录状态，简听阅读在本机加密保存书源会话及按来源、站点隔离的 Cookie，不将其上传给开发者。第三方服务对信息的处理适用其自身隐私政策。"
+    },
+    {
+      "name": "privacy_network_updates",
+      "value": "点击获取更新会打开华为应用市场中的本应用详情页；无法打开市场时会尝试打开其官方网页，由应用市场提供版本信息与更新服务。相关服务会接收必要的网络连接信息。在线音频投播和系统媒体控制按你的操作调用系统服务。"
+    },
+    {
+      "name": "privacy_network_tracking",
+      "value": "简听阅读不使用广告追踪或开发者侧用户行为统计服务。第三方书源的内容与登录操作由你选择，请在导入和登录前确认来源可信。"
+    },
+    {
+      "name": "privacy_permissions_title",
+      "value": "三、系统权限与文件选择"
+    },
+    {
+      "name": "privacy_permissions_background",
+      "value": "网络权限用于上述联网功能；后台运行权限用于锁屏或切换应用后继续播放音频、处理下载任务并提供系统媒体控制。"
+    },
+    {
+      "name": "privacy_permissions_vibration",
+      "value": "振动权限用于交互触感反馈。"
+    },
+    {
+      "name": "privacy_permissions_picker",
+      "value": "导入音频、音频 ZIP、书源文件、恢复本地备份和选择阅读背景时，使用系统文件或照片选择器访问你主动选择的文件；导出文件与本地备份由你选择保存位置。二维码导入调用系统扫码能力，可扫描二维码或选择二维码图片。应用不直接申请位置、麦克风、通讯录、短信或日历权限。"
+    },
+    {
+      "name": "privacy_content_title",
+      "value": "四、内容来源"
+    },
+    {
+      "name": "privacy_content_sources",
+      "value": "全网榜单首页直接获取起点、懒人听书、喜马拉雅、七猫小说、晋江文学公开的榜单、书名、作者或主播与封面，并在本机缓存；对应平台及图片服务会收到正常网络请求所需的 IP 地址和请求信息。首页浏览不需要导入书源；点击书籍后，书名关键词发送到你已启用的导入书源查找对应版本。小说正文、目录及音频仍由你自行导入的书源提供，本地书籍来自你选择的文件。简听阅读不保证第三方内容持续可用。"
+    },
+    {
+      "name": "privacy_content_rights",
+      "value": "请在法律法规及内容提供方许可范围内阅读、收听、下载和导出内容，尊重作品及相关素材的合法权益。"
+    },
+    {
+      "name": "privacy_data_title",
+      "value": "五、保存、备份与删除"
+    },
+    {
+      "name": "privacy_data_storage",
+      "value": "本地记录和设置保存在系统应用数据目录；导入的书源及其登录会话、Cookie 使用本机加密数据库保存。本地导入音频、下载章节与缓存保存在应用沙箱或你选择的导出位置。"
+    },
+    {
+      "name": "privacy_data_backup",
+      "value": "你主动使用“账号与备份”中的立即备份，或主动开启默认关闭的自动备份后，在线书架、阅听记录、播放进度、阅读章节与字位置、常规阅读设置、朗读进度与设置、统计、通用设置、在线书籍信息及清洗后的书源定义会交由系统云文件服务保存到你自己的华为云空间，并占用该空间；自动备份在应用使用期间按所选间隔检查，仅在数据变化时生成新备份；应用关闭期间不保证定时执行，下次打开后补做。开关和调度记录按账号保存在本机，不随备份迁移，可随时关闭。后续传输受系统同步设置管理，开发者不接收这些备份。恢复时先下载校验并由你确认，再覆盖对应在线记录与设置、合并书源；本机保留恢复前的快照。系统备份与恢复使用同一数据范围。无法识别或不符合格式的阅听记录在导出时逐条跳过，不删除本机原记录。实际账号资料、书源登录态、Cookie、敏感 Header Token、原始书源 JSON、离线音频、本地导入书籍、自定义阅读背景、配色和字体文件不进入该备份。跨设备续播传递恢复在线播放所需的书籍、章节和进度信息。"
+    },
+    {
+      "name": "privacy_data_delete",
+      "value": "你可以在对应页面删除书架条目、搜索历史、阅听记录、下载和书源；删除书源会清除其会话及 Cookie，已锁定书源需先解锁。清除应用数据或卸载应用会清理本机应用数据，另行导出的文件和系统备份需在对应系统功能中管理。退出简听阅读登录不会删除华为云空间的备份，可在系统云空间中管理应用数据与同步设置。"
+    },
+    {
+      "name": "record_title",
+      "value": "阅听记录"
+    },
+    {
+      "name": "record_unfavorited_title",
+      "value": "未收藏记录"
+    },
+    {
+      "name": "record_favorited_back",
+      "value": "返回收藏记录"
+    },
+    {
+      "name": "record_delete_confirm",
+      "value": "确认删除已选 %d 本书的阅听记录？"
+    },
+    {
+      "name": "record_read_progress",
+      "value": "已读 %d%"
+    },
+    {
+      "name": "record_listen_progress",
+      "value": "已听 %d%"
+    },
+    {
+      "name": "record_read_started",
+      "value": "已开始阅读"
+    },
+    {
+      "name": "record_empty",
+      "value": "暂无收藏书籍的阅听记录"
+    },
+    {
+      "name": "record_empty_hint",
+      "value": "收藏书籍后，这里会保留你的阅读和聆听进度。"
+    },
+    {
+      "name": "record_unfavorited_empty",
+      "value": "暂无未收藏记录"
+    },
+    {
+      "name": "record_unfavorited_hint",
+      "value": "未收藏书籍的阅读和聆听记录会显示在这里。"
+    },
+    {
+      "name": "privacy_children_title",
+      "value": "六、未成年人保护"
+    },
+    {
+      "name": "privacy_children_body",
+      "value": "简听阅读不以十四周岁以下儿童为主要服务对象。未成年人应在监护人指导下阅读本政策并使用应用。"
+    },
+    {
+      "name": "privacy_contact_title",
+      "value": "七、政策更新与联系"
+    },
+    {
+      "name": "privacy_contact_updates",
+      "value": "本政策于 2026 年 9 月 30 日更新。你可以在“我的 → 关于 → 隐私政策”查看当前政策；后续调整以应用内及公开政策页面的内容为准。"
+    },
+    {
+      "name": "privacy_contact_channel",
+      "value": "开发者：ylwang。隐私问题可通过项目反馈页面 https://github.com/end-web/HarmonyOS-book/issues 联系。请勿在公开反馈中填写账号密码、Cookie 等敏感信息。"
+    },
+    {
+      "name": "privacy_version",
+      "value": "政策版本：v%s"
+    },
+    {
+      "name": "player_sleep",
+      "value": "定时"
+    },
+    {
+      "name": "player_source_local",
+      "value": "本地导入"
+    },
+    {
+      "name": "player_source_unknown",
+      "value": "未知来源"
+    },
+    {
+      "name": "player_rewind_15",
+      "value": "后退15秒"
+    },
+    {
+      "name": "player_forward_15",
+      "value": "快进15秒"
+    },
+    {
+      "name": "player_speed_title",
+      "value": "播放速度"
+    },
+    {
+      "name": "player_speed",
+      "value": "倍速"
+    },
+    {
+      "name": "player_skip_title",
+      "value": "跳过片头片尾"
+    },
+    {
+      "name": "player_skip_intro",
+      "value": "片头"
+    },
+    {
+      "name": "player_skip_outro",
+      "value": "片尾"
+    },
+    {
+      "name": "player_skip_seconds",
+      "value": "%d 秒"
+    },
+    {
+      "name": "player_speed_decrease",
+      "value": "倍速减少0.05"
+    },
+    {
+      "name": "player_speed_increase",
+      "value": "倍速增加0.05"
+    },
+    {
+      "name": "player_intro_decrease",
+      "value": "片头减少1秒"
+    },
+    {
+      "name": "player_intro_increase",
+      "value": "片头增加1秒"
+    },
+    {
+      "name": "player_outro_decrease",
+      "value": "片尾减少1秒"
+    },
+    {
+      "name": "player_outro_increase",
+      "value": "片尾增加1秒"
+    },
+    {
+      "name": "player_sleep_title",
+      "value": "定时关闭"
+    },
+    {
+      "name": "player_sleep_by_time",
+      "value": "按时长"
+    },
+    {
+      "name": "player_sleep_by_chapter",
+      "value": "按章节"
+    },
+    {
+      "name": "player_sleep_this_chapter",
+      "value": "本章结束"
+    },
+    {
+      "name": "player_sleep_finish_current",
+      "value": "播完本章"
+    },
+    {
+      "name": "player_sleep_remaining_chapters",
+      "value": "剩余 %d 章"
+    },
+    {
+      "name": "player_sleep_chapters",
+      "value": "%d 章"
+    },
+    {
+      "name": "player_sleep_minutes",
+      "value": "%d 分钟"
+    },
+    {
+      "name": "player_sleep_custom",
+      "value": "自定义"
+    },
+    {
+      "name": "player_sleep_custom_minutes",
+      "value": "自定义 · %d 分钟"
+    },
+    {
+      "name": "player_sleep_custom_chapters",
+      "value": "自定义 · %d 章"
+    },
+    {
+      "name": "player_sleep_minutes_placeholder",
+      "value": "输入 1–1440"
+    },
+    {
+      "name": "player_sleep_chapters_placeholder",
+      "value": "输入 1–%d"
+    },
+    {
+      "name": "player_sleep_minute_unit",
+      "value": "分钟"
+    },
+    {
+      "name": "player_sleep_chapter_unit",
+      "value": "章"
+    },
+    {
+      "name": "player_sleep_custom_hint",
+      "value": "输入后，点键盘“完成”立即生效"
+    },
+    {
+      "name": "player_sleep_minutes_error",
+      "value": "请输入 1–1440 的整数分钟数"
+    },
+    {
+      "name": "player_sleep_chapters_error",
+      "value": "请输入 1–%d 的整数章数"
+    },
+    {
+      "name": "player_sleep_smart",
+      "value": "到时播完本章"
+    },
+    {
+      "name": "player_sleep_smart_hint",
+      "value": "到时本章剩余不超过 10 分钟，则播完再暂停"
+    },
+    {
+      "name": "player_sleep_chapter_hint",
+      "value": "当前章节计入章数，按目录顺序播放至目标章节"
+    },
+    {
+      "name": "player_sleep_target",
+      "value": "将在「%s」结束后暂停"
+    },
+    {
+      "name": "player_sleep_waiting",
+      "value": "定时已到，播完本章后暂停"
+    },
+    {
+      "name": "player_sleep_cancel",
+      "value": "取消定时"
+    },
+    {
+      "name": "player_sleep_cancelled",
+      "value": "已取消定时"
+    },
+    {
+      "name": "player_sleep_close",
+      "value": "关闭定时面板"
+    },
+    {
+      "name": "player_sleep_minutes_set",
+      "value": "已设置 %d 分钟后暂停"
+    },
+    {
+      "name": "player_sleep_switch_cancelled",
+      "value": "已切换章节，章节停止已取消"
+    },
     {
       "name": "player_cast",
       "value": "投播"
@@ -1219,14 +2431,38 @@
       "name": "rule_source_import_file_action",
       "value": "选择本地 JSON（可多选）"
     },
-    {"name": "rule_source_import_files_hint", "value": "每次最多 10 个文件，单个 25 MiB、合计 250 MiB。无效、超限或锁定的内容会跳过。"},
-    {"name": "rule_source_import_files_oversized", "value": "%d 个文件超过单文件 25 MiB 限制，请拆分后重试。"},
-    {"name": "rule_source_import_files_budget", "value": "%d 个文件超过本批 30 MiB 总量限制，请分批导入。"},
-    {"name": "rule_source_import_files_invalid", "value": "%d 个文件为空、格式无效或未包含可导入书源，请检查 JSON 内容。"},
-    {"name": "rule_source_import_files_read_failed", "value": "%d 个文件读取失败，请重新选择文件或保存到本地后重试。"},
-    {"name": "rule_source_import_files_write_failed", "value": "%d 个文件的书源保存失败，请检查书源定义和剩余存储空间后重试。"},
-    {"name": "rule_source_import_files_progress", "value": "正在导入第 %d / %d 个文件…"},
-    {"name": "rule_source_import_files_result", "value": "已导入 %d 个书源，跳过 %d 个书源、%d 个文件"},
+    {
+      "name": "rule_source_import_files_hint",
+      "value": "每次最多 10 个文件，单个 25 MiB、合计 250 MiB。无效、超限或锁定的内容会跳过。"
+    },
+    {
+      "name": "rule_source_import_files_oversized",
+      "value": "%d 个文件超过单文件 25 MiB 限制，请拆分后重试。"
+    },
+    {
+      "name": "rule_source_import_files_budget",
+      "value": "%d 个文件超过本批 30 MiB 总量限制，请分批导入。"
+    },
+    {
+      "name": "rule_source_import_files_invalid",
+      "value": "%d 个文件为空、格式无效或未包含可导入书源，请检查 JSON 内容。"
+    },
+    {
+      "name": "rule_source_import_files_read_failed",
+      "value": "%d 个文件读取失败，请重新选择文件或保存到本地后重试。"
+    },
+    {
+      "name": "rule_source_import_files_write_failed",
+      "value": "%d 个文件的书源保存失败，请检查书源定义和剩余存储空间后重试。"
+    },
+    {
+      "name": "rule_source_import_files_progress",
+      "value": "正在导入第 %d / %d 个文件…"
+    },
+    {
+      "name": "rule_source_import_files_result",
+      "value": "已导入 %d 个书源，跳过 %d 个书源、%d 个文件"
+    },
     {
       "name": "rule_source_import_file_empty",
       "value": "所选 JSON 文件为空"
@@ -1687,484 +2923,2056 @@
       "name": "rule_source_panel_empty",
       "value": "该书源未提供可用的分类或登录表单"
     },
-    { "name": "rule_source_debug_stop", "value": "停止调试" },
-    { "name": "rule_source_json_single", "value": "请输入单个有效书源 JSON" },
-    { "name": "rule_source_json_identity", "value": "已有书源的标识地址不可更改，请新建书源" },
-    { "name": "rule_source_login_tab", "value": "登录" },
-    { "name": "rule_source_json_tab", "value": "JSON" },
-    { "name": "native_editor_item", "value": "第 %d 项" },
-    { "name": "native_editor_basic", "value": "基本设置" },
-    { "name": "native_editor_open", "value": "逐项编辑" },
-    { "name": "native_editor_parent", "value": "返回上一级" },
-    { "name": "native_editor_optional", "value": "可选，填写后生效" },
-    { "name": "native_editor_add", "value": "添加一项" },
-    { "name": "native_editor_remove", "value": "移除字段" },
-    { "name": "native_editor_remove_confirm", "value": "移除 %s 及其子项？保存后生效。" },
-    { "name": "native_editor_key", "value": "字段名，例如 User-Agent" },
-    { "name": "native_editor_string", "value": "文本或表达式" },
-    { "name": "native_editor_object", "value": "字段组" },
-    { "name": "native_editor_array", "value": "列表" },
-    { "name": "native_editor_boolean", "value": "开关" },
-    { "name": "native_editor_number", "value": "数字" },
-    { "name": "native_editor_number_error", "value": "%s 需要填写有效数字" },
-    { "name": "native_editor_add_error", "value": "请填写有效且不重复的字段名" },
-    { "name": "native_field_name", "value": "名称" },
-    { "name": "native_field_url", "value": "地址或地址表达式" },
-    { "name": "native_field_group", "value": "书源分组" },
-    { "name": "native_field_comment", "value": "备注" },
-    { "name": "native_field_type", "value": "内容类型（text / audio / comic / video）" },
-    { "name": "native_field_headers", "value": "请求头" },
-    { "name": "native_field_method", "value": "请求方式（GET / POST）" },
-    { "name": "native_field_body", "value": "请求正文" },
-    { "name": "native_field_fields", "value": "提取字段" },
-    { "name": "native_field_list", "value": "列表提取表达式" },
-    { "name": "native_field_vars", "value": "变量与筛选选项" },
-    { "name": "native_field_menus", "value": "发现菜单" },
-    { "name": "native_field_dynamic_menus", "value": "动态发现菜单" },
-    { "name": "native_field_let", "value": "阶段变量" },
-    { "name": "native_field_keep", "value": "保留到后续章节的变量" },
-    { "name": "native_field_lib", "value": "函数库" },
-    { "name": "native_field_enabled", "value": "启用书源" },
-    { "name": "rule_source_cookie_jar", "value": "保存网站 Cookie" },
-    { "name": "rule_source_timeout", "value": "请求超时（毫秒）" },
-    { "name": "rule_source_rate", "value": "请求频率" },
-    { "name": "rule_source_explore_enabled", "value": "启用发现" },
-    { "name": "rule_source_explore_rule", "value": "发现分类规则" },
-    { "name": "rule_source_explore_fields", "value": "发现书籍提取规则（JSON）" },
-    { "name": "rule_source_login_ui", "value": "登录表单规则" },
-    { "name": "rule_source_login_check", "value": "登录检查脚本" },
-    { "name": "rule_source_initial_variable", "value": "初始书源变量" },
-    { "name": "rule_source_export", "value": "导出" },
-    { "name": "rule_source_export_saved", "value": "书源已导出" },
-    {"name": "appearance_material", "value": "材质效果"},
-    {"name": "appearance_accent", "value": "主题色"},
-    {"name": "appearance_material_default", "value": "默认"},
-    {"name": "appearance_material_ultra_thin", "value": "超薄 · 通透"},
-    {"name": "appearance_material_thin", "value": "轻薄 · 磨砂"},
-    {"name": "appearance_material_regular", "value": "标准"},
-    {"name": "appearance_material_thick", "value": "厚磨砂"},
-    {"name": "appearance_material_ultra_thick", "value": "超厚磨砂"},
-    {"name": "appearance_material_hint", "value": "调整浮动控件与弹窗的通透程度，选择后立即生效。默认使用各控件的推荐材质。"},
-    {"name": "appearance_accent_hint", "value": "用于按钮、选中状态与光感颜色，不改变电子书的纸张配色。"},
-    {"name": "appearance_accent_default", "value": "玫瑰红"},
-    {"name": "appearance_accent_orange", "value": "橙色"},
-    {"name": "appearance_accent_rose", "value": "玫瑰红"},
-    {"name": "appearance_accent_purple", "value": "鸢尾紫"},
-    {"name": "appearance_accent_blue", "value": "晴空蓝"},
-    {"name": "appearance_accent_teal", "value": "青绿色"},
-    {"name": "appearance_accent_green", "value": "苔藓绿"},
-    {"name": "appearance_accent_hex_hint", "value": "自定义色值，如 #8E55B8"},
-    {"name": "appearance_apply", "value": "应用"},
-    {"name": "appearance_accent_invalid", "value": "请输入 # 加六位十六进制色值"},
-    {"name": "appearance_save_failed", "value": "外观设置保存失败，请重试"},
-    {"name": "home_favorite_add", "value": "收藏"},
-    {"name": "home_favorite_remove", "value": "取消收藏"},
-    {"name": "home_favorite_failed", "value": "收藏操作失败，请重试"},
-    {"name": "talebook_add", "value": "添加 Talebook NAS"},
-    {"name": "talebook_title", "value": "连接 Talebook"},
-    {"name": "talebook_hint", "value": "连接后添加阅读和听书来源。支持 EPUB、TXT 和已发布的有声书，可在书源的发现入口浏览书库。"},
-    {"name": "talebook_address", "value": "NAS 地址"},
-    {"name": "talebook_address_hint", "value": "http://nas.example.com:58080"},
-    {"name": "talebook_code", "value": "访问码"},
-    {"name": "talebook_code_hint", "value": "没有访问码可留空"},
-    {"name": "talebook_network_hint", "value": "仅 IPv6 的 NAS 需要手机网络支持 IPv6。HTTP 连接不会加密传输访问码。当前使用访问码访问书库，需要在 Talebook 中开放访客阅读权限。"},
-    {"name": "talebook_connect", "value": "验证并连接"},
-    {"name": "talebook_connecting", "value": "正在连接…"},
-    {"name": "talebook_connected", "value": "Talebook 已连接，可在发现中浏览书库"},
-    {"name": "tts_title", "value": "朗读"},
-    {"name": "tts_settings_title", "value": "朗读设置"},
-    {"name": "tts_entry_hint", "value": "点击开始听书，长按打开朗读设置"},
-    {"name": "tts_chapter_progress", "value": "本章朗读进度"},
-    {"name": "tts_previous_segment", "value": "上一朗读片段"},
-    {"name": "tts_next_segment", "value": "下一朗读片段"},
-    {"name": "tts_close", "value": "收起"},
-    {"name": "tts_play", "value": "播放"},
-    {"name": "tts_pause", "value": "暂停"},
-    {"name": "tts_previous", "value": "上一章"},
-    {"name": "tts_next", "value": "下一章"},
-    {"name": "tts_from_page", "value": "从当前页朗读"},
-    {"name": "tts_resume_saved", "value": "继续上次朗读"},
-    {"name": "tts_resume_hint", "value": "暂停后从当前朗读片段开头继续；自定义语音需要联网。"},
-    {"name": "tts_speed", "value": "朗读语速"},
-    {"name": "tts_follow", "value": "正文跟随朗读"},
-    {"name": "tts_voice", "value": "离线音色"},
-    {"name": "tts_refresh", "value": "刷新"},
-    {"name": "tts_download", "value": "下载并使用"},
-    {"name": "tts_selected", "value": "已选择"},
-    {"name": "tts_select", "value": "使用"},
-    {"name": "tts_sleep", "value": "定时停止"},
-    {"name": "tts_sleep_off", "value": "关闭"},
-    {"name": "tts_sleep_15", "value": "15 分钟"},
-    {"name": "tts_sleep_30", "value": "30 分钟"},
-    {"name": "tts_sleep_60", "value": "60 分钟"},
-    {"name": "tts_sleep_chapter", "value": "读完本章停止"},
-    {"name": "tts_sleep_remaining", "value": "将在 %d 分钟内停止"},
-    {"name": "tts_sleep_chapter_active", "value": "将在本章结束后停止"},
-    {"name": "tts_stop", "value": "结束朗读"},
-    {"name": "tts_no_voices", "value": "暂未找到可用音色，请检查系统语音服务后重试。"},
-    {"name": "tts_engine_error", "value": "朗读暂不可用，请检查离线音色是否已安装，或切换音色后重试。"},
-    {"name": "tts_download_error", "value": "音色下载失败或超时，请检查网络后刷新重试。"},
-    {"name": "tts_content_error", "value": "章节正文加载失败或为空，请重试或手动切换章节。"},
-    {"name": "tts_save_error", "value": "朗读进度保存失败，请检查可用存储空间。"},
-    {"name": "tts_online_only", "value": "当前仅支持在线小说正文朗读。"},
-    {"name": "tts_mini_label", "value": "正在朗读"},
-    {"name": "tts_follow_position", "value": "回到朗读位置"},
-    {"name": "chapter_order_asc", "value": "正序"},
-    {"name": "chapter_order_desc", "value": "倒序"},
-    {"name": "reader_search_chapters", "value": "搜索章节"},
-    {"name": "reader_no_matching_chapters", "value": "无匹配章节"},
-    {"name": "reader_follow_system", "value": "跟随系统深浅色"},
-    {"name": "reader_vertical_turn", "value": "连续滚动"},
-    {"name": "reader_scroll_retry", "value": "章节加载失败，点击重试"},
-    {"name": "reader_margins", "value": "正文边距（vp）"},
-    {"name": "reader_margin_left", "value": "左"},
-    {"name": "reader_margin_right", "value": "右"},
-    {"name": "reader_margin_top", "value": "上"},
-    {"name": "reader_margin_bottom", "value": "下"},
-    {"name": "source_login_valid", "value": "已登录"},
-    {"name": "source_login_expired", "value": "已过期"},
-    {"name": "source_login_none", "value": "未登录"},
-    {"name": "rule_source_login_no_session", "value": "未获取到登录会话，请完成网页登录后再保存"},
-    {"name": "reader_pure_black", "value": "纯黑"},
-    {"name": "reader_turn_title", "value": "翻页效果"},
-    {"name": "reader_turn_none", "value": "无效果"},
-    {"name": "reader_turn_cover", "value": "覆盖"},
-    {"name": "reader_turn_simulation", "value": "仿真"},
-    {"name": "appearance_material_strong", "value": "强"},
-    {"name": "appearance_material_balanced", "value": "均衡"},
-    {"name": "appearance_material_weak", "value": "弱"},
-    {"name": "settings_preload_custom", "value": "预缓存章节数"},
-    {"name": "settings_preload_range", "value": "请输入 0–50 章，0 为关闭预缓存"},
-    {"name": "shelf_title", "value": "书架"},
-    {"name": "shelf_manage", "value": "管理"},
-    {"name": "shelf_selected_count", "value": "已选 %d 本"},
-    {"name": "shelf_select_all", "value": "全选"},
-    {"name": "shelf_deselect_all", "value": "取消全选"},
-    {"name": "shelf_delete_count", "value": "删除（%d）"},
-    {"name": "shelf_batch_title", "value": "移出所选 %d 本书？"},
-    {"name": "shelf_batch_description", "value": "所选书籍将从书架移除，保留阅听记录和进度。"},
-    {"name": "shelf_batch_delete_files", "value": "同时删除本地文件"},
-    {"name": "shelf_batch_files_hint", "value": "清理所选书籍的导入副本、已下载音频及阅听记录，删除后无法恢复。"},
-    {"name": "shelf_batch_deleting", "value": "正在删除…"},
-    {"name": "shelf_batch_removed", "value": "已移出 %d 本书"},
-    {"name": "shelf_batch_partial", "value": "已移出 %d 本，%d 本未完成，请重试"},
-    {"name": "shelf_batch_failed", "value": "移出书架失败，请重试"},
-    {"name": "shelf_batch_files_failed", "value": "删除未完成，请重试；若已清理本地文件，需重新导入或下载"},
-    {"name": "shelf_delete_only", "value": "仅删除书架"},
-    {"name": "shelf_delete_local", "value": "删除书架、本地及记录"},
-    {"name": "chapter_segment_all", "value": "全部章节"},
-    {"name": "settings_preload_custom_tab", "value": "自定义"},
-    {"name": "chapter_grid_empty", "value": "暂无匹配章节"},
-    {"name": "chapter_total_switch", "value": "共 %d 集 · 切换"},
-    {"name": "chapter_total_switch_text", "value": "共 %d 章 · 切换"},
-    {"name": "chapter_not_cached", "value": "未缓存"},
-    {"name": "reader_listen_short", "value": "听"},
-    {"name": "reader_font_tab", "value": "字体"},
-    {"name": "reader_palette", "value": "调色盘"},
-    {"name": "reader_font_weight", "value": "字重"},
-    {"name": "reader_font_color", "value": "文字颜色"},
-    {"name": "reader_system_font", "value": "系统字体"},
-    {"name": "reader_import_font", "value": "导入字体"},
-    {"name": "reader_import_font_hint", "value": "每次最多导入 5 个 TTF / OTF，单个不超过 32 MB。已导入字体全部保留，可随时切换。"},
-    {"name": "reader_import_font_failed", "value": "字体导入失败，请选择有效的 TTF / OTF 字体（不超过 32 MB）"},
-    {"name": "reader_screen_on", "value": "亮屏时间"},
-    {"name": "reader_screen_system", "value": "跟随系统"},
-    {"name": "reader_screen_always", "value": "常亮"},
-    {"name": "reader_screen_minutes", "value": "%d 分钟"},
-    {"name": "reader_font_partial", "value": "已导入 %d 个字体，%d 个未成功，请检查文件格式和大小"},
-    {"name": "reader_font_unavailable", "value": "字体文件无法使用，请重新导入"},
-    {"name": "tts_custom_title", "value": "朗读引擎"},
-    {"name": "tts_system_voice", "value": "系统语音"},
-    {"name": "tts_custom_import", "value": "导入 TTS"},
-    {"name": "tts_custom_paste", "value": "粘贴配置"},
-    {"name": "tts_custom_paste_hint", "value": "粘贴轻页／阅读的 TTS JSON 配置，支持单个或多个音色"},
-    {"name": "tts_custom_confirm", "value": "导入并使用"},
-    {"name": "tts_custom_hint", "value": "导入后可随时切换音色。每次最多选择 5 个 JSON 文件，保留已有配置；自定义语音需联网。"},
-    {"name": "tts_custom_import_success", "value": "已导入 %d 个音色，已选中最后一个"},
-    {"name": "tts_custom_import_partial", "value": "已导入 %d 个音色，%d 个文件未导入，请检查配置格式"},
-    {"name": "tts_custom_import_error", "value": "导入失败，请检查 JSON 格式与配置。支持轻页 HTTP TTS、模板表达式和 UTF-8 请求，暂不支持登录脚本及外部脚本库；最多保留 100 个音色。"},
-    {"name": "content_reload", "value": "重载"},
-    {"name": "content_reload_failed", "value": "重载失败，请稍后重试"},
-    {"name": "source_switch_title", "value": "换源"},
-    {"name": "source_switch_hint", "value": "搜索已启用的其他书源，支持不同版本名称，请核对作者和版本。"},
-    {"name": "source_switch_empty", "value": "未找到匹配版本，可简化上方书名重新搜索，或启用更多书源。"},
-    {"name": "source_switch_failed", "value": "%d 个书源搜索失败，可重新搜索。"},
-    {"name": "source_switch_no_chapters", "value": "该来源暂无章节，请选择其他来源。"},
-    {"name": "source_switch_chapter_hint", "value": "已按当前进度定位章节，可直接继续，也可手动选择其他章节。"},
-    {"name": "source_switch_continue", "value": "继续：%s"},
-    {"name": "source_switch_filter", "value": "搜索章节"},
-    {"name": "source_switch_back", "value": "返回来源列表"},
-    {"name": "source_switch_retry", "value": "重新搜索"},
-    {"name": "source_switch_empty_content", "value": "该章节正文为空，请选择其他章节或来源。"},
-    {"name": "source_switch_unavailable", "value": "该来源暂时无法播放，请选择其他章节或来源。"},
-    {"name": "source_switch_keyword", "value": "书名，可删除演播和版本后缀"},
-    {"name": "source_switch_progress", "value": "已搜索 %d/%d 个书源，找到 %d 个版本"},
-    {"name": "source_switch_stop", "value": "停止搜索"},
-    {"name": "source_switch_loading_chapters", "value": "正在加载章节…"},
-    {"name": "reader_tap_title", "value": "点击区域"},
-    {"name": "reader_tap_hint", "value": "点击格子切换：上一页 → 工具栏 → 下一页 → 无操作。至少保留一个工具栏区域；滑动不会呼出工具栏。"},
-    {"name": "reader_tap_previous", "value": "上一页"},
-    {"name": "reader_tap_toolbar", "value": "工具栏"},
-    {"name": "reader_tap_next", "value": "下一页"},
-    {"name": "reader_tap_none", "value": "无操作"},
-    {"name": "reader_tap_reset", "value": "恢复默认区域"},
-    {"name": "reader_tap_left_width", "value": "左列宽度"},
-    {"name": "reader_tap_right_width", "value": "右列宽度"},
-    {"name": "reader_tap_top_height", "value": "上行高度"},
-    {"name": "reader_tap_bottom_height", "value": "下行高度"},
-    {"name": "reader_header_title", "value": "页眉"},
-    {"name": "reader_corner_top_left", "value": "左上"},
-    {"name": "reader_corner_top_right", "value": "右上"},
-    {"name": "reader_corner_bottom_left", "value": "左下"},
-    {"name": "reader_corner_bottom_right", "value": "右下"},
-    {"name": "reader_show_header", "value": "显示页眉"},
-    {"name": "reader_show_footer", "value": "显示页脚"},
-    {"name": "reader_show_chapter_title", "value": "章节名称"},
-    {"name": "reader_show_page_number", "value": "页码 / 阅读进度"},
-    {"name": "reader_show_chapter_number", "value": "章节序号"},
-    {"name": "reader_show_book_name", "value": "书籍名称"},
-    {"name": "account_national_day_badge", "value": "国庆快乐勋章"},
-    {"name": "achievement_title", "value": "成就馆"},
-    {"name": "achievement_login_hint", "value": "登录后查看已获得的勋章与解锁进度，并选择佩戴。"},
-    {"name": "account_medal_list", "value": "勋章列表"},
-    {"name": "account_national_day_medal_date", "value": "2026.10.01"},
-    {"name": "account_reading_medal_1h_name", "value": "初识书声"},
-    {"name": "account_reading_medal_1h_hours", "value": "1 小时"},
-    {"name": "account_reading_medal_10h_name", "value": "渐入佳境"},
-    {"name": "account_reading_medal_10h_hours", "value": "10 小时"},
-    {"name": "account_reading_medal_50h_name", "value": "书声相伴"},
-    {"name": "account_reading_medal_50h_hours", "value": "50 小时"},
-    {"name": "account_reading_medal_100h_name", "value": "百时书友"},
-    {"name": "account_reading_medal_100h_hours", "value": "100 小时"},
-    {"name": "account_reading_medal_300h_name", "value": "声入人心"},
-    {"name": "account_reading_medal_300h_hours", "value": "300 小时"},
-    {"name": "account_reading_medal_500h_name", "value": "书海漫游"},
-    {"name": "account_reading_medal_500h_hours", "value": "500 小时"},
-    {"name": "account_reading_medal_1000h_name", "value": "千时知音"},
-    {"name": "account_reading_medal_1000h_hours", "value": "1000 小时"},
-    {"name": "account_reading_medal_2000h_name", "value": "万书之王"},
-    {"name": "account_reading_medal_2000h_hours", "value": "2000 小时"},
-    {"name": "account_reading_medal_5000h_name", "value": "传奇之声"},
-    {"name": "account_reading_medal_5000h_hours", "value": "5000 小时"},
-    {"name": "medal_load_failed", "value": "勋章加载失败，点击重试"},
-    {"name": "medal_remaining", "value": "累计收听 %d 小时可获得，还差 %d 小时 %d 分钟。"},
-    {"name": "medal_historical", "value": "累计收听 %d 小时 · 历史累计解锁"},
-    {"name": "medal_awarded_date", "value": "累计收听 %d 小时 · 获得于 %s"},
-    {"name": "medal_obtained_date", "value": "%s 获得"},
-    {"name": "medal_historical_date", "value": "历史累计解锁"},
-    {"name": "medal_close", "value": "关闭"},
-    {"name": "medal_equip", "value": "佩戴"},
-    {"name": "medal_unequip", "value": "取消佩戴"},
-    {"name": "medal_equipped", "value": "已佩戴勋章"},
-    {"name": "medal_unequipped", "value": "已取消佩戴"},
-    {"name": "medal_save_failed", "value": "勋章设置保存失败，请重试"},
-    {"name": "medal_summary", "value": "已获得 %d/%d 枚 · 累计收听 %s 小时"},
-    {"name": "medal_new_awards", "value": "新获得 %d 枚勋章，可点击选择佩戴"},
-    {"name": "medal_hours", "value": "%d 小时"},
-    {"name": "medal_wearing", "value": "佩戴中"},
-    {"name": "medal_unlocked", "value": "已获得"},
-    {"name": "medal_locked", "value": "未解锁"},
-    {"name": "medal_scope_hint", "value": "按本机实际收听时长解锁，包含听书与朗读；勋章跟随本地数据及备份保存。"},
-    {"name": "ranking_all", "value": "全部"},
-    {"name": "ranking_label_separator", "value": "·"},
-    {"name": "ranking_qidian", "value": "起点"},
-    {"name": "ranking_lrts", "value": "懒人听书"},
-    {"name": "ranking_ximalaya", "value": "喜马拉雅"},
-    {"name": "ranking_month", "value": "月票榜"},
-    {"name": "ranking_hot", "value": "热播周榜"},
-    {"name": "ranking_free", "value": "免费经典榜"},
-    {"name": "ranking_sales", "value": "畅销榜"},
-    {"name": "ranking_finished", "value": "完结榜"},
-    {"name": "ranking_reading", "value": "阅读榜"},
-    {"name": "ranking_recommend", "value": "推荐榜"},
-    {"name": "ranking_new", "value": "新书榜"},
-    {"name": "ranking_comment", "value": "热评周榜"},
-    {"name": "ranking_paid", "value": "付费畅销榜"},
-    {"name": "ranking_home", "value": "全网榜单"},
-    {"name": "ranking_discover", "value": "发现"},
-    {"name": "ranking_tagline", "value": "翻开好故事，听见新世界"},
-    {"name": "ranking_spotlight", "value": "本期焦点"},
-    {"name": "ranking_find_source", "value": "查找书源"},
-    {"name": "ranking_more", "value": "查看榜单"},
-    {"name": "ranking_unavailable", "value": "榜单暂时无法获取，下拉重试"},
-    {"name": "ranking_loading", "value": "正在获取榜单…"},
-    {"name": "ranking_cached", "value": "暂未更新，当前展示上次缓存"},
-    {"name": "ranking_back", "value": "返回发现"},
-    {"name": "ranking_search", "value": "搜索"},
-    {"name": "ranking_choose_home", "value": "选择首页"},
-    {"name": "ranking_manage_sources", "value": "导入 / 管理书源"},
-    {"name": "ranking_search_keyword", "value": "输入书名，查找可用版本"},
-    {"name": "ranking_matching", "value": "正在查找书源 · %d / %d"},
-    {"name": "ranking_no_sources", "value": "榜单可以直接浏览。导入并启用可搜索的书源后，即可查找阅读或收听版本。"},
-    {"name": "ranking_match_failed", "value": "部分书源未能完成搜索，可修改关键词重试或检查书源。"},
-    {"name": "ranking_no_match", "value": "暂未找到对应版本，试试修改书名或添加更多书源。"},
-    {"name": "ranking_choose_version", "value": "请选择作者、主播及版本相符的结果"},
-    {"name": "ranking_last_choice", "value": "上次选择"},
-    {"name": "ranking_updated", "value": "更新于 %s年%s月%s日 %s:%s:%s"},
-    {"name": "ranking_top_count", "value": "当前展示前 %d 本"},
-    {"name": "ranking_footer", "value": "榜单与封面来自各平台公开页面\n阅读与收听由你导入的书源提供"},
-    {"name": "ranking_open_failed", "value": "暂时无法打开，请重试"},
-    {"name": "ranking_issue", "value": "READ / LISTEN"},
-    {"name": "ranking_qimao", "value": "七猫小说"},
-    {"name": "ranking_jjwxc", "value": "晋江文学"},
-    {"name": "ranking_boy_hot", "value": "男生大热榜"},
-    {"name": "ranking_girl_hot", "value": "女生大热榜"},
-    {"name": "ranking_total_points", "value": "总分排行榜"},
-    {"name": "ranking_monthly", "value": "月度排行榜"},
-    {"name": "ranking_search_week", "value": "热搜周榜"},
-    {"name": "ranking_free_week", "value": "免费周榜"},
-    {"name": "ranking_sales_week", "value": "畅销周榜"},
-    {"name": "ranking_finished_week", "value": "完结周榜"},
-    {"name": "ranking_audio_hot", "value": "有声书热播榜"},
-    {"name": "ranking_audio_new", "value": "有声书新品榜"},
-    {"name": "ranking_audio_reputation", "value": "有声书口碑榜"},
-    {"name": "ranking_novel_vip", "value": "小说VIP榜"},
-    {"name": "ranking_boy_new", "value": "男生新书榜"},
-    {"name": "ranking_girl_new", "value": "女生新书榜"},
-    {"name": "ranking_boy_finished", "value": "男生完结榜"},
-    {"name": "ranking_girl_finished", "value": "女生完结榜"},
-    {"name": "ranking_season", "value": "季度排行榜"},
-    {"name": "ranking_half_year", "value": "半年排行榜"},
-    {"name": "ranking_vip_recommend", "value": "VIP强推榜"},
-    {"name": "ranking_words", "value": "字数排行榜"},
-    {"name": "settings_cover_super_resolution", "value": "AI 封面超分"},
-    {"name": "settings_cover_super_resolution_desc", "value": "增强播放页低清网络封面，首次处理需稍候；不可用时显示原图"},
-    {"name": "settings_cover_super_resolution_unavailable", "value": "当前系统不支持，需要 HarmonyOS 26 及支持图片超分的设备"},
-    {"name": "shelf_updates_title", "value": "书架更新"},
-    {"name": "shelf_update_daily_hint", "value": "每天自动检查一次，安静更新你的书架"},
-    {"name": "shelf_update_progress", "value": "正在检查 %d/%d"},
-    {"name": "shelf_update_error", "value": "更新暂未完成，请稍后重试"},
-    {"name": "shelf_update_time", "value": "最近检查 · %s"},
-    {"name": "shelf_update_book_count", "value": "%d 本有新内容"},
-    {"name": "shelf_update_checked_count", "value": "已检查 %d 本"},
-    {"name": "shelf_update_new_content", "value": "发现新内容"},
-    {"name": "shelf_update_text_total", "value": "%d → %d 章"},
-    {"name": "shelf_update_audio_total", "value": "%d → %d 集"},
-    {"name": "shelf_update_text_delta", "value": "+%d 章"},
-    {"name": "shelf_update_audio_delta", "value": "+%d 集"},
-    {"name": "shelf_update_checking", "value": "正在检查更新"},
-    {"name": "shelf_update_no_new", "value": "暂时没有新章节"},
-    {"name": "shelf_update_no_record", "value": "还没有更新记录"},
-    {"name": "shelf_update_empty_hint", "value": "在线收藏的最新章节将在这里汇总"},
-    {"name": "shelf_update_failed_count", "value": "%d 本暂未检查成功，可稍后重试"},
-    {"name": "shelf_update_check_now", "value": "立即检查"},
-    {"name": "log_title", "value": "日志管理"},
-    {"name": "log_hint", "value": "日志默认关闭，手动开启后记录导入、存储和启动异常，并可运行检测。开关状态保存在本机，关闭后保留已有日志。遇到问题请先开启，再复现并复制日志；最近 200 条仅保存在本机，不会主动收集正文、账号或文件名。"},
-    {"name": "log_enabled", "value": "记录日志"},
-    {"name": "log_refresh", "value": "刷新"},
-    {"name": "log_check", "value": "运行检测"},
-    {"name": "log_copy", "value": "复制日志"},
-    {"name": "log_clear", "value": "清空日志"},
-    {"name": "log_cancel", "value": "取消"},
-    {"name": "log_clear_confirm", "value": "清空本机诊断日志？书架和导入文件不受影响。"},
-    {"name": "log_count", "value": "显示 %d 条 · 错误 %d 条"},
-    {"name": "log_errors_only", "value": "仅错误"},
-    {"name": "log_empty", "value": "暂无日志，可运行检测或复现问题后刷新"},
-    {"name": "log_copied", "value": "日志已复制"},
-    {"name": "log_operation_failed", "value": "操作失败，请稍后重试"},
-    {"name": "log_storage_failed", "value": "日志文件读写异常，当前记录可能尚未完整保存"},
-    {"name": "import_pick_failed", "value": "未能选择文件，请重试；详情可在“我的—日志管理”查看"},
-    {"name": "features_free_access", "value": "全部功能免费开放"},
-    {"name": "membership_developer_active", "value": "开发者调试豁免已启用"},
-    {"name": "membership_entry_desc", "value": "专属主题 · 更多会员权益"},
-    {"name": "membership_card_title", "value": "简听阅读会员"},
-    {"name": "membership_period_title", "value": "会员周期"},
-    {"name": "membership_close", "value": "关闭会员中心"},
-    {"name": "membership_benefit_short", "value": "专属主题 · 自动备份 · 书源不限 · 搜索并发 · 专属客服"},
-    {"name": "membership_details", "value": "会员权益与购买说明"},
-    {"name": "membership_title", "value": "主题"},
-    {"name": "membership_subscription_title", "value": "会员中心"},
-    {"name": "membership_subscription_entry", "value": "开通会员"},
-    {"name": "membership_plan_unavailable", "value": "暂不可购买"},
-    {"name": "membership_timeout", "value": "华为支付响应超时，请稍后恢复购买；已扣款请勿重复购买"},
-    {"name": "membership_checking", "value": "正在核对会员状态…"},
-    {"name": "membership_active", "value": "会员已生效"},
-    {"name": "membership_inactive", "value": "当前没有生效的会员"},
-    {"name": "membership_expires", "value": "有效期至 %s"},
-    {"name": "membership_expiry_renew_on", "value": "有效期至 %d年%d月%d日 · 自动续费已开启"},
-    {"name": "membership_expiry_renew_off", "value": "有效期至 %d年%d月%d日 · 自动续费已关闭"},
-    {"name": "membership_renew_on", "value": "自动续费已开启"},
-    {"name": "membership_renew_off", "value": "自动续费已关闭，当前有效期内会员权益继续有效"},
-    {"name": "membership_benefit", "value": "1. 自动云备份：可开启自动备份，选择每天、每 3 天或每周。非会员可手动云备份。\n2. 全量主题解锁：有效期内解锁全部会员桌面图标及后续新增官方皮肤。默认图标、原有界面配色和阅读器主题保持免费。\n3. 自定义源无限制：会员导入总数不限，非会员最多 8 个。\n4. 搜索并发自定义：默认 3，可设置 1–12。\n5. 专属客服：会员可享专属客服支持。"},
-    {"name": "membership_month", "value": "月度会员"},
-    {"name": "membership_year", "value": "年度会员"},
-    {"name": "membership_month_period", "value": "每 1 个月自动续费"},
-    {"name": "membership_year_period", "value": "每 1 年自动续费"},
-    {"name": "membership_subscribe", "value": "立即订阅"},
-    {"name": "membership_restore", "value": "恢复购买 / 刷新"},
-    {"name": "membership_manage", "value": "管理订阅"},
-    {"name": "membership_price_hint", "value": "价格来自华为，优惠及实际扣费金额以华为收银台为准。"},
-    {"name": "membership_products_loading", "value": "正在获取套餐…"},
-    {"name": "membership_products_unavailable", "value": "套餐暂不可购买，请稍后刷新。已购用户仍可恢复购买或管理订阅。"},
-    {"name": "membership_terms", "value": "会员购买与自动续费说明\n终身会员为一次性购买的非消耗型商品，权益长期有效，不自动续费；退款或撤销后权益终止。购买终身会员不会自动取消已有月度或年度订阅，请到“管理订阅”关闭原订阅续费。\n月度、年度会员：订阅费用由华为支付收取，按所选月度或年度周期自动续费。请在当前周期结束前通过“管理订阅”取消，以华为页面显示的取消截止时间和扣费规则为准。取消后，已支付周期内权益继续有效。\n会员权益包含自动云备份及周期设置、全部会员桌面图标及后续新增官方皮肤、自定义源导入总数不限及专属客服支持。图标切换需要支持该功能的系统；自动备份需登录华为账号并开通可用云空间，在应用使用期间执行，不提供实时双向同步。非会员可手动云备份，最多导入 8 个自定义源；已有超额书源保留并可使用和更新。默认图标、原有界面配色、阅读器主题和阅读听书功能保持免费。\n会员到期或退款导致权益失效后，停止自动备份和超额新增，联网核验时恢复默认图标。会员随购买时的系统华为账号恢复，重新安装或切换账号后请联网恢复购买。暂时无法联网时保留现有图标，新会员操作需核验有效权益。"},
-    {"name": "membership_consent", "value": "我已阅读并同意会员权益、购买及自动续费说明"},
-    {"name": "membership_icon_exclusive", "value": "会员专享"},
-    {"name": "membership_confirmation_pending", "value": "会员已核验，部分订单同步尚未完成，请稍后点击恢复购买重试。"},
-    {"name": "membership_cancelled", "value": "已取消订阅操作"},
-    {"name": "membership_login_required", "value": "请先在系统设置中登录购买时使用的华为账号，再恢复购买"},
-    {"name": "membership_not_authorized", "value": "支付服务暂不可用，请稍后重试"},
-    {"name": "membership_retry_later", "value": "操作较频繁，请稍后重试"},
-    {"name": "membership_network_error", "value": "暂时无法连接华为，请检查网络后恢复购买"},
-    {"name": "membership_unsupported", "value": "当前设备或华为账号所在地区暂不支持订阅"},
-    {"name": "membership_syncing", "value": "正在同步会员信息，请稍候…"},
-    {"name": "membership_verification_failed", "value": "会员状态未能核验，请稍后恢复购买；已扣款请勿重复购买"},
-    {"name": "auto_backup_membership_required", "value": "自动云备份和周期设置为会员专享，非会员可使用手动云备份。"},
-    {"name": "rule_source_membership_limit", "value": "非会员最多导入 8 个自定义源，超限批次未写入。可减少新增数量或开通会员；已有源仍可使用和更新。"},
-    {"name": "rule_source_membership_hint", "value": "书源导入不限总数；已有源更新会保留启用状态。"},
-    {"name": "rule_source_save_failed", "value": "保存失败"},
-    {"name": "membership_lifetime", "value": "终身会员"},
-    {"name": "membership_lifetime_period", "value": "一次购买，终身有效"},
-    {"name": "membership_lifetime_valid", "value": "终身会员 · 长期有效"},
-    {"name": "membership_lifetime_owned", "value": "已开通终身会员"},
-    {"name": "membership_buy_lifetime", "value": "一次购买"},
-    {"name": "membership_lifetime_renewal_notice", "value": "已有月度或年度订阅的用户，购买终身会员后请到“管理订阅”关闭原订阅的自动续费，购买终身会员不会自动取消原订阅。"},
-    {"name": "book_detail_action_in_shelf", "value": "已在书架"},
-    {"name": "book_detail_action_add_shelf", "value": "加入书架"},
-    {"name": "book_detail_action_chapters", "value": "查看目录"},
-    {"name": "book_detail_action_switch_source", "value": "换源"},
-    {"name": "book_detail_action_listen_record", "value": "收听记录"},
-    {"name": "book_detail_action_read_record", "value": "阅读记录"},
-    {"name": "book_detail_reading", "value": "在听"},
-    {"name": "book_detail_reading_text", "value": "在读"},
-    {"name": "book_detail_latest", "value": "最新"},
-    {"name": "book_detail_progress_audio", "value": "共 %d 集 · 已下载 %d 集"},
-    {"name": "book_detail_progress_text", "value": "共 %d 章 · 已下载 %d 章"},
-    {"name": "book_detail_total_audio", "value": "共 %d 集"},
-    {"name": "book_detail_total_text", "value": "共 %d 章"},
-    {"name": "book_detail_tags_label", "value": "标签："},
-    {"name": "book_detail_intro_label", "value": "简介："},
-    {"name": "book_detail_start_listen", "value": "听书"},
-    {"name": "book_detail_start_read", "value": "阅读"},
-    {"name": "book_detail_continue_listen", "value": "继续收听"},
-    {"name": "book_detail_continue_read", "value": "继续阅读"},
-    {"name": "book_detail_score", "value": "%s分"},
-    {"name": "book_detail_score_none", "value": "暂无"},
-    {"name": "shelf_view_detail", "value": "查看详情"},
-    {"name": "shelf_status_filter", "value": "书架筛选"},
-    {"name": "shelf_status_all", "value": "全部"},
-    {"name": "shelf_status_ongoing", "value": "连载中"},
-    {"name": "shelf_status_completed", "value": "已完结"},
-    {"name": "shelf_search_hint", "value": "搜索书名、作者或演播者"},
-    {"name": "shelf_search_expand", "value": "展开书架搜索"},
-    {"name": "shelf_view_list", "value": "切换为列表"},
-    {"name": "shelf_view_grid", "value": "切换为网格"},
-    {"name": "shelf_search_collapse", "value": "收起书架搜索"},
-    {"name": "shelf_filter_empty", "value": "没有符合条件的书籍"},
-    {"name": "shelf_filter_empty_hint", "value": "试试其他筛选条件或搜索关键词"},
-    {"name": "shelf_filter_save_failed", "value": "筛选已生效，但保存失败，请重新选择"},
-    {"name": "settings_loading", "value": "正在读取本地设置…"},
-    {"name": "settings_load_failed", "value": "本地设置读取失败，请重试"},
-    {"name": "settings_search_loading", "value": "正在读取搜索设置…"},
-    {"name": "settings_search_load_failed", "value": "搜索设置读取失败，请重试"},
-    {"name": "book_detail_loading_chapters", "value": "加载章节中"},
-    {"name": "app_icon_waveberry", "value": "莓果酒红"},
-    {"name": "app_icon_waveorange", "value": "活力橙"},
-    {"name": "app_icon_wavegraphite", "value": "石墨灰"},
-    {"name": "app_icon_wavepurple", "value": "明亮紫"},
-    {"name": "app_icon_waveclear", "value": "透明玻璃"},
-    {"name": "app_icon_lifewhite", "value": "夜曲·白"},
-    {"name": "app_icon_invite_free", "value": "邀测免费体验"},
-    {"name": "settings_default_playback_speed", "value": "全局默认倍速"},
-    {"name": "settings_default_playback_speed_desc", "value": "用于无倍速记录的有声书；单本倍速独立记忆，互不影响"}
+    {
+      "name": "rule_source_debug_stop",
+      "value": "停止调试"
+    },
+    {
+      "name": "rule_source_json_single",
+      "value": "请输入单个有效书源 JSON"
+    },
+    {
+      "name": "rule_source_json_identity",
+      "value": "已有书源的标识地址不可更改，请新建书源"
+    },
+    {
+      "name": "rule_source_login_tab",
+      "value": "登录"
+    },
+    {
+      "name": "rule_source_json_tab",
+      "value": "JSON"
+    },
+    {
+      "name": "native_editor_item",
+      "value": "第 %d 项"
+    },
+    {
+      "name": "native_editor_basic",
+      "value": "基本设置"
+    },
+    {
+      "name": "native_editor_open",
+      "value": "逐项编辑"
+    },
+    {
+      "name": "native_editor_parent",
+      "value": "返回上一级"
+    },
+    {
+      "name": "native_editor_optional",
+      "value": "可选，填写后生效"
+    },
+    {
+      "name": "native_editor_add",
+      "value": "添加一项"
+    },
+    {
+      "name": "native_editor_remove",
+      "value": "移除字段"
+    },
+    {
+      "name": "native_editor_remove_confirm",
+      "value": "移除 %s 及其子项？保存后生效。"
+    },
+    {
+      "name": "native_editor_key",
+      "value": "字段名，例如 User-Agent"
+    },
+    {
+      "name": "native_editor_string",
+      "value": "文本或表达式"
+    },
+    {
+      "name": "native_editor_object",
+      "value": "字段组"
+    },
+    {
+      "name": "native_editor_array",
+      "value": "列表"
+    },
+    {
+      "name": "native_editor_boolean",
+      "value": "开关"
+    },
+    {
+      "name": "native_editor_number",
+      "value": "数字"
+    },
+    {
+      "name": "native_editor_number_error",
+      "value": "%s 需要填写有效数字"
+    },
+    {
+      "name": "native_editor_add_error",
+      "value": "请填写有效且不重复的字段名"
+    },
+    {
+      "name": "native_field_name",
+      "value": "名称"
+    },
+    {
+      "name": "native_field_url",
+      "value": "地址或地址表达式"
+    },
+    {
+      "name": "native_field_group",
+      "value": "书源分组"
+    },
+    {
+      "name": "native_field_comment",
+      "value": "备注"
+    },
+    {
+      "name": "native_field_type",
+      "value": "内容类型（text / audio / comic / video）"
+    },
+    {
+      "name": "native_field_headers",
+      "value": "请求头"
+    },
+    {
+      "name": "native_field_method",
+      "value": "请求方式（GET / POST）"
+    },
+    {
+      "name": "native_field_body",
+      "value": "请求正文"
+    },
+    {
+      "name": "native_field_fields",
+      "value": "提取字段"
+    },
+    {
+      "name": "native_field_list",
+      "value": "列表提取表达式"
+    },
+    {
+      "name": "native_field_vars",
+      "value": "变量与筛选选项"
+    },
+    {
+      "name": "native_field_menus",
+      "value": "发现菜单"
+    },
+    {
+      "name": "native_field_dynamic_menus",
+      "value": "动态发现菜单"
+    },
+    {
+      "name": "native_field_let",
+      "value": "阶段变量"
+    },
+    {
+      "name": "native_field_keep",
+      "value": "保留到后续章节的变量"
+    },
+    {
+      "name": "native_field_lib",
+      "value": "函数库"
+    },
+    {
+      "name": "native_field_enabled",
+      "value": "启用书源"
+    },
+    {
+      "name": "rule_source_cookie_jar",
+      "value": "保存网站 Cookie"
+    },
+    {
+      "name": "rule_source_timeout",
+      "value": "请求超时（毫秒）"
+    },
+    {
+      "name": "rule_source_rate",
+      "value": "请求频率"
+    },
+    {
+      "name": "rule_source_explore_enabled",
+      "value": "启用发现"
+    },
+    {
+      "name": "rule_source_explore_rule",
+      "value": "发现分类规则"
+    },
+    {
+      "name": "rule_source_explore_fields",
+      "value": "发现书籍提取规则（JSON）"
+    },
+    {
+      "name": "rule_source_login_ui",
+      "value": "登录表单规则"
+    },
+    {
+      "name": "rule_source_login_check",
+      "value": "登录检查脚本"
+    },
+    {
+      "name": "rule_source_initial_variable",
+      "value": "初始书源变量"
+    },
+    {
+      "name": "rule_source_export",
+      "value": "导出"
+    },
+    {
+      "name": "rule_source_export_saved",
+      "value": "书源已导出"
+    },
+    {
+      "name": "appearance_material",
+      "value": "材质效果"
+    },
+    {
+      "name": "appearance_accent",
+      "value": "主题色"
+    },
+    {
+      "name": "appearance_material_default",
+      "value": "默认"
+    },
+    {
+      "name": "appearance_material_ultra_thin",
+      "value": "超薄 · 通透"
+    },
+    {
+      "name": "appearance_material_thin",
+      "value": "轻薄 · 磨砂"
+    },
+    {
+      "name": "appearance_material_regular",
+      "value": "标准"
+    },
+    {
+      "name": "appearance_material_thick",
+      "value": "厚磨砂"
+    },
+    {
+      "name": "appearance_material_ultra_thick",
+      "value": "超厚磨砂"
+    },
+    {
+      "name": "appearance_material_hint",
+      "value": "调整浮动控件与弹窗的通透程度，选择后立即生效。默认使用各控件的推荐材质。"
+    },
+    {
+      "name": "appearance_accent_hint",
+      "value": "用于按钮、选中状态与光感颜色，不改变电子书的纸张配色。"
+    },
+    {
+      "name": "appearance_accent_default",
+      "value": "玫瑰红"
+    },
+    {
+      "name": "appearance_accent_orange",
+      "value": "橙色"
+    },
+    {
+      "name": "appearance_accent_rose",
+      "value": "玫瑰红"
+    },
+    {
+      "name": "appearance_accent_purple",
+      "value": "鸢尾紫"
+    },
+    {
+      "name": "appearance_accent_blue",
+      "value": "晴空蓝"
+    },
+    {
+      "name": "appearance_accent_teal",
+      "value": "青绿色"
+    },
+    {
+      "name": "appearance_accent_green",
+      "value": "苔藓绿"
+    },
+    {
+      "name": "appearance_accent_hex_hint",
+      "value": "自定义色值，如 #8E55B8"
+    },
+    {
+      "name": "appearance_apply",
+      "value": "应用"
+    },
+    {
+      "name": "appearance_accent_invalid",
+      "value": "请输入 # 加六位十六进制色值"
+    },
+    {
+      "name": "appearance_save_failed",
+      "value": "外观设置保存失败，请重试"
+    },
+    {
+      "name": "home_favorite_add",
+      "value": "收藏"
+    },
+    {
+      "name": "home_favorite_remove",
+      "value": "取消收藏"
+    },
+    {
+      "name": "home_favorite_failed",
+      "value": "收藏操作失败，请重试"
+    },
+    {
+      "name": "talebook_add",
+      "value": "添加 Talebook NAS"
+    },
+    {
+      "name": "talebook_title",
+      "value": "连接 Talebook"
+    },
+    {
+      "name": "talebook_hint",
+      "value": "连接后添加阅读和听书来源。支持 EPUB、TXT 和已发布的有声书，可在书源的发现入口浏览书库。"
+    },
+    {
+      "name": "talebook_address",
+      "value": "NAS 地址"
+    },
+    {
+      "name": "talebook_address_hint",
+      "value": "http://nas.example.com:58080"
+    },
+    {
+      "name": "talebook_code",
+      "value": "访问码"
+    },
+    {
+      "name": "talebook_code_hint",
+      "value": "没有访问码可留空"
+    },
+    {
+      "name": "talebook_network_hint",
+      "value": "仅 IPv6 的 NAS 需要手机网络支持 IPv6。HTTP 连接不会加密传输访问码。当前使用访问码访问书库，需要在 Talebook 中开放访客阅读权限。"
+    },
+    {
+      "name": "talebook_connect",
+      "value": "验证并连接"
+    },
+    {
+      "name": "talebook_connecting",
+      "value": "正在连接…"
+    },
+    {
+      "name": "talebook_connected",
+      "value": "Talebook 已连接，可在发现中浏览书库"
+    },
+    {
+      "name": "tts_title",
+      "value": "朗读"
+    },
+    {
+      "name": "tts_settings_title",
+      "value": "朗读设置"
+    },
+    {
+      "name": "tts_entry_hint",
+      "value": "点击开始听书，长按打开朗读设置"
+    },
+    {
+      "name": "tts_chapter_progress",
+      "value": "本章朗读进度"
+    },
+    {
+      "name": "tts_previous_segment",
+      "value": "上一朗读片段"
+    },
+    {
+      "name": "tts_next_segment",
+      "value": "下一朗读片段"
+    },
+    {
+      "name": "tts_close",
+      "value": "收起"
+    },
+    {
+      "name": "tts_play",
+      "value": "播放"
+    },
+    {
+      "name": "tts_pause",
+      "value": "暂停"
+    },
+    {
+      "name": "tts_previous",
+      "value": "上一章"
+    },
+    {
+      "name": "tts_next",
+      "value": "下一章"
+    },
+    {
+      "name": "tts_from_page",
+      "value": "从当前页朗读"
+    },
+    {
+      "name": "tts_resume_saved",
+      "value": "继续上次朗读"
+    },
+    {
+      "name": "tts_resume_hint",
+      "value": "暂停后从当前朗读片段开头继续；自定义语音需要联网。"
+    },
+    {
+      "name": "tts_speed",
+      "value": "朗读语速"
+    },
+    {
+      "name": "tts_follow",
+      "value": "正文跟随朗读"
+    },
+    {
+      "name": "tts_voice",
+      "value": "离线音色"
+    },
+    {
+      "name": "tts_refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "tts_download",
+      "value": "下载并使用"
+    },
+    {
+      "name": "tts_selected",
+      "value": "已选择"
+    },
+    {
+      "name": "tts_select",
+      "value": "使用"
+    },
+    {
+      "name": "tts_sleep",
+      "value": "定时停止"
+    },
+    {
+      "name": "tts_sleep_off",
+      "value": "关闭"
+    },
+    {
+      "name": "tts_sleep_15",
+      "value": "15 分钟"
+    },
+    {
+      "name": "tts_sleep_30",
+      "value": "30 分钟"
+    },
+    {
+      "name": "tts_sleep_60",
+      "value": "60 分钟"
+    },
+    {
+      "name": "tts_sleep_chapter",
+      "value": "读完本章停止"
+    },
+    {
+      "name": "tts_sleep_remaining",
+      "value": "将在 %d 分钟内停止"
+    },
+    {
+      "name": "tts_sleep_chapter_active",
+      "value": "将在本章结束后停止"
+    },
+    {
+      "name": "tts_stop",
+      "value": "结束朗读"
+    },
+    {
+      "name": "tts_no_voices",
+      "value": "暂未找到可用音色，请检查系统语音服务后重试。"
+    },
+    {
+      "name": "tts_engine_error",
+      "value": "朗读暂不可用，请检查离线音色是否已安装，或切换音色后重试。"
+    },
+    {
+      "name": "tts_download_error",
+      "value": "音色下载失败或超时，请检查网络后刷新重试。"
+    },
+    {
+      "name": "tts_content_error",
+      "value": "章节正文加载失败或为空，请重试或手动切换章节。"
+    },
+    {
+      "name": "tts_save_error",
+      "value": "朗读进度保存失败，请检查可用存储空间。"
+    },
+    {
+      "name": "tts_online_only",
+      "value": "当前仅支持在线小说正文朗读。"
+    },
+    {
+      "name": "tts_mini_label",
+      "value": "正在朗读"
+    },
+    {
+      "name": "tts_follow_position",
+      "value": "回到朗读位置"
+    },
+    {
+      "name": "chapter_order_asc",
+      "value": "正序"
+    },
+    {
+      "name": "chapter_order_desc",
+      "value": "倒序"
+    },
+    {
+      "name": "reader_search_chapters",
+      "value": "搜索章节"
+    },
+    {
+      "name": "reader_no_matching_chapters",
+      "value": "无匹配章节"
+    },
+    {
+      "name": "reader_follow_system",
+      "value": "跟随系统深浅色"
+    },
+    {
+      "name": "reader_vertical_turn",
+      "value": "连续滚动"
+    },
+    {
+      "name": "reader_scroll_retry",
+      "value": "章节加载失败，点击重试"
+    },
+    {
+      "name": "reader_margins",
+      "value": "正文边距（vp）"
+    },
+    {
+      "name": "reader_margin_left",
+      "value": "左"
+    },
+    {
+      "name": "reader_margin_right",
+      "value": "右"
+    },
+    {
+      "name": "reader_margin_top",
+      "value": "上"
+    },
+    {
+      "name": "reader_margin_bottom",
+      "value": "下"
+    },
+    {
+      "name": "source_login_valid",
+      "value": "已登录"
+    },
+    {
+      "name": "source_login_expired",
+      "value": "已过期"
+    },
+    {
+      "name": "source_login_none",
+      "value": "未登录"
+    },
+    {
+      "name": "rule_source_login_no_session",
+      "value": "未获取到登录会话，请完成网页登录后再保存"
+    },
+    {
+      "name": "reader_pure_black",
+      "value": "纯黑"
+    },
+    {
+      "name": "reader_turn_title",
+      "value": "翻页效果"
+    },
+    {
+      "name": "reader_turn_none",
+      "value": "无效果"
+    },
+    {
+      "name": "reader_turn_cover",
+      "value": "覆盖"
+    },
+    {
+      "name": "reader_turn_simulation",
+      "value": "仿真"
+    },
+    {
+      "name": "appearance_material_strong",
+      "value": "强"
+    },
+    {
+      "name": "appearance_material_balanced",
+      "value": "均衡"
+    },
+    {
+      "name": "appearance_material_weak",
+      "value": "弱"
+    },
+    {
+      "name": "settings_preload_custom",
+      "value": "预缓存章节数"
+    },
+    {
+      "name": "settings_preload_range",
+      "value": "请输入 0–50 章，0 为关闭预缓存"
+    },
+    {
+      "name": "shelf_title",
+      "value": "书架"
+    },
+    {
+      "name": "shelf_manage",
+      "value": "管理"
+    },
+    {
+      "name": "shelf_selected_count",
+      "value": "已选 %d 本"
+    },
+    {
+      "name": "shelf_select_all",
+      "value": "全选"
+    },
+    {
+      "name": "shelf_deselect_all",
+      "value": "取消全选"
+    },
+    {
+      "name": "shelf_delete_count",
+      "value": "删除（%d）"
+    },
+    {
+      "name": "shelf_batch_title",
+      "value": "移出所选 %d 本书？"
+    },
+    {
+      "name": "shelf_batch_description",
+      "value": "所选书籍将从书架移除，保留阅听记录和进度。"
+    },
+    {
+      "name": "shelf_batch_delete_files",
+      "value": "同时删除本地文件"
+    },
+    {
+      "name": "shelf_batch_files_hint",
+      "value": "清理所选书籍的导入副本、已下载音频及阅听记录，删除后无法恢复。"
+    },
+    {
+      "name": "shelf_batch_deleting",
+      "value": "正在删除…"
+    },
+    {
+      "name": "shelf_batch_removed",
+      "value": "已移出 %d 本书"
+    },
+    {
+      "name": "shelf_batch_partial",
+      "value": "已移出 %d 本，%d 本未完成，请重试"
+    },
+    {
+      "name": "shelf_batch_failed",
+      "value": "移出书架失败，请重试"
+    },
+    {
+      "name": "shelf_batch_files_failed",
+      "value": "删除未完成，请重试；若已清理本地文件，需重新导入或下载"
+    },
+    {
+      "name": "shelf_delete_only",
+      "value": "仅删除书架"
+    },
+    {
+      "name": "shelf_delete_local",
+      "value": "删除书架、本地及记录"
+    },
+    {
+      "name": "chapter_segment_all",
+      "value": "全部章节"
+    },
+    {
+      "name": "settings_preload_custom_tab",
+      "value": "自定义"
+    },
+    {
+      "name": "chapter_grid_empty",
+      "value": "暂无匹配章节"
+    },
+    {
+      "name": "chapter_total_switch",
+      "value": "共 %d 集 · 切换"
+    },
+    {
+      "name": "chapter_total_switch_text",
+      "value": "共 %d 章 · 切换"
+    },
+    {
+      "name": "chapter_not_cached",
+      "value": "未缓存"
+    },
+    {
+      "name": "reader_listen_short",
+      "value": "听"
+    },
+    {
+      "name": "reader_font_tab",
+      "value": "字体"
+    },
+    {
+      "name": "reader_palette",
+      "value": "调色盘"
+    },
+    {
+      "name": "reader_font_weight",
+      "value": "字重"
+    },
+    {
+      "name": "reader_font_color",
+      "value": "文字颜色"
+    },
+    {
+      "name": "reader_system_font",
+      "value": "系统字体"
+    },
+    {
+      "name": "reader_import_font",
+      "value": "导入字体"
+    },
+    {
+      "name": "reader_import_font_hint",
+      "value": "每次最多导入 5 个 TTF / OTF，单个不超过 32 MB。已导入字体全部保留，可随时切换。"
+    },
+    {
+      "name": "reader_import_font_failed",
+      "value": "字体导入失败，请选择有效的 TTF / OTF 字体（不超过 32 MB）"
+    },
+    {
+      "name": "reader_screen_on",
+      "value": "亮屏时间"
+    },
+    {
+      "name": "reader_screen_system",
+      "value": "跟随系统"
+    },
+    {
+      "name": "reader_screen_always",
+      "value": "常亮"
+    },
+    {
+      "name": "reader_screen_minutes",
+      "value": "%d 分钟"
+    },
+    {
+      "name": "reader_font_partial",
+      "value": "已导入 %d 个字体，%d 个未成功，请检查文件格式和大小"
+    },
+    {
+      "name": "reader_font_unavailable",
+      "value": "字体文件无法使用，请重新导入"
+    },
+    {
+      "name": "tts_custom_title",
+      "value": "朗读引擎"
+    },
+    {
+      "name": "tts_system_voice",
+      "value": "系统语音"
+    },
+    {
+      "name": "tts_custom_import",
+      "value": "导入 TTS"
+    },
+    {
+      "name": "tts_custom_paste",
+      "value": "粘贴配置"
+    },
+    {
+      "name": "tts_custom_paste_hint",
+      "value": "粘贴轻页／阅读的 TTS JSON 配置，支持单个或多个音色"
+    },
+    {
+      "name": "tts_custom_confirm",
+      "value": "导入并使用"
+    },
+    {
+      "name": "tts_custom_hint",
+      "value": "导入后可随时切换音色。每次最多选择 5 个 JSON 文件，保留已有配置；自定义语音需联网。"
+    },
+    {
+      "name": "tts_custom_import_success",
+      "value": "已导入 %d 个音色，已选中最后一个"
+    },
+    {
+      "name": "tts_custom_import_partial",
+      "value": "已导入 %d 个音色，%d 个文件未导入，请检查配置格式"
+    },
+    {
+      "name": "tts_custom_import_error",
+      "value": "导入失败，请检查 JSON 格式与配置。支持轻页 HTTP TTS、模板表达式和 UTF-8 请求，暂不支持登录脚本及外部脚本库；最多保留 100 个音色。"
+    },
+    {
+      "name": "content_reload",
+      "value": "重载"
+    },
+    {
+      "name": "content_reload_failed",
+      "value": "重载失败，请稍后重试"
+    },
+    {
+      "name": "source_switch_title",
+      "value": "换源"
+    },
+    {
+      "name": "source_switch_hint",
+      "value": "搜索已启用的其他书源，支持不同版本名称，请核对作者和版本。"
+    },
+    {
+      "name": "source_switch_empty",
+      "value": "未找到匹配版本，可简化上方书名重新搜索，或启用更多书源。"
+    },
+    {
+      "name": "source_switch_failed",
+      "value": "%d 个书源搜索失败，可重新搜索。"
+    },
+    {
+      "name": "source_switch_no_chapters",
+      "value": "该来源暂无章节，请选择其他来源。"
+    },
+    {
+      "name": "source_switch_chapter_hint",
+      "value": "已按当前进度定位章节，可直接继续，也可手动选择其他章节。"
+    },
+    {
+      "name": "source_switch_continue",
+      "value": "继续：%s"
+    },
+    {
+      "name": "source_switch_filter",
+      "value": "搜索章节"
+    },
+    {
+      "name": "source_switch_back",
+      "value": "返回来源列表"
+    },
+    {
+      "name": "source_switch_retry",
+      "value": "重新搜索"
+    },
+    {
+      "name": "source_switch_empty_content",
+      "value": "该章节正文为空，请选择其他章节或来源。"
+    },
+    {
+      "name": "source_switch_unavailable",
+      "value": "该来源暂时无法播放，请选择其他章节或来源。"
+    },
+    {
+      "name": "source_switch_keyword",
+      "value": "书名，可删除演播和版本后缀"
+    },
+    {
+      "name": "source_switch_progress",
+      "value": "已搜索 %d/%d 个书源，找到 %d 个版本"
+    },
+    {
+      "name": "source_switch_stop",
+      "value": "停止搜索"
+    },
+    {
+      "name": "source_switch_loading_chapters",
+      "value": "正在加载章节…"
+    },
+    {
+      "name": "reader_tap_title",
+      "value": "点击区域"
+    },
+    {
+      "name": "reader_tap_hint",
+      "value": "点击格子切换：上一页 → 工具栏 → 下一页 → 无操作。至少保留一个工具栏区域；滑动不会呼出工具栏。"
+    },
+    {
+      "name": "reader_tap_previous",
+      "value": "上一页"
+    },
+    {
+      "name": "reader_tap_toolbar",
+      "value": "工具栏"
+    },
+    {
+      "name": "reader_tap_next",
+      "value": "下一页"
+    },
+    {
+      "name": "reader_tap_none",
+      "value": "无操作"
+    },
+    {
+      "name": "reader_tap_reset",
+      "value": "恢复默认区域"
+    },
+    {
+      "name": "reader_tap_left_width",
+      "value": "左列宽度"
+    },
+    {
+      "name": "reader_tap_right_width",
+      "value": "右列宽度"
+    },
+    {
+      "name": "reader_tap_top_height",
+      "value": "上行高度"
+    },
+    {
+      "name": "reader_tap_bottom_height",
+      "value": "下行高度"
+    },
+    {
+      "name": "reader_header_title",
+      "value": "页眉"
+    },
+    {
+      "name": "reader_corner_top_left",
+      "value": "左上"
+    },
+    {
+      "name": "reader_corner_top_right",
+      "value": "右上"
+    },
+    {
+      "name": "reader_corner_bottom_left",
+      "value": "左下"
+    },
+    {
+      "name": "reader_corner_bottom_right",
+      "value": "右下"
+    },
+    {
+      "name": "reader_show_header",
+      "value": "显示页眉"
+    },
+    {
+      "name": "reader_show_footer",
+      "value": "显示页脚"
+    },
+    {
+      "name": "reader_show_chapter_title",
+      "value": "章节名称"
+    },
+    {
+      "name": "reader_show_page_number",
+      "value": "页码 / 阅读进度"
+    },
+    {
+      "name": "reader_show_chapter_number",
+      "value": "章节序号"
+    },
+    {
+      "name": "reader_show_book_name",
+      "value": "书籍名称"
+    },
+    {
+      "name": "account_national_day_badge",
+      "value": "国庆快乐勋章"
+    },
+    {
+      "name": "achievement_title",
+      "value": "成就馆"
+    },
+    {
+      "name": "achievement_login_hint",
+      "value": "登录后查看已获得的勋章与解锁进度，并选择佩戴。"
+    },
+    {
+      "name": "account_medal_list",
+      "value": "勋章列表"
+    },
+    {
+      "name": "account_national_day_medal_date",
+      "value": "2026.10.01"
+    },
+    {
+      "name": "account_reading_medal_1h_name",
+      "value": "初识书声"
+    },
+    {
+      "name": "account_reading_medal_1h_hours",
+      "value": "1 小时"
+    },
+    {
+      "name": "account_reading_medal_10h_name",
+      "value": "渐入佳境"
+    },
+    {
+      "name": "account_reading_medal_10h_hours",
+      "value": "10 小时"
+    },
+    {
+      "name": "account_reading_medal_50h_name",
+      "value": "书声相伴"
+    },
+    {
+      "name": "account_reading_medal_50h_hours",
+      "value": "50 小时"
+    },
+    {
+      "name": "account_reading_medal_100h_name",
+      "value": "百时书友"
+    },
+    {
+      "name": "account_reading_medal_100h_hours",
+      "value": "100 小时"
+    },
+    {
+      "name": "account_reading_medal_300h_name",
+      "value": "声入人心"
+    },
+    {
+      "name": "account_reading_medal_300h_hours",
+      "value": "300 小时"
+    },
+    {
+      "name": "account_reading_medal_500h_name",
+      "value": "书海漫游"
+    },
+    {
+      "name": "account_reading_medal_500h_hours",
+      "value": "500 小时"
+    },
+    {
+      "name": "account_reading_medal_1000h_name",
+      "value": "千时知音"
+    },
+    {
+      "name": "account_reading_medal_1000h_hours",
+      "value": "1000 小时"
+    },
+    {
+      "name": "account_reading_medal_2000h_name",
+      "value": "万书之王"
+    },
+    {
+      "name": "account_reading_medal_2000h_hours",
+      "value": "2000 小时"
+    },
+    {
+      "name": "account_reading_medal_5000h_name",
+      "value": "传奇之声"
+    },
+    {
+      "name": "account_reading_medal_5000h_hours",
+      "value": "5000 小时"
+    },
+    {
+      "name": "medal_load_failed",
+      "value": "勋章加载失败，点击重试"
+    },
+    {
+      "name": "medal_remaining",
+      "value": "累计收听 %d 小时可获得，还差 %d 小时 %d 分钟。"
+    },
+    {
+      "name": "medal_historical",
+      "value": "累计收听 %d 小时 · 历史累计解锁"
+    },
+    {
+      "name": "medal_awarded_date",
+      "value": "累计收听 %d 小时 · 获得于 %s"
+    },
+    {
+      "name": "medal_obtained_date",
+      "value": "%s 获得"
+    },
+    {
+      "name": "medal_historical_date",
+      "value": "历史累计解锁"
+    },
+    {
+      "name": "medal_close",
+      "value": "关闭"
+    },
+    {
+      "name": "medal_equip",
+      "value": "佩戴"
+    },
+    {
+      "name": "medal_unequip",
+      "value": "取消佩戴"
+    },
+    {
+      "name": "medal_equipped",
+      "value": "已佩戴勋章"
+    },
+    {
+      "name": "medal_unequipped",
+      "value": "已取消佩戴"
+    },
+    {
+      "name": "medal_save_failed",
+      "value": "勋章设置保存失败，请重试"
+    },
+    {
+      "name": "medal_summary",
+      "value": "已获得 %d/%d 枚 · 累计收听 %s 小时"
+    },
+    {
+      "name": "medal_new_awards",
+      "value": "新获得 %d 枚勋章，可点击选择佩戴"
+    },
+    {
+      "name": "medal_hours",
+      "value": "%d 小时"
+    },
+    {
+      "name": "medal_wearing",
+      "value": "佩戴中"
+    },
+    {
+      "name": "medal_unlocked",
+      "value": "已获得"
+    },
+    {
+      "name": "medal_locked",
+      "value": "未解锁"
+    },
+    {
+      "name": "medal_scope_hint",
+      "value": "按本机实际收听时长解锁，包含听书与朗读；勋章跟随本地数据及备份保存。"
+    },
+    {
+      "name": "ranking_all",
+      "value": "全部"
+    },
+    {
+      "name": "ranking_label_separator",
+      "value": "·"
+    },
+    {
+      "name": "ranking_qidian",
+      "value": "起点"
+    },
+    {
+      "name": "ranking_lrts",
+      "value": "懒人听书"
+    },
+    {
+      "name": "ranking_ximalaya",
+      "value": "喜马拉雅"
+    },
+    {
+      "name": "ranking_month",
+      "value": "月票榜"
+    },
+    {
+      "name": "ranking_hot",
+      "value": "热播周榜"
+    },
+    {
+      "name": "ranking_free",
+      "value": "免费经典榜"
+    },
+    {
+      "name": "ranking_sales",
+      "value": "畅销榜"
+    },
+    {
+      "name": "ranking_finished",
+      "value": "完结榜"
+    },
+    {
+      "name": "ranking_reading",
+      "value": "阅读榜"
+    },
+    {
+      "name": "ranking_recommend",
+      "value": "推荐榜"
+    },
+    {
+      "name": "ranking_new",
+      "value": "新书榜"
+    },
+    {
+      "name": "ranking_comment",
+      "value": "热评周榜"
+    },
+    {
+      "name": "ranking_paid",
+      "value": "付费畅销榜"
+    },
+    {
+      "name": "ranking_home",
+      "value": "全网榜单"
+    },
+    {
+      "name": "ranking_discover",
+      "value": "发现"
+    },
+    {
+      "name": "ranking_tagline",
+      "value": "翻开好故事，听见新世界"
+    },
+    {
+      "name": "ranking_spotlight",
+      "value": "本期焦点"
+    },
+    {
+      "name": "ranking_find_source",
+      "value": "查找书源"
+    },
+    {
+      "name": "ranking_more",
+      "value": "查看榜单"
+    },
+    {
+      "name": "ranking_unavailable",
+      "value": "榜单暂时无法获取，下拉重试"
+    },
+    {
+      "name": "ranking_loading",
+      "value": "正在获取榜单…"
+    },
+    {
+      "name": "ranking_cached",
+      "value": "暂未更新，当前展示上次缓存"
+    },
+    {
+      "name": "ranking_back",
+      "value": "返回发现"
+    },
+    {
+      "name": "ranking_search",
+      "value": "搜索"
+    },
+    {
+      "name": "ranking_choose_home",
+      "value": "选择首页"
+    },
+    {
+      "name": "ranking_manage_sources",
+      "value": "导入 / 管理书源"
+    },
+    {
+      "name": "ranking_search_keyword",
+      "value": "输入书名，查找可用版本"
+    },
+    {
+      "name": "ranking_matching",
+      "value": "正在查找书源 · %d / %d"
+    },
+    {
+      "name": "ranking_no_sources",
+      "value": "榜单可以直接浏览。导入并启用可搜索的书源后，即可查找阅读或收听版本。"
+    },
+    {
+      "name": "ranking_match_failed",
+      "value": "部分书源未能完成搜索，可修改关键词重试或检查书源。"
+    },
+    {
+      "name": "ranking_no_match",
+      "value": "暂未找到对应版本，试试修改书名或添加更多书源。"
+    },
+    {
+      "name": "ranking_choose_version",
+      "value": "请选择作者、主播及版本相符的结果"
+    },
+    {
+      "name": "ranking_last_choice",
+      "value": "上次选择"
+    },
+    {
+      "name": "ranking_updated",
+      "value": "更新于 %s年%s月%s日 %s:%s:%s"
+    },
+    {
+      "name": "ranking_top_count",
+      "value": "当前展示前 %d 本"
+    },
+    {
+      "name": "ranking_footer",
+      "value": "榜单与封面来自各平台公开页面\n阅读与收听由你导入的书源提供"
+    },
+    {
+      "name": "ranking_open_failed",
+      "value": "暂时无法打开，请重试"
+    },
+    {
+      "name": "ranking_issue",
+      "value": "READ / LISTEN"
+    },
+    {
+      "name": "ranking_qimao",
+      "value": "七猫小说"
+    },
+    {
+      "name": "ranking_jjwxc",
+      "value": "晋江文学"
+    },
+    {
+      "name": "ranking_boy_hot",
+      "value": "男生大热榜"
+    },
+    {
+      "name": "ranking_girl_hot",
+      "value": "女生大热榜"
+    },
+    {
+      "name": "ranking_total_points",
+      "value": "总分排行榜"
+    },
+    {
+      "name": "ranking_monthly",
+      "value": "月度排行榜"
+    },
+    {
+      "name": "ranking_search_week",
+      "value": "热搜周榜"
+    },
+    {
+      "name": "ranking_free_week",
+      "value": "免费周榜"
+    },
+    {
+      "name": "ranking_sales_week",
+      "value": "畅销周榜"
+    },
+    {
+      "name": "ranking_finished_week",
+      "value": "完结周榜"
+    },
+    {
+      "name": "ranking_audio_hot",
+      "value": "有声书热播榜"
+    },
+    {
+      "name": "ranking_audio_new",
+      "value": "有声书新品榜"
+    },
+    {
+      "name": "ranking_audio_reputation",
+      "value": "有声书口碑榜"
+    },
+    {
+      "name": "ranking_novel_vip",
+      "value": "小说VIP榜"
+    },
+    {
+      "name": "ranking_boy_new",
+      "value": "男生新书榜"
+    },
+    {
+      "name": "ranking_girl_new",
+      "value": "女生新书榜"
+    },
+    {
+      "name": "ranking_boy_finished",
+      "value": "男生完结榜"
+    },
+    {
+      "name": "ranking_girl_finished",
+      "value": "女生完结榜"
+    },
+    {
+      "name": "ranking_season",
+      "value": "季度排行榜"
+    },
+    {
+      "name": "ranking_half_year",
+      "value": "半年排行榜"
+    },
+    {
+      "name": "ranking_vip_recommend",
+      "value": "VIP强推榜"
+    },
+    {
+      "name": "ranking_words",
+      "value": "字数排行榜"
+    },
+    {
+      "name": "settings_cover_super_resolution",
+      "value": "AI 封面超分"
+    },
+    {
+      "name": "settings_cover_super_resolution_desc",
+      "value": "增强播放页低清网络封面，首次处理需稍候；不可用时显示原图"
+    },
+    {
+      "name": "settings_cover_super_resolution_unavailable",
+      "value": "当前系统不支持，需要 HarmonyOS 26 及支持图片超分的设备"
+    },
+    {
+      "name": "shelf_updates_title",
+      "value": "书架更新"
+    },
+    {
+      "name": "shelf_update_daily_hint",
+      "value": "每天自动检查一次，安静更新你的书架"
+    },
+    {
+      "name": "shelf_update_progress",
+      "value": "正在检查 %d/%d"
+    },
+    {
+      "name": "shelf_update_error",
+      "value": "更新暂未完成，请稍后重试"
+    },
+    {
+      "name": "shelf_update_time",
+      "value": "最近检查 · %s"
+    },
+    {
+      "name": "shelf_update_book_count",
+      "value": "%d 本有新内容"
+    },
+    {
+      "name": "shelf_update_checked_count",
+      "value": "已检查 %d 本"
+    },
+    {
+      "name": "shelf_update_new_content",
+      "value": "发现新内容"
+    },
+    {
+      "name": "shelf_update_text_total",
+      "value": "%d → %d 章"
+    },
+    {
+      "name": "shelf_update_audio_total",
+      "value": "%d → %d 集"
+    },
+    {
+      "name": "shelf_update_text_delta",
+      "value": "+%d 章"
+    },
+    {
+      "name": "shelf_update_audio_delta",
+      "value": "+%d 集"
+    },
+    {
+      "name": "shelf_update_checking",
+      "value": "正在检查更新"
+    },
+    {
+      "name": "shelf_update_no_new",
+      "value": "暂时没有新章节"
+    },
+    {
+      "name": "shelf_update_no_record",
+      "value": "还没有更新记录"
+    },
+    {
+      "name": "shelf_update_empty_hint",
+      "value": "在线收藏的最新章节将在这里汇总"
+    },
+    {
+      "name": "shelf_update_failed_count",
+      "value": "%d 本暂未检查成功，可稍后重试"
+    },
+    {
+      "name": "shelf_update_check_now",
+      "value": "立即检查"
+    },
+    {
+      "name": "log_title",
+      "value": "日志管理"
+    },
+    {
+      "name": "log_hint",
+      "value": "日志默认关闭，手动开启后记录导入、存储和启动异常，并可运行检测。开关状态保存在本机，关闭后保留已有日志。遇到问题请先开启，再复现并复制日志；最近 200 条仅保存在本机，不会主动收集正文、账号或文件名。"
+    },
+    {
+      "name": "log_enabled",
+      "value": "记录日志"
+    },
+    {
+      "name": "log_refresh",
+      "value": "刷新"
+    },
+    {
+      "name": "log_check",
+      "value": "运行检测"
+    },
+    {
+      "name": "log_copy",
+      "value": "复制日志"
+    },
+    {
+      "name": "log_clear",
+      "value": "清空日志"
+    },
+    {
+      "name": "log_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "log_clear_confirm",
+      "value": "清空本机诊断日志？书架和导入文件不受影响。"
+    },
+    {
+      "name": "log_count",
+      "value": "显示 %d 条 · 错误 %d 条"
+    },
+    {
+      "name": "log_errors_only",
+      "value": "仅错误"
+    },
+    {
+      "name": "log_empty",
+      "value": "暂无日志，可运行检测或复现问题后刷新"
+    },
+    {
+      "name": "log_copied",
+      "value": "日志已复制"
+    },
+    {
+      "name": "log_operation_failed",
+      "value": "操作失败，请稍后重试"
+    },
+    {
+      "name": "log_storage_failed",
+      "value": "日志文件读写异常，当前记录可能尚未完整保存"
+    },
+    {
+      "name": "import_pick_failed",
+      "value": "未能选择文件，请重试；详情可在“我的—日志管理”查看"
+    },
+    {
+      "name": "features_free_access",
+      "value": "全部功能免费开放"
+    },
+    {
+      "name": "membership_developer_active",
+      "value": "开发者调试豁免已启用"
+    },
+    {
+      "name": "membership_entry_desc",
+      "value": "专属主题 · 更多会员权益"
+    },
+    {
+      "name": "membership_card_title",
+      "value": "简听阅读会员"
+    },
+    {
+      "name": "membership_period_title",
+      "value": "会员周期"
+    },
+    {
+      "name": "membership_close",
+      "value": "关闭会员中心"
+    },
+    {
+      "name": "membership_benefit_short",
+      "value": "专属主题 · 自动备份 · 书源不限 · 搜索并发 · 专属客服"
+    },
+    {
+      "name": "membership_details",
+      "value": "会员权益与购买说明"
+    },
+    {
+      "name": "membership_title",
+      "value": "主题"
+    },
+    {
+      "name": "membership_subscription_title",
+      "value": "会员中心"
+    },
+    {
+      "name": "membership_subscription_entry",
+      "value": "开通会员"
+    },
+    {
+      "name": "membership_plan_unavailable",
+      "value": "暂不可购买"
+    },
+    {
+      "name": "membership_timeout",
+      "value": "华为支付响应超时，请稍后恢复购买；已扣款请勿重复购买"
+    },
+    {
+      "name": "membership_checking",
+      "value": "正在核对会员状态…"
+    },
+    {
+      "name": "membership_active",
+      "value": "会员已生效"
+    },
+    {
+      "name": "membership_inactive",
+      "value": "当前没有生效的会员"
+    },
+    {
+      "name": "membership_expires",
+      "value": "有效期至 %s"
+    },
+    {
+      "name": "membership_expiry_renew_on",
+      "value": "有效期至 %d年%d月%d日 · 自动续费已开启"
+    },
+    {
+      "name": "membership_expiry_renew_off",
+      "value": "有效期至 %d年%d月%d日 · 自动续费已关闭"
+    },
+    {
+      "name": "membership_renew_on",
+      "value": "自动续费已开启"
+    },
+    {
+      "name": "membership_renew_off",
+      "value": "自动续费已关闭，当前有效期内会员权益继续有效"
+    },
+    {
+      "name": "membership_benefit",
+      "value": "1. 自动云备份：可开启自动备份，选择每天、每 3 天或每周。非会员可手动云备份。\n2. 全量主题解锁：有效期内解锁全部会员桌面图标及后续新增官方皮肤。默认图标、原有界面配色和阅读器主题保持免费。\n3. 自定义源无限制：会员导入总数不限，非会员最多 8 个。\n4. 搜索并发自定义：默认 3，可设置 1–12。\n5. 专属客服：会员可享专属客服支持。"
+    },
+    {
+      "name": "membership_month",
+      "value": "月度会员"
+    },
+    {
+      "name": "membership_year",
+      "value": "年度会员"
+    },
+    {
+      "name": "membership_month_period",
+      "value": "每 1 个月自动续费"
+    },
+    {
+      "name": "membership_year_period",
+      "value": "每 1 年自动续费"
+    },
+    {
+      "name": "membership_subscribe",
+      "value": "立即订阅"
+    },
+    {
+      "name": "membership_restore",
+      "value": "恢复购买 / 刷新"
+    },
+    {
+      "name": "membership_manage",
+      "value": "管理订阅"
+    },
+    {
+      "name": "membership_price_hint",
+      "value": "价格来自华为，优惠及实际扣费金额以华为收银台为准。"
+    },
+    {
+      "name": "membership_products_loading",
+      "value": "正在获取套餐…"
+    },
+    {
+      "name": "membership_products_unavailable",
+      "value": "套餐暂不可购买，请稍后刷新。已购用户仍可恢复购买或管理订阅。"
+    },
+    {
+      "name": "membership_terms",
+      "value": "会员购买与自动续费说明\n终身会员为一次性购买的非消耗型商品，权益长期有效，不自动续费；退款或撤销后权益终止。购买终身会员不会自动取消已有月度或年度订阅，请到“管理订阅”关闭原订阅续费。\n月度、年度会员：订阅费用由华为支付收取，按所选月度或年度周期自动续费。请在当前周期结束前通过“管理订阅”取消，以华为页面显示的取消截止时间和扣费规则为准。取消后，已支付周期内权益继续有效。\n会员权益包含自动云备份及周期设置、全部会员桌面图标及后续新增官方皮肤、自定义源导入总数不限及专属客服支持。图标切换需要支持该功能的系统；自动备份需登录华为账号并开通可用云空间，在应用使用期间执行，不提供实时双向同步。非会员可手动云备份，最多导入 8 个自定义源；已有超额书源保留并可使用和更新。默认图标、原有界面配色、阅读器主题和阅读听书功能保持免费。\n会员到期或退款导致权益失效后，停止自动备份和超额新增，联网核验时恢复默认图标。会员随购买时的系统华为账号恢复，重新安装或切换账号后请联网恢复购买。暂时无法联网时保留现有图标，新会员操作需核验有效权益。"
+    },
+    {
+      "name": "membership_consent",
+      "value": "我已阅读并同意会员权益、购买及自动续费说明"
+    },
+    {
+      "name": "membership_icon_exclusive",
+      "value": "会员专享"
+    },
+    {
+      "name": "membership_confirmation_pending",
+      "value": "会员已核验，部分订单同步尚未完成，请稍后点击恢复购买重试。"
+    },
+    {
+      "name": "membership_cancelled",
+      "value": "已取消订阅操作"
+    },
+    {
+      "name": "membership_login_required",
+      "value": "请先在系统设置中登录购买时使用的华为账号，再恢复购买"
+    },
+    {
+      "name": "membership_not_authorized",
+      "value": "支付服务暂不可用，请稍后重试"
+    },
+    {
+      "name": "membership_retry_later",
+      "value": "操作较频繁，请稍后重试"
+    },
+    {
+      "name": "membership_network_error",
+      "value": "暂时无法连接华为，请检查网络后恢复购买"
+    },
+    {
+      "name": "membership_unsupported",
+      "value": "当前设备或华为账号所在地区暂不支持订阅"
+    },
+    {
+      "name": "membership_syncing",
+      "value": "正在同步会员信息，请稍候…"
+    },
+    {
+      "name": "membership_verification_failed",
+      "value": "会员状态未能核验，请稍后恢复购买；已扣款请勿重复购买"
+    },
+    {
+      "name": "auto_backup_membership_required",
+      "value": "自动云备份和周期设置为会员专享，非会员可使用手动云备份。"
+    },
+    {
+      "name": "rule_source_membership_limit",
+      "value": "非会员最多导入 8 个自定义源，超限批次未写入。可减少新增数量或开通会员；已有源仍可使用和更新。"
+    },
+    {
+      "name": "rule_source_membership_hint",
+      "value": "书源导入不限总数；已有源更新会保留启用状态。"
+    },
+    {
+      "name": "rule_source_save_failed",
+      "value": "保存失败"
+    },
+    {
+      "name": "membership_lifetime",
+      "value": "终身会员"
+    },
+    {
+      "name": "membership_lifetime_period",
+      "value": "一次购买，终身有效"
+    },
+    {
+      "name": "membership_lifetime_valid",
+      "value": "终身会员 · 长期有效"
+    },
+    {
+      "name": "membership_lifetime_owned",
+      "value": "已开通终身会员"
+    },
+    {
+      "name": "membership_buy_lifetime",
+      "value": "一次购买"
+    },
+    {
+      "name": "membership_lifetime_renewal_notice",
+      "value": "已有月度或年度订阅的用户，购买终身会员后请到“管理订阅”关闭原订阅的自动续费，购买终身会员不会自动取消原订阅。"
+    },
+    {
+      "name": "book_detail_action_in_shelf",
+      "value": "已在书架"
+    },
+    {
+      "name": "book_detail_action_add_shelf",
+      "value": "加入书架"
+    },
+    {
+      "name": "book_detail_action_chapters",
+      "value": "查看目录"
+    },
+    {
+      "name": "book_detail_action_switch_source",
+      "value": "换源"
+    },
+    {
+      "name": "book_detail_action_listen_record",
+      "value": "收听记录"
+    },
+    {
+      "name": "book_detail_action_read_record",
+      "value": "阅读记录"
+    },
+    {
+      "name": "book_detail_reading",
+      "value": "在听"
+    },
+    {
+      "name": "book_detail_reading_text",
+      "value": "在读"
+    },
+    {
+      "name": "book_detail_latest",
+      "value": "最新"
+    },
+    {
+      "name": "book_detail_progress_audio",
+      "value": "共 %d 集 · 已下载 %d 集"
+    },
+    {
+      "name": "book_detail_progress_text",
+      "value": "共 %d 章 · 已下载 %d 章"
+    },
+    {
+      "name": "book_detail_total_audio",
+      "value": "共 %d 集"
+    },
+    {
+      "name": "book_detail_total_text",
+      "value": "共 %d 章"
+    },
+    {
+      "name": "book_detail_tags_label",
+      "value": "标签："
+    },
+    {
+      "name": "book_detail_intro_label",
+      "value": "简介："
+    },
+    {
+      "name": "book_detail_start_listen",
+      "value": "听书"
+    },
+    {
+      "name": "book_detail_start_read",
+      "value": "阅读"
+    },
+    {
+      "name": "book_detail_continue_listen",
+      "value": "继续收听"
+    },
+    {
+      "name": "book_detail_continue_read",
+      "value": "继续阅读"
+    },
+    {
+      "name": "book_detail_score",
+      "value": "%s分"
+    },
+    {
+      "name": "book_detail_score_none",
+      "value": "暂无"
+    },
+    {
+      "name": "shelf_view_detail",
+      "value": "查看详情"
+    },
+    {
+      "name": "shelf_status_filter",
+      "value": "书架筛选"
+    },
+    {
+      "name": "shelf_status_all",
+      "value": "全部"
+    },
+    {
+      "name": "shelf_status_ongoing",
+      "value": "连载中"
+    },
+    {
+      "name": "shelf_status_completed",
+      "value": "已完结"
+    },
+    {
+      "name": "shelf_search_hint",
+      "value": "搜索书名、作者或演播者"
+    },
+    {
+      "name": "shelf_search_expand",
+      "value": "展开书架搜索"
+    },
+    {
+      "name": "shelf_view_list",
+      "value": "切换为列表"
+    },
+    {
+      "name": "shelf_view_grid",
+      "value": "切换为网格"
+    },
+    {
+      "name": "shelf_search_collapse",
+      "value": "收起书架搜索"
+    },
+    {
+      "name": "shelf_filter_empty",
+      "value": "没有符合条件的书籍"
+    },
+    {
+      "name": "shelf_filter_empty_hint",
+      "value": "试试其他筛选条件或搜索关键词"
+    },
+    {
+      "name": "shelf_filter_save_failed",
+      "value": "筛选已生效，但保存失败，请重新选择"
+    },
+    {
+      "name": "settings_loading",
+      "value": "正在读取本地设置…"
+    },
+    {
+      "name": "settings_load_failed",
+      "value": "本地设置读取失败，请重试"
+    },
+    {
+      "name": "settings_search_loading",
+      "value": "正在读取搜索设置…"
+    },
+    {
+      "name": "settings_search_load_failed",
+      "value": "搜索设置读取失败，请重试"
+    },
+    {
+      "name": "book_detail_loading_chapters",
+      "value": "加载章节中"
+    },
+    {
+      "name": "app_icon_waveberry",
+      "value": "莓果酒红"
+    },
+    {
+      "name": "app_icon_waveorange",
+      "value": "活力橙"
+    },
+    {
+      "name": "app_icon_wavegraphite",
+      "value": "石墨灰"
+    },
+    {
+      "name": "app_icon_wavepurple",
+      "value": "明亮紫"
+    },
+    {
+      "name": "app_icon_waveclear",
+      "value": "透明玻璃"
+    },
+    {
+      "name": "app_icon_lifewhite",
+      "value": "夜曲·白"
+    },
+    {
+      "name": "app_icon_invite_free",
+      "value": "邀测免费体验"
+    },
+    {
+      "name": "settings_default_playback_speed",
+      "value": "全局默认倍速"
+    },
+    {
+      "name": "settings_default_playback_speed_desc",
+      "value": "用于无倍速记录的有声书；单本倍速独立记忆，互不影响"
+    },
+    {
+      "name": "comic_type",
+      "value": "漫画"
+    },
+    {
+      "name": "comic_session_position",
+      "value": "%s · 第 %d 页"
+    },
+    {
+      "name": "shelf_filter_comic_count",
+      "value": "漫画 %d"
+    },
+    {
+      "name": "comic_back",
+      "value": "返回"
+    },
+    {
+      "name": "comic_loading",
+      "value": "正在加载漫画…"
+    },
+    {
+      "name": "comic_empty",
+      "value": "暂时无法读取这一话"
+    },
+    {
+      "name": "comic_empty_hint",
+      "value": "书源未返回可用图片。请重试、切换章节，或在书源管理中测试该来源。"
+    },
+    {
+      "name": "comic_retry",
+      "value": "重新加载"
+    },
+    {
+      "name": "comic_image_failed",
+      "value": "第 %d 页加载失败"
+    },
+    {
+      "name": "comic_page_number",
+      "value": "漫画第 %d 页"
+    },
+    {
+      "name": "comic_saved",
+      "value": "已入书架"
+    },
+    {
+      "name": "comic_add_shelf",
+      "value": "加入书架"
+    },
+    {
+      "name": "comic_save_failed",
+      "value": "保存失败，请稍后重试"
+    },
+    {
+      "name": "comic_previous",
+      "value": "上一话"
+    },
+    {
+      "name": "comic_next",
+      "value": "下一话"
+    },
+    {
+      "name": "comic_chapters",
+      "value": "目录"
+    },
+    {
+      "name": "comic_reading_mode",
+      "value": "阅读模式"
+    },
+    {
+      "name": "comic_scroll",
+      "value": "条漫 · 连续滚动"
+    },
+    {
+      "name": "comic_paged",
+      "value": "翻页 · 从左向右"
+    },
+    {
+      "name": "comic_rtl",
+      "value": "日漫 · 从右向左"
+    },
+    {
+      "name": "comic_gesture_hint",
+      "value": "轻点屏幕中央显示工具栏，滑动翻页；读到末尾继续滑动自动进入下一话。"
+    },
+    {
+      "name": "search_comic_only",
+      "value": "只搜漫画"
+    },
+    {
+      "name": "comic_dissolve",
+      "value": "消散翻页"
+    },
+    {
+      "name": "comic_ai_sr",
+      "value": "AI 超分"
+    },
+    {
+      "name": "comic_ai_sr_hint",
+      "value": "本机处理已缓存图片，不上传；超大长图或设备不支持时保留原图。"
+    },
+    {
+      "name": "comic_ai_color",
+      "value": "AI 上色"
+    },
+    {
+      "name": "comic_ai_color_unavailable",
+      "value": "暂不可用：尚未接入本地上色模型。"
+    },
+    {
+      "name": "comic_ai_original",
+      "value": "超分未完成，正在显示原图"
+    },
+    {
+      "name": "comic_next_failed",
+      "value": "这一话未能加载，已保留当前画面，请稍后重试。"
+    },
+    {"name": "search_switch_layout", "value": "切换列表或网格"},
+    {"name": "profile_local_import", "value": "本地导入"},
+    {"name": "chapter_order_ascending", "value": "正序"},
+    {"name": "chapter_order_descending", "value": "倒序"},
+    {"name": "chapter_back_top", "value": "回到顶部"},
+    {"name": "chapter_back_bottom", "value": "回到底部"},
+    {"name": "ranking_settings_title", "value": "全网榜单分类"},
+    {"name": "ranking_settings_desc", "value": "关闭后隐藏该平台榜单；上下移动可调整首页分类和榜单展示顺序。"},
+    {"name": "ranking_settings_save_failed", "value": "榜单设置保存失败，请重试"},
+    {"name": "ranking_settings_retry", "value": "加载失败，点击重试"},
+    {"name": "ranking_move_up", "value": "上移"},
+    {"name": "ranking_move_down", "value": "下移"},
+    {"name": "ranking_fanqie", "value": "番茄小说"},
+    {"name": "ranking_faloo", "value": "飞卢小说"},
+    {"name": "ranking_month_flowers", "value": "月鲜花榜"},
+    {"name": "ranking_categories_empty", "value": "暂无展示分类，请在设置中开启全网榜单分类"},
+    {"name": "record_content_filter", "value": "记录类型筛选"},
+    {"name": "record_edit", "value": "编辑记录"},
+    {"name": "record_edit_done", "value": "完成编辑"}
   ]
 }

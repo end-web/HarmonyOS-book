@@ -358,7 +358,7 @@ export class BookSourceService {
       return '搜索请求正常，当前关键词暂无匹配，已保留书源';
     }
 
-    const contentType: 'audio' | 'text' = results[0].contentType ?? (source.isAudio() ? 'audio' : 'text');
+    const contentType: 'audio' | 'text' | 'comic' = results[0].contentType ?? (source.isComic() ? 'comic' : source.isAudio() ? 'audio' : 'text');
     await BookSourceService.validateCandidate(source, results[0], contentType);
     const bookName: string = results[0].name;
     return contentType === 'audio'
@@ -395,7 +395,7 @@ export class BookSourceService {
                 source.isAudio() ? 'audio' : 'text', isCancelled, true);
               BookSourceService.checkHealthCancellation(isCancelled);
               health.status = LocalRuleSourceStatus.READY;
-              health.message = `发现、详情、目录与${(book.contentType ?? (source.isAudio() ? 'audio' : 'text')) === 'audio' ? '音频' : '正文'}解析正常：${book.name}`;
+              health.message = `发现、详情、目录与${(book.contentType ?? (source.isComic() ? 'comic' : source.isAudio() ? 'audio' : 'text')) === 'audio' ? '音频' : '正文'}解析正常：${book.name}`;
               return health;
             } catch (error) {
               BookSourceService.checkHealthCancellation(isCancelled);
@@ -426,7 +426,7 @@ export class BookSourceService {
   }
 
   private static async validateCandidate(source: LocalRuleSource, result: SearchResult,
-    contentType: 'audio' | 'text', isCancelled: () => boolean = (): boolean => false,
+    contentType: 'audio' | 'text' | 'comic', isCancelled: () => boolean = (): boolean => false,
     publicOnly: boolean = false): Promise<void> {
     BookSourceService.checkHealthCancellation(isCancelled);
     const searchVariables = BookSourceService.copyVariables(result.variables);
@@ -448,7 +448,7 @@ export class BookSourceService {
   }
 
   private static async validateChapterCandidates(source: LocalRuleSource, toc: TocItem[],
-    variables: Record<string, string>, contentType: 'audio' | 'text',
+    variables: Record<string, string>, contentType: 'audio' | 'text' | 'comic',
     isCancelled: () => boolean = (): boolean => false): Promise<void> {
     const candidates = BookSourceService.preferredChapterCandidates(toc);
     let attempted = 0;
@@ -467,7 +467,9 @@ export class BookSourceService {
         } else {
           const scopedVariables = BookSourceService.mergeVariables(variables, chapter.variables);
           const content = await LocalRuleDispatcher.resolveContent(source, chapter.url, scopedVariables);
-          if (content.content.trim().length === 0) throw new Error('章节正文为空');
+          if (contentType === 'comic') {
+            if (content.imageUrls.length === 0) throw new Error('章节漫画图片为空');
+          } else if (content.content.trim().length === 0) throw new Error('章节正文为空');
         }
         return;
       } catch (error) {
@@ -499,7 +501,7 @@ export class BookSourceService {
     output.push(item);
   }
 
-  private static hasContentType(results: SearchResult[], contentType: 'audio' | 'text'): boolean {
+  private static hasContentType(results: SearchResult[], contentType: 'audio' | 'text' | 'comic'): boolean {
     for (const result of results) {
       if (result.contentType === contentType) return true;
     }
@@ -613,7 +615,7 @@ export class BookSourceService {
     }
 
     const variables = BookSourceService.copyVariables(book.variables);
-    variables['__bookContentType'] = 'text';
+    variables['__bookContentType'] = book.contentType ?? 'text';
     const info = await LocalRuleDispatcher.getBookInfo(localSource, book.bookUrl, variables);
     let tocUrl = book.bookUrl;
     let resolvedVariables = variables;
@@ -685,11 +687,11 @@ export class BookSourceService {
 
   /** Lossless rule output for media and paragraph actions; existing reader/player contracts remain intact. */
   static async getSourceChapterContent(book: Book, chapterUrl: string,
-    chapterVariables?: Record<string, string>): Promise<LocalRuleContentResult> {
+    chapterVariables?: Record<string, string>, request?: LightSourceRequest): Promise<LocalRuleContentResult> {
     const source = await LocalRuleSourceRepository.getByUrl(book.sourceUrl);
     if (source === undefined || !source.canExecute()) throw new Error('本地书源不可用或已被删除');
     return LocalRuleDispatcher.resolveContent(source,chapterUrl,
-      BookSourceService.mergeVariables(BookSourceService.copyVariables(book.variables),chapterVariables));
+      BookSourceService.mergeVariables(BookSourceService.copyVariables(book.variables),chapterVariables), request);
   }
 
   static async getExploreBooksByUrl(source: BookSource, categoryUrl: string,

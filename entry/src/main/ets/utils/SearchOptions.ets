@@ -4,7 +4,7 @@ export class SearchOptions {
     return textOnly ? type === 0 || type === 3 : type === 1;
   }
 
-  static matchesContentType(type: 'audio' | 'text', textOnly: boolean, audioOnly: boolean): boolean {
+  static matchesContentType(type: 'audio' | 'text' | 'comic', textOnly: boolean, audioOnly: boolean): boolean {
     if (textOnly === audioOnly) return true;
     return textOnly ? type === 'text' : type === 'audio';
   }

@@ -117,7 +117,7 @@ export class LightSourceCore {
     return { name: item.name, author: item.author, coverUrl: item.coverUrl, bookUrl: item.bookUrl,
       intro: item.intro, kind: item.kind, lastChapter: item.latestChapterTitle, completed: /完结|完本|已完成|completed|finished/i.test(item.status || ''), wordCount: item.wordCount,
       updateTime: item.updateTime, sourceName: source.bookSourceName, sourceUrl: source.bookSourceUrl,
-      contentType: BookTypeSupport.isAudio(item) ? 'audio' : 'text', mediaType: BookTypeSupport.isVideo(item) ? 'video' : BookTypeSupport.isImage(item) ? 'comic' : BookTypeSupport.isAudio(item) ? 'audio' : 'text', variables: {...JSON.parse(item.variable || '{}'), __lightBook:snapshot, __lightBookType:String(item.type || 0)} };
+      contentType: BookTypeSupport.isImage(item) ? 'comic' : BookTypeSupport.isAudio(item) ? 'audio' : 'text', mediaType: BookTypeSupport.isVideo(item) ? 'video' : BookTypeSupport.isImage(item) ? 'comic' : BookTypeSupport.isAudio(item) ? 'audio' : 'text', variables: {...JSON.parse(item.variable || '{}'), __lightBook:snapshot, __lightBookType:String(item.type || 0)} };
   }
   static async panel(localJson: string, login: boolean, saveLabel: string, loginLabel: string): Promise<string> {
     const local = JSON.parse(localJson) as LocalRuleSource;

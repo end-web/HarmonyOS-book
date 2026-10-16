@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/wip3l/legado-harmony",
   "fork": "https://github.com/hos-book/legado-harmony",
-  "commit": "5d685ca3be020795ff1ce2eae5780dfd9bdc4470",
+  "commit": "67e5f2dc99b4fb62fe714b45d7d6acc56e7afad2",
   "license": "GPL-3.0",
   "files": [
     {
@@ -61,8 +61,8 @@
     {
       "path": "core/book/WebBookFetchRuntime.ts",
       "upstreamPath": "sourceengine/src/main/ets/core/book/WebBookFetchRuntime.ts",
-      "upstreamSha256": "97abd0496b3ad9ca426923b59052ce921034624dc285ecb98b8f3e8ca3a33729",
-      "sha256": "97abd0496b3ad9ca426923b59052ce921034624dc285ecb98b8f3e8ca3a33729"
+      "upstreamSha256": "71271fd4500b550cbd745641c8abece64cba66aba4af32712dd72768b93c2b29",
+      "sha256": "71271fd4500b550cbd745641c8abece64cba66aba4af32712dd72768b93c2b29"
     },
     {
       "path": "core/book/WebJsAwaitScript.ts",

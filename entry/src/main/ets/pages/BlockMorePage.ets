@@ -119,7 +119,8 @@ export struct BlockMorePage {
   private searchResultToBook(r: SearchResult): Book {
     const emptyChapters: Chapter[] = [];
     const book: Book = {
-      id: r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl, r.bookUrl) :
+      id: r.contentType === 'comic' ? BookIdentity.onlineComicBookId(r.sourceUrl, r.bookUrl) :
+      r.contentType === 'text' ? BookIdentity.onlineTextBookId(r.sourceUrl, r.bookUrl) :
         BookIdentity.onlineAudioBookId(r.sourceUrl || '', r.bookUrl || r.name),
       title: r.name,
       author: r.author || '未知',

@@ -228,7 +228,8 @@ export class ChapterCacheService {
     for (const name of names) {
       const hit = readerScope
         ? (name.startsWith('reader_') || name.startsWith('widget_cover_'))
-        : (name.startsWith('chap_') || name.startsWith('widget_cover_') || name === 'image_file_cache');
+        : (name.startsWith('chap_') || name.startsWith('widget_cover_') || name === 'image_file_cache' ||
+          name === 'comic_images' || name === 'comic_super_resolution_v1');
       if (!hit) continue;
       const p = `${dir}/${name}`;
       try {

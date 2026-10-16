@@ -1,6 +1,8 @@
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { MainPage } from './MainPage';
+import { WebEngineGate } from '../service/WebEngineGate';
+import { WebBookFetchRuntimeHost } from '../service/rulesource/light/WebBookFetchRuntimeHost';
 import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 import { BookDetailPage, DetailBackInterceptor, DetailTitleBarActions, DetailTitleBarState } from './BookDetailPage';
 import { PlayerPage, PlayerBackInterceptor, PlayerEntryDecider } from './PlayerPage';
@@ -21,6 +23,7 @@ import { OpenSourcePage } from './OpenSourcePage';
 import { BlockMorePage } from './BlockMorePage';
 import { DownloadManagerPage } from './DownloadManagerPage';
 import { LogManagementPage } from './LogManagementPage';
+import { ComicReaderPage } from './ComicReaderPage';
 import { ReaderPage } from './ReaderPage';
 // import { ReaderKitVerifyPage } from './ReaderKitVerifyPage';
 import { SearchPage } from './SearchPage';
@@ -141,7 +144,8 @@ struct Index {
   private syncReaderWindowMode(): void {
     // onHidden 也会在退后台触发；阅读路由仍在栈顶时保留系统栏和安全区。
     const paths: string[] = this.navStack.getAllPathName();
-    WindowUtils.setReaderActive(paths.length > 0 && paths[paths.length - 1] === 'reader');
+    WindowUtils.setReaderActive(paths.length > 0 &&
+      (paths[paths.length - 1] === 'reader' || paths[paths.length - 1] === 'comicReader'));
   }
 
   /** EntryAbility.onCreate 写入路由后,Index 首次挂载时消费一次 */
@@ -408,6 +412,13 @@ struct Index {
         }
         return undefined;
       })
+    } else if (name === 'comicReader') {
+      NavDestination() {
+        ComicReaderPage({ navStack: this.navStack,
+          params: param instanceof TextReaderRouteParams ? param : new TextReaderRouteParams() })
+      }.hideTitleBar(true).backgroundColor('#121212')
+      .onShown((): void => { this.syncReaderWindowMode(); WindowUtils.setReaderStatusBarLight(true); })
+      .onHidden((): void => { this.syncReaderWindowMode(); })
     } else if (name === 'reader') {
       NavDestination() {
         ReaderPageWrapper({ navStack: this.navStack, param: param as Object })
@@ -548,6 +559,7 @@ struct Index {
   }
 
   build() {
+    Stack() {
     Navigation(this.navStack) {
       // home 已在 aboutToAppear 中 push,根内容留空
     }
@@ -563,6 +575,11 @@ struct Index {
     .width('100%')
     .height('100%')
     .id(OneShotTransitionIds.ROOT_NAVIGATION)
+    // Keep the rendering transport active when the home NavDestination is hidden.
+    if (WebEngineGate.instance.needRuleBrowser) {
+      WebBookFetchRuntimeHost()
+    }
+    }.width('100%').height('100%')
   }
 }
 

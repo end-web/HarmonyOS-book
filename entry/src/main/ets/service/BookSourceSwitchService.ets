@@ -37,7 +37,8 @@ export class SourceSwitchSearch {
     const contentType = book.contentType ?? 'audio';
     // 在调度搜索前按导入定义筛选，避免向异类书源发送请求。
     const sources = available.filter((source: BookSource): boolean =>
-      source.bookSourceUrl !== book.sourceUrl && (contentType === 'text' ?
+      source.bookSourceUrl !== book.sourceUrl && (contentType === 'comic' ?
+        source.bookSourceType === LocalRuleSourceType.COMIC : contentType === 'text' ?
         source.bookSourceType === LocalRuleSourceType.TEXT || source.bookSourceType === LocalRuleSourceType.WEB_FILE :
         source.bookSourceType === LocalRuleSourceType.AUDIO));
     this.total = sources.length;
@@ -57,7 +58,7 @@ export class SourceSwitchSearch {
           const results = await Promise.race([BookSourceService.searchBooks(source, query), timeout, this.cancellation]);
           if (this.cancelled) return;
           for (const result of results) {
-            const kind = result.contentType ?? ((source.bookSourceType === LocalRuleSourceType.TEXT ||
+            const kind = result.contentType ?? (source.bookSourceType === LocalRuleSourceType.COMIC ? 'comic' : (source.bookSourceType === LocalRuleSourceType.TEXT ||
               source.bookSourceType === LocalRuleSourceType.WEB_FILE) ? 'text' : 'audio');
             if (kind !== contentType || !result.bookUrl ||
               !SourceSwitchSearch.titleKey(result.name).includes(SourceSwitchSearch.titleKey(query))) continue;
@@ -112,10 +113,10 @@ export class SourceSwitchSearch {
     return Math.min(Math.max(0, oldIndex), newBook.chapters.length - 1);
   }
 
-  private static toBook(result: SearchResult, source: BookSource, kind: 'audio' | 'text'): Book {
+  private static toBook(result: SearchResult, source: BookSource, kind: 'audio' | 'text' | 'comic'): Book {
     const sourceUrl = source.bookSourceUrl;
     const book: Book = {
-      id: kind === 'text' ? BookIdentity.onlineTextBookId(sourceUrl, result.bookUrl) :
+      id: kind === 'comic' ? BookIdentity.onlineComicBookId(sourceUrl, result.bookUrl) : kind === 'text' ? BookIdentity.onlineTextBookId(sourceUrl, result.bookUrl) :
         BookIdentity.onlineAudioBookId(sourceUrl, result.bookUrl),
       contentType: kind, title: result.name, author: result.author, narrator: source.bookSourceName,
       cover: result.coverUrl, category: result.kind, intro: result.intro, totalDuration: 0,

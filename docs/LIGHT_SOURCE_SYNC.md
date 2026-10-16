@@ -15,6 +15,8 @@
 
 ## 更新流程
 
+正式包必须保留属性名：原生书源 JSON、表达式和脚本桥接依赖运行时字段名，不能开启 `-enable-property-obfuscation`；顶层、文件名和导出符号仍可混淆。发布检查应向 `scripts/verify-release-package.py` 传入本次构建的 `--name-cache obfuscation-cache.json`，检查原生书源定义与桥接数据字段是否被改名。仅检查 APP 元数据或运行未混淆的 Node 回归无法覆盖此问题。
+
 先在 `D:\legado-harmony` 拉取并查看上游差异。同步输入必须是需要的固定提交；可以使用独立 detached worktree，避免覆盖本地签名配置。组织 Fork 的推送独立处理。随后在简听运行（路径替换为实际检出目录）：
 
 ```powershell
@@ -186,3 +188,7 @@ Release IDE 增量 debug 构建成功（53.920 秒），HAP 元数据 apiRelease
 随后手机进程 62919 的 18:02:57～18:03:12 日志记录四次完整网络起播，分别为 1720、1417、3921、1528ms。对应书源限流等待 0、5、2024、0ms，HTTP 125、138、145、120ms，prepare() 调用 978、1124、1131、1226ms，play() 调用 565、68、586、77ms；媒体会话为 0～1ms，后台资格申请为 5～7ms。无明显限流的三次为 1.42～1.72 秒；3.92 秒样本受到前一手动章节已发请求的剩余 3 秒窗口约束。另一次准备中被切章打断，不记作完整起播；首个完整文件缓存起播 708ms，不计入网络样本。连续选章期间没有后台解析抢先发送，预加载在用户 18:03:14 暂停时按原策略启动。本批未记录 play/idle 5400102；不据此承诺所有书源均达到 1.85 秒。
 
 本轮已读取 [ArkTS 语法规范](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-native-flow/references/lang-syntax/SKILL.md) 及其规则参考、[ArkUI V2 观察指导](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/02-development/arkui/hmos-arkui-knowledge-retriever/references/knowledges/02-state-management/v2/arkts-new-observedV2-and-trace.md)、[hilog 技能](https://raw.gitcode.com/HarmonyOS_Skills/harmonyos-agent-skills/raw/main/04-tools/deveco/deveco-studio-hilog/SKILL.md) 和 references/hilog.md；MCP 静态检查仍提示 LSP 未初始化，使用已验证的 Release IDE CLI 编译。
+
+### 漫画网页等待修复（2026-10-15）
+
+上游提交 `67e5f2dc99b4fb62fe714b45d7d6acc56e7afad2` 修正 WebBookFetchRuntime 将网页等待次数截断为 20 次的问题；现在尊重请求的等待次数（上限 120），同时保留请求总超时。等待条件未满足时显式失败，不再将初始 HTML 冒充成功正文。通过 sync-light-source.cjs 同步；test-comic-web-wait.cjs 覆盖延迟出现、条件不满足和硬超时。

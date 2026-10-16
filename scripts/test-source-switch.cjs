@@ -37,7 +37,7 @@ const { SourceSwitchSearch } = load('service/BookSourceSwitchService.ets', {
     active--;
     if (cancel) task.cancelled = true;
     if (source.bookSourceUrl === 'bad') throw new Error('unavailable');
-    const item = { name: resultTitle, contentType: 'audio', bookUrl: '/book', author: '作者' };
+    const item = { name: resultTitle, contentType: source.bookSourceType === 2 ? 'comic' : 'audio', bookUrl: '/book', author: '作者' };
     return [item, item, { ...item, name: '其他书' }, { ...item, contentType: 'text', bookUrl: '/text' }];
   } } }
 });
@@ -80,6 +80,12 @@ const { SourceSwitchSearch } = load('service/BookSourceSwitchService.ets', {
   assert.equal(task.total, 1);
   assert.equal(results.length, 1);
   assert.equal(results[0].contentType, 'audio');
+  calls = []; task = new SourceSwitchSearch();
+  await task.run({ ...oldBook, contentType: 'comic' }, books => { results = books; });
+  assert.deepEqual(calls, ['kind-2']);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].contentType, 'comic');
+  assert.ok(results[0].id.startsWith('search_comic_'));
   calls = []; task = new SourceSwitchSearch();
   await task.run({ ...oldBook, sourceUrl: 'kind-1' }, books => { results = books; });
   assert.equal(calls.length, 0);

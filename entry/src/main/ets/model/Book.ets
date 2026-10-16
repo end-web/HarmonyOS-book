@@ -25,8 +25,8 @@ export interface Chapter {
 
 export interface Book {
   id: string;
-  /** 内容类型：audio=有声书；text=在线电子书。 */
-  contentType?: 'audio' | 'text';
+  /** 内容类型：audio=有声书；text=电子书；comic=漫画图片章节。 */
+  contentType?: 'audio' | 'text' | 'comic';
   title: string;
   author: string;
   narrator: string;

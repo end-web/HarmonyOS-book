@@ -19,6 +19,7 @@ import { WidgetUpdater } from '../service/WidgetUpdater';
 import { WindowUtils } from '../utils/WindowUtils';
 import { AdaptiveLayout } from '../utils/AdaptiveLayout';
 import { ReaderPage } from './ReaderPage';
+import { RankingSettingsComponent } from '../components/RankingSettingsComponent';
 import { AppearanceSettingsComponent } from '../components/AppearanceSettingsComponent';
 import { CoverSuperResolutionService } from '../service/CoverSuperResolutionService';
 
@@ -577,6 +578,7 @@ export struct SettingsPage {
           GridCol() { this.buildLaunchGroup() }.enabled(this.isLoaded)
           GridCol() { this.buildPlaybackGroup() }.enabled(this.isLoaded)
           GridCol() { this.buildSearchGroup() }
+          GridCol() { RankingSettingsComponent() }
         }
         .width('100%')
         .padding({

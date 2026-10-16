@@ -98,6 +98,7 @@ export struct SearchPage {
   @Local viewMode: number = 0;
   @Local audioBooks: Book[] = [];
   @Local textBooks: Book[] = [];
+  @Local comicBooks: Book[] = [];
   @Local audioCount: number = 0;
   @Local textCount: number = 0;
   @Local visibleResultCount: number = 0;
@@ -256,6 +257,7 @@ export struct SearchPage {
     this.searchTab = 0;
     this.audioBooks = [];
     this.textBooks = [];
+    this.comicBooks = [];
     this.audioCount = 0;
     this.textCount = 0;
     this.visibleResultCount = 0;
@@ -369,8 +371,8 @@ export struct SearchPage {
 
   private appendHomeRecommendationBooks(source: BookSource, blocks: HomeBlockSection[],
     books: Book[], seen: Set<string>): void {
-    const fallbackType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
-      ? 'text' : 'audio';
+    const fallbackType: 'audio' | 'text' | 'comic' = source.bookSourceType === 0 || source.bookSourceType === 3
+      ? 'text' : source.bookSourceType === 2 ? 'comic' : 'audio';
     for (const block of blocks) {
       for (const result of block.books) {
         const book = this.searchResultToBook(result, result.contentType ?? fallbackType);
@@ -416,8 +418,8 @@ export struct SearchPage {
   private async loadSourceRecommendationBooks(source: BookSource, keyword: string): Promise<Book[]> {
     try {
       const results = await BookSourceService.searchBooks(source, keyword);
-      const fallbackType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
-        ? 'text' : 'audio';
+      const fallbackType: 'audio' | 'text' | 'comic' = source.bookSourceType === 0 || source.bookSourceType === 3
+        ? 'text' : source.bookSourceType === 2 ? 'comic' : 'audio';
       const books: Book[] = [];
       for (const result of results) {
         books.push(this.searchResultToBook(result, result.contentType ?? fallbackType));
@@ -471,6 +473,7 @@ export struct SearchPage {
     this.searchTab = 0;
     this.audioBooks = [];
     this.textBooks = [];
+    this.comicBooks = [];
     this.audioCount = 0;
     this.textCount = 0;
     this.visibleResultCount = 0;
@@ -536,18 +539,20 @@ export struct SearchPage {
       const books: Book[] = [];
       const audioBooks: Book[] = [];
       const textBooks: Book[] = [];
-      const fallbackContentType: 'audio' | 'text' = source.bookSourceType === 0 || source.bookSourceType === 3
-        ? 'text' : 'audio';
+      const fallbackContentType: 'audio' | 'text' | 'comic' = source.bookSourceType === 0 || source.bookSourceType === 3
+        ? 'text' : source.bookSourceType === 2 ? 'comic' : 'audio';
       for (const item of results) {
         if (!SearchOptions.matches(item.name, item.author || '', keyword, this.exactSearch, this.searchByAuthor)) continue;
-        const contentType: 'audio' | 'text' = item.contentType ?? fallbackContentType;
+        const contentType: 'audio' | 'text' | 'comic' = item.contentType ?? fallbackContentType;
         if (!SearchOptions.matchesContentType(contentType, this.searchTextOnly, this.searchAudioOnly)) continue;
         const dedupeKey = `${item.sourceUrl}\u001f${item.bookUrl}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
         const book = this.searchResultToBook(item, contentType);
         books.push(book);
-        if (contentType === 'text') {
+        if (contentType === 'comic') {
+          this.comicBooks = this.comicBooks.concat([book]);
+        } else if (contentType === 'text') {
           textBooks.push(book);
         } else {
           audioBooks.push(book);
@@ -644,6 +649,7 @@ export struct SearchPage {
       break;
     }
     if (textChanged) this.textBooks = textBooks;
+    this.comicBooks = this.comicBooks.map((item: Book): Book => item.id === book.id ? book : item);
   }
 
   private cloneBook(book: Book): Book {
@@ -684,19 +690,22 @@ export struct SearchPage {
     if (this.searchTab === 0 || this.searchTab === 2) {
       for (const book of this.textBooks) visible.push(book);
     }
+    if (this.searchTab === 0 || this.searchTab === 3) {
+      for (const book of this.comicBooks) visible.push(book);
+    }
     this.resultDataSource.setBooks(visible);
     this.visibleResultCount = visible.length;
   }
 
   private selectSearchTab(index: number): void {
-    if (index < 0 || index > 2 || this.searchTab === index) return;
+    if (index < 0 || index > 3 || this.searchTab === index) return;
     this.searchTab = index;
     this.refreshVisibleBooks();
   }
 
-  private searchResultToBook(result: SearchResult, contentType: 'audio' | 'text'): Book {
+  private searchResultToBook(result: SearchResult, contentType: 'audio' | 'text' | 'comic'): Book {
     const emptyChapters: Chapter[] = [];
-    const id = contentType === 'text'
+    const id = contentType === 'comic' ? BookIdentity.onlineComicBookId(result.sourceUrl, result.bookUrl) : contentType === 'text'
       ? BookIdentity.onlineTextBookId(result.sourceUrl || '', result.bookUrl || result.name)
       : BookIdentity.onlineAudioBookId(result.sourceUrl || '', result.bookUrl || result.name);
     const book: Book = {
@@ -705,7 +714,7 @@ export struct SearchPage {
       author: result.author || '未知',
       narrator: result.sourceName,
       cover: result.coverUrl || '',
-      category: result.kind || (contentType === 'text' ? '电子书' : '有声书'),
+      category: result.kind || (contentType === 'comic' ? '漫画' : contentType === 'text' ? '电子书' : '有声书'),
       contentType,
       intro: result.intro || '',
       wordCount: result.wordCount,
@@ -858,8 +867,8 @@ export struct SearchPage {
         .fontSize(12)
         .fontColor(this.searchTab === index ? HomeTheme.Accent : $r('sys.color.font_secondary'))
         .fontWeight(this.searchTab === index ? FontWeight.Medium : FontWeight.Regular)
-      Text((index === 0 ? this.audioCount + this.textCount :
-        (index === 1 ? this.audioCount : this.textCount)).toString())
+      Text((index === 0 ? this.audioCount + this.textCount + this.comicBooks.length :
+        (index === 1 ? this.audioCount : index === 2 ? this.textCount : this.comicBooks.length)).toString())
         .fontSize(11)
         .fontColor(this.searchTab === index ? HomeTheme.Accent : $r('sys.color.font_tertiary'))
     }
@@ -874,12 +883,15 @@ export struct SearchPage {
     Row() {
       Stack() {
         Row() {
-          Row({ space: AppSpace.Xxs }) {
-            this.buildSearchTypeTab($r('app.string.search_type_all'), 0)
-            this.buildSearchTypeTab($r('app.string.search_type_audio'), 1)
-            this.buildSearchTypeTab($r('app.string.search_type_text'), 2)
-          }
-          .padding({ left: 4, right: 4, top: 3, bottom: 3 })
+          Scroll() {
+            Row({ space: AppSpace.Xxs }) {
+              this.buildSearchTypeTab($r('app.string.search_type_all'), 0)
+              this.buildSearchTypeTab($r('app.string.search_type_audio'), 1)
+              this.buildSearchTypeTab($r('app.string.search_type_text'), 2)
+              this.buildSearchTypeTab($r('app.string.comic_type'), 3)
+            }
+            .padding({ left: 4, right: 4, top: 3, bottom: 3 })
+          }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).layoutWeight(1)
 
           if (this.searching) {
             LoadingProgress()
@@ -894,27 +906,6 @@ export struct SearchPage {
               .margin({ left: AppSpace.Xxs })
           }
 
-          Blank()
-
-          Stack({ alignContent: Alignment.Center }) {
-            SymbolGlyph(this.viewMode === 0 ?
-              $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
-              .fontSize(18)
-              .fontColor([$r('sys.color.font_primary')])
-          }
-          .width(40)
-          .height(40)
-          .borderRadius(AppRadius.Pill)
-          .onClick(() => {
-            this.getUIContext().animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard }, () => {
-              this.viewMode = this.viewMode === 0 ? 1 : 0;
-              try {
-                this.resultScroller.scrollEdge(Edge.Top);
-              } catch (_e) {
-                // 切换布局的同一帧可能暂时没有可滚动节点。
-              }
-            });
-          })
         }
         .width('100%')
         .height('100%')
@@ -1155,6 +1146,29 @@ export struct SearchPage {
           this.searchOptionsVisible = !this.searchOptionsVisible;
         })
         .bindPopup(this.searchOptionsVisible, this.searchOptionsPopupOptions())
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph(this.viewMode === 0 ?
+              $r('sys.symbol.list_bullet') : $r('sys.symbol.square_grid_2x2'))
+              .fontSize(18)
+              .fontColor([$r('sys.color.font_primary')])
+          }
+          .width(SEARCH_TITLE_CONTROL_HEIGHT)
+          .height(SEARCH_TITLE_CONTROL_HEIGHT)
+          .borderRadius(AppRadius.Pill)
+          .backgroundColor(Color.Transparent)
+          .attributeModifier(AppMaterial.modifier(AppMaterial.InteractiveClean))
+          .accessibilityText($r('app.string.search_switch_layout'))
+          .id('search-layout-button')
+          .onClick(() => {
+            this.getUIContext().animateTo({ duration: AppMotion.Base, curve: AppCurve.Standard }, () => {
+              this.viewMode = this.viewMode === 0 ? 1 : 0;
+              try {
+                this.resultScroller.scrollEdge(Edge.Top);
+              } catch (_e) {
+                // 切换布局的同一帧可能暂时没有可滚动节点。
+              }
+            });
+          })
     }
     .width('100%')
     .height(SEARCH_HEADER_HEIGHT)

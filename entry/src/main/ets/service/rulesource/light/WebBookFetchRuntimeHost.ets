@@ -1,4 +1,5 @@
 import { webview } from '@kit.ArkWeb';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { WebBookFetchRuntime } from './upstream/core/book/WebBookFetchRuntime';
 import { LightSourceHtmlCodec } from './LightSourceHtmlCodec';
 
@@ -55,6 +56,12 @@ export struct WebBookFetchRuntimeHost {
         .domStorageAccess(true)
         .mixedMode(MixedMode.All)
         .onlineImageAccess(true)
+        .onConsole((event) => {
+          if (event && /blocked by CORS policy|Access-Control-Allow-Origin/.test(event.message.getMessage())) {
+            hilog.warn(0x0001, 'SourceWeb', 'Source website request blocked by browser CORS policy');
+          }
+          return false;
+        })
         .onControllerAttached((): void => { this.attachRuntime(); })
         .onPageBegin((): void => { WebBookFetchRuntime.get().onPageBegin(this.controller); })
         .onPageEnd((): void => { WebBookFetchRuntime.get().onPageEnd(this.controller); })

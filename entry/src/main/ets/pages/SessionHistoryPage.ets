@@ -138,7 +138,7 @@ export struct SessionHistoryPage {
         if (entry.kind === 'tts') {
           await TextToSpeechService.getInstance().start(book, index, location.position, false);
         }
-        this.navStack.pushPathByName('reader', TextReaderRouteParams.of(book.id));
+        this.navStack.pushPathByName(book.contentType === 'comic' ? 'comicReader' : 'reader', TextReaderRouteParams.of(book.id));
       }
     } catch (_error) {
       this.getUIContext().getPromptAction().showToast({ message: $r('app.string.session_jump_failed') });
@@ -150,6 +150,9 @@ export struct SessionHistoryPage {
     if (entry.kind === 'audio') {
       Text($r('app.string.session_audio_position', location.chapterTitle,
         this.time(location.position), this.time(location.total)))
+        .fontSize(14).fontColor($r('sys.color.font_secondary'))
+    } else if (location.domPos.startsWith('comic:')) {
+      Text($r('app.string.comic_session_position', location.chapterTitle, location.pageOffset + 1))
         .fontSize(14).fontColor($r('sys.color.font_secondary'))
     } else {
       Text($r('app.string.session_text_position', location.chapterTitle, Math.floor(location.position)))

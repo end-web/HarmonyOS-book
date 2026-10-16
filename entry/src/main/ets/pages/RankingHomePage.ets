@@ -11,6 +11,7 @@ import { PlatformCompat } from '../utils/PlatformCompat';
 import { HomeRecommendationDataSource } from '../utils/HomeRecommendationDataSource';
 import { SearchCache } from '../utils/SearchCache';
 import { RankingService } from '../service/ranking/RankingService';
+import { RankingPreferences, RankingCategorySetting } from '../service/ranking/RankingPreferences';
 import { BookMatchService, RankingMatch, RankingMatchProgress } from '../service/ranking/BookMatchService';
 import { DataService } from '../service/DataService';
 import { SourceDataService } from '../service/SourceDataService';
@@ -223,7 +224,34 @@ export struct RankingHomePage {
   @Local topSafe: number = WindowUtils.getStatusBarHeightVp();
   @Local leftSafe: number = WindowUtils.getLeftSafeVp();
   @Local rightSafe: number = WindowUtils.getRightSafeVp();
-  private platforms: RankingPlatform[] = RankingService.platforms();
+  @Local platforms: RankingPlatform[] = RankingService.platforms();
+  private readonly rankingSettingsListener = (): void => { this.reloadCategories(); };
+
+  private async reloadCategories(): Promise<void> {
+    try {
+      const settings = await RankingPreferences.load();
+      if (!this.alive) return;
+      const enabled = settings.filter((item: RankingCategorySetting): boolean => item.enabled);
+      this.platforms = [RankingService.platforms()[0]].concat(enabled.map((item: RankingCategorySetting): RankingPlatform =>
+        new RankingPlatform(item.id, item.name)));
+      this.platformData.setItems(this.platforms);
+      if (!this.platforms.some((item: RankingPlatform): boolean => item.id === this.platformId)) this.platformId = '';
+      const previous = this.boards;
+      const all = RankingService.boards();
+      const next: RankingBoard[] = [];
+      for (const platform of enabled) {
+        for (const board of all.filter((item: RankingBoard): boolean => item.platformId === platform.id)) {
+          next.push(previous.find((item: RankingBoard): boolean => item.id === board.id) ?? board);
+        }
+      }
+      this.boards = next;
+      this.syncBoards();
+      this.load(false);
+    } catch (_error) {
+      // 偏好读取失败时保留默认或当前配置，不覆写保存值。
+      if (this.alive) this.load(false);
+    }
+  }
   private boardData: HomeRecommendationDataSource<RankingBoard> = new HomeRecommendationDataSource<RankingBoard>();
   private fullData: HomeRecommendationDataSource<RankingBook> = new HomeRecommendationDataSource<RankingBook>();
   private matchData: HomeRecommendationDataSource<RankingMatch> = new HomeRecommendationDataSource<RankingMatch>();
@@ -272,10 +300,12 @@ export struct RankingHomePage {
       return false;
     });
     WindowUtils.addSafeAreaListener(this.safeAreaListener);
-    this.load(false);
+    RankingPreferences.subscribe(this.rankingSettingsListener);
+    this.reloadCategories();
   }
 
   aboutToDisappear(): void {
+    RankingPreferences.unsubscribe(this.rankingSettingsListener);
     this.alive = false;
     this.pendingMatchProgress = undefined;
     this.generation++;
@@ -347,10 +377,6 @@ export struct RankingHomePage {
     const generation = ++this.generation;
     this.loading = true;
     try {
-      if (this.boards.length === 0) {
-        this.boards = RankingService.boards();
-        this.syncBoards();
-      }
       // 当前平台先刷新，精品推荐直接沿用展示顺序（懒人、起点、喜马拉雅）。
       const snapshot = this.boards.filter((board: RankingBoard): boolean =>
         !this.platformId || board.platformId === this.platformId).concat(
@@ -642,6 +668,9 @@ export struct RankingHomePage {
           ImmersiveTabComponent({ label: $r('app.string.shelf_filter_text_count',
             this.allMatches.filter((match: RankingMatch): boolean => match.book.contentType === 'text').length),
             fitContent: true, selected: this.matchType === 'text', onTap: (): void => this.selectMatchType('text') })
+          ImmersiveTabComponent({ label: $r('app.string.shelf_filter_comic_count',
+            this.allMatches.filter((match: RankingMatch): boolean => match.book.contentType === 'comic').length),
+            fitContent: true, selected: this.matchType === 'comic', onTap: (): void => this.selectMatchType('comic') })
         }.width('100%').height(40)
         if (this.searching) {
           Row({ space: 8 }) {
@@ -664,7 +693,7 @@ export struct RankingHomePage {
               Column({ space: 7 }) {
                 Row() {
                   Text(match.sourceName).fontSize(12).fontColor($r('sys.color.font_secondary')).layoutWeight(1).maxLines(1)
-                  Text(match.book.contentType === 'text' ? $r('app.string.search_type_text') : $r('app.string.search_type_audio'))
+                  Text(match.book.contentType === 'comic' ? $r('app.string.comic_type') : match.book.contentType === 'text' ? $r('app.string.search_type_text') : $r('app.string.search_type_audio'))
                     .fontSize(10).fontColor($r('sys.color.font_secondary')).margin({ right: 8 })
                   if (match.remembered) {
                     Text($r('app.string.ranking_last_choice')).fontSize(10).fontColor($r('sys.color.font_secondary'))
@@ -825,6 +854,12 @@ export struct RankingHomePage {
       ListItemGroup() {
         if (this.overview) {
           ListItem() { this.categoryOverview() }
+        } else if (!this.loading && this.boards.length === 0) {
+          ListItem() {
+            Text($r('app.string.ranking_categories_empty')).fontSize(14)
+              .fontColor($r('sys.color.font_secondary')).textAlign(TextAlign.Center)
+              .width('100%').padding(32)
+          }
         } else {
           LazyForEach(this.boardData, (board: RankingBoard) => {
             ListItem() {

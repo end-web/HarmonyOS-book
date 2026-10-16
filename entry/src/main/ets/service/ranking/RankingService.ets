@@ -27,11 +27,19 @@ export class RankingService {
       new RankingPlatform('lrts', $r('app.string.ranking_lrts')),
       new RankingPlatform('ximalaya', $r('app.string.ranking_ximalaya')),
       new RankingPlatform('qimao', $r('app.string.ranking_qimao')),
-      new RankingPlatform('jjwxc', $r('app.string.ranking_jjwxc'))];
+      new RankingPlatform('jjwxc', $r('app.string.ranking_jjwxc')),
+      new RankingPlatform('fanqie', $r('app.string.ranking_fanqie')),
+      new RankingPlatform('faloo', $r('app.string.ranking_faloo'))];
   }
 
   static boards(): RankingBoard[] {
     return [
+      new RankingBoard('fq-hot', 'fanqie', $r('app.string.ranking_fanqie'), $r('app.string.ranking_hot'),
+        'https://fanqienovel.com/api/author/misc/top_book_list/v1/'),
+      new RankingBoard('fl-month', 'faloo', $r('app.string.ranking_faloo'), $r('app.string.ranking_month'),
+        'https://b.faloo.com/y_0_0_0_0_3_15_1.html'),
+      new RankingBoard('fl-flowers', 'faloo', $r('app.string.ranking_faloo'), $r('app.string.ranking_month_flowers'),
+        'https://b.faloo.com/y_0_0_0_0_3_5_1.html'),
       new RankingBoard('lr-hot', 'lrts', $r('app.string.ranking_lrts'), $r('app.string.ranking_hot'),
         'https://www.lrts.me/rank/hot/week'),
       new RankingBoard('qd-month', 'qidian', $r('app.string.ranking_qidian'), $r('app.string.ranking_month'),
@@ -149,7 +157,8 @@ export class RankingService {
     next.books = board.books;
     next.fetchedAt = board.fetchedAt;
     try {
-      const response = await HttpClient.request(board.endpoint, { timeout: 12000 });
+      const response = await HttpClient.request(board.endpoint, { timeout: 12000,
+        charset: board.platformId === 'faloo' ? 'gb18030' : 'utf-8' });
       if (response.statusCode !== 200) throw new Error(`Ranking HTTP ${response.statusCode}`);
       const books = RankingParser.parse(board.platformId, board.id, response.body);
       if (books.length === 0) throw new Error('Ranking page changed or empty');

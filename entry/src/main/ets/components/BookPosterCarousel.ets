@@ -265,9 +265,16 @@ export struct BookPosterCarousel {
               CoverImage({ url: item.coverUrl, imgWidth: BOOK_POSTER_COVER_WIDTH,
                 aspectRatioValue: item.aspectRatio,
                 useOriginalRatio: this.useOriginalCoverRatio, maxOriginalHeight: 160,
-                radius: AppRadius.Sm, imageFit: ImageFit.Contain, decodeW: 480, decodeH: 640 })
-            }.constraintSize({ maxWidth: BOOK_POSTER_COVER_WIDTH })
+                radius: AppRadius.Sm, compositeEdges: true,
+                imageFit: ImageFit.Contain, decodeW: 480, decodeH: 640 })
+            }
+            // 为离屏纹理留下透明采样边，避免旋转时纹理边界直接形成硬锯齿。
+            // 封面本身尺寸不变，留白随卡片一起合成，不对合成层再次裁剪。
+            .padding(1)
+            .constraintSize({ maxWidth: BOOK_POSTER_COVER_WIDTH + 2 })
             .id(this.coverNodeId(item))
+            .renderGroup(true)
+            .blendMode(BlendMode.SRC_OVER, BlendApplyType.OFFSCREEN)
             .opacity(this.coverState.hiddenSourceId === this.coverNodeId(item) ? 0 : 1)
             .scale({ x: this.cardScale(index), y: this.cardScale(index) })
             .rotate({ angle: this.cardAngle(index),

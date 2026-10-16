@@ -25,19 +25,27 @@ class ProfileItem {
   }
 }
 
+const SOURCE_ITEMS: ProfileItem[] = [
+  new ProfileItem($r('sys.symbol.bookshelf'), $r('app.string.rule_source_title'), 'ruleSources',
+    AppColor.Brand),
+  new ProfileItem($r('sys.symbol.arrow_down_circle'), $r('app.string.profile_local_import'), 'import', '#34C759')
+];
+
 const CONTENT_ITEMS: ProfileItem[] = [
   new ProfileItem($r('sys.symbol.star_fill'), $r('app.string.achievement_title'), 'achievements', '#E6A23C'),
-  new ProfileItem($r('sys.symbol.arrow_down_circle'), '本地导入', 'import', '#34C759'),
-  new ProfileItem($r('sys.symbol.doc_text'), $r('app.string.log_title'), 'logs', '#0A84FF')
+  new ProfileItem($r('sys.symbol.star_fill'), $r('app.string.membership_title'), 'membership', AppColor.Brand)
+];
+
+const SETTINGS_ITEMS: ProfileItem[] = [
+  new ProfileItem($r('sys.symbol.gearshape'), '设置', 'settings', '#8E8E93')
 ];
 
 const SYSTEM_ITEMS: ProfileItem[] = [
-  new ProfileItem($r('sys.symbol.gearshape'), '设置', 'settings', '#8E8E93'),
+  new ProfileItem($r('sys.symbol.doc_text'), $r('app.string.log_title'), 'logs', '#0A84FF'),
   new ProfileItem($r('sys.symbol.info_circle'), '关于', 'about', '#0A59F7')
 ];
 
 const SUPPORT_ITEMS: ProfileItem[] = [
-  new ProfileItem($r('sys.symbol.star_fill'), $r('app.string.membership_title'), 'membership', AppColor.Brand),
   new ProfileItem($r('sys.symbol.qrcode'), $r('app.string.profile_wechat_title'), 'wechat',
     '#07C160', $r('app.string.profile_wechat_desc')),
   new ProfileItem($r('sys.symbol.person_2'), $r('app.string.profile_community_group'), 'community',
@@ -132,7 +140,8 @@ export struct ProfilePage {
         Scroll(this.scrollScroller) {
           Column({ space: AppSpace.Lg }) {
             this.buildAccountCard()
-            this.buildSourceGroup()
+            this.buildGroup(SOURCE_ITEMS)
+            this.buildGroup(SETTINGS_ITEMS)
             this.buildGroup(CONTENT_ITEMS)
             this.buildGroup(SYSTEM_ITEMS)
             this.buildGroup(SUPPORT_ITEMS, '支持与联系')
@@ -250,55 +259,6 @@ export struct ProfilePage {
         this.navStack.pushPathByName('account', '');
       })
     }.width('100%').backgroundColor($r('sys.color.comp_background_primary')).borderRadius(AppRadius.Lg)
-  }
-
-  @Builder
-  buildSourceGroup() {
-    Column() {
-      Row({ space: AppSpace.Sm }) {
-        Stack() {
-          SymbolGlyph($r('sys.symbol.bookshelf'))
-            .fontSize(18)
-            .fontColor([Color.White])
-        }
-        .width(28)
-        .height(28)
-        .backgroundColor(AppColor.Brand)
-        .borderRadius(7)
-
-        Column({ space: 2 }) {
-          Text($r('app.string.rule_source_title'))
-            .fontSize(AppFont.BodyL)
-            .fontColor($r('sys.color.font_primary'))
-          Text($r('app.string.settings_rule_source_desc'))
-            .fontSize(AppFont.Caption)
-            .fontColor($r('sys.color.font_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(24)
-          .width(24)
-          .height(24)
-          .fontColor([$r('sys.color.font_tertiary')])
-      }
-      .width('100%')
-      .padding({
-        left: ROW_INDENT,
-        right: ROW_INDENT,
-        top: AppSpace.Sm,
-        bottom: AppSpace.Sm
-      })
-      .constraintSize({ minHeight: 64 })
-      .backgroundColor($r('sys.color.comp_background_primary'))
-      .borderRadius(AppRadius.Lg)
-      .onClick(() => this.onItemTap('ruleSources'))
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder

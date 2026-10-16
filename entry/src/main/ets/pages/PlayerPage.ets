@@ -1,3 +1,4 @@
+import { ChapterSheetActions } from '../components/ChapterSheetActions';
 import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
 import { PlaybackLoadingIndicator } from '../components/PlaybackLoadingIndicator';
 import { PlayerCoverImage } from '../components/PlayerCoverImage';
@@ -178,6 +179,9 @@ export struct PlayerPage {
     this.leftSafeVp = WindowUtils.getLeftSafeVp();
     this.rightSafeVp = WindowUtils.getRightSafeVp();
   };
+  @Local chapterTopRequest: number = 0;
+  @Local chapterBottomRequest: number = 0;
+  @Local chapterDescending: boolean = false;
   private chapterListScroller: Scroller = new Scroller();
   private chapterPositionTimer: number = -1;
   private chapterListInteracted: boolean = false;
@@ -1019,6 +1023,7 @@ export struct PlayerPage {
     this.showChapterList = true;
     this.listOffsetFromCurrent = 0;
     this.chapterSearchKeyword = '';
+    this.chapterDescending = this.book?.chaptersDescending ?? false;
     if (!this.book) return;
     this.chapterDataSource.setChapters(PreferenceService.orderedChapters(this.book));
     if (this.book.chapters.length === 0) {
@@ -1043,6 +1048,19 @@ export struct PlayerPage {
   }
 
   /** 按关键词过滤章节列表（关键词为空时还原全部，并滚回当前章节） */
+  private toggleChapterOrder(): void {
+    const book = this.book;
+    if (!book) return;
+    book.chaptersDescending = !book.chaptersDescending;
+    this.chapterDescending = book.chaptersDescending;
+    PreferenceService.saveTocOrder(book.id, book.chaptersDescending).catch((): void => {
+      this.getUIContext().getPromptAction().showToast({ message: $r('app.string.chapter_order_save_failed') });
+    });
+    this.applyChapterFilter(this.chapterSearchKeyword);
+    this.scrollChapterListToIndex(0, ScrollAlign.START);
+    this.chapterTopRequest++;
+  }
+
   private applyChapterFilter(keyword: string): void {
     this.interruptChapterPosition();
     this.chapterSearchKeyword = keyword;
@@ -1920,7 +1938,7 @@ export struct PlayerPage {
   @Builder
   buildChapterSheet() {
     Stack({ alignContent: Alignment.BottomEnd }) {
-      Column({ space: AppSpace.Sm }) {
+      Column({ space: AppSpace.Xs }) {
       Row() {
         Text(this.book?.title ?? '')
           .fontSize(AppFont.Title)
@@ -1939,7 +1957,22 @@ export struct PlayerPage {
           .onClick(() => { this.showChapterList = false; })
       }
       .width('100%')
-      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Md })
+      .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs })
+
+      ChapterSheetActions({
+        descending: this.chapterDescending,
+        onOrder: (): void => this.toggleChapterOrder(),
+        onTop: (): void => {
+          this.chapterTopRequest++;
+          this.interruptChapterPosition();
+          this.scrollChapterListToIndex(0, ScrollAlign.START);
+        },
+        onBottom: (): void => {
+          this.chapterBottomRequest++;
+          this.interruptChapterPosition();
+          this.scrollChapterListToIndex(this.chapterDataSource.totalCount() - 1, ScrollAlign.END);
+        }
+      })
 
       // 章节搜索框（原生 Search,与首页一致）
       Search({ value: this.chapterSearchKeyword!!, placeholder: '搜索章节' })
@@ -1950,13 +1983,13 @@ export struct PlayerPage {
         .height(40)
         .borderRadius(AppRadius.Lg)
         .backgroundColor($r('sys.color.comp_background_tertiary'))
-        .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Xs, bottom: AppSpace.Xs })
+        .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: 0, bottom: 0 })
 
       if (this.chapterGridVisible) {
         ChapterSegmentGrid({
-          book: this.book,
+          book: this.book, topRequest: this.chapterTopRequest, bottomRequest: this.chapterBottomRequest,
           chapters: this.book?.chapters ?? [], currentId: this.playbackChapter()?.id ?? '',
-          keyword: this.chapterSearchKeyword, descending: this.book?.chaptersDescending ?? false,
+          keyword: this.chapterSearchKeyword, descending: this.chapterDescending,
           onSelect: (chapter: Chapter): void => { this.selectChapter(chapter); },
           onLongPress: (chapter: Chapter): void => this.handleChapterDownloadLongPress(chapter)
         }).layoutWeight(1)

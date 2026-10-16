@@ -50,6 +50,7 @@ const context = {
   LocalRuleBrowserLoginCoordinator: { MAX_HTML_LENGTH: 524288, reject() { events.push('reject'); } },
   LocalRuleWebSession: { acquire: async () => 1, release() { events.push('release'); } },
   LocalRuleHttpClient: {
+    getStoredCookieRecords: async () => [],
     getStoredCookieHeader: async () => 'session=existing',
     requestOrigin: url => new URL(url).origin
   },

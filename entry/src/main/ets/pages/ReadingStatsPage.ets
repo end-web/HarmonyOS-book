@@ -1,8 +1,10 @@
+import { ImmersiveCircleButton } from '../components/ImmersiveCircleButton';
+import { PlatformCompat } from '../utils/PlatformCompat';
 import { HdsCompat } from '../utils/HdsCompat';
 import { common } from '@kit.AbilityKit';
 import { emitter } from '@kit.BasicServicesKit';
 import { HdsNavigation, HdsNavigationTitleMode } from '@kit.UIDesignKit';
-import { AppColor, AppCurve, AppFont, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
+import { AppColor, AppMaterial, AppCurve, AppFont, AppRadius, AppSpace, HomeTheme } from '../theme/Theme';
 import { WindowUtils } from '../utils/WindowUtils';
 import {
   BookUsageStats,
@@ -44,6 +46,7 @@ class ListenRecordView {
   @Trace listenSeconds: number = 0;
   updatedAt: number = 0;
   @Trace isText: boolean = false;
+  @Trace isComic: boolean = false;
   readingPosition: TextReadingPosition | null = null;
 }
 
@@ -76,6 +79,7 @@ class ListeningRecordDataSource implements IDataSource {
       item.listenSeconds = record.listenSeconds;
       item.updatedAt = record.updatedAt;
       item.isText = record.isText;
+      item.isComic = record.isComic;
       item.readingPosition = record.readingPosition;
       return item;
     });
@@ -100,6 +104,9 @@ export struct ReadingStatsPage {
   @Local totalSeconds: number = 0;
   @Local monthSeconds: number = 0;
   @Local records: ListenRecordView[] = [];
+  @Local contentFilter: number = 0;
+  @Local contentFilterVisible: boolean = false;
+  private readonly recordTitleBuilder: CustomBuilder = (): void => this.buildRecordTitleBar();
   @Local loading: boolean = true;
   @Local refreshing: boolean = false;
   @Local appeared: boolean = false;
@@ -192,7 +199,7 @@ export struct ReadingStatsPage {
       const allRecords = await this.buildRecordViews(ctx, bundle.records, history, reading);
       this.records = allRecords.filter((item: ListenRecordView): boolean =>
         this.shouldShowRecord(item, favoriteIds));
-      this.recordDataSource.setRecords(this.records);
+      this.applyContentFilter();
       this.recoverReadingBooks(ctx, reading).catch((error: Error): void => {
         DiagnosticLogService.info('records.recovery.failed', `${error.message}; ${error.stack ?? ''}`);
       });
@@ -340,7 +347,7 @@ export struct ReadingStatsPage {
       if (book) {
         books.set(bookId, book);
         candidate.setBook(book.sourceUrl, book.bookUrl, book.title, book.author || book.narrator, book.cover);
-        candidate.isText = candidate.isText || book.contentType === 'text';
+        candidate.isText = candidate.isText || book.contentType === 'text' || book.contentType === 'comic';
       } else {
         missingBooks++;
       }
@@ -389,6 +396,7 @@ export struct ReadingStatsPage {
     view.listenSeconds = item.listenSeconds;
     view.updatedAt = item.updatedAt || 0;
     view.isText = item.isText;
+    view.isComic = book?.contentType === 'comic' || item.bookId.startsWith('search_comic_');
     view.readingPosition = item.readingPosition;
     return view;
   }
@@ -457,7 +465,7 @@ export struct ReadingStatsPage {
   }
 
   private selectAll(): void {
-    this.selectedIds = new Set(this.records.map((item) => item.bookId));
+    this.selectedIds = new Set(this.filteredRecords().map((item: ListenRecordView): string => item.bookId));
     this.selectMode = this.selectedIds.size > 0;
   }
 
@@ -518,7 +526,7 @@ export struct ReadingStatsPage {
         await TextReadingProgressService.save(context, TextReadingPosition.atChar(item.bookId,
           reading.resourceIndex, reading.domPos, reading.charOffset, reading.pageOffset, reading.chapterTitle));
       }
-      this.navStack.pushPathByName('reader', TextReaderRouteParams.of(item.bookId));
+      this.navStack.pushPathByName(item.isComic ? 'comicReader' : 'reader', TextReaderRouteParams.of(item.bookId));
       return;
     }
     const params: Record<string, Object> = {
@@ -529,6 +537,90 @@ export struct ReadingStatsPage {
     this.getUIContext().animateTo({ duration: 500, curve: Curve.FastOutSlowIn }, () => {
       this.navStack.pushPathByName('player', params, false);
     });
+  }
+
+  private applyContentFilter(): void {
+    this.recordDataSource.setRecords(this.filteredRecords());
+  }
+
+  private contentFilterLabel(index: number): Resource {
+    if (index === 1) return $r('app.string.search_type_audio');
+    if (index === 2) return $r('app.string.search_type_text');
+    if (index === 3) return $r('app.string.comic_type');
+    return $r('app.string.search_type_all');
+  }
+
+  private contentFilterOptions(): CustomPopupOptions {
+    const options: CustomPopupOptions = {
+      builder: this.buildContentFilterMenu,
+      placement: Placement.BottomRight,
+      popupColor: Color.Transparent,
+      radius: AppRadius.Xl,
+      enableArrow: false,
+      focusable: true,
+      onStateChange: (event): void => { this.contentFilterVisible = event.isVisible; }
+    };
+    if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.Sheet;
+    else options.backgroundBlurStyle = AppMaterial.SheetBlur;
+    return options;
+  }
+
+  @LocalBuilder
+  buildContentFilterMenu() {
+    Column({ space: 2 }) {
+      ForEach([0, 1, 2, 3], (index: number) => {
+        Text(this.contentFilterLabel(index)).fontSize(16)
+          .fontColor(index === this.contentFilter ? AppColor.Brand : $r('sys.color.font_primary'))
+          .width('100%').height(48).padding({ left: AppSpace.Sm, right: AppSpace.Sm })
+          .borderRadius(AppRadius.Xl - AppSpace.Xs)
+          .backgroundColor(index === this.contentFilter ? AppColor.BrandSoft : Color.Transparent)
+          .onClick((): void => {
+            this.contentFilterVisible = false;
+            this.contentFilter = index;
+            this.clearSelection();
+            this.applyContentFilter();
+          })
+      }, (index: number): string => index.toString())
+    }.width(200).padding(AppSpace.Xs)
+  }
+
+  @LocalBuilder
+  buildRecordTitleBar() {
+    Row({ space: AppSpace.Sm }) {
+      if (!this.inTab) {
+        ImmersiveCircleButton({ icon: $r('sys.symbol.chevron_left'), label: $r('app.string.app_icon_back'),
+          onPress: (): void => { this.navStack.pop(); } })
+      }
+      Text(this.pageTitle()).fontSize(26).fontWeight(FontWeight.Bold)
+        .fontColor($r('sys.color.font_primary')).maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+      ImmersiveCircleButton({ icon: $r('sys.symbol.funnel'), label: $r('app.string.record_content_filter'),
+        iconColor: this.contentFilter > 0 ? AppColor.Brand : $r('sys.color.icon_primary'),
+        onPress: (): void => { this.contentFilterVisible = !this.contentFilterVisible; } })
+        .bindPopup(this.contentFilterVisible, this.contentFilterOptions())
+      ImmersiveCircleButton({ icon: $r('sys.symbol.clock'),
+        label: this.onlyUnfavorited ? $r('app.string.record_favorited_back') : $r('app.string.record_unfavorited_title'),
+        onPress: (): void => {
+          this.contentFilterVisible = false;
+          if (this.onlyUnfavorited) this.navStack.pop();
+          else this.navStack.pushPathByName('unfavoriteHistory', null, false);
+        } })
+      ImmersiveCircleButton({ icon: this.selectMode ? $r('sys.symbol.checkmark') : $r('sys.symbol.square_and_pencil'),
+        label: this.selectMode ? $r('app.string.record_edit_done') : $r('app.string.record_edit'),
+        iconColor: this.selectMode ? AppColor.Brand : $r('sys.color.icon_primary'),
+        onPress: (): void => {
+          this.contentFilterVisible = false;
+          if (this.selectMode) this.clearSelection();
+          else this.selectMode = true;
+        } }).enabled(!this.loading && this.filteredRecords().length > 0)
+    }.width('100%').height(MINI_TITLE_BAR_HEIGHT)
+      .padding({ left: AppSpace.Md, right: AppSpace.Md }).clip(false)
+  }
+
+  private filteredRecords(): ListenRecordView[] {
+    return this.records.filter((item: ListenRecordView): boolean =>
+      this.contentFilter === 0 || (this.contentFilter === 1 && !item.isText) ||
+      (this.contentFilter === 2 && item.isText && !item.isComic) || (this.contentFilter === 3 && item.isComic));
   }
 
   build() {
@@ -585,30 +677,7 @@ export struct ReadingStatsPage {
       .mode(NavigationMode.Stack)
       .titleBar({
         avoidLayoutSafeArea: true,
-        content: {
-          title: {
-            mainTitle: this.pageTitle()
-          },
-          backIcon: {
-            icon: $r('sys.symbol.chevron_left'),
-            action: () => this.navStack.pop()
-          },
-          menu: {
-            value: [{
-              content: {
-                icon: $r('sys.symbol.clock'),
-                label: this.onlyUnfavorited ? $r('app.string.record_favorited_back') : $r('app.string.record_unfavorited_title'),
-                action: () => {
-                  if (this.onlyUnfavorited) {
-                    this.navStack.pop();
-                  } else {
-                    this.navStack.pushPathByName('unfavoriteHistory', null, false);
-                  }
-                }
-              }
-            }]
-          }
-        },
+        content: { stackBuilder: this.recordTitleBuilder },
         style: {
           scrollEffectOpts: {
             scrollEffectType: HdsCompat.scrollEffect
@@ -649,7 +718,7 @@ export struct ReadingStatsPage {
         }
       })
       .titleMode(HdsNavigationTitleMode.MINI)
-      .hideBackButton(this.inTab)
+      .hideBackButton(true)
       .bindToScrollable([this.scroller])
       .width('100%')
       .height('100%')
@@ -940,18 +1009,7 @@ export struct ReadingStatsPage {
           .onClick(() => this.clearSelection())
       }
       .alignItems(VerticalAlign.Center)
-    } else {
-      Row({ space: AppSpace.Md }) {
-        Text('编辑')
-          .fontSize(AppFont.Caption)
-          .fontColor($r('sys.color.font_primary'))
-          .onClick(() => this.selectMode = true)
-        SymbolGlyph($r('sys.symbol.list_bullet'))
-          .fontSize(18)
-          .fontColor([$r('sys.color.font_tertiary')])
-      }
-      .height(28)
-      .alignItems(VerticalAlign.Center)
+
     }
   }
 
