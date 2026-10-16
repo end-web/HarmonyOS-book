@@ -5,10 +5,11 @@
  */
 
 import { NativeExpr, NativeScope } from './NativeExpr';
+import { SourceCoverUrl } from './SourceCoverUrl';
 import type { NativeExprHost, NativeValue } from './NativeExpr';
 import type {
   NativeActionSpec, NativeCommentsSpec, NativeContentSpec, NativeFetchSpec, NativeRequestSpec, NativeSourceDefinition,
-  NativeStageSpec
+  NativeStageSpec, NativeTocSpec
 } from './NativeSourceSpec';
 
 export interface NativeRequest {
@@ -185,7 +186,9 @@ interface StagePage {
 
 const MENU_STATIC = 'native:menu:';
 const MENU_ITEM = 'native:item:';
-const MAX_TOC_PAGES = 100;
+const MAX_TOC_PAGES = 1000;
+/** toc.nextUrl 一次给出多个地址时，剩余目录页每批并发请求的页数。 */
+const TOC_PAGE_BATCH = 4;
 const MAX_CONTENT_PAGES = 30;
 const MAX_LIST_ITEMS = 20000;
 const DEFAULT_COMMENT_BUBBLES = 60;
@@ -411,41 +414,80 @@ export class NativeSourceRunner {
     const stage = this.requireStage(this.definition.toc, '目录');
     const chapters: NativeChapterRecord[] = [];
     const visited: Set<string> = new Set();
+    const defaultUrl = book.tocUrl || book.bookUrl;
+    const nextStage: NativeStageSpec = Object.assign({}, stage, { url: '= __url' });
+    const pageScope = async (page: number, url: string): Promise<NativeScope> =>
+      (await this.baseScope()).set('book', book).set('page', page).child().set('__url', url);
     let nextUrl = '';
     for (let page = 1; page <= MAX_TOC_PAGES; page++) {
       if (this.cancelled()) return [];
-      const scope = (await this.baseScope()).set('book', book).set('page', page);
-      const pageStage: NativeStageSpec = page === 1 ? stage : Object.assign({}, stage, { url: '= __url' });
-      const loaded = await this.loadStage(pageStage, scope.child().set('__url', nextUrl),
-        book.tocUrl || book.bookUrl, '目录');
-      const fields = stage.fields || {};
-      for (const item of this.listItems(stage.list || '', loaded.scope, loaded.baseUrl, 'toc.list')) {
-        const itemScope = loaded.scope.child().set('item', item).set('index', chapters.length);
-        const title = NativeExpr.toText(this.value(fields['title'], itemScope, false, 'toc.fields.title')).trim();
-        if (!title) continue;
-        const isVolume = NativeExpr.isTruthy(this.value(fields['isVolume'], itemScope, false, 'toc.fields.isVolume'));
-        const url = NativeExpr.resolveUrl(
-          NativeExpr.toText(this.value(fields['url'], itemScope, false, 'toc.fields.url')), loaded.baseUrl);
-        if (!url && !isVolume) continue;
-        chapters.push({
-          title: title,
-          url: url,
-          isVip: NativeExpr.isTruthy(this.value(fields['isVip'], itemScope, false, 'toc.fields.isVip')),
-          isPay: NativeExpr.isTruthy(this.value(fields['isPay'], itemScope, false, 'toc.fields.isPay')),
-          isVolume: isVolume,
-          tag: NativeExpr.toText(this.value(fields['tag'] || fields['updateTime'], itemScope, false,
-            'toc.fields.tag')).trim()
-        });
-        if (chapters.length >= MAX_LIST_ITEMS || (limit > 0 && chapters.length >= limit)) break;
-      }
-      if (limit > 0 && chapters.length >= limit) break;
+      const loaded = await this.loadStage(page === 1 ? stage : nextStage, await pageScope(page, nextUrl),
+        defaultUrl, '目录');
+      visited.add(loaded.baseUrl);
+      if (this.appendTocPage(stage, loaded, chapters, limit)) break;
       if (!stage.nextUrl) break;
-      nextUrl = NativeExpr.resolveUrl(
-        NativeExpr.toText(this.value(stage.nextUrl, loaded.scope, false, 'toc.nextUrl')), loaded.baseUrl);
-      if (!nextUrl || visited.has(nextUrl)) break;
-      visited.add(nextUrl);
+      const pending = this.tocNextUrls(stage.nextUrl, loaded).filter((url: string): boolean => !visited.has(url));
+      if (pending.length === 0) break;
+      if (pending.length === 1) {
+        nextUrl = pending[0];
+        visited.add(nextUrl);
+        continue;
+      }
+      // 一次给出多个地址表示“剩余全部目录页”：按列出顺序分批并发请求，不再跟随这些页自己的 nextUrl。
+      const listed = pending.slice(0, MAX_TOC_PAGES - page);
+      for (let offset = 0; offset < listed.length; offset += TOC_PAGE_BATCH) {
+        if (this.cancelled()) return [];
+        const batch = listed.slice(offset, offset + TOC_PAGE_BATCH);
+        const pages = await Promise.all(batch.map(async (url: string, index: number): Promise<StagePage> =>
+          this.loadStage(nextStage, await pageScope(page + offset + index + 1, url), defaultUrl, '目录')));
+        for (const listedPage of pages) {
+          if (this.appendTocPage(stage, listedPage, chapters, limit)) {
+            return stage.reverse === true ? chapters.reverse() : chapters;
+          }
+        }
+      }
+      break;
     }
     return stage.reverse === true ? chapters.reverse() : chapters;
+  }
+
+  /** 把一页目录的章节追加到 chapters；到达条数上限时返回 true。 */
+  private appendTocPage(stage: NativeTocSpec, loaded: StagePage, chapters: NativeChapterRecord[],
+    limit: number): boolean {
+    const fields = stage.fields || {};
+    for (const item of this.listItems(stage.list || '', loaded.scope, loaded.baseUrl, 'toc.list')) {
+      const itemScope = loaded.scope.child().set('item', item).set('index', chapters.length);
+      const title = NativeExpr.toText(this.value(fields['title'], itemScope, false, 'toc.fields.title')).trim();
+      if (!title) continue;
+      const isVolume = NativeExpr.isTruthy(this.value(fields['isVolume'], itemScope, false, 'toc.fields.isVolume'));
+      const url = NativeExpr.resolveUrl(
+        NativeExpr.toText(this.value(fields['url'], itemScope, false, 'toc.fields.url')), loaded.baseUrl);
+      if (!url && !isVolume) continue;
+      chapters.push({
+        title: title,
+        url: url,
+        isVip: NativeExpr.isTruthy(this.value(fields['isVip'], itemScope, false, 'toc.fields.isVip')),
+        isPay: NativeExpr.isTruthy(this.value(fields['isPay'], itemScope, false, 'toc.fields.isPay')),
+        isVolume: isVolume,
+        tag: NativeExpr.toText(this.value(fields['tag'] || fields['updateTime'], itemScope, false,
+          'toc.fields.tag')).trim()
+      });
+      if (chapters.length >= MAX_LIST_ITEMS || (limit > 0 && chapters.length >= limit)) return true;
+    }
+    return false;
+  }
+
+  /** toc.nextUrl 的结果：一个地址是下一页；列表或多行文本是剩余全部目录页。已补全、去重。 */
+  private tocNextUrls(spec: NativeValue, loaded: StagePage): string[] {
+    const raw = this.value(spec, loaded.scope, false, 'toc.nextUrl');
+    const values: NativeValue[] = Array.isArray(raw) ? raw : NativeExpr.toText(raw).split(/\r?\n/);
+    const urls: string[] = [];
+    for (const value of values) {
+      const text = NativeExpr.toText(value).trim();
+      const url = text ? NativeExpr.resolveUrl(text, loaded.baseUrl) : '';
+      if (url && urls.indexOf(url) < 0) urls.push(url);
+    }
+    return urls;
   }
 
   async content(book: NativeBookInput, chapter: NativeChapterInput): Promise<NativeContentResult> {
@@ -476,6 +518,7 @@ export class NativeSourceRunner {
       if (kind === 'audio' || kind === 'video') {
         const audio = NativeExpr.toText(this.first(this.value(kind === 'audio' ? stage.audio : stage.video,
           loaded.scope, false, `content.${kind}`))).trim();
+        if (!audio) throw new NativeSourceError(this.mediaFailure(stage, loaded, kind));
         return {
           kind: kind, text: NativeExpr.resolveUrl(audio, loaded.baseUrl), baseUrl: loaded.baseUrl,
           paragraphComments: [], chapterCommentUrl: '', links: [], images: [],
@@ -780,6 +823,43 @@ export class NativeSourceRunner {
     }
   }
 
+  /** 音频/视频地址为空时的原因：书源写的 mediaError 优先，否则取附加请求、主请求里第一个报错的 code/message。 */
+  private mediaFailure(stage: NativeContentSpec, loaded: StagePage, kind: string): string {
+    const label = kind === 'audio' ? '音频' : '视频';
+    if (stage.mediaError) {
+      const custom = NativeExpr.toText(this.value(stage.mediaError, loaded.scope, false, 'content.mediaError')).trim();
+      if (custom) return custom;
+    }
+    const responses: NativeValue[] = Object.keys(stage.fetch || {})
+      .map((name: string): NativeValue => loaded.scope.get(name));
+    responses.push(loaded.scope.get('data'));
+    for (const response of responses) {
+      const reason = NativeSourceRunner.apiFailure(response);
+      if (reason) return `${label}接口返回失败：${reason}`;
+    }
+    return `正文规则没有返回${label}地址`;
+  }
+
+  private static apiFailure(value: NativeValue): string {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    const record = value as Record<string, NativeValue>;
+    let code: NativeValue = null;
+    for (const key of ['code', 'status_code', 'err_no']) {
+      if (record[key] !== undefined && record[key] !== null) {
+        code = record[key];
+        break;
+      }
+    }
+    if (code === null || code === 0 || code === '0' || code === 200) return '';
+    let message = '';
+    for (const key of ['message', 'msg', 'error', 'err_tips']) {
+      message = NativeExpr.toText(record[key] === undefined ? null : record[key]).trim();
+      if (message) break;
+    }
+    const codeText = NativeExpr.toText(code);
+    return message ? `${message}（code=${codeText}）` : `code=${codeText}`;
+  }
+
   private readBooks(stage: NativeStageSpec, loaded: StagePage, prefix: string): NativeBookRecord[] {
     const books: NativeBookRecord[] = [];
     const items = this.listItems(stage.list || '', loaded.scope, loaded.baseUrl, `${prefix}.list`);
@@ -807,7 +887,7 @@ export class NativeSourceRunner {
       author: text('author'),
       kind: text('kind'),
       intro: text('intro'),
-      coverUrl: url('coverUrl'),
+      coverUrl: this.definition.coverDecode ? SourceCoverUrl.wrap(url('coverUrl'), this.definition.url) : url('coverUrl'),
       wordCount: text('wordCount'),
       lastChapter: text('lastChapter'),
       updateTime: text('updateTime'),

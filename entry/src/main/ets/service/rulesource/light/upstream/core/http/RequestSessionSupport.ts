@@ -30,7 +30,8 @@ export class RequestSessionSupport {
     return config;
   }
 
-  static apply(requestUrl: string, headers: Record<string, string>, config: RequestSessionConfig, sourceUrl: string = ''): void {
+  static apply(requestUrl: string, headers: Record<string, string>, config: RequestSessionConfig,
+    sourceUrl: string = ''): void {
     const cleanUrl = (requestUrl || '').trim();
     if (!/^https?:\/\//i.test(cleanUrl) || !config) return;
     if (Object.keys(config.queryCookies || {}).length === 0 &&

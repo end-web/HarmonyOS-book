@@ -1,3 +1,4 @@
+import { SourceCoverService } from './SourceCoverService';
 import { PlaybackCoordinator } from './PlaybackCoordinator';
 import { avSession } from '@kit.AVSessionKit';
 import { PlatformCompat } from '../utils/PlatformCompat';
@@ -435,6 +436,10 @@ export class AVSessionService {
   }
 
   private async loadCover(cover: string): Promise<image.PixelMap | null> {
+    if (SourceCoverService.isEncoded(cover)) {
+      try { return await this.loadCover(await SourceCoverService.resolve(cover)); }
+      catch (_) { return null; }
+    }
     const cached = this.coverCache.get(cover);
     if (cached !== undefined) {
       this.coverCache.delete(cover);

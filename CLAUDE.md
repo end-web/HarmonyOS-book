@@ -64,6 +64,8 @@
 
 ## 内容分发
 
+书源源码同步使用双来源固定版本：解析内核取 `wip3l/harmony-book-source-engine`，搜索/发现/阅读调度及导入、音频辅助代码取 `wip3l/legado-harmony`。`scripts/sync-light-source.cjs` 依次接收两个仓库路径，清单分别记录版本和逐文件归属，`--check` 可只读核对结果。仍通过现有宿主端口使用简听有界 QuickJS、加密存储和 Web 租约；不额外接入上游 QuickJS HAR。具体版本和兼容补丁见同步文档。
+
 书源导入、规则执行与解析统一使用固定版本轻页核心，旧简听规则引擎、`jianting.source` 执行器与按域名分流的内容适配器已删除。历史定义只保留数据。页面、书架、阅读器、播放器保留简听实现。平台继续使用有界 QuickJS、加密书源库和按源隔离 Cookie。普通 HTTP 与脚本解析使用独立任务上下文，不持有全局执行队列；仅真实网页抓取/媒体嗅探持有 Web 会话，状态仅在变更时写回，沿用现有播放和预加载业务调度。规则契约见 [书源规则](docs/BOOK_SOURCE_RULES.md)，固定版本及维护步骤见 [轻页同步](docs/LIGHT_SOURCE_SYNC.md)。
 
 `用户导入 → LocalRuleSourceImportParser（上游导入方法）→ LocalRuleSourceRepository → SourceDataService / BookSourceService → LocalRuleDispatcher / LightSourceBridge → LightSourceCore → 轻页规则核心`

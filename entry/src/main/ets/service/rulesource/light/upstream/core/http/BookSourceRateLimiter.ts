@@ -1,5 +1,5 @@
-import { SourceEngineHost } from '../host/SourceEngineHost';
 import { BookSource } from '../../model/data/Book';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 
 class BookSourceRateState {
   timestamps: number[] = [];
@@ -27,7 +27,9 @@ export class BookSourceRateLimiter {
    */
   static async acquire(source: BookSource | null, isCancelled?: () => boolean,
     maxWaitMs: number = 0): Promise<RateLimitAcquireResult> {
-    if (SourceEngineHost.isCancelled(source) || isCancelled?.()) return RateLimitAcquireResult.Cancelled;
+    if (SourceEngineHost.isCancelled(source) || (isCancelled && isCancelled())) {
+      return RateLimitAcquireResult.Cancelled;
+    }
     if (!source || !source.concurrentRate) return RateLimitAcquireResult.Acquired;
     const config = this.parse(source.concurrentRate);
     if (!config) return RateLimitAcquireResult.Acquired;
@@ -39,6 +41,9 @@ export class BookSourceRateLimiter {
       state = new BookSourceRateState();
       this.states.set(key, state);
     }
+    // Without a host scheduler the waiter only sleeps and `first` is always true, so the loop below behaves
+    // exactly like the plain window wait. A host scheduler can make a waiter yield a free slot to a
+    // higher-priority one; the window itself is still enforced here.
     const waiter = SourceEngineHost.enqueue(key, source, isCancelled);
     try {
       while (true) {
@@ -48,7 +53,8 @@ export class BookSourceRateLimiter {
         if (state.timestamps.length < config.limit) {
           if (!SourceEngineHost.first(key, waiter)) {
             if (deadline > 0 && now >= deadline) return RateLimitAcquireResult.RateLimited;
-            await waiter.wait(deadline > 0 ? Math.min(500, Math.max(1, deadline - now)) : 500);
+            const slice = BookSourceRateLimiter.WAIT_SLICE_MS;
+            await waiter.wait(deadline > 0 ? Math.min(slice, Math.max(1, deadline - now)) : slice);
             continue;
           }
           state.timestamps.push(now);
@@ -61,7 +67,9 @@ export class BookSourceRateLimiter {
         }
         await waiter.wait(Math.min(waitMs, BookSourceRateLimiter.WAIT_SLICE_MS));
       }
-    } finally { SourceEngineHost.remove(key, waiter); }
+    } finally {
+      SourceEngineHost.remove(key, waiter);
+    }
   }
 
   /**

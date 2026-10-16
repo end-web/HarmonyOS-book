@@ -135,7 +135,7 @@ export class RuleExecutionService {
         if (await slice.checkpoint(token)) result.yieldedCount++;
         this.throwIfDeadlineExceeded(deadlineAt, request.stage);
         const content = this.itemText(request, itemIndex);
-        const analyzer = new AnalyzeRule(content, request.baseUrl);
+        const analyzer = new AnalyzeRule(content, request.baseUrl).setNoticeScope(request.stage, request.source.bookSourceName);
 this.seedSourceVariables(analyzer.getContext(), request.source, request.contextValues);
         this.applySourceJsVars(analyzer, request.source, request.contextValues);
         const itemValues: Record<string, string> = {};
@@ -311,7 +311,7 @@ this.seedSourceVariables(analyzer.getContext(), request.source, request.contextV
     for (let index = 0; index < itemCount; index++) {
       token.throwIfCancelled();
       await slice.checkpoint(token);
-      const analyzer = new AnalyzeRule(this.itemText(request, index), request.baseUrl);
+      const analyzer = new AnalyzeRule(this.itemText(request, index), request.baseUrl).setNoticeScope(request.stage, request.source.bookSourceName);
       this.seedSourceVariables(analyzer.getContext(), request.source, request.contextValues);
       this.applySourceJsVars(analyzer, request.source, request.contextValues);
       baseValues.push(field.listResult ? JSON.stringify(analyzer.getStringList(baseRule)) :
@@ -362,7 +362,7 @@ this.seedSourceVariables(analyzer.getContext(), request.source, request.contextV
       for (const value of values) {
         token.throwIfCancelled();
         await slice.checkpoint(token);
-        const analyzer = new AnalyzeRule(value, request.baseUrl);
+        const analyzer = new AnalyzeRule(value, request.baseUrl).setNoticeScope(request.stage, request.source.bookSourceName);
 this.seedSourceVariables(analyzer.getContext(), request.source, request.contextValues);
         this.applySourceJsVars(analyzer, request.source, request.contextValues);
         transformed.push(field.listResult ? JSON.stringify(analyzer.getStringList(trailingRule)) :

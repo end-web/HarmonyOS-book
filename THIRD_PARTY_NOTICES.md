@@ -27,14 +27,16 @@ Apache License 2.0 全文见 `third_party/quickjs/LICENSE-APACHE-2.0`。
 
 本页所列 QuickJS、CryptoJS、仓颉运行时和 LLVM libc++ 保留各自许可证。本应用已迁入轻页 GPL-3.0 书源引擎，组合应用分发需遵循相应 GPL 条款并提供对应源码；不能将包含该引擎的应用整体声明为 MIT。页面没有从轻页迁入。
 
-## 轻页 / legado-harmony 书源核心
+## 独立书源内核与轻页应用辅助代码
 
-- 上游：https://github.com/wip3l/legado-harmony
+- 内核上游：https://github.com/wip3l/harmony-book-source-engine
+- 内核固定提交：`1eb86df3e38189fee400ca5982f07e3dc4501d51`
+- 应用辅助代码上游：https://github.com/wip3l/legado-harmony
 - 组织 Fork：https://github.com/hos-book/legado-harmony
-- 固定提交：`5d685ca3be020795ff1ce2eae5780dfd9bdc4470`（本地共同维护分支 `codex/sourceengine-host`，尚未推送；基于上游 `fc1f3b25861965a698f824679e7ebbc7130ae393`，含公共解析内核与 entry 调度适配）
+- 应用辅助代码固定提交：`67e5f2dc99b4fb62fe714b45d7d6acc56e7afad2`（共同维护分支 `codex/sourceengine-host`，末次修复尚未推送；保留搜索/发现/阅读调度及导入、音频后处理）
 - 许可证：GPL-3.0，全文见 `third_party/light-source/LICENSE`
 
-迁入位置：`entry/src/main/ets/service/rulesource/light/upstream/`。原版权头保留；修改和适配由 `scripts/sync-light-source.cjs` 记录，版本和文件校验值见 `third_party/light-source/upstream.json`，维护流程见 `docs/LIGHT_SOURCE_SYNC.md`。
+迁入位置：`entry/src/main/ets/service/rulesource/light/upstream/`。原版权头保留；修改和适配由 `scripts/sync-light-source.cjs` 记录，双来源版本、逐文件归属和校验值见 `third_party/light-source/upstream.json`，维护流程见 `docs/LIGHT_SOURCE_SYNC.md`。独立仓库的 NOTICE 同时保留在 `third_party/light-source/NOTICE` 和应用资源中。内核首版未包含的网页等待修复由可校验补丁保留。没有引入独立仓库附带的第二套 QuickJS HAR。
 
 ## CryptoJS
 

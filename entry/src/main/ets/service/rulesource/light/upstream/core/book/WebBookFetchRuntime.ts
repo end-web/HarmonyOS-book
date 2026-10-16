@@ -332,8 +332,7 @@ export class WebBookFetchRuntime {
   }
 
   private shouldRetryWebJs(task: WebBookFetchTask, value: string): boolean {
-    // Native waitFor expresses a duration in 500 ms polls. Do not silently cap
-    // a 20-second rule at 20 attempts (10 seconds); the request timer bounds it.
+    // Honor the declared wait duration; the request timer remains the hard limit.
     const maxAttempts = Math.max(1, Math.min(120, Math.floor(task.request.webJsMaxAttempts || 1)));
     return task.webJsAttempts < maxAttempts && !this.matchesWebJs(task, value);
   }

@@ -2,6 +2,7 @@ import { ChapterSheetActions } from '../components/ChapterSheetActions';
 import { ChapterSegmentGrid } from '../components/ChapterSegmentGrid';
 import { PlaybackLoadingIndicator } from '../components/PlaybackLoadingIndicator';
 import { PlayerCoverImage } from '../components/PlayerCoverImage';
+import { CoverImage } from '../components/CoverImage';
 import { BookSourceSwitchSheet } from '../components/BookSourceSwitchSheet';
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, curves, FrameCallback, LengthMetrics } from '@kit.ArkUI';
@@ -1396,11 +1397,9 @@ export struct PlayerPage {
     Stack() {
       if (this.book && this.book.cover) {
         if (this.book.cover.startsWith('http')) {
-          Image(this.book.cover)
+          CoverImage({ url: this.book.cover, useFixedHeight: true, imgHeight: '100%', radius: 0, decodeW: 120, decodeH: 120 })
             .width('100%')
             .height('100%')
-            .objectFit(ImageFit.Cover)
-            .sourceSize({ width: 120, height: 120 })
             .blur(40)
         } else if (this.book.cover.startsWith('/') || this.book.cover.startsWith('file://')) {
           Image('file://' + this.book.cover.replace(/^file:\/\//, ''))

@@ -644,6 +644,34 @@ async function run() {
   LightSourceRuntime.host.hydrate = async () => '{}';
   states.delete(source.bookSourceUrl);
   assert.equal(await engine.checkLogin(JSON.stringify(cookieOnly),'',''),false);
+  const savedHydrate = LightSourceRuntime.host.hydrate;
+  let accountCookie = 'account-a';
+  let cacheFetches = 0;
+  const cacheOrigin = 'https://cache-login.test';
+  const cachedLogin = parser.parse(JSON.stringify({sourceFormat:'native',version:1,name:'Cached login',url:cacheOrigin,
+    login:{url:cacheOrigin+'/login',cookies:['session']},
+    cache:{sessionToken:{url:'/token',value:'=data.token',ttl:600}},
+    search:{url:'/search',headers:{'X-Cached':'{{sessionToken}}'},list:'$.books',fields:{name:'$.name',bookUrl:'$.url'}}})).sources[0];
+  cachedLogin.definition = codec.stringify(cachedLogin);
+  const cachedLoginJson = JSON.stringify(cachedLogin);
+  LightSourceRuntime.host.hydrate = async () => JSON.stringify({[cacheOrigin]:'session='+accountCookie});
+  fixtures.set(cacheOrigin+'/token',() => { cacheFetches++; return JSON.stringify({token:accountCookie}); });
+  fixtures.set(cacheOrigin+'/search','{"books":[{"name":"Cached","url":"/book"}]}');
+  await engine.search(cachedLoginJson,'Cached',1);
+  accountCookie = 'refreshed-a';
+  await engine.search(cachedLoginJson,'Cached',1);
+  assert.equal(cacheFetches,1,'ordinary Cookie refresh must not invalidate native declared caches');
+  accountCookie = 'account-b';
+  assert.equal(await engine.checkLogin(cachedLoginJson,'',''),true);
+  await engine.search(cachedLoginJson,'Cached',1);
+  assert.equal(cacheFetches,2,'cookie-only browser login must invalidate the previous account cache');
+  assert.equal(requests.filter(request => request.url === cacheOrigin+'/search').at(-1).headers['X-Cached'],'account-b');
+  await engine.clearLogin(cachedLoginJson);
+  accountCookie = 'account-c';
+  await engine.search(cachedLoginJson,'Cached',1);
+  assert.equal(cacheFetches,3,'logout must invalidate native declared caches');
+  LightSourceRuntime.host.hydrate = savedHydrate;
+  console.log('PASS: native cache reuse on Cookie refresh, invalidation on browser login and logout');
   delete LightSourceRuntime.host.browse;
   const scriptOnly = {...loginLocal,definition:JSON.stringify({...source,loginUi:'',loginUrl:'function login(){java.startBrowser("https://engine.test/login");}'})};
   const scriptPanel = JSON.parse(await engine.panel(JSON.stringify(scriptOnly),true,'save','login'));

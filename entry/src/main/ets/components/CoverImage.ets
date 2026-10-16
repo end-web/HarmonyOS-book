@@ -2,6 +2,7 @@ import { AppRadius } from '../theme/Theme';
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { CoverAspectRatio } from '../utils/CoverAspectRatio';
 import { PlatformCompat } from '../utils/PlatformCompat';
+import { SourceCoverService } from '../service/SourceCoverService';
 
 class CoverCompositeClip implements AttributeModifier<CommonAttribute> {
   private enabled: boolean;
@@ -50,6 +51,8 @@ export struct CoverImage {
   @Local retryCount: number = 0;
   @Local imageReady: boolean = false;
   @Local originalRatio: number = 0.75;
+  @Local resolvedUrl: string = '';
+  private resolveGeneration: number = 0;
 
   private displayRatio(): number {
     return this.useOriginalRatio ? this.originalRatio : this.aspectRatioValue;
@@ -75,6 +78,7 @@ export struct CoverImage {
 
   aboutToDisappear(): void {
     this.appeared = false;
+    this.resolveGeneration++;
     this.cancelRetry();
   }
 
@@ -90,10 +94,25 @@ export struct CoverImage {
     this.imageReady = false;
     this.giveUp = (CoverImage.failedUntil.get(this.url) ?? 0) > Date.now();
     this.retryCount = 0;
+    this.resolvedUrl = SourceCoverService.isEncoded(this.url) ? '' : this.url;
+    this.resolveGeneration++;
     if (this.url.startsWith('http') && !this.giveUp) {
       CoverImage.failedUntil.delete(this.url);
-      CoverPrefetcher.prefetch(this.url, this.highPriority);
+      if (SourceCoverService.isEncoded(this.url)) this.resolveCover();
+      else CoverPrefetcher.prefetch(this.url, this.highPriority);
     }
+  }
+
+  private resolveCover(): void {
+    const raw = this.url;
+    const generation = ++this.resolveGeneration;
+    SourceCoverService.resolve(raw).then((resolved: string): void => {
+      if (!this.appeared || this.url !== raw || generation !== this.resolveGeneration) return;
+      this.resolvedUrl = resolved;
+      this.showImage = true;
+    }).catch((): void => {
+      if (this.appeared && this.url === raw && generation === this.resolveGeneration) this.scheduleRetry();
+    });
   }
 
   private cancelRetry(): void {
@@ -122,14 +141,15 @@ export struct CoverImage {
     this.retryTimer = setTimeout((): void => {
       this.retryTimer = -1;
       if (!this.appeared || this.url !== url) return;
-      this.showImage = true;
+      if (SourceCoverService.isEncoded(url)) this.resolveCover();
+      else this.showImage = true;
     }, delayMs);
   }
 
   @Builder
   private networkImage(url: string) {
     if (this.useFixedHeight) {
-      Image(url)
+      Image(this.resolvedUrl)
         .width(this.imgWidth)
         .height(this.imgHeight)
         .borderRadius(this.compositeEdges ? 0 : this.radius)
@@ -154,7 +174,7 @@ export struct CoverImage {
           if (this.url === url) this.scheduleRetry();
         })
     } else {
-      Image(url)
+      Image(this.resolvedUrl)
         .width(this.displayWidth())
         .aspectRatio(this.displayRatio())
         .borderRadius(this.compositeEdges ? 0 : this.radius)
@@ -204,7 +224,7 @@ export struct CoverImage {
   build() {
     Stack() {
       this.placeholderImage()
-      if (this.url.startsWith('http') && this.showImage && !this.giveUp) {
+      if (this.url.startsWith('http') && this.resolvedUrl && this.showImage && !this.giveUp) {
         this.networkImage(this.url)
       }
     }

@@ -1,6 +1,7 @@
 import { util } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { CookieStore } from '../http/CookieStore';
+import { SourceCookieJar } from '../host/SourceEngineHost';
 import { JsonPathEvaluator } from './JsonPathEvaluator';
 import { QuickJsScriptRuntime, QuickJsShadowComparator } from '../script/QuickJsScriptRuntime';
 import { QuickJsObservationContext } from '../script/QuickJsRuntimeStatus';
@@ -297,6 +298,11 @@ export class JsRuntime {
     return result;
   }
 
+  /** 脚本里的 cookie.* 调用归属的书源：AnalyzeRule 和 RuleExecutionService 会把书源地址写进变量。 */
+  private cookieJar(): SourceCookieJar {
+    return CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl'));
+  }
+
   private sourceRuntimeValue(key: string): string {
     if (!key) return '';
     const value = this.vars[`source.${key}`];
@@ -372,8 +378,9 @@ export class JsRuntime {
     const setRe = /\bcookie\.setCookie\(\s*([^,]+)\s*,\s*([^)]+)\)/g;
     let setMatch: RegExpExecArray | null;
     while ((setMatch = setRe.exec(expr)) !== null) {
-      CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).setCookies(this.evalStr(setMatch[1]), this.evalStr(setMatch[2]));
-      CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).saveAsync();
+      const jar = this.cookieJar();
+      jar.setCookies(this.evalStr(setMatch[1]), this.evalStr(setMatch[2]));
+      jar.saveAsync();
     }
 
     const removeRe = /\bcookie\.removeCookie\(\s*([^)]+)\)/g;
@@ -382,7 +389,7 @@ export class JsRuntime {
       const args = this.splitArgs(removeMatch[1]);
       const url = this.evalStr(args[0] || '');
       const name = args.length > 1 ? this.evalStr(args[1]) : '';
-      CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).removeCookie(url, name || undefined);
+      this.cookieJar().removeCookie(url, name || undefined);
     }
   }
 
@@ -706,7 +713,8 @@ export class JsRuntime {
     const args = this.splitArgs(rawArgs);
     const url = this.evalStr(args[0] || '');
     const name = args.length > 1 ? this.evalStr(args[1]) : '';
-    return name ? CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).getCookieValue(url, name) : CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).getCookie(url);
+    const jar = this.cookieJar();
+    return name ? jar.getCookieValue(url, name) : jar.getCookie(url);
   }
 
   private putVar(rawArgs: string): string {

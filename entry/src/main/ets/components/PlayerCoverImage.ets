@@ -1,5 +1,6 @@
 import { CoverPrefetcher } from '../service/CoverPrefetcher';
 import { EnhancedPlayerCover } from './EnhancedPlayerCover';
+import { SourceCoverService } from '../service/SourceCoverService';
 
 class PlayerCoverRequest {
   url: string;
@@ -22,10 +23,13 @@ export struct PlayerCoverImage {
   @Local loadedKey: string = '';
   @Local failedKey: string = '';
   @Local previewFailed: boolean = false;
+  @Local resolvedUrl: string = '';
+  @Local resolvedFallback: string = '';
+  private generation: number = 0;
   private resizeTimer: number = -1;
 
   aboutToAppear(): void { this.reset(); }
-  aboutToDisappear(): void { this.cancelResize(); }
+  aboutToDisappear(): void { this.cancelResize(); this.generation++; }
 
   @Monitor('url', 'fallback')
   onCoverChanged(): void { this.reset(); }
@@ -34,6 +38,19 @@ export struct PlayerCoverImage {
     this.loadedKey = '';
     this.failedKey = '';
     this.previewFailed = false;
+    const generation = ++this.generation;
+    this.resolvedUrl = SourceCoverService.isEncoded(this.url) ? '' : this.url;
+    this.resolvedFallback = SourceCoverService.isEncoded(this.fallback) ? '' : this.fallback;
+    if (SourceCoverService.isEncoded(this.url)) {
+      SourceCoverService.resolve(this.url).then((url: string): void => {
+        if (generation === this.generation) this.resolvedUrl = url;
+      }).catch((): void => {});
+    }
+    if (SourceCoverService.isEncoded(this.fallback)) {
+      SourceCoverService.resolve(this.fallback).then((url: string): void => {
+        if (generation === this.generation) this.resolvedFallback = url;
+      }).catch((): void => {});
+    }
     CoverPrefetcher.prefetch(this.url, true);
     if (this.fallback) CoverPrefetcher.prefetch(this.fallback, true);
   }
@@ -62,17 +79,17 @@ export struct PlayerCoverImage {
     return $rawfile(url);
   }
 
-  private requestKey(): string { return JSON.stringify([this.url, this.decodeSize]); }
+  private requestKey(): string { return JSON.stringify([this.resolvedUrl, this.decodeSize]); }
 
   build() {
     Stack() {
-      Image(this.source(this.previewFailed ? this.url : (this.fallback || this.url)))
+      Image(this.source(this.previewFailed ? this.resolvedUrl : (this.resolvedFallback || this.resolvedUrl)))
         .width('100%').height('100%').objectFit(ImageFit.Cover)
         .sourceSize({ width: 300, height: 300 })
         .alt($r('app.media.app_icon_legacy'))
         .onError((): void => { this.previewFailed = true; })
-      if (this.highQuality && this.url) {
-        ForEach([new PlayerCoverRequest(this.url, this.decodeSize)], (request: PlayerCoverRequest) => {
+      if (this.highQuality && this.resolvedUrl) {
+        ForEach([new PlayerCoverRequest(this.resolvedUrl, this.decodeSize)], (request: PlayerCoverRequest) => {
           Image(this.source(request.url))
             .width('100%').height('100%').objectFit(ImageFit.Cover)
             .sourceSize({ width: request.size, height: request.size })
@@ -87,7 +104,7 @@ export struct PlayerCoverImage {
               if (this.requestKey() === request.key) this.failedKey = request.key;
             })
         }, (request: PlayerCoverRequest): string => request.key)
-        EnhancedPlayerCover({ url: this.failedKey === this.requestKey() ? (this.fallback || this.url) : this.url })
+        EnhancedPlayerCover({ url: this.failedKey === this.requestKey() ? (this.resolvedFallback || this.resolvedUrl) : this.resolvedUrl })
       }
     }
     .width('100%').height('100%')

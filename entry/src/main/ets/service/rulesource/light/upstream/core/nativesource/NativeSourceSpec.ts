@@ -194,6 +194,8 @@ export interface NativeContentSpec extends NativeStageSpec {
   audio?: string;
   /** 视频类书籍这一集的视频流地址，由应用自带的播放页播放。 */
   video?: string;
+  /** audio / video 为空时给用户看的原因，可读取附加请求的结果；不写时从接口返回的 code/message 归纳。 */
+  mediaError?: string;
   /** 取图片、音频时附带的请求头，例如 Referer。 */
   mediaHeaders?: Record<string, string>;
   imageDecode?: NativeImageDecodeSpec;
@@ -201,7 +203,17 @@ export interface NativeContentSpec extends NativeStageSpec {
   replace?: NativeReplaceSpec[];
 }
 
+/** Literal cover parameters, shared by search, explore and detail. IV is hex or a 16-byte file prefix. */
+export interface NativeCoverDecodeSpec {
+  algorithm: string;
+  key: string;
+  keyEncoding?: 'hex' | 'utf8';
+  iv?: string;
+  ivPrefixBytes?: number;
+}
+
 export interface NativeSourceDefinition {
+  coverDecode?: NativeCoverDecodeSpec;
   nativeSource: number;
   name: string;
   url: string;
@@ -314,6 +326,16 @@ export class NativeSourceSpec {
 
   static validate(definition: NativeSourceDefinition): string[] {
     const errors: string[] = [];
+    const cover = definition.coverDecode;
+    if (cover !== undefined) {
+      if (!cover || !/^AES\/CBC\/PKCS(?:5|7)Padding$/i.test(cover.algorithm || '') ||
+        typeof cover.key !== 'string' || !cover.key || cover.key.length > 128 ||
+        (cover.keyEncoding !== undefined && !['hex', 'utf8'].includes(cover.keyEncoding)) ||
+        (cover.ivPrefixBytes === 16 ? !!cover.iv :
+          (cover.ivPrefixBytes !== undefined && cover.ivPrefixBytes !== 0) || !/^[a-f0-9]{32}$/i.test(cover.iv || ''))) {
+        errors.push('coverDecode 需要 AES/CBC/PKCS7Padding、key 和 iv 或 ivPrefixBytes:16');
+      }
+    }
     if (!definition.name) errors.push('缺少书源名称 name');
     if (!/^https?:\/\//i.test(definition.url || '')) errors.push('书源地址 url 必须以 http:// 或 https:// 开头');
     if (!definition.search && !definition.explore) errors.push('至少需要 search 或 explore 其中之一');

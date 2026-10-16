@@ -1,7 +1,7 @@
-import { SourceEngineHost } from '../host/SourceEngineHost';
 import { JSBoundedExecutionResult, JSContext, JSRuntimeOptions } from '@devzeng/quickjs';
 import { QuickJsObservationContext, QuickJsRuntimeMode, QuickJsRuntimeStatus } from './QuickJsRuntimeStatus';
 import { QuickJsValidationStore } from './QuickJsValidationStore';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 
 export class QuickJsExpressionResult {
   success: boolean = false;

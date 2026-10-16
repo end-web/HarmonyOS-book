@@ -24,6 +24,8 @@ import { AnalyzeUrl } from './upstream/core/rule/AnalyzeUrl';
 import { VerificationSupport } from './upstream/core/http/VerificationSupport';
 import { LightCookieStore } from './LightSourceRuntime';
 import { LightLocalSource as LocalRuleSource } from './LightSourceHost';
+import { SourceCoverLoader } from './upstream/core/nativesource/SourceCoverLoader';
+import { LightSourceCoverCache } from './LightSourceCoverCache';
 
 
 /** JSON boundary prevents the upstream TypeScript model leaking into ArkTS pages. */
@@ -31,6 +33,12 @@ import { LightSourceTiming } from './LightSourceTiming';
 import { LightSourceRequest, LightSourceRequestPolicy } from './LightSourceRequestPolicy';
 
 export class LightSourceCore {
+  static async cover(localJson: string, raw: string, revision: number): Promise<string> {
+    const local = JSON.parse(localJson) as LocalRuleSource;
+    const source = this.source(local);
+    return LightSourceCoverCache.materialize(`${revision}\n${source.jsLib}\n${raw}`,
+      () => LightSourceRuntime.run(source, local, () => SourceCoverLoader.load(new HttpClient(), source, raw)));
+  }
   static async voices(localJson: string): Promise<string> {
     const local = JSON.parse(localJson) as LocalRuleSource;
     const source = this.source(local);
@@ -275,6 +283,9 @@ export class LightSourceCore {
     const source = this.source(local);
     return LightSourceRuntime.run(source,local,async () => {
       if (NativeSourceService.isNative(source)) {
+        // Browser cookies are no longer part of the upstream native cache key.
+        // This is the login completion boundary, including cookie-only login.
+        NativeSourceService.clearCache(source.bookSourceUrl);
         const spec = NativeSourceService.loginSpec(source);
         return spec?.check ? (await NativeSourceService.checkLogin(source,new HttpClient())).ok :
           NativeSourceService.hasLoginCookies(source);

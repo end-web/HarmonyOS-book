@@ -1,6 +1,7 @@
 import { BookSource } from '../../model/data/Book';
 import { BookSourceScriptRunner } from '../book/BookSourceScriptRunner';
 import { CookieStore } from './CookieStore';
+import { NetworkErrorText } from './NetworkErrorText';
 
 export class VerificationSupport {
   static isChallengeResponse(body: string): boolean {
@@ -24,7 +25,12 @@ export class VerificationSupport {
       rule.includes('验证码') || rule.includes('cookie.setCookie') || rule.includes('cookie.getCookie'));
   }
 
-  static shouldRequestBrowserVerification(source: BookSource, body: string, statusCode: number, rule?: string): boolean {
+  static shouldRequestBrowserVerification(source: BookSource, body: string, statusCode: number, rule?: string,
+    error?: string): boolean {
+    // 没拿到响应且请求层报的是明确的网络错误（域名解析、超时、连不上等）：与登录无关，打开验证页也修不好。
+    if (statusCode === 0 && NetworkErrorText.describe(error || '', '')) {
+      return false;
+    }
     // A JSON API authentication error is not an HTML browser challenge. Opening ArkWeb for
     // responses such as {"message":"...","status":"10003"} hides the real credential
     // problem and cannot repair it. Likewise Cloudflare 521 means its origin is unavailable,
@@ -277,9 +283,10 @@ export class VerificationSupport {
 
   static sourceCookieHeader(source: BookSource, requestUrl: string): string {
     if (!source || !requestUrl) return '';
-    const existing = CookieStore.forSource(source.bookSourceUrl).getCookie(requestUrl);
+    const jar = CookieStore.forSource(source.bookSourceUrl);
+    const existing = jar.getCookie(requestUrl);
     const loginUrl = this.cleanUrl(source.loginUrl || '');
-    const loginCookie = CookieStore.forSource(source.bookSourceUrl).getCookie(loginUrl) || CookieStore.forSource(source.bookSourceUrl).getCookie(this.originOf(loginUrl));
+    const loginCookie = jar.getCookie(loginUrl) || jar.getCookie(this.originOf(loginUrl));
     const requestHost = this.hostOf(requestUrl);
     const loginHost = this.hostOf(loginUrl);
     if (!loginCookie || !requestHost || !loginHost || !this.hostsShareSite(requestHost, loginHost)) return existing;
@@ -293,9 +300,10 @@ export class VerificationSupport {
       this.originOf(currentUrl),
       this.originOf(loginUrl)
     ].filter((item: string) => this.isHttpUrl(item));
+    const jar = CookieStore.forSource(sourceUrl);
     let fromUrl = '';
     for (const item of fromUrls) {
-      if (CookieStore.forSource(sourceUrl).getCookie(item)) {
+      if (jar.getCookie(item)) {
         fromUrl = item;
         break;
       }
@@ -311,10 +319,10 @@ export class VerificationSupport {
       this.isHttpUrl(item) && array.indexOf(item) === index &&
       this.hostsShareSite(this.hostOf(fromUrl), this.hostOf(item)));
     for (const target of targets) {
-      CookieStore.forSource(sourceUrl).copyCookies(fromUrl, target);
-      CookieStore.forSource(sourceUrl).copyCookies(fromUrl, `${target}/`);
+      jar.copyCookies(fromUrl, target);
+      jar.copyCookies(fromUrl, `${target}/`);
     }
-    CookieStore.forSource(sourceUrl).saveAsync();
+    jar.saveAsync();
   }
 
   private static mergeCookieHeaders(primary: string, secondary: string): string {

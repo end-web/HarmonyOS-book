@@ -1,6 +1,7 @@
 import { AppColor, AppSpace, AppFont, HomeTheme } from '../theme/Theme';
 import { Book } from '../model/Book';
 import { PlaybackLoadingIndicator } from './PlaybackLoadingIndicator';
+import { CoverImage } from './CoverImage';
 import { PlayerDragState, PlayerDragTransition } from '../utils/PlayerDragTransition';
 
 @ComponentV2
@@ -26,11 +27,9 @@ export struct MiniPlayer {
   coverImageBuilder(): void {
     if (this.book) {
       if (this.book.cover && this.book.cover.startsWith('http')) {
-        Image(this.book.cover)
+        CoverImage({ url: this.book.cover, useFixedHeight: true, imgHeight: '100%', radius: 0 })
           .width('100%')
           .height('100%')
-          .objectFit(ImageFit.Cover)
-          .sourceSize({ width: 300, height: 400 })
           .id('mini-player-cover-image')
       } else if (this.book.cover
         && (this.book.cover.startsWith('/') || this.book.cover.startsWith('file://'))) {

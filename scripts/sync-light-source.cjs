@@ -4,12 +4,30 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const project = path.resolve(__dirname, '..');
-const source = path.resolve(process.argv[2] || 'D:/legado-harmony');
+const args = process.argv.slice(2).filter(arg => arg !== '--check');
+if (args.length !== 2) throw new Error('Usage: node scripts/sync-light-source.cjs <engine-repository> <application-repository> [--check]');
+const checkOnly = process.argv.includes('--check');
+const engineSource = path.resolve(args[0]);
+const source = path.resolve(args[1]);
 const sourceRoot = path.join(source, 'entry/src/main/ets');
-const engineRoot = path.join(source, 'sourceengine/src/main/ets');
-const sourceRoots = [sourceRoot, engineRoot];
+const engineRoot = path.join(engineSource, 'sourceengine/src/main/ets');
+// Never fall back to the application's old sourceengine copy.
+const sourceRoots = [engineRoot, sourceRoot];
+const readText = filename => fs.readFileSync(filename, 'utf8').replaceAll('\r\n', '\n');
+function revision(root, paths) {
+  const status = cp.execFileSync('git', ['-C', root, 'status', '--porcelain', '--', ...paths], { encoding: 'utf8' }).trim();
+  if (status) throw new Error(`The upstream source working tree must be clean: ${root}`);
+  return cp.execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+}
+const sources = {
+  engine: { repository: 'https://github.com/wip3l/harmony-book-source-engine',
+    commit: revision(engineSource, ['sourceengine', 'LICENSE', 'NOTICE']) },
+  application: { repository: 'https://github.com/wip3l/legado-harmony',
+    commit: revision(source, ['entry/src/main/ets', 'LICENSE']) }
+};
 const exportOwners = new Map();
-const packageIndex = path.join(source, 'sourceengine/Index.ts');
+const packageIndex = path.join(engineSource, 'sourceengine/Index.ts');
+if (!fs.existsSync(packageIndex)) throw new Error(`Missing independent engine entry: ${packageIndex}`);
 if (fs.existsSync(packageIndex)) {
   const index = fs.readFileSync(packageIndex, 'utf8');
   for (const match of index.matchAll(/export\s*\{([^}]+)\}\s*from\s*['"]\.\/src\/main\/ets\/([^'"]+)['"]/g)) {
@@ -20,6 +38,10 @@ if (fs.existsSync(packageIndex)) {
   }
 }
 const locate = name => sourceRoots.map(root => path.join(root, name)).find(fs.existsSync);
+function provenance(filename) {
+  const owner = filename.startsWith(engineRoot + path.sep) ? 'engine' : 'application';
+  return { source: owner, upstreamPath: path.relative(owner === 'engine' ? engineSource : source, filename).replaceAll('\\', '/') };
+}
 function rewritePackageImports(name, text) {
   return text.replace(/\b(import|export)\s*\{([^}]+)\}\s*from\s*['"]@legado\/sourceengine['"];?/g,
     (all, keyword, members) => {
@@ -43,6 +65,7 @@ const manifestPath = path.join(project, 'third_party/light-source/upstream.json'
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const excluded = new Set(['model/data/AppDatabase.ts']);
 const seeds = ['core/book/WebBookService.ts', 'core/book/SearchCoordinator.ts',
+  'core/nativesource/SourceCoverLoader.ts',
   'core/book/ExploreCoordinator.ts', 'core/nativesource/NativeSourceService.ts',
   'core/book/ReaderInteractionProvider.ts', 'core/book/BookSourceScriptRunner.ts',
   'core/book/BookSourceLoginWebRuntime.ts', 'core/http/RawHttpTextClient.ts'];
@@ -51,7 +74,7 @@ const visit = name => {
   if (files.has(name) || excluded.has(name)) return;
   const filename = locate(name);
   if (!filename) throw new Error(`Missing upstream module: ${name}`);
-  const text = fs.readFileSync(filename, 'utf8');
+  const text = readText(filename);
   files.set(name, text);
   for (const match of rewritePackageImports(name, text).matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)) {
     if (match[1].startsWith('@legado/sourceengine')) throw new Error(`Unsupported package import: ${match[1]}`);
@@ -68,7 +91,7 @@ seeds.forEach(visit);
 const previous = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : null;
 for (const entry of previous?.files || []) {
   const filename = path.join(target, entry.path);
-  if (!fs.existsSync(filename) || hash(fs.readFileSync(filename)) !== entry.sha256) {
+  if (!fs.existsSync(filename) || (hash(fs.readFileSync(filename)) !== entry.sha256 && hash(readText(filename)) !== entry.sha256)) {
     throw new Error(`Local engine change: ${entry.path}. Update the adapter/patch before syncing.`);
   }
 }
@@ -78,8 +101,9 @@ const replaceMethod = (text, signature, body) => {
   return text.replace(expression, body);
 };
 function adapt(name, text) {
-  // Shared host ports carry execution policy. Synchronization only rewrites module paths.
-  return rewritePackageImports(name, text).replaceAll('\r\n', '\n');
+  // Execution policy stays in host ports; retain the one upstream bug fix not yet split out.
+  const rewritten = rewritePackageImports(name, text).replaceAll('\r\n', '\n');
+  return name === 'core/book/WebBookFetchRuntime.ts' ? require('./light-source-web-wait.cjs')(rewritten) : rewritten;
 }
 
 // Prepare and validate every transformation before mutating the working tree.
@@ -94,7 +118,8 @@ let cookieSemantics = cookieOriginal.replaceAll('CookieStore', 'LightCookieSeman
     .replace('private static withoutExpiredJwtCookies', 'static withoutExpiredJwtCookies');
 cookieSemantics = replaceMethod(cookieSemantics, 'static saveAsync\\(',
   '  static saveAsync(): void { /* Encrypted persistence is flushed by the source lease. */ }');
-generated.push({name:'core/http/LightCookieSemantics.ts',original:cookieOriginal,text:cookieSemantics});
+generated.push({name:'core/http/LightCookieSemantics.ts',original:cookieOriginal,text:cookieSemantics,
+  origin: locate('core/http/CookieStore.ts'), generated: true});
 const page = fs.readFileSync(path.join(sourceRoot, 'pages/BookSource.ets'), 'utf8').replaceAll('\r\n', '\n');
 const methods = ['parseBookSource', 'parseCompactRule', 'applyRuleToSearchRule', 'applyRuleToTocRule',
   'applyRuleToContentRule', 'applyRuleToBookInfoRule'].map(name => {
@@ -102,11 +127,13 @@ const methods = ['parseBookSource', 'parseCompactRule', 'applyRuleToSearchRule',
   if (!match) throw new Error(`Source import method changed: ${name}`);
   return match[0];
 });
-generated.push({ name: 'LightSourceImport.ts', original: methods.join('\n'), text:
+generated.push({ name: 'LightSourceImport.ts', original: methods.join('\n'),
+  origin: path.join(sourceRoot, 'pages/BookSource.ets'), generated: true, text:
   `import { BookSource, SearchRule, ExploreRule, BookInfoRule, TocRule, ContentRule } from './model/data/Book';\n` +
   `export class LightSourceImport {\n${methods.join('\n\n')}\n}\n` });
 // The package now provides a platform-free import entry; keep the existing application alias.
 generated.push({ name: 'LightNativeImport.ts', original: files.get('core/nativesource/NativeSourceImport.ts'),
+  origin: locate('core/nativesource/NativeSourceImport.ts'), generated: true,
   text: "export { NativeSourceImport as NativeSourceService } from './core/nativesource/NativeSourceImport';\n" });
 // The upstream audio page performs a second parsing step after the rule engine:
 // unwrap JSON/HTML media results and carry the source's scoped stream headers.
@@ -118,15 +145,38 @@ const audioMethods = ['resolveAudioUrl', 'audioUrlFromObject', 'invalidAudioAddr
   if (!match) throw new Error(`Source audio method changed: ${name}`);
   return match[0];
 });
-generated.push({ name: 'LightAudioSupport.ts', original: audioMethods.join('\n'), text:
+generated.push({ name: 'LightAudioSupport.ts', original: audioMethods.join('\n'),
+  origin: path.join(sourceRoot, 'pages/AudioBook.ets'), generated: true, text:
   `import { BookSource } from './model/data/Book';\n` +
   `import { AudioRuleSupport } from './core/book/AudioRuleSupport';\n` +
   `import { BookUrlResolver } from './core/book/BookUrlResolver';\n` +
   `import { VerificationSupport } from './core/http/VerificationSupport';\n` +
   `export class LightAudioSupport {\n${audioMethods.join('\n\n')}\n}\n` });
-const commit = cp.execFileSync('git', ['-C', source, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-const status = cp.execFileSync('git', ['-C', source, 'status', '--porcelain', '--', 'entry/src/main/ets', 'sourceengine', 'LICENSE'], { encoding: 'utf8' }).trim();
-if (status) throw new Error('The upstream source working tree must be clean.');
+const manifest = { schemaVersion: 2, sources, license: 'GPL-3.0',
+  hashNormalization: 'LF',
+  patches: [{ id: 'bounded-web-wait', file: 'scripts/light-source-web-wait.cjs',
+    sha256: hash(readText(path.join(__dirname, 'light-source-web-wait.cjs'))) }],
+  files: generated.map(entry => ({ path: entry.name,
+    ...provenance(entry.origin || locate(entry.name)),
+    ...(entry.generated ? { generated: true } : {}),
+    upstreamSha256: hash(entry.original), sha256: hash(entry.text) }))
+};
+const manifestText = JSON.stringify(manifest, null, 2) + '\n';
+const license = readText(path.join(engineSource, 'LICENSE'));
+const notice = readText(path.join(engineSource, 'NOTICE'));
+if (checkOnly) {
+  if (!previous || readText(manifestPath) !== manifestText) throw new Error('Upstream manifest differs; synchronize the pinned inputs first.');
+  for (const entry of generated) {
+    if (readText(path.join(target, entry.name)) !== entry.text) throw new Error(`Generated output differs: ${entry.name}`);
+  }
+  for (const folder of ['third_party/light-source', 'entry/src/main/resources/rawfile/third_party/light-source']) {
+    if (readText(path.join(project, folder, 'LICENSE')) !== license || readText(path.join(project, folder, 'NOTICE')) !== notice) {
+      throw new Error(`Upstream license/notice differs: ${folder}`);
+    }
+  }
+  console.log(`Verified ${generated.length} files against both pinned upstream commits.`);
+  process.exit(0);
+}
 for (const entry of previous?.files || []) {
   if (!generated.some(value => value.name === entry.path)) fs.unlinkSync(path.join(target, entry.path));
 }
@@ -137,14 +187,11 @@ for (const entry of generated) {
 }
 const licenseDir = path.dirname(manifestPath);
 fs.mkdirSync(licenseDir, { recursive: true });
-fs.copyFileSync(path.join(source, 'LICENSE'), path.join(licenseDir, 'LICENSE'));
+fs.writeFileSync(path.join(licenseDir, 'LICENSE'), license);
+fs.writeFileSync(path.join(licenseDir, 'NOTICE'), notice);
 const packagedLicense = path.join(project, 'entry/src/main/resources/rawfile/third_party/light-source/LICENSE');
 fs.mkdirSync(path.dirname(packagedLicense), {recursive:true});
-fs.copyFileSync(path.join(source, 'LICENSE'), packagedLicense);
-fs.writeFileSync(manifestPath, JSON.stringify({ repository: 'https://github.com/wip3l/legado-harmony',
-  fork: 'https://github.com/hos-book/legado-harmony', commit, license: 'GPL-3.0',
-  files: generated.map(entry => ({ path: entry.name,
-    ...(locate(entry.name) ? { upstreamPath: path.relative(source, locate(entry.name)).replaceAll('\\', '/') } : {}),
-    upstreamSha256: hash(entry.original), sha256: hash(entry.text) }))
-}, null, 2) + '\n');
-console.log(`Imported ${generated.length} source-engine files at ${commit}. No pages copied.`);
+fs.writeFileSync(packagedLicense, license);
+fs.writeFileSync(path.join(path.dirname(packagedLicense), 'NOTICE'), notice);
+fs.writeFileSync(manifestPath, manifestText);
+console.log(`Imported ${generated.length} files. Engine: ${sources.engine.commit}; application helpers: ${sources.application.commit}. No pages copied.`);

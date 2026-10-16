@@ -1,4 +1,3 @@
-import { SourceEngineHost } from '../host/SourceEngineHost';
 import { BookSource } from '../../model/data/Book';
 import { HttpClient, HttpRequest, HttpResponse } from '../http/HttpClient';
 import { VerificationSupport } from '../http/VerificationSupport';
@@ -7,6 +6,7 @@ import { BookSourceRateLimiter, RateLimitAcquireResult } from '../http/BookSourc
 import { util } from '@kit.ArkTS';
 import { BookSourceDebugContext } from '../book/BookSourceDebugModels';
 import { BookSourceHeaderRuntime } from '../book/BookSourceHeaderRuntime';
+import { SourceEngineHost } from '../host/SourceEngineHost';
 
 export interface UrlConfig {
   url: string;
@@ -456,7 +456,8 @@ export class AnalyzeUrl {
         'application/json; charset=utf-8' : 'application/x-www-form-urlencoded';
     }
     const request: HttpRequest = {
-      cancelCheck: () => SourceEngineHost.isCancelled(this.source) || !!this.cancelCheck?.(),
+      cancelCheck: (): boolean =>
+        SourceEngineHost.isCancelled(this.source) || (!!this.cancelCheck && this.cancelCheck()),
       timingId: SourceEngineHost.id(this.source),
       cookieSource: this.source?.bookSourceUrl || '',
       url: this.config.url,
@@ -505,7 +506,7 @@ export class AnalyzeUrl {
     // scope exactly; normal HTTP status failures are never hidden by the fallback.
     if (this.shouldRetryWithWebView(req, resp)) {
       console.info('[AnalyzeUrl] native transport failed; retrying with WebView:', this.urlHost(req.url));
-      if (req.cancelCheck?.()) return this.notSentResponse(req, RateLimitAcquireResult.Cancelled);
+      if (req.cancelCheck && req.cancelCheck()) return this.notSentResponse(req, RateLimitAcquireResult.Cancelled);
       const webResponse = await this.fetchFollowingRedirects({ ...req, useWebView: true });
       if (this.isUsableResponse(webResponse)) return webResponse;
     }
@@ -591,9 +592,16 @@ export class AnalyzeUrl {
   }
 
   private async acquireTimedSlot(): Promise<RateLimitAcquireResult> {
+    const timingId = SourceEngineHost.id(this.source);
     const startedAt = Date.now();
-    try { return await BookSourceRateLimiter.acquire(this.source, this.cancelCheck, this.rateLimitMaxWaitMs); }
-    finally { SourceEngineHost.end(SourceEngineHost.id(this.source), 'source-rate-wait', startedAt, 'priority=' + SourceEngineHost.priority(this.source) + ' cancelled=' + SourceEngineHost.isCancelled(this.source)); }
+    try {
+      return await BookSourceRateLimiter.acquire(this.source, this.cancelCheck, this.rateLimitMaxWaitMs);
+    } finally {
+      if (timingId > 0) {
+        SourceEngineHost.end(timingId, 'source-rate-wait', startedAt, `priority=${SourceEngineHost.priority(this.source)}` +
+          ` cancelled=${SourceEngineHost.isCancelled(this.source)}`);
+      }
+    }
   }
 
   private async fetchFollowingRedirects(req: HttpRequest): Promise<HttpResponse> {

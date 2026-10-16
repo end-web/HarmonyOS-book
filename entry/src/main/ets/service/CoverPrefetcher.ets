@@ -15,6 +15,8 @@ import { cacheDownload } from '@kit.BasicServicesKit';
 import { HttpClient } from './http/HttpClient';
 import { PlatformCompat } from '../utils/PlatformCompat';
 import { http } from '@kit.NetworkKit';
+import { SourceCoverService } from './SourceCoverService';
+import fs from '@ohos.file.fs';
 
 const DOMAIN = 0x0000;
 const TAG = 'CoverPrefetcher';
@@ -38,6 +40,17 @@ const MAX_ORIGINS: number = 64;
 export class CoverPrefetcher {
   /** 超分读取原始图片，沿用书源图片请求头，不使用列表解码后的缩略图。 */
   static async loadOriginal(url: string): Promise<ArrayBuffer> {
+    if (SourceCoverService.isEncoded(url) || url.startsWith('file://')) {
+      const resolved = await SourceCoverService.resolve(url);
+      const file = fs.openSync(resolved.replace(/^file:\/\//, ''), fs.OpenMode.READ_ONLY);
+      try {
+        const size = fs.statSync(file.fd).size;
+        if (size <= 0 || size > 8 * 1024 * 1024) throw new Error('Invalid cover size');
+        const buffer = new ArrayBuffer(size);
+        if (fs.readSync(file.fd, buffer) !== size) throw new Error('Incomplete cover read');
+        return buffer;
+      } finally { fs.closeSync(file); }
+    }
     const request = http.createHttp();
     try {
       const response = await request.request(url, {
@@ -110,6 +123,7 @@ export class CoverPrefetcher {
    * @param highPriority true 时插到队首（首屏/可见卡片）
    */
   static prefetch(url: string, highPriority: boolean = false): void {
+    if (SourceCoverService.isEncoded(url)) return;
     if (!url || !url.startsWith('http')) {
       return;
     }

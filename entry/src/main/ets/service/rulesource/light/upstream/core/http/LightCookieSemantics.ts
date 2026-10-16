@@ -1,8 +1,8 @@
-import { SourceEngineHost, SourceCookieJar } from '../host/SourceEngineHost';
 import { webview } from '@kit.ArkWeb';
 import { util } from '@kit.ArkTS';
 import { LogText } from '../../utils/LogText';
 import { SetCookieParser } from './SetCookieParser';
+import { SourceEngineHost, SourceCookieJar } from '../host/SourceEngineHost';
 
 export class LightCookieSemantics {
   /** Legacy unscoped callers keep the ArkWeb jar; source execution always supplies its identity. */

@@ -31,6 +31,9 @@ class LightPanelControlData {
 
 /** The imported source dispatcher is the only application entry to the upstream engine. */
 export class LightSourceBridge {
+  static async cover(source: LocalRuleSource, raw: string, revision: number): Promise<string> {
+    return LightSourceCore.cover(LightSourceBridge.prepare(source), raw, revision);
+  }
   static async voices(source: LocalRuleSource): Promise<LocalRuleVoice[]> {
     return JSON.parse(await LightSourceCore.voices(LightSourceBridge.prepare(source)));
   }
