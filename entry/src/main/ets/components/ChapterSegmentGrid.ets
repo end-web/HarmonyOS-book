@@ -40,6 +40,7 @@ export struct ChapterSegmentGrid {
   @Param keyword: string = '';
   @Param descending: boolean = false;
   @Param columns: number = 2;
+  @Param highlightCurrent: boolean = true;
   @Param topRequest: number = 0;
   @Param bottomRequest: number = 0;
 
@@ -141,7 +142,7 @@ export struct ChapterSegmentGrid {
             ListItem() {
               Row({ space: 6 }) {
                 Text(chapter.title).layoutWeight(1)
-                .fontSize(AppFont.Body).fontColor(chapter.id === this.currentId ? AppColor.Brand : $r('sys.color.font_primary'))
+                .fontSize(AppFont.Body).fontColor(this.highlightCurrent && chapter.id === this.currentId ? AppColor.Brand : $r('sys.color.font_primary'))
                 .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
                 if (chapter.id === this.currentId) {
                   SymbolGlyph($r('sys.symbol.scope')).fontSize(16).fontColor([AppColor.Brand])
@@ -149,7 +150,7 @@ export struct ChapterSegmentGrid {
                 ChapterCacheIndicator({ book: this.book, chapter: chapter })
               }
                 .width('100%').height(64).padding({ left: 14, right: 14 })
-                .backgroundColor(chapter.id === this.currentId ? AppColor.BrandSoft : $r('sys.color.comp_background_tertiary'))
+                .backgroundColor(this.highlightCurrent && chapter.id === this.currentId ? AppColor.BrandSoft : $r('sys.color.comp_background_tertiary'))
                 .borderRadius(AppRadius.Md)
                 .onClick((): void => this.onSelect(chapter))
                 .gesture(LongPressGesture({ repeat: false }).onAction((): void => this.onLongPress(chapter)))

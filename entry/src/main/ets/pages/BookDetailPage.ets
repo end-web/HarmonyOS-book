@@ -1491,8 +1491,8 @@ export struct BookDetailPage {
       book: this.book,
       chapterTitle: this.historyChapterTitle(),
       chapterIndex: Math.max(0, this.currentChapterIndex()),
-      onSelect: async (book: Book, index: number, _matched: boolean): Promise<void> => {
-        await this.switchSource(book, index);
+      onSelect: async (book: Book, index: number, _matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> => {
+        await this.switchSource(book, index, oldFavoriteId, replace);
       }
     })
   }
@@ -1501,12 +1501,13 @@ export struct BookDetailPage {
    * 换源：写入缓存后原地替换详情路由。
    * 只替换路由而不复用旧组件，避免旧 bookId 的加载态/目录残留。
    */
-  private async switchSource(book: Book, index: number): Promise<void> {
+  private async switchSource(book: Book, index: number, oldFavoriteId: string, replace: boolean): Promise<void> {
     if (!this.detailActive || !this.showSourceSheet) return;
     if (index < 0 || index >= book.chapters.length) return;
     SearchCache.put(book);
     await DataService.upsertCachedBook(book);
     if (!this.detailActive) return;
+    if (oldFavoriteId) await PreferenceService.replaceFavoriteSource(oldFavoriteId, book.id, replace);
     this.showSourceSheet = false;
     this.navStack.replacePath({ name: 'detail', param: book.id }, false);
   }

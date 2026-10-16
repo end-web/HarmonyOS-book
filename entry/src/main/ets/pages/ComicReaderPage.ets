@@ -407,7 +407,7 @@ export struct ComicReaderPage {
     this.navStack.pushPathByName('detail', this.book.id);
   }
 
-  private async switchSource(book: Book, index: number, matched: boolean): Promise<void> {
+  private async switchSource(book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> {
     const context = this.getUIContext().getHostContext();
     if (!context || !this.alive || !this.showSourceSwitch || !book.chapters[index]) return;
     const pages = await ComicReaderService.load(book, book.chapters[index], context);
@@ -421,6 +421,7 @@ export struct ComicReaderPage {
     await TextReadingProgressService.save(context, position);
     if (!this.alive || !this.showSourceSwitch) return;
     SearchCache.put(book);
+    if (oldFavoriteId) await PreferenceService.replaceFavoriteSource(oldFavoriteId, book.id, replace);
     this.showSourceSwitch = false;
     this.navStack.replacePath({ name: 'comicReader', param: TextReaderRouteParams.of(book.id) }, false);
   }
@@ -429,8 +430,8 @@ export struct ComicReaderPage {
   sourceSwitchSheet() {
     BookSourceSwitchSheet({ book: this.book ?? null, chapterTitle: this.book?.chapters[this.chapterIndex]?.title ?? '',
       chapterIndex: this.chapterIndex,
-      onSelect: async (book: Book, index: number, matched: boolean): Promise<void> => {
-        await this.switchSource(book, index, matched);
+      onSelect: async (book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> => {
+        await this.switchSource(book, index, matched, oldFavoriteId, replace);
       } })
   }
 

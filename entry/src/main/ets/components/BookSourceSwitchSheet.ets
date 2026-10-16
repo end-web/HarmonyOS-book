@@ -2,15 +2,18 @@ import { Book, Chapter } from '../model/Book';
 import { BookSourceService } from '../service/BookSourceService';
 import { SourceSwitchSearch, SourceSwitchBookDataSource } from '../service/BookSourceSwitchService';
 import { ChapterDataSource } from '../utils/ChapterDataSource';
-import { AppColor, AppSpace } from '../theme/Theme';
+import { AppColor, AppMaterial, AppSpace } from '../theme/Theme';
+import { PreferenceService } from '../service/PreferenceService';
+import { PlatformCompat } from '../utils/PlatformCompat';
+import { promptAction } from '@kit.ArkUI';
 
 @ComponentV2
 export struct BookSourceSwitchSheet {
   @Param book: Book | null = null;
   @Param chapterTitle: string = '';
   @Param chapterIndex: number = 0;
-  @Event onSelect: (book: Book, index: number, matched: boolean) => Promise<void> =
-    async (_book: Book, _index: number, _matched: boolean): Promise<void> => {};
+  @Event onSelect: (book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean) => Promise<void> =
+    async (_book: Book, _index: number, _matched: boolean, _oldFavoriteId: string, _replace: boolean): Promise<void> => {};
   @Local searching: boolean = true;
   @Local busy: boolean = false;
   @Local count: number = 0;
@@ -104,7 +107,34 @@ export struct BookSourceSwitchSheet {
     if (this.busy || !this.selected) return;
     this.busy = true;
     this.errorText = '';
-    try { await this.onSelect(this.selected, index, this.book !== null && index === SourceSwitchSearch.matchChapter(this.book, this.chapterTitle, this.selected)); }
+    const selected = this.selected;
+    const original = this.book;
+    try {
+      const oldFavoriteId = original !== null && original.id !== selected.id &&
+        await PreferenceService.isFavorite(original.id) ? original.id : '';
+      if (this.disposed) return;
+      let replace = false;
+      if (oldFavoriteId) {
+        const options: promptAction.ShowDialogOptions = {
+          title: $r('app.string.source_switch_replace_title'),
+          message: $r('app.string.source_switch_replace_message'),
+          alignment: DialogAlignment.Center,
+          backgroundBlurStyle: BlurStyle.COMPONENT_ULTRA_THICK,
+          buttons: [
+            { text: $r('app.string.common_cancel'), color: $r('sys.color.font_secondary') },
+            { text: $r('app.string.source_switch_replace_confirm'), color: AppColor.Brand }
+          ]
+        };
+        if (PlatformCompat.immersiveMaterial) options.systemMaterial = AppMaterial.DialogUltraThick;
+        try {
+          const response = await this.getUIContext().getPromptAction().showDialog(options);
+          replace = response.index === 1;
+        } catch (_) { return; }
+      }
+      if (this.disposed) return;
+      await this.onSelect(selected, index, original !== null &&
+        index === SourceSwitchSearch.matchChapter(original, this.chapterTitle, selected), oldFavoriteId, replace);
+    }
     catch (error) {
       if (!this.disposed) this.errorText = error instanceof Error ? error.message : String(error);
     } finally { if (!this.disposed) this.busy = false; }

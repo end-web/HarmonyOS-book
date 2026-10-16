@@ -336,6 +336,24 @@ export class PreferenceService {
     }
   }
 
+  /** 确认换源后保留书架顺序和置顶，原书缓存与阅读记录继续保留。 */
+  static async replaceFavoriteSource(oldId: string, newId: string, replace: boolean = true): Promise<void> {
+    if (!oldId || !newId || oldId === newId) return;
+    const s = await PreferenceService.ensureStore();
+    const list = await PreferenceService.getFavorites();
+    const replaceExisting = replace && list.includes(oldId);
+    const replaced = replaceExisting ? list.filter((id: string): boolean => id !== newId)
+      .map((id: string): string => id === oldId ? newId : id) :
+      (list.includes(newId) ? list : [newId, ...list]);
+    const pinned = await PreferenceService.getPinnedFavorites();
+    const nextPinned = Array.from(new Set(pinned.map((id: string): string => replaceExisting && id === oldId ? newId : id)));
+    await s.put(KEY_FAVORITES, JSON.stringify(replaced));
+    await s.put(KEY_PINNED_FAVORITES, JSON.stringify(nextPinned));
+    await s.flush();
+    PreferenceService.notifyFavoriteChanged();
+    emitter.emit(EVT_FAVORITES_CHANGED, { data: { bookId: newId } });
+  }
+
   static async isFavorite(bookId: string): Promise<boolean> {
     const list = await PreferenceService.getFavorites();
     return list.includes(bookId);

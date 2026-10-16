@@ -579,7 +579,7 @@ export struct ReaderPage {
     } finally { this.reloadingChapter = false; }
   }
 
-  private async switchSource(book: Book, index: number, matched: boolean): Promise<void> {
+  private async switchSource(book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> {
     const context = this.context;
     if (this.leaving || !this.showSourceSwitch || !context) return;
     const chapter = book.chapters[index];
@@ -601,6 +601,7 @@ export struct ReaderPage {
     if (this.speechState.bookId === this.book?.id) TextToSpeechService.getInstance().pause();
     this.saveProgress();
     SearchCache.put(book);
+    if (oldFavoriteId) await PreferenceService.replaceFavoriteSource(oldFavoriteId, book.id, replace);
     this.showSourceSwitch = false;
     this.navStack.replacePath({ name: 'reader', param: TextReaderRouteParams.of(book.id) }, false);
   }
@@ -608,8 +609,8 @@ export struct ReaderPage {
   @Builder
   private buildSourceSwitchSheet(): void {
     BookSourceSwitchSheet({ book: this.book, chapterTitle: this.currentChapterTitle, chapterIndex: this.currentResourceIndex,
-      onSelect: async (book: Book, index: number, matched: boolean): Promise<void> => {
-        await this.switchSource(book, index, matched);
+      onSelect: async (book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> => {
+        await this.switchSource(book, index, matched, oldFavoriteId, replace);
       }
     })
   }
@@ -2409,6 +2410,7 @@ export struct ReaderPage {
         .margin({ left: AppSpace.Lg, right: AppSpace.Lg, top: 0, bottom: 0 })
       if (this.chapterSegmented) {
         ChapterSegmentGrid({
+          highlightCurrent: false,
           book: this.book, topRequest: this.chapterTopRequest, bottomRequest: this.chapterBottomRequest,
           chapters: this.book?.chapters ?? [],
           currentId: this.book?.chapters[this.currentResourceIndex]?.id ?? '',
@@ -2426,18 +2428,11 @@ export struct ReaderPage {
         LazyForEach(this.chapterDataSource, (chapter: Chapter) => {
           ListItem() {
             Row({ space: AppSpace.Sm }) {
-              Column()
-                .width(3)
-                .height(32)
-                .borderRadius(2)
-                .backgroundColor(this.isCurrentChapter(chapter) ? AppColor.Brand : Color.Transparent)
-
               Column({ space: AppSpace.Xxs }) {
                 Text(chapter.title)
                   .fontSize(AppFont.BodyL)
-                  .fontColor(this.isCurrentChapter(chapter) ? $r('sys.color.font_primary') :
-                    $r('sys.color.font_secondary'))
-                  .fontWeight(this.isCurrentChapter(chapter) ? FontWeight.Medium : FontWeight.Normal)
+                  .fontColor($r('sys.color.font_secondary'))
+                  .fontWeight(FontWeight.Normal)
                   .maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
               }
@@ -2454,8 +2449,7 @@ export struct ReaderPage {
             .width('100%')
             .constraintSize({ minHeight: READER_CHAPTER_ROW_HEIGHT })
             .padding({ left: AppSpace.Lg, right: AppSpace.Lg, top: AppSpace.Sm, bottom: AppSpace.Sm })
-            .backgroundColor(this.isCurrentChapter(chapter) ?
-              AppColor.BrandSoft : Color.Transparent)
+            .backgroundColor(Color.Transparent)
             .onClick((): void => {
               this.selectChapter(chapter);
             })

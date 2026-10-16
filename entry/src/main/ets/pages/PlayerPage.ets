@@ -1453,7 +1453,7 @@ export struct PlayerPage {
     } finally { this.reloadingChapter = false; }
   }
 
-  private async switchSource(book: Book, index: number, matched: boolean): Promise<void> {
+  private async switchSource(book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> {
     if (this.isLeaving || !this.showSourceSwitch) return;
     const chapter = book.chapters[index];
     if (!chapter) return;
@@ -1469,6 +1469,7 @@ export struct PlayerPage {
     await DataService.upsertCachedBook(book);
     if (this.isLeaving || !this.showSourceSwitch) return;
     SearchCache.put(book);
+    if (oldFavoriteId) await PreferenceService.replaceFavoriteSource(oldFavoriteId, book.id, replace);
     this.showSourceSwitch = false;
     const params = new PlayerSourceSwitchRoute();
     params.bookId = book.id;
@@ -1482,8 +1483,8 @@ export struct PlayerPage {
     BookSourceSwitchSheet({ book: this.book,
       chapterTitle: this.playerState.currentBook?.id === this.book?.id ? this.playerState.currentChapter?.title ?? '' : '',
       chapterIndex: this.playerState.currentBook?.id === this.book?.id ? this.currentChapterIndex() : 0,
-      onSelect: async (book: Book, index: number, matched: boolean): Promise<void> => {
-        await this.switchSource(book, index, matched);
+      onSelect: async (book: Book, index: number, matched: boolean, oldFavoriteId: string, replace: boolean): Promise<void> => {
+        await this.switchSource(book, index, matched, oldFavoriteId, replace);
       }
     })
   }

@@ -9,7 +9,7 @@ const ts = require(path.join(ide, 'sdk/default/openharmony/ets/build-tools/ets-l
 const root = path.resolve(__dirname, '../entry/src/main/ets');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n');
 function compile(source, globals) {
-  const context = { exports: {}, Set, Map, JSON, console, ...globals };
+  const context = { exports: {}, Set, Map, JSON, console, LocalBuilder: () => {}, ...globals };
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS }
   }).outputText;
@@ -190,6 +190,21 @@ async function run() {
   await assert.rejects(PreferenceService.setFavoritesPinned(['other'], true));
   failWrite = false;
   assert.deepEqual(await PreferenceService.getPinnedFavorites(), [], 'failed writes leave pin state unchanged');
+  favorites(['first', 'old', 'last']);
+  values.set('pinned_favorite_book_ids', JSON.stringify(['old']));
+  await PreferenceService.replaceFavoriteSource('old', 'replacement', false);
+  assert.deepEqual(await PreferenceService.getFavorites(), ['replacement', 'first', 'old', 'last'], 'cancel keeps both sources');
+  assert.deepEqual(await PreferenceService.getPinnedFavorites(), ['old']);
+  await PreferenceService.replaceFavoriteSource('old', 'replacement', false);
+  assert.deepEqual(await PreferenceService.getFavorites(), ['replacement', 'first', 'old', 'last'], 'keeping both never duplicates the new source');
+  await PreferenceService.replaceFavoriteSource('old', 'replacement', true);
+  assert.deepEqual(await PreferenceService.getFavorites(), ['first', 'replacement', 'last'], 'replacement keeps the original shelf position');
+  assert.deepEqual(await PreferenceService.getPinnedFavorites(), ['replacement'], 'replacement inherits the original pin');
+  const beforeNoop = writes;
+  await PreferenceService.replaceFavoriteSource('', 'unused', false);
+  await PreferenceService.replaceFavoriteSource('replacement', 'replacement', true);
+  assert.equal(writes, beforeNoop);
+  console.log('PASS: source-switch cancel keeps both, replacement preserves order/pin, deduplication and no-op guards');
   console.log('PASS: persistent pin order, unpin, newly added books, removal/re-add and write failures');
   console.log('PASS: filter-scoped selection, cancel/back, default file retention, bulk persistence, alias IDs, partial failure/retry and busy guards');
 }

@@ -4973,6 +4973,9 @@
     {"name": "ranking_categories_empty", "value": "暂无展示分类，请在设置中开启全网榜单分类"},
     {"name": "record_content_filter", "value": "记录类型筛选"},
     {"name": "record_edit", "value": "编辑记录"},
-    {"name": "record_edit_done", "value": "完成编辑"}
+    {"name": "record_edit_done", "value": "完成编辑"},
+    {"name": "source_switch_replace_title", "value": "覆盖书架中的原书源？"},
+    {"name": "source_switch_replace_message", "value": "覆盖后，书架将使用新来源，并保留原来的位置和置顶状态。取消则保留原来源，同时加入新来源，两本都会显示在书架。"},
+    {"name": "source_switch_replace_confirm", "value": "覆盖原来源"}
   ]
 }
